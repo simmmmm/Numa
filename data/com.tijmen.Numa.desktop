@@ -7,5 +7,5 @@ Terminal=false
 Type=Application
 Categories=Graphics;Photography;GNOME;GTK;
 StartupNotify=true
-MimeType=image/jpeg;image/png;image/heic;image/heif;image/x-fuji-raf;image/x-sony-arw;image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;image/x-adobe-dng;image/x-panasonic-rw2;image/x-olympus-orf;image/x-pentax-pef;image/x-samsung-srw;
-Keywords=raw;photo;photography;develop;RAF;ARW;CR2;NEF;DNG;
+MimeType=image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/heic;image/heif;image/x-adobe-dng;image/x-canon-cr2;image/x-canon-cr3;image/x-canon-crw;image/x-epson-erf;image/x-fuji-raf;image/x-hasselblad-3fr;image/x-hasselblad-fff;image/x-kodak-dcr;image/x-kodak-kdc;image/x-leaf-mos;image/x-minolta-mrw;image/x-nikon-nef;image/x-nikon-nrw;image/x-olympus-orf;image/x-panasonic-raw;image/x-panasonic-raw2;image/x-panasonic-rw2;image/x-pentax-pef;image/x-phaseone-iiq;image/x-samsung-srw;image/x-sigma-x3f;image/x-sony-arw;image/x-sony-sr2;image/x-sony-srf;image/x-dcraw;
+Keywords=raw;photo;photography;develop;view;RAF;ARW;CR2;CR3;NEF;DNG;RW2;ORF;PEF;X3F;

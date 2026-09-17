@@ -218,11 +218,26 @@ entry does not exist, and the messages that say what is missing name
 ### IO — Import, export, catalog
 
 - ✅ **IO-001**: Open a single image outside any library — Open… (Ctrl+O) in the
-  menu, `numa photo.RAF`, or Open With from a file manager (the menu entry now
-  says `%F` and the image types it takes). The photograph opens in the library
-  that holds it; when none does, its folder is offered as a new library, since
-  edits live in a library's catalog and an edit held only in memory is work
-  lost on closing with nothing to say so.
+  menu, `numa photo.RAF`, or Open With from a file manager. The photograph opens
+  in the library that holds it; when none does, its folder is offered as a new
+  library, since edits live in a library's catalog and an edit held only in
+  memory is work lost on closing with nothing to say so.
+
+  It lands in the **loupe** (LIB-004) rather than the editor: a photograph
+  double-clicked in a file manager is being looked at, not yet worked on, and
+  the grid behind the loupe is the folder it came from — so the next frame is
+  one arrow key away and the editor is one press of Enter. If the grid is
+  narrowed to something that does not include it, the editor takes it instead.
+
+  The desktop entry claims every type Numa reads: the RAW formats
+  shared-mime-info names (DNG, CR2/CR3/CRW, NEF/NRW, ARW/SR2/SRF, RAF, ORF,
+  RW2, PEF, SRW, X3F, 3FR/FFF, IIQ, ERF, MOS, MRW, DCR/KDC), HEIF, JPEG, PNG,
+  TIFF, WebP and BMP. **Open photographs with Numa** in Preferences makes it
+  the default for all of them and switches back to whatever the desktop would
+  have chosen; it goes through GIO rather than writing `mimeapps.list`, which
+  belongs to the desktop, has three locations and a precedence between them.
+  For a machine where Numa is not installed at all,
+  `packaging/set-default.sh [AppImage]` does the same from a terminal.
 - ✅ **IO-002**: Export to `<library>/edited/`, never overwriting.
 - ✅ **IO-003**: Autosave. Every path that changes the document already says so
   — that is what the history push is — so the same call schedules a write, two
@@ -373,12 +388,29 @@ entry does not exist, and the messages that say what is missing name
 
   The loupe is Space: one photograph as large as the window allows, over the
   grid rather than in place of it, so the filter bar, the header and the scroll
-  position are all still there when Space or Escape puts it away. The arrows
-  step through the shoot inside it and Enter takes the frame into the editor.
-  The culling keys are not repeated for it: the loupe moves the grid's cursor
-  with it, so 0–5, P, X and U already act on what is on screen — and the name
-  and stars under the photograph are read from the card's own badge, so they
-  say what was just typed. It shows the 1920-pixel thumbnail, which is a cache
+  position are all still there when Space or Escape puts it away. It fades in
+  and out over 160 ms, because a photograph that replaces a wall of
+  photographs between one frame and the next reads as a new window rather than
+  a closer look at this one. The arrows step through the shoot inside it and
+  Enter takes the frame into the editor. The culling keys are not repeated for
+  it: the loupe moves the grid's cursor with it, so 0–5, P, X and U already act
+  on what is on screen.
+
+  Under the photograph is a bar of everything that can be done to it and
+  nothing that cannot: previous and next, five stars, pick, reject, Edit, and
+  back to the grid. The keys do all of it and are faster, so every button names
+  its key — a key nobody knows about is a feature nobody has. The stars are
+  pressable here where the grid's are a readout: in the loupe what is being
+  judged is the thing on screen, and there is no selection to be unsure about.
+  Pressing the star already given clears the rating, which is how a rating is
+  taken back without knowing that 0 is a key. What the bar shows is read from
+  the card's own badge, so it says what was just typed rather than what the
+  catalog said when the grid was filled.
+
+  The pane is hidden as well as unrevealed once the fade is over: an overlay
+  stretches its children, so a revealer left visible is a full-size widget over
+  the grid that shows nothing and takes every click — which reads as a grid
+  that has stopped responding. It shows the 1920-pixel thumbnail, which is a cache
   read rather than a decode, and so the as-shot frame rather than the edited
   one: this is the pass where a frame is kept or dropped, and the editor is
   where it is developed. Its keys run before the grid's own, since the grid
@@ -1691,21 +1723,33 @@ dependency at all.
 
   The model names 150 classes, which is the reason it was chosen over a sky
   detector: a named mask is a *set* of them (Greenery is tree, grass, plant,
-  flower and palm), and anything the six presets do not name is one click on
+  flower and palm), and anything the groups do not name is one click on
   the photograph away, because the class under the cursor is a lookup.
 
   **The panel shows what was found, not what could be asked for.** "Find in
   the photograph" was six fixed buttons — Sky, Buildings, Person, Animal,
   Greenery, Ground, Water — greyed out when the thing was not here. Now the
-  row is what the model found in *this* photograph, one chip each, largest
-  first: a preset's name where one fits ("Buildings" beats four nouns for a
-  street), the class's own name where none does — a car is a car — and
-  nothing for anything under half a per cent of the frame, which is a smudge.
-  A "Subject" chip stands in when neither person nor animal was named, because
-  the subject model finds what ADE20K cannot name and pressing it is the
-  fallback `resolve_mask` already takes. The row says "Looking at the
-  photograph…" until the answer lands. `Segmentation::found` is the testable
-  half.
+  row is what the model found in *this* photograph, largest first.
+
+  **In groups, not in nouns.** Foreground and Background first, then the groups
+  that are here: Person, Animal, Sky, Water, Greenery, Ground, Buildings — and
+  nothing for a group under half a per cent of the frame, which is a smudge.
+  There was a chip per class as well, and it made the panel a list of nouns —
+  Windowpane, Curtain, Chair, Signboard — where half of them are things this
+  model is not good enough at for the chip to be worth pressing, and the ones
+  that are were already inside a group. Nothing is lost: a class-sized thing is
+  selected by clicking on it, which picks *that* one rather than every thing
+  like it in the frame, and the class under the cursor is a lookup.
+
+  Foreground is whatever the photograph is of — the person or animal when the
+  semantic model named one, and MASK-008's matting model when it named nothing,
+  because a kite in flight is nobody's ADE20K class and the matte is not asked
+  *which* thing it is, only which pixels are it. Background is that mask
+  inverted, which is what the invert was always for, and it keeps the matte's
+  clean edge. The pair is offered whenever the matting model is installed: "all
+  of it except the subject" is a thing a photographer asks for on any frame.
+  The row says "Looking at the photograph…" until the answer lands.
+  `Segmentation::found` is the testable half.
 
   **Hovering a chip traces the thing on the photograph** with MASK-010's
   marching ants, before anything is made: what "Greenery" means here is seen
@@ -1954,8 +1998,10 @@ dependency at all.
   looked like it was doing nothing. It does least on a subject that fills the
   frame and most on one that does not, and that is the model's size rather
   than anything here. Person and Animal are separate
-  presets, and inverting either is the background — which is what the invert was
-  always for. People *individually*, and parts of them, is not done.
+  presets, and the panel now offers the inversion as a chip of its own:
+  **Background** is the foreground mask inverted, so "everything except the
+  subject" is one press rather than two. People *individually*, and parts of
+  them, is not done.
 
   They were one button called "Subject" until the photographer pointed out that
   his subject usually is not one: on a street photograph the subject is the

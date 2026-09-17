@@ -307,8 +307,14 @@ struct App {
     reference_caption: gtk::Label,
 
     loupe: gtk::Box,
+
+    loupe_reveal: gtk::Revealer,
     loupe_picture: gtk::Picture,
     loupe_caption: gtk::Label,
+
+    loupe_stars: Rc<Vec<gtk::Button>>,
+    loupe_pick: gtk::Button,
+    loupe_reject: gtk::Button,
 
     loupe_at: Rc<Cell<Option<usize>>>,
 
@@ -661,8 +667,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         reference_picture: gtk::Picture::new(),
         reference_caption: gtk::Label::new(None),
         loupe: gtk::Box::new(gtk::Orientation::Vertical, 6),
+        loupe_reveal: gtk::Revealer::new(),
         loupe_picture: gtk::Picture::new(),
         loupe_caption: gtk::Label::new(None),
+        loupe_stars: Rc::new((1..=5).map(|_| gtk::Button::new()).collect()),
+        loupe_pick: gtk::Button::new(),
+        loupe_reject: gtk::Button::new(),
         loupe_at: Rc::new(Cell::new(None)),
         grid_cards: Rc::new(RefCell::new(Vec::new())),
         strip_cards: Rc::new(RefCell::new(Vec::new())),
@@ -1649,6 +1659,41 @@ fn write_menu_entry(path: &std::path::Path) -> Result<(), String> {
     std::fs::write(&entry, menu_entry_for(path, &icon)).map_err(|err| err.to_string())
 }
 
+fn opened_types() -> Vec<String> {
+    include_str!("../../data/com.tijmen.Numa.desktop")
+        .lines()
+        .find_map(|line| line.strip_prefix("MimeType="))
+        .map(|types| types.split(';').filter(|t| !t.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn desktop_entry() -> Option<gio::AppInfo> {
+    gio::AppInfo::all().into_iter().find(|info| {
+        info.id().is_some_and(|id| id == "com.tijmen.Numa.desktop")
+    })
+}
+
+fn opens_photographs() -> bool {
+    let Some(ours) = desktop_entry() else { return false };
+    gio::AppInfo::default_for_type("image/x-adobe-dng", false)
+        .is_some_and(|other| other.id() == ours.id())
+}
+
+fn set_opens_photographs(on: bool) -> Result<(), String> {
+    let ours = desktop_entry().ok_or("Numa has no entry in the applications menu yet")?;
+    for kind in opened_types() {
+        if !on {
+            gio::AppInfo::reset_type_associations(&kind);
+            continue;
+        }
+
+        if let Err(err) = ours.set_as_default_for_type(&kind) {
+            log::warn!("could not set the default for {kind}: {err}");
+        }
+    }
+    Ok(())
+}
+
 fn remove_menu_entry() {
     if menu_entry_target().is_none() {
         return;
@@ -2166,6 +2211,27 @@ fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
         page.add(&menu);
     }
 
+    let opening = adw::PreferencesGroup::new();
+    opening.set_title("Opening Photographs");
+    let default = adw::SwitchRow::new();
+    default.set_title("Open photographs with Numa");
+    default.set_subtitle(
+        "RAW files, HEIF, JPEG, PNG, TIFF, WebP and BMP, double-clicked in the file manager. \
+         They open in the loupe, with the folder they came from behind it.",
+    );
+    default.set_active(opens_photographs());
+    default.connect_active_notify(glib::clone!(
+        #[weak] dialog,
+        move |row| {
+            if let Err(err) = set_opens_photographs(row.is_active()) {
+                dialog.add_toast(adw::Toast::new(&err));
+                row.set_active(!row.is_active());
+            }
+        }
+    ));
+    opening.add(&default);
+    page.add(&opening);
+
     let storage = adw::PreferencesGroup::new();
     storage.set_title("Storage");
     storage.set_description(Some(
@@ -2355,7 +2421,10 @@ fn open_path(state: &App, window: &adw::ApplicationWindow, path: PathBuf) {
         match id {
             Some(id) => {
                 remember_recent(path);
-                open_photo(state, id);
+
+                if !show_in_loupe(state, id) {
+                    open_photo(state, id);
+                }
             }
             None => state.toast("The photograph is not in the library"),
         }
@@ -4544,17 +4613,27 @@ fn refresh_found(state: &App) {
         return;
     };
 
-    let mut things = found.found();
+    let groups = found.found();
 
-    let named_a_subject =
-        things.iter().any(|thing| thing.classes.iter().any(|c| segment::MATTEABLE.contains(c)));
-    if !named_a_subject && numa::render::matte::is_installed() {
-        things.push(segment::Found {
-            name: "Subject".to_string(),
-            classes: segment::MATTEABLE.to_vec(),
-            share: 0.0,
-        });
+    let subject: Vec<u16> = groups
+        .iter()
+        .flat_map(|thing| thing.classes.iter().copied())
+        .filter(|class| segment::MATTEABLE.contains(class))
+        .collect();
+    let mut things: Vec<(segment::Found, bool)> = Vec::new();
+    if numa::render::matte::is_installed() {
+        let classes = match subject.is_empty() {
+            true => segment::MATTEABLE.to_vec(),
+            false => subject,
+        };
+        for (name, inverted) in [("Foreground", false), ("Background", true)] {
+            things.push((
+                segment::Found { name: name.to_string(), classes: classes.clone(), share: 0.0 },
+                inverted,
+            ));
+        }
     }
+    things.extend(groups.into_iter().map(|thing| (thing, false)));
     if things.is_empty() {
         note("Nothing it could name");
         return;
@@ -4564,13 +4643,16 @@ fn refresh_found(state: &App) {
         .filter(|(asked, _)| std::ptr::eq(asked.as_ptr(), Arc::as_ptr(&found)))
         .map(|(_, guess)| guess);
 
-    for thing in things {
-        let mut tooltip = match thing.share > 0.0 {
-            true => format!("About {:.0} % of this photograph", thing.share * 100.0),
-            false => "Not named here — the subject model will look for one".to_string(),
+    for (thing, inverted) in things {
+        let mut tooltip = match (thing.share > 0.0, inverted) {
+            (true, _) => format!("About {:.0} % of this photograph", thing.share * 100.0),
+            (false, false) => "What the photograph is of, whatever it is".to_string(),
+            (false, true) => "Everything but what the photograph is of".to_string(),
         };
         let mut name = thing.name.clone();
-        if let Some(guess) = animal.as_ref().filter(|_| thing.classes.contains(&126)) {
+
+        let is_animal_group = thing.classes.as_slice() == [126];
+        if let Some(guess) = animal.as_ref().filter(|_| is_animal_group) {
             name = guess.name.to_string();
             let noun = guess.name.to_lowercase();
             let article = if noun.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
@@ -4588,7 +4670,7 @@ fn refresh_found(state: &App) {
         let chosen = name.clone();
         chip.connect_clicked(glib::clone!(
             #[strong] state,
-            move |_| add_segment_mask(&state, classes.clone(), &chosen)
+            move |_| add_segment_mask(&state, classes.clone(), &chosen, inverted)
         ));
 
         let hover = gtk::EventControllerMotion::new();
@@ -4803,7 +4885,7 @@ fn subject_alpha(state: &App) -> Option<Arc<Alpha>> {
     mask.map.0.clone()
 }
 
-fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str) {
+fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str, inverted: bool) {
     if !segment::is_installed() {
         state.toast("No segmentation model installed — see Preferences");
         return;
@@ -4815,7 +4897,9 @@ fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str) {
         let mut masks = photo.document.masks();
 
         let existing = masks.iter().position(|mask| {
-            mask.shape == Shape::Segment { classes: classes.clone() } && mask.is_idle()
+            mask.shape == Shape::Segment { classes: classes.clone() }
+                && mask.inverted == inverted
+                && mask.is_idle()
         });
         if let Some(index) = existing {
             drop(open);
@@ -4826,6 +4910,8 @@ fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str) {
         let mut mask = Mask::new(Shape::Segment { classes: classes.clone() });
 
         mask.matte = classes.iter().all(|class| segment::MATTEABLE.contains(class));
+
+        mask.inverted = inverted;
 
         if name != segment::name_for(&classes) {
             mask.name = Some(name.to_string());
@@ -9074,11 +9160,9 @@ fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) {
 
 const LOUPE_EDGE: u32 = 1920;
 
-fn build_loupe(state: &App) -> gtk::Box {
+fn build_loupe(state: &App) -> gtk::Revealer {
     let loupe = state.loupe.clone();
-    loupe.set_visible(false);
     loupe.add_css_class("loupe");
-    loupe.set_margin_top(0);
 
     state.loupe_picture.set_vexpand(true);
     state.loupe_picture.set_hexpand(true);
@@ -9088,18 +9172,157 @@ fn build_loupe(state: &App) -> gtk::Box {
     loupe.append(&state.loupe_picture);
 
     state.loupe_caption.add_css_class("loupe-caption");
-    state.loupe_caption.set_margin_bottom(8);
     state.loupe_caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    state.loupe_caption.set_halign(gtk::Align::Center);
     loupe.append(&state.loupe_caption);
+    loupe.append(&build_loupe_bar(state));
 
     let click = gtk::GestureClick::new();
     click.connect_released(glib::clone!(
         #[strong] state,
         move |_, _, _, _| close_loupe(&state)
     ));
-    loupe.add_controller(click);
+    state.loupe_picture.add_controller(click);
 
-    loupe
+    let reveal = state.loupe_reveal.clone();
+    reveal.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    reveal.set_transition_duration(160);
+    reveal.set_child(Some(&loupe));
+
+    reveal.set_visible(false);
+    reveal.connect_child_revealed_notify(glib::clone!(
+        #[strong] state,
+        move |reveal| {
+            if !reveal.reveals_child() {
+                reveal.set_visible(false);
+                state.loupe_picture.set_paintable(gtk::gdk::Paintable::NONE);
+            }
+        }
+    ));
+    reveal
+}
+
+fn build_loupe_bar(state: &App) -> gtk::Box {
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    bar.set_halign(gtk::Align::Center);
+    bar.set_margin_bottom(6);
+    bar.add_css_class("loupe-bar");
+
+    let step = |state: &App, icon: &str, hint: &str, forward: bool| {
+        let button = gtk::Button::from_icon_name(icon);
+        button.add_css_class("flat");
+        button.set_tooltip_text(Some(hint));
+        button.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| step_loupe(&state, forward)
+        ));
+        button
+    };
+    bar.append(&step(state, "go-previous-symbolic", "Previous photograph (Left)", false));
+
+    let stars = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    stars.add_css_class("linked");
+    stars.set_margin_start(6);
+    stars.set_margin_end(6);
+    for (index, star) in state.loupe_stars.iter().enumerate() {
+        let value = index as u8 + 1;
+        star.set_label("\u{2606}");
+        star.add_css_class("flat");
+        star.add_css_class("loupe-star");
+        star.set_tooltip_text(Some(&format!("{value} \u{2605} ({value}) \u{2014} again to clear")));
+        star.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| rate_in_loupe(&state, value)
+        ));
+        stars.append(star);
+    }
+    bar.append(&stars);
+
+    state.loupe_pick.set_label("\u{2691}");
+    state.loupe_pick.add_css_class("flat");
+    state.loupe_pick.set_tooltip_text(Some("Pick (P) \u{2014} again to clear"));
+    state.loupe_pick.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| flag_in_loupe(&state, Flag::Picked)
+    ));
+    bar.append(&state.loupe_pick);
+
+    state.loupe_reject.set_label("\u{2715}");
+    state.loupe_reject.add_css_class("flat");
+    state.loupe_reject.set_tooltip_text(Some("Reject (X) \u{2014} again to clear"));
+    state.loupe_reject.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| flag_in_loupe(&state, Flag::Rejected)
+    ));
+    bar.append(&state.loupe_reject);
+
+    let edit = gtk::Button::with_label("Edit");
+    edit.add_css_class("flat");
+    edit.set_margin_start(6);
+    edit.set_tooltip_text(Some("Open this photograph in the editor (Enter)"));
+    edit.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            let card = selected_cards(&state).first().cloned();
+            close_loupe(&state);
+            if let Some(card) = card {
+                open_in_editor(&state, &card);
+            }
+        }
+    ));
+    bar.append(&edit);
+
+    let close = gtk::Button::from_icon_name("view-grid-symbolic");
+    close.add_css_class("flat");
+    close.set_tooltip_text(Some("Back to the grid (Space or Escape)"));
+    close.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| close_loupe(&state)
+    ));
+    bar.append(&close);
+
+    bar.append(&step(state, "go-next-symbolic", "Next photograph (Right)", true));
+    bar
+}
+
+fn rate_in_loupe(state: &App, value: u8) {
+    let now = loupe_rating(state).0;
+    apply_to_selection(state, Action::Rate(if now == value { 0 } else { value }));
+    refresh_loupe_bar(state);
+}
+
+fn flag_in_loupe(state: &App, flag: Flag) {
+    let now = loupe_rating(state).1;
+    apply_to_selection(state, Action::Flag(if now == flag { Flag::None } else { flag }));
+    refresh_loupe_bar(state);
+}
+
+fn loupe_rating(state: &App) -> (u8, Flag) {
+    let Some(at) = state.loupe_at.get() else { return (0, Flag::None) };
+    let id = state
+        .grid_cards
+        .borrow()
+        .get(at)
+        .and_then(|card| card.widget.widget_name().parse::<i64>().ok());
+    let Some(id) = id else { return (0, Flag::None) };
+    let cards = state.cards.borrow();
+    let Some((_, badge)) = cards.get(&id) else { return (0, Flag::None) };
+    let text = badge.text();
+    (rating_from_badge(&text), flag_from_badge(&text))
+}
+
+fn show_in_loupe(state: &App, id: i64) -> bool {
+    let card = state
+        .grid_cards
+        .borrow()
+        .iter()
+        .position(|card| card.widget.widget_name() == id.to_string())
+        .map(|at| (at, state.grid_cards.borrow()[at].widget.clone()));
+    let Some((at, card)) = card else { return false };
+    state.wall.select_only(&card);
+    state.wall.reveal(&card);
+    show_loupe(state, at);
+    true
 }
 
 fn open_loupe(state: &App) {
@@ -9125,10 +9348,11 @@ fn show_loupe(state: &App, at: usize) {
     };
 
     state.loupe_at.set(Some(at));
-    state.loupe.set_visible(true);
+    state.loupe_reveal.set_visible(true);
+    state.loupe_reveal.set_reveal_child(true);
 
     state.loupe_picture.set_paintable(gtk::gdk::Paintable::NONE);
-    refresh_loupe_caption(state);
+    refresh_loupe_bar(state);
 
     let loupe = state.loupe_picture.clone();
     let at_open = state.loupe_at.clone();
@@ -9162,8 +9386,8 @@ fn loupe_key(state: &App, key: gtk::gdk::Key) -> glib::Propagation {
 
 fn close_loupe(state: &App) {
     state.loupe_at.set(None);
-    state.loupe.set_visible(false);
-    state.loupe_picture.set_paintable(gtk::gdk::Paintable::NONE);
+
+    state.loupe_reveal.set_reveal_child(false);
 }
 
 fn step_loupe(state: &App, forward: bool) {
@@ -9185,14 +9409,36 @@ fn step_loupe(state: &App, forward: bool) {
     show_loupe(state, next);
 }
 
-fn refresh_loupe_caption(state: &App) {
+fn refresh_loupe_bar(state: &App) {
     let Some(at) = state.loupe_at.get() else { return };
     let id = state.grid_cards.borrow().get(at).and_then(|card| card.widget.widget_name().parse::<i64>().ok());
     let Some(id) = id else { return };
-    let cards = state.cards.borrow();
-    let Some((photo, badge)) = cards.get(&id) else { return };
-    let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    state.loupe_caption.set_text(&format!("{name}   {}", badge.text()));
+    let name = {
+        let cards = state.cards.borrow();
+        let Some((photo, _)) = cards.get(&id) else { return };
+        photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+    };
+    let (rating, flag) = loupe_rating(state);
+
+    state.loupe_caption.set_text(&name);
+
+    for (index, star) in state.loupe_stars.iter().enumerate() {
+        let filled = index as u8 + 1 <= rating;
+        star.set_label(if filled { "\u{2605}" } else { "\u{2606}" });
+        match filled {
+            true => star.add_css_class("rated"),
+            false => star.remove_css_class("rated"),
+        }
+    }
+    for (button, on, class) in [
+        (&state.loupe_pick, flag == Flag::Picked, "rated"),
+        (&state.loupe_reject, flag == Flag::Rejected, "rejected"),
+    ] {
+        match on {
+            true => button.add_css_class(class),
+            false => button.remove_css_class(class),
+        }
+    }
 }
 
 fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
@@ -9527,7 +9773,7 @@ fn install_rating_shortcuts(state: &App, window: &adw::ApplicationWindow) {
             };
 
             apply_to_selection(&state, action);
-            refresh_loupe_caption(&state);
+            refresh_loupe_bar(&state);
             glib::Propagation::Stop
         }
     ));
