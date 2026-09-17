@@ -297,6 +297,21 @@ struct App {
 
     grid_scroller: gtk::ScrolledWindow,
 
+    face_names_area: gtk::DrawingArea,
+    show_face_names: Rc<Cell<bool>>,
+    face_names: Rc<RefCell<Vec<([f32; 4], String)>>>,
+
+    reference_button: gtk::ToggleButton,
+    reference_pane: gtk::Box,
+    reference_picture: gtk::Picture,
+    reference_caption: gtk::Label,
+
+    loupe: gtk::Box,
+    loupe_picture: gtk::Picture,
+    loupe_caption: gtk::Label,
+
+    loupe_at: Rc<Cell<Option<usize>>>,
+
     grid_cards: Rc<RefCell<Vec<LazyThumb>>>,
     strip_cards: Rc<RefCell<Vec<LazyThumb>>>,
 
@@ -638,6 +653,17 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         mask_area: gtk::DrawingArea::new(),
         filmstrip_scroller: gtk::ScrolledWindow::new(),
         grid_scroller: gtk::ScrolledWindow::new(),
+        face_names_area: gtk::DrawingArea::new(),
+        show_face_names: Rc::new(Cell::new(false)),
+        face_names: Rc::new(RefCell::new(Vec::new())),
+        reference_button: gtk::ToggleButton::new(),
+        reference_pane: gtk::Box::new(gtk::Orientation::Vertical, 6),
+        reference_picture: gtk::Picture::new(),
+        reference_caption: gtk::Label::new(None),
+        loupe: gtk::Box::new(gtk::Orientation::Vertical, 6),
+        loupe_picture: gtk::Picture::new(),
+        loupe_caption: gtk::Label::new(None),
+        loupe_at: Rc::new(Cell::new(None)),
         grid_cards: Rc::new(RefCell::new(Vec::new())),
         strip_cards: Rc::new(RefCell::new(Vec::new())),
         thumbnail_generation: Rc::new(Cell::new(0)),
@@ -2221,6 +2247,9 @@ fn shortcuts_dialog(window: &adw::ApplicationWindow) {
 
     let library_group = adw::PreferencesGroup::new();
     library_group.set_title("Library");
+    library_group.add(&row("Look at one photograph, and put it away again", "Space"));
+    library_group.add(&row("Previous / next photograph in the loupe", "Left / Right"));
+    library_group.add(&row("Open the photograph in the loupe in the editor", "Enter"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
     library_group.add(&row("Flag the selection picked", "P"));
     library_group.add(&row("Flag the selection rejected", "X"));
@@ -2762,7 +2791,18 @@ fn build_library_page(state: &App, window: &adw::ApplicationWindow) -> gtk::Box 
 
     page.add_controller(drop);
 
-    page.append(&scroller);
+    let over = gtk::Overlay::new();
+    over.set_child(Some(&scroller));
+    over.add_overlay(&build_loupe(state));
+    page.append(&over);
+
+    let loupe_keys = gtk::EventControllerKey::new();
+    loupe_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    loupe_keys.connect_key_pressed(glib::clone!(
+        #[strong] state,
+        move |_, key, _, _| loupe_key(&state, key)
+    ));
+    window.add_controller(loupe_keys);
 
     state.wall.connect_card_activated(glib::clone!(
         #[strong] state,
@@ -3341,6 +3381,18 @@ fn mask_name(mask: &Mask) -> String {
         Shape::Painted => "Brush".to_string(),
         Shape::ColourRange { .. } => "Colour range".to_string(),
         Shape::LuminanceRange { .. } => "Luminance range".to_string(),
+    }
+}
+
+fn mask_label(masks: &[Mask], index: usize) -> String {
+    let name = mask_name(&masks[index]);
+    let same: Vec<usize> =
+        (0..masks.len()).filter(|other| mask_name(&masks[*other]) == name).collect();
+    match same.len() > 1 {
+        true => {
+            format!("{name} {}", same.iter().position(|other| *other == index).unwrap_or(0) + 1)
+        }
+        false => name,
     }
 }
 
@@ -4162,9 +4214,8 @@ fn refresh_masks(state: &App) {
     for (index, mask) in masks.iter().enumerate() {
         let item = gio::MenuItem::new(
             Some(&format!(
-                "{} {}{}",
-                mask_name(mask),
-                index + 1,
+                "{}{}",
+                mask_label(&masks, index),
                 if mask.is_idle() { " — nothing set" } else { "" }
             )),
             None,
@@ -4203,7 +4254,7 @@ fn refresh_masks(state: &App) {
     }
     for (index, mask) in masks.iter().enumerate() {
         let row = adw::ActionRow::new();
-        row.set_title(&format!("{} {}", mask_name(mask), index + 1));
+        row.set_title(&mask_label(&masks, index));
         row.set_subtitle(&match (mask.visible, mask.is_pending(), mask.is_idle()) {
             (false, ..) => "Hidden".to_string(),
             (_, true, _) => "Working out where it is…".to_string(),
@@ -4280,13 +4331,12 @@ fn refresh_masks(state: &App) {
     state.mask_list.set_visible(!masks.is_empty());
     state.mask_empty.set_visible(masks.is_empty());
 
-    let current = selected.and_then(|index| masks.get(index));
-    state.mask_button.set_label(&match current {
-        Some(mask) => format!("{} {}", mask_name(mask), selected.unwrap_or(0) + 1),
-        None => String::new(),
-    });
+    let current = selected.filter(|index| *index < masks.len());
+    state
+        .mask_button
+        .set_label(&current.map_or_else(String::new, |index| mask_label(&masks, index)));
 
-    if let Some(mask) = current {
+    if let Some(mask) = current.map(|index| &masks[index]) {
         state.applying.set(true);
         state.mask_banner_eye.set_active(mask.visible);
         state.applying.set(false);
@@ -4535,9 +4585,10 @@ fn refresh_found(state: &App) {
         chip.set_hexpand(true);
         chip.set_tooltip_text(Some(&tooltip));
         let classes = thing.classes.clone();
+        let chosen = name.clone();
         chip.connect_clicked(glib::clone!(
             #[strong] state,
-            move |_| add_segment_mask(&state, classes.clone())
+            move |_| add_segment_mask(&state, classes.clone(), &chosen)
         ));
 
         let hover = gtk::EventControllerMotion::new();
@@ -4752,7 +4803,7 @@ fn subject_alpha(state: &App) -> Option<Arc<Alpha>> {
     mask.map.0.clone()
 }
 
-fn add_segment_mask(state: &App, classes: Vec<u16>) {
+fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str) {
     if !segment::is_installed() {
         state.toast("No segmentation model installed — see Preferences");
         return;
@@ -4762,9 +4813,23 @@ fn add_segment_mask(state: &App, classes: Vec<u16>) {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
         let mut masks = photo.document.masks();
+
+        let existing = masks.iter().position(|mask| {
+            mask.shape == Shape::Segment { classes: classes.clone() } && mask.is_idle()
+        });
+        if let Some(index) = existing {
+            drop(open);
+            select_mask(state, Some(index));
+            return;
+        }
+
         let mut mask = Mask::new(Shape::Segment { classes: classes.clone() });
 
         mask.matte = classes.iter().all(|class| segment::MATTEABLE.contains(class));
+
+        if name != segment::name_for(&classes) {
+            mask.name = Some(name.to_string());
+        }
         masks.push(mask);
         let index = masks.len() - 1;
         photo.document.set_masks(masks);
@@ -6426,6 +6491,12 @@ fn ensure_faces(state: &App) {
                     .iter()
                     .filter_map(|face| {
                         Some(SeenFace {
+                            at: [
+                                face.x / width,
+                                face.y / height,
+                                face.width / width,
+                                face.height / height,
+                            ],
                             embedding: cull::people::embed(&frame, face)?,
                             portrait: cull::people::align(&frame, face)?,
                         })
@@ -6453,6 +6524,8 @@ fn ensure_faces(state: &App) {
         refresh_face(&state);
         refresh_found(&state);
         refresh_info(&state);
+
+        refresh_face_names(&state);
         if any {
             request_render(&state);
         }
@@ -7633,14 +7706,17 @@ fn build_filmstrip(state: &App) {
     state.strip_badges.borrow_mut().clear();
     state.strip_cards.borrow_mut().clear();
 
-    const EDGE: u32 = 64;
+    const HEIGHT: f32 = 64.0;
     let cards = state.cards.borrow();
     for id in state.order.borrow().iter() {
         let Some((photo, _)) = cards.get(id) else { continue };
 
+        let aspect = numa::io::thumbs::cached_size(&photo.path, photo.mtime, GRID_THUMB_EDGE)
+            .map_or(1.5, |(width, height)| width as f32 / height.max(1) as f32)
+            .clamp(0.5, 2.5);
         let picture = gtk::Picture::new();
         picture.set_content_fit(gtk::ContentFit::Cover);
-        picture.set_size_request(EDGE as i32, EDGE as i32);
+        picture.set_size_request((HEIGHT * aspect).round() as i32, HEIGHT as i32);
         picture.set_overflow(gtk::Overflow::Hidden);
 
         let stacked = gtk::Overlay::new();
@@ -7679,7 +7755,7 @@ fn build_filmstrip(state: &App) {
         state.strip_cards.borrow_mut().push(LazyThumb {
             path: photo.path.clone(),
             mtime: photo.mtime,
-            edge: EDGE,
+            edge: GRID_THUMB_EDGE,
             asked: 0,
             picture,
             widget: frame.clone().upcast(),
@@ -8798,6 +8874,8 @@ fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> gtk::Box {
 
 fn reload_grid(state: &App) {
 
+    close_loupe(state);
+
     state.catalog.remember(GRID_FILTER, &*state.filter.borrow());
 
     thumbnail::cancel_pending();
@@ -8924,6 +9002,8 @@ fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) {
     begin_open(state);
     state.canvas.set_paintable(gtk::gdk::Paintable::NONE);
     state.before.set_active(false);
+
+    state.face_names.borrow_mut().clear();
     leave_crop(state);
     state.loading_full.set(false);
     state.crop_rect.set([0.0, 0.0, 1.0, 1.0]);
@@ -8990,6 +9070,129 @@ fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) {
     refresh_profile_picker(state);
     refresh_crumbs(state);
     request_render(state);
+}
+
+const LOUPE_EDGE: u32 = 1920;
+
+fn build_loupe(state: &App) -> gtk::Box {
+    let loupe = state.loupe.clone();
+    loupe.set_visible(false);
+    loupe.add_css_class("loupe");
+    loupe.set_margin_top(0);
+
+    state.loupe_picture.set_vexpand(true);
+    state.loupe_picture.set_hexpand(true);
+    state.loupe_picture.set_can_shrink(true);
+
+    state.loupe_picture.set_content_fit(gtk::ContentFit::Contain);
+    loupe.append(&state.loupe_picture);
+
+    state.loupe_caption.add_css_class("loupe-caption");
+    state.loupe_caption.set_margin_bottom(8);
+    state.loupe_caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    loupe.append(&state.loupe_caption);
+
+    let click = gtk::GestureClick::new();
+    click.connect_released(glib::clone!(
+        #[strong] state,
+        move |_, _, _, _| close_loupe(&state)
+    ));
+    loupe.add_controller(click);
+
+    loupe
+}
+
+fn open_loupe(state: &App) {
+    let selected = selected_cards(state);
+    let Some(first) = selected.first() else {
+        state.toast("Select a photo first");
+        return;
+    };
+    let at = state.grid_cards.borrow().iter().position(|card| card.widget == *first);
+    if let Some(at) = at {
+        show_loupe(state, at);
+    }
+}
+
+fn show_loupe(state: &App, at: usize) {
+    let Some((path, mtime)) = state
+        .grid_cards
+        .borrow()
+        .get(at)
+        .map(|card| (card.path.clone(), card.mtime))
+    else {
+        return;
+    };
+
+    state.loupe_at.set(Some(at));
+    state.loupe.set_visible(true);
+
+    state.loupe_picture.set_paintable(gtk::gdk::Paintable::NONE);
+    refresh_loupe_caption(state);
+
+    let loupe = state.loupe_picture.clone();
+    let at_open = state.loupe_at.clone();
+    thumbnail::load_thumbnail(&path, mtime, LOUPE_EDGE, move |texture| {
+
+        if at_open.get() == Some(at) {
+            loupe.set_paintable(Some(&texture));
+        }
+    });
+}
+
+fn loupe_key(state: &App, key: gtk::gdk::Key) -> glib::Propagation {
+    if state.loupe_at.get().is_none() {
+        return glib::Propagation::Proceed;
+    }
+    match key {
+        gtk::gdk::Key::space | gtk::gdk::Key::Escape => close_loupe(state),
+        gtk::gdk::Key::Left | gtk::gdk::Key::Page_Up => step_loupe(state, false),
+        gtk::gdk::Key::Right | gtk::gdk::Key::Page_Down => step_loupe(state, true),
+        gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+            let card = selected_cards(state).first().cloned();
+            close_loupe(state);
+            if let Some(card) = card {
+                open_in_editor(state, &card);
+            }
+        }
+        _ => return glib::Propagation::Proceed,
+    }
+    glib::Propagation::Stop
+}
+
+fn close_loupe(state: &App) {
+    state.loupe_at.set(None);
+    state.loupe.set_visible(false);
+    state.loupe_picture.set_paintable(gtk::gdk::Paintable::NONE);
+}
+
+fn step_loupe(state: &App, forward: bool) {
+    let Some(at) = state.loupe_at.get() else { return };
+    let count = state.grid_cards.borrow().len();
+    let next = match forward {
+        true => (at + 1).min(count.saturating_sub(1)),
+        false => at.saturating_sub(1),
+    };
+    if next == at {
+        return;
+    }
+
+    let card = state.grid_cards.borrow().get(next).map(|card| card.widget.clone());
+    if let Some(card) = card {
+        state.wall.select_only(&card);
+        state.wall.reveal(&card);
+    }
+    show_loupe(state, next);
+}
+
+fn refresh_loupe_caption(state: &App) {
+    let Some(at) = state.loupe_at.get() else { return };
+    let id = state.grid_cards.borrow().get(at).and_then(|card| card.widget.widget_name().parse::<i64>().ok());
+    let Some(id) = id else { return };
+    let cards = state.cards.borrow();
+    let Some((photo, badge)) = cards.get(&id) else { return };
+    let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    state.loupe_caption.set_text(&format!("{name}   {}", badge.text()));
 }
 
 fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
@@ -9300,6 +9503,11 @@ fn install_rating_shortcuts(state: &App, window: &adw::ApplicationWindow) {
                 return glib::Propagation::Proceed;
             }
 
+            if state.loupe_at.get().is_none() && key == gtk::gdk::Key::space {
+                open_loupe(&state);
+                return glib::Propagation::Stop;
+            }
+
             if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
                 return match key.to_unicode() {
                     Some('v' | 'V') => {
@@ -9319,6 +9527,7 @@ fn install_rating_shortcuts(state: &App, window: &adw::ApplicationWindow) {
             };
 
             apply_to_selection(&state, action);
+            refresh_loupe_caption(&state);
             glib::Propagation::Stop
         }
     ));
@@ -9397,6 +9606,8 @@ fn flag_from_badge(text: &str) -> Flag {
 }
 
 struct SeenFace {
+
+    at: [f32; 4],
     embedding: [f32; cull::people::LENGTH],
     portrait: image::RgbImage,
 }
@@ -9800,18 +10011,30 @@ fn refresh_slider_marks(state: &App) {
         .map(|photo| photo.as_shot)
         .unwrap_or(WhiteBalance { temperature: 5500.0, tint: 0.0 });
 
-    let at_rest = state.sliders.at_rest(as_shot);
-    for ((_, scale, _), rest) in state.sliders.each().iter().zip(at_rest) {
-
+    let mark = |scale: &gtk::Scale, rest: bool| {
         let row = scale.parent();
-        for widget in std::iter::once(scale.upcast_ref::<gtk::Widget>().clone()).chain(row) {
+        for widget in std::iter::once(scale.clone().upcast::<gtk::Widget>()).chain(row) {
             if rest {
                 widget.remove_css_class("touched");
             } else {
                 widget.add_css_class("touched");
             }
         }
+    };
+
+    let panel = state.sliders.each();
+    for ((_, scale, _), rest) in panel.iter().zip(state.sliders.at_rest(as_shot)) {
+        mark(scale, rest);
     }
+
+    REGISTERED.with(|registered| {
+        for scale in registered.borrow().iter() {
+            if panel.iter().any(|(_, theirs, _)| *theirs == scale) {
+                continue;
+            }
+            mark(scale, (scale.value() - neutral_of(scale).unwrap_or(0.0)).abs() < 1e-4);
+        }
+    });
 }
 
 fn build_history(state: &App) -> gtk::Popover {
@@ -9997,7 +10220,7 @@ fn refresh_history(state: &App) {
 
 fn masks_changed(now: &[Mask], before: &[Mask]) -> Option<String> {
     if now.len() > before.len() {
-        return Some(format!("Added {}", mask_name(now.last()?)));
+        return Some(format!("Added {}", mask_label(now, now.len() - 1)));
     }
     if now.len() < before.len() {
         return Some("Removed a mask".to_string());
@@ -10028,7 +10251,7 @@ fn masks_changed(now: &[Mask], before: &[Mask]) -> Option<String> {
     } else {
         "Changed"
     };
-    Some(format!("{what} {} {}", mask_name(mask), index + 1))
+    Some(format!("{what} {}", mask_label(now, index)))
 }
 
 enum Source {
@@ -10395,6 +10618,7 @@ fn build_editor_page(state: &App) -> gtk::Box {
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&state.canvas));
     overlay.add_overlay(&build_guides_overlay(state));
+    overlay.add_overlay(&build_face_names_overlay(state));
     overlay.add_overlay(&build_crop_overlay(state));
     overlay.add_overlay(&build_mask_overlay(state));
     overlay.add_overlay(&build_retouch_overlay(state));
@@ -10465,9 +10689,15 @@ fn build_editor_page(state: &App) -> gtk::Box {
         ));
     }
 
+    let beside = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+    beside.set_homogeneous(true);
+    beside.append(&build_reference_pane(state));
+    beside.append(&scroller);
+
     let panel = build_adjustment_panel(state);
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
-    split.set_start_child(Some(&scroller));
+    split.set_start_child(Some(&beside));
     split.set_end_child(Some(&panel));
     split.set_resize_start_child(true);
     split.set_resize_end_child(false);
@@ -10783,6 +11013,21 @@ fn build_editor_bar(state: &App) -> gtk::Box {
         }
     ));
     bar.append(&state.before);
+
+    let reference = state.reference_button.clone();
+    reference.set_label("Reference");
+    reference.set_margin_end(8);
+    reference.set_tooltip_text(Some(
+        "Keep this frame beside the next ones, to match them to it",
+    ));
+    reference.connect_toggled(glib::clone!(
+        #[strong] state,
+        move |button| match button.is_active() {
+            true => set_reference(&state),
+            false => clear_reference(&state),
+        }
+    ));
+    bar.append(&reference);
 
     let (group, export) = export_buttons(state, |state| export_now(state));
     state.export_button.replace(Some(export));
@@ -12292,6 +12537,8 @@ fn shift_moves_ten(widget: &impl IsA<gtk::Widget>, adjustment: &gtk::Adjustment)
 thread_local! {
 
     static NEUTRALS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
+
+    static REGISTERED: RefCell<Vec<gtk::Scale>> = const { RefCell::new(Vec::new()) };
 }
 
 fn set_neutral(scale: &gtk::Scale, value: f64) {
@@ -12303,6 +12550,7 @@ fn neutral_of(scale: &gtk::Scale) -> Option<f64> {
 }
 
 fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: Readout) -> gtk::Box {
+    REGISTERED.with(|registered| registered.borrow_mut().push(scale.clone()));
     let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
     row.set_margin_bottom(6);
 
@@ -12517,6 +12765,73 @@ fn covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
         && inner[1] >= outer[1] - 1e-4
         && inner[0] + inner[2] <= outer[0] + outer[2] + 1e-4
         && inner[1] + inner[3] <= outer[1] + outer[3] + 1e-4
+}
+
+fn build_reference_pane(state: &App) -> gtk::Box {
+    let pane = state.reference_pane.clone();
+    pane.set_visible(false);
+    pane.add_css_class("reference-pane");
+    pane.set_hexpand(true);
+
+    state.reference_picture.set_vexpand(true);
+    state.reference_picture.set_hexpand(true);
+    state.reference_picture.set_can_shrink(true);
+    state.reference_picture.set_content_fit(gtk::ContentFit::Contain);
+    pane.append(&state.reference_picture);
+
+    state.reference_caption.add_css_class("reference-caption");
+    state.reference_caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    state.reference_caption.set_margin_bottom(6);
+    state.reference_caption.set_halign(gtk::Align::Center);
+    pane.append(&state.reference_caption);
+
+    pane
+}
+
+fn set_reference(state: &App) {
+    let rendered = {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else {
+            state.reference_button.set_active(false);
+            return;
+        };
+        let name = match &photo.source {
+            Source::Photo { path, .. } => {
+                path.file_name().map(|name| name.to_string_lossy().into_owned())
+            }
+            Source::Bracket { paths } => Some(format!("Merge of {} frames", paths.len())),
+        };
+
+        let key = colour_key(&photo.document);
+        if key != photo.working_key {
+            photo.working = render::to_working_space(&photo.document, &photo.proxy);
+            photo.working_key = key;
+            photo.draft = None;
+        }
+        let scale = photo.proxy.width.max(photo.proxy.height) as f32
+            / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
+        let document = render::with_masks_resolved(&photo.document, &photo.working);
+        (render::apply_stack(&document, &photo.working, scale), name)
+    };
+    let (frame, name) = rendered;
+
+    state.reference_picture.set_paintable(Some(&texture_from(frame)));
+    state.reference_caption.set_text(&match name {
+        Some(name) => format!("Reference \u{00b7} {name}"),
+        None => "Reference".to_string(),
+    });
+    state.reference_pane.set_visible(true);
+    state.toast("This frame is the reference \u{2014} step to another to compare");
+}
+
+fn clear_reference(state: &App) {
+    state.reference_pane.set_visible(false);
+    state.reference_picture.set_paintable(gtk::gdk::Paintable::NONE);
+    if state.reference_button.is_active() {
+        state.applying.set(true);
+        state.reference_button.set_active(false);
+        state.applying.set(false);
+    }
 }
 
 fn render_current(state: &App) {
@@ -13327,6 +13642,103 @@ fn commit_crop(state: &App) {
     }
 }
 
+fn build_face_names_overlay(state: &App) -> gtk::DrawingArea {
+    let area = state.face_names_area.clone();
+    area.set_can_target(false);
+    area.set_visible(false);
+    state.canvas.connect_paintable_notify(glib::clone!(
+        #[weak] area,
+        move |_| area.queue_draw()
+    ));
+    area.set_draw_func(glib::clone!(
+        #[strong] state,
+        move |_, context, width, height| {
+            let (x, y, w, h) = content_rect(&state, width as f64, height as f64);
+            context.select_font_face(
+                "Sans",
+                gtk::cairo::FontSlant::Normal,
+                gtk::cairo::FontWeight::Normal,
+            );
+            context.set_font_size(13.0);
+            for (at, name) in state.face_names.borrow().iter() {
+                let (face_x, face_y) = (x + w * at[0] as f64, y + h * at[1] as f64);
+                let (face_w, face_h) = (w * at[2] as f64, h * at[3] as f64);
+
+                context.set_source_rgba(1.0, 1.0, 1.0, 0.7);
+                context.set_line_width(1.0);
+                context.rectangle(face_x.round() + 0.5, face_y.round() + 0.5, face_w.round(), face_h.round());
+                let _ = context.stroke();
+
+                let Ok(extents) = context.text_extents(name) else { continue };
+                let pad = 5.0;
+                let (label_w, label_h) = (extents.width() + pad * 2.0, 20.0);
+
+                let label_x = (face_x + face_w / 2.0 - label_w / 2.0).clamp(x, x + w - label_w);
+                let label_y = (face_y + face_h + 4.0).min(y + h - label_h);
+                context.set_source_rgba(0.0, 0.0, 0.0, 0.55);
+                context.rectangle(label_x, label_y, label_w, label_h);
+                let _ = context.fill();
+                context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+                context.move_to(label_x + pad, label_y + label_h - 6.0);
+                let _ = context.show_text(name);
+            }
+        }
+    ));
+    area
+}
+
+fn refresh_face_names(state: &App) {
+    if !state.show_face_names.get() {
+        return;
+    }
+    let open = state.open.borrow();
+    let Some(photo) = open.as_ref() else { return };
+    let Source::Photo { id, .. } = photo.source else { return };
+
+    let named = state.catalog.named_faces().unwrap_or_else(|err| {
+        log::warn!("could not read the named faces: {err}");
+        Vec::new()
+    });
+    let elsewhere: Vec<(String, [f32; cull::people::LENGTH])> =
+        named.iter().map(|(_, name, embedding)| (name.clone(), *embedding)).collect();
+
+    let names = photo
+        .people
+        .iter()
+        .filter_map(|seen| {
+            let here = named
+                .iter()
+                .filter(|(photo_id, _, _)| *photo_id == id)
+                .map(|(_, name, embedding)| {
+                    (name, cull::people::likeness(embedding, &seen.embedding))
+                })
+                .filter(|(_, alike)| *alike >= 0.8)
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(name, _)| name.clone());
+            let name = match here {
+                Some(name) => name,
+                None => format!("{}?", cull::people::recognise(&seen.embedding, &elsewhere)?.0),
+            };
+
+            (!name.trim_end_matches('?').is_empty()).then_some((seen.at, name))
+        })
+        .collect();
+
+    *state.face_names.borrow_mut() = names;
+    state.face_names_area.queue_draw();
+}
+
+fn show_face_names(state: &App, on: bool) {
+    state.show_face_names.set(on);
+    state.face_names_area.set_visible(on);
+    if on {
+        refresh_face_names(state);
+    } else {
+        state.face_names.borrow_mut().clear();
+    }
+    state.face_names_area.queue_draw();
+}
+
 fn build_guides_overlay(state: &App) -> gtk::DrawingArea {
     let area = state.guides_area.clone();
     area.set_can_target(false);
@@ -13940,7 +14352,10 @@ fn people_group(state: &App, photo: &OpenPhoto) -> Option<adw::PreferencesGroup>
             }
 
             let state = state.clone();
-            glib::idle_add_local_once(move || refresh_info(&state));
+            glib::idle_add_local_once(move || {
+                refresh_info(&state);
+                refresh_face_names(&state);
+            });
         };
         row.connect_apply(glib::clone!(
             #[strong] state,
@@ -13953,6 +14368,16 @@ fn people_group(state: &App, photo: &OpenPhoto) -> Option<adw::PreferencesGroup>
         ));
         group.add(&row);
     }
+
+    let on_canvas = adw::SwitchRow::new();
+    on_canvas.set_title("Show the names on the photograph");
+    on_canvas.set_active(state.show_face_names.get());
+    on_canvas.connect_active_notify(glib::clone!(
+        #[strong] state,
+        move |row| show_face_names(&state, row.is_active())
+    ));
+    group.add(&on_canvas);
+
     Some(group)
 }
 
@@ -14200,6 +14625,8 @@ fn open_photo(state: &App, id: i64) {
 
     state.canvas.set_paintable(gtk::gdk::Paintable::NONE);
     state.before.set_active(false);
+
+    state.face_names.borrow_mut().clear();
     leave_crop(state);
     state.loading_full.set(false);
     *state.open.borrow_mut() = None;
@@ -14394,6 +14821,8 @@ fn save_open_edits(state: &App) {
 
 fn close_editor(state: &App) {
     save_open_edits(state);
+
+    clear_reference(state);
     if let Some(photo) = state.open.borrow().as_ref() {
 
         if matches!(photo.source, Source::Bracket { .. }) {
@@ -14791,5 +15220,35 @@ mod brush_scale {
         assert!(brush_size(0.5) < 0.07, "{}", brush_size(0.5));
 
         assert!(brush_size(0.1) < 0.005, "{}", brush_size(0.1));
+    }
+}
+
+#[cfg(test)]
+mod mask_names {
+    use numa::core::mask::{Mask, Shape};
+
+    fn radial(name: Option<&str>) -> Mask {
+        let mut mask = Mask::new(Shape::radial());
+        mask.name = name.map(str::to_string);
+        mask
+    }
+
+    #[test]
+    fn numbered_only_when_shared() {
+        let one = [radial(Some("Bird"))];
+        assert_eq!(super::mask_label(&one, 0), "Bird");
+
+        let two = [radial(Some("Bird")), radial(Some("Sky"))];
+        assert_eq!(super::mask_label(&two, 0), "Bird");
+        assert_eq!(super::mask_label(&two, 1), "Sky");
+
+        let three = [radial(Some("Bird")), radial(Some("Sky")), radial(Some("Bird"))];
+        assert_eq!(super::mask_label(&three, 0), "Bird 1");
+        assert_eq!(super::mask_label(&three, 1), "Sky");
+        assert_eq!(super::mask_label(&three, 2), "Bird 2");
+
+        let plain = [radial(None), radial(None)];
+        assert_eq!(super::mask_label(&plain, 0), "Radial 1");
+        assert_eq!(super::mask_label(&plain, 1), "Radial 2");
     }
 }

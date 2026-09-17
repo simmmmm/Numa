@@ -458,11 +458,10 @@ recognition thresholds, and the bugs that were hardest to find.
 ## Roadmap
 
 [`docs/FEATURES.md`](docs/FEATURES.md) tracks every feature by ID and is the
-only place status is kept: currently **149 built**, 9 partly built, 9 planned
-and 7 withdrawn, each withdrawal with its reason.
+only place status is kept: currently **153 built**, 6 partly built, 4 planned
+and 11 withdrawn, each withdrawal with its reason.
 
-**Still open.** A single-photo loupe in the library · a reference view beside
-the photograph · GPU inference · eyes-closed detection for culling · a neutral
+**Still open.** GPU inference · eyes-closed detection for culling · a neutral
 Fujifilm X-T5 camera profile, which needs Provia reference frames.
 
 The full list, generated from the status markers, is at the end of
