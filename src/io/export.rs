@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use image::RgbImage;
+use image::{ImageEncoder, RgbImage};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use serde::{Deserialize, Serialize};
@@ -153,14 +153,19 @@ pub fn save(
 ) -> Result<(), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
 
+    let icc = crate::io::icc::profile(settings.space);
     let mut bytes: Vec<u8> = Vec::new();
     match settings.format {
-        Format::Jpeg => JpegEncoder::new_with_quality(&mut bytes, settings.quality.clamp(1, 100))
-            .encode_image(image)
-            .map_err(|err| fail(err.to_string()))?,
-        Format::Png => image
-            .write_with_encoder(PngEncoder::new(&mut bytes))
-            .map_err(|err| fail(err.to_string()))?,
+        Format::Jpeg => {
+            let mut encoder = JpegEncoder::new_with_quality(&mut bytes, settings.quality.clamp(1, 100));
+            encoder.set_icc_profile(icc).map_err(|err| fail(err.to_string()))?;
+            encoder.encode_image(image).map_err(|err| fail(err.to_string()))?
+        }
+        Format::Png => {
+            let mut encoder = PngEncoder::new(&mut bytes);
+            encoder.set_icc_profile(icc).map_err(|err| fail(err.to_string()))?;
+            image.write_with_encoder(encoder).map_err(|err| fail(err.to_string()))?
+        }
     }
 
     if settings.metadata && settings.format == Format::Jpeg {
