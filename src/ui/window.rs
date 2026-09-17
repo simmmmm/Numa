@@ -12827,11 +12827,8 @@ fn set_reference(state: &App) {
 fn clear_reference(state: &App) {
     state.reference_pane.set_visible(false);
     state.reference_picture.set_paintable(gtk::gdk::Paintable::NONE);
-    if state.reference_button.is_active() {
-        state.applying.set(true);
-        state.reference_button.set_active(false);
-        state.applying.set(false);
-    }
+
+    state.reference_button.set_active(false);
 }
 
 fn render_current(state: &App) {
