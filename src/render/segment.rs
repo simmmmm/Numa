@@ -136,29 +136,15 @@ impl Segmentation {
         };
 
         let mut found: Vec<Found> = Vec::new();
-        let mut taken: Vec<u16> = Vec::new();
         for (name, classes) in PRESETS {
             let here: Vec<u16> =
                 classes.iter().copied().filter(|class| share_of(*class) > 0.001).collect();
             let share: f32 = here.iter().map(|class| share_of(*class)).sum();
             if share >= FOUND_FLOOR {
-                taken.extend(&here);
                 found.push(Found { name: name.to_string(), classes: here, share });
             }
         }
-        for (class, share) in &present {
-            if *share < FOUND_FLOOR || taken.contains(class) {
-                continue;
-            }
-            let Some(label) = label(*class) else { continue };
-            let mut name = label.to_string();
-            if let Some(first) = name.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
-            found.push(Found { name, classes: vec![*class], share: *share });
-        }
         found.sort_by(|a, b| b.share.total_cmp(&a.share));
-        found.truncate(MOST_FOUND);
         found
     }
 
@@ -337,7 +323,6 @@ pub struct Found {
 }
 
 const FOUND_FLOOR: f32 = 0.005;
-const MOST_FOUND: usize = 12;
 
 pub const PRESETS: &[(&str, &[u16])] = &[
     ("Sky", &[2]),
@@ -434,11 +419,12 @@ mod tests {
         assert_eq!(names[0], "Sky", "the biggest thing first: {names:?}");
         assert!(names.contains(&"Buildings"), "a preset name for a preset class: {names:?}");
         assert!(names.contains(&"Greenery"), "{names:?}");
-        assert!(names.contains(&"Car"), "a class outside the presets keeps its own name, capitalised: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.eq_ignore_ascii_case("car")),
+            "a class outside the groups is not a chip, whatever its share: {names:?}"
+        );
         assert!(!names.iter().any(|n| n.eq_ignore_ascii_case("ashcan")), "one cell is a smudge: {names:?}");
 
-        let car = found.iter().find(|f| f.name == "Car").unwrap();
-        assert_eq!(car.classes, vec![20]);
         let buildings = found.iter().find(|f| f.name == "Buildings").unwrap();
         assert_eq!(buildings.classes, vec![1], "only the preset's classes that are actually here");
     }

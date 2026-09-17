@@ -338,6 +338,14 @@ takes a few seconds longer:
 ./Numa-*-x86_64.AppImage --appimage-extract-and-run
 ```
 
+**Opening photographs with Numa.** Once it is in the applications menu, Numa
+is offered under *Open With* for RAW files, HEIF, JPEG, PNG, TIFF, WebP and
+BMP. To make it the one that opens them, turn on **Open photographs with
+Numa** in Preferences — or, from a terminal,
+`packaging/set-default.sh ~/Applications/Numa-*.AppImage`. A photograph opened
+that way lands in the loupe, with the folder it came from in the grid behind
+it: the next frame is one arrow key away, and Enter opens the editor.
+
 On first start Numa offers to add itself to the applications menu, and to
 download the additional files described below: the machine-learning models and
 RawTherapee's camera profiles. If the AppImage is moved or replaced by a newer

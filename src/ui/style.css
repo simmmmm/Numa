@@ -225,6 +225,33 @@
     opacity: 0.6;
 }
 
+/* LIB-004: the bar under the loupe. Quiet until a button means something:
+   what is being looked at is the photograph, and the bar is there to be found
+   rather than to be read. */
+.loupe-bar button {
+    opacity: 0.65;
+}
+
+.loupe-bar button:hover {
+    opacity: 1;
+}
+
+.loupe-bar .loupe-star {
+    padding-left: 4px;
+    padding-right: 4px;
+    font-size: 1.1em;
+}
+
+.loupe-bar button.rated {
+    opacity: 1;
+    color: @accent_color;
+}
+
+.loupe-bar button.rejected {
+    opacity: 1;
+    color: #ff7a66;
+}
+
 .thumbnail {
     border-radius: 6px;
     background: alpha(black, 0.25);
