@@ -199,6 +199,32 @@
     outline-offset: -2px;
 }
 
+/* CANVAS-006: the reference frame beside the canvas. A line between the two,
+   and the same dark ground the canvas has: two photographs side by side are
+   compared by their own light, not by the two panes looking different. */
+.reference-pane {
+    border-right: 1px solid alpha(currentColor, 0.15);
+    background: darker(@window_bg_color);
+    padding: 12px;
+}
+
+.reference-caption {
+    font-size: 0.85em;
+    opacity: 0.6;
+}
+
+/* LIB-004: the loupe over the grid. Opaque and dark: it is a photograph being
+   looked at, and the cards showing through it would be light behind it. */
+.loupe {
+    background: @window_bg_color;
+    padding: 12px;
+}
+
+.loupe-caption {
+    font-size: 0.9em;
+    opacity: 0.6;
+}
+
 .thumbnail {
     border-radius: 6px;
     background: alpha(black, 0.25);

@@ -249,6 +249,12 @@ impl Justified {
         }
     }
 
+    pub fn reveal(&self, card: &impl IsA<gtk::Widget>) {
+        if let Some(index) = self.index_of(card.as_ref()) {
+            self.scroll_to(index);
+        }
+    }
+
     pub fn unselect_all(&self) {
         let count = self.imp().selected.borrow().len();
         self.set_selection(vec![false; count]);

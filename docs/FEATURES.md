@@ -358,8 +358,8 @@ entry does not exist, and the messages that say what is missing name
   frame, and the same on a right-click menu — which is how anyone finds out the keys exist, and the only
   place deleting belongs. Deleting moves the file to the desktop's trash and
   forgets the catalog row; it says so before it does it.
-- 🟡 **LIB-004**: Thumbnail size control and a single-photo loupe. The size is
-  built: a button at the end of the filter bar holds two sliders, how tall a
+- ✅ **LIB-004**: Thumbnail size control and a single-photo loupe. The size is a
+  button at the end of the filter bar holding two sliders, how tall a
   row aims to be and how much space sits between the photographs, both
   remembered. They move in marked steps and show no pixel figure: the rows
   stretch to the width and the cards have padding, so a number would be a
@@ -369,12 +369,32 @@ entry does not exist, and the messages that say what is missing name
   a HiDPI display — and the bands of cards held ready (PERF-005) shrink as
   the thumbnails grow, so the memory they take stays about the same. Changing either keeps the photograph at the top
   of the view where it was. The space is on top of each card's own 6 px of
-  padding, which is where the selection outline is drawn. Not yet: the loupe.
+  padding, which is where the selection outline is drawn.
+
+  The loupe is Space: one photograph as large as the window allows, over the
+  grid rather than in place of it, so the filter bar, the header and the scroll
+  position are all still there when Space or Escape puts it away. The arrows
+  step through the shoot inside it and Enter takes the frame into the editor.
+  The culling keys are not repeated for it: the loupe moves the grid's cursor
+  with it, so 0–5, P, X and U already act on what is on screen — and the name
+  and stars under the photograph are read from the card's own badge, so they
+  say what was just typed. It shows the 1920-pixel thumbnail, which is a cache
+  read rather than a decode, and so the as-shot frame rather than the edited
+  one: this is the pass where a frame is kept or dropped, and the editor is
+  where it is developed. Its keys run before the grid's own, since the grid
+  keeps the focus underneath it and its arrows would otherwise move the cursor
+  without the loupe following.
+
+  UX-009's strip follows the same rule as of today: a frame is as tall as the
+  strip and as wide as the photograph's shape, from the thumbnail cache, where
+  it was a 64-pixel square left over from the square grid. It shows the grid's
+  own 320-pixel thumbnail, so the strip decodes nothing of its own and stays
+  sharp on a HiDPI screen.
 - ✅ **LIB-013**: A mark in the grid and the filmstrip on photographs that have
   adjustments. Opening one is not editing it: an untouched document is stored as
   nothing at all, so the mark means what it says — which is the question a shoot
   raises on the second pass through it.
-- 🟡 **LIB-014**: Names on faces. The info page lists the faces in the open
+- ✅ **LIB-014**: Names on faces. The info page lists the faces in the open
   photograph, each with a picture of it and a name: typed once, and every other
   photograph with a face like it offers that name, saying it is a guess — Enter
   confirms, typing corrects. Only what was typed is stored; the name reaches
@@ -395,7 +415,18 @@ entry does not exist, and the messages that say what is missing name
   faces back to the groups. Faces seen in only one photograph are left to the
   info page. Pictures are kept by Analyse; a library analysed before that gets
   them fetched once, the first time the dialog opens.
-  Not yet: names on the canvas.
+
+  On the canvas too, from a switch under the People rows: a thin box around
+  each face and the name in a dark pill under it — under, because a label
+  across the eyes is exactly where nobody wants one, and kept inside the frame,
+  because a face at its edge is common and a name running off the canvas is not
+  a name. A guess carries a question mark, as the row does; a face nobody has
+  named is not drawn at all, since an empty box over every stranger in a crowd
+  is noise. Off unless asked for: a photograph is looked at for what it is
+  until who is in it is the question. The names are worked out when the faces
+  land or a name is given rather than on every draw, which would be a catalog
+  read per frame, and each face carries where it is, so a face whose embedding
+  the model could not produce cannot shift the names onto the wrong people.
 - ✅ **LIB-015**: The library as rows — every thumbnail at
   its own shape, the rows filling the width (justified, Google Photos style,
   rather than masonry columns: rows keep the filter's order left to right, and
@@ -461,22 +492,27 @@ entry does not exist, and the messages that say what is missing name
   the same: nothing here was fitted against Lightroom's own render. Of a
   collection of 4383, 3844 translate; the rest are brush presets or hold only
   local, lens or reset settings. The whole collection imports in 0.2 s.
-- 🟡 **LIB-007**: Batch export — pick a shoot in the grid and it goes out in
-  one go. A stack read out of the catalog carries no mask pixels, because those
-  are never stored, so they are worked out again before the frame is developed:
-  without it the masks on an exported photograph did nothing at all, and an
-  inverted painted one did its adjustment to the whole frame. The editor's own
-  export was always right, which is how two buttons came to disagree about the
-  same file. Both call one function now. from the same pair of buttons the editor has: the button repeats the
+- ✅ **LIB-007**: Batch export — pick a shoot in the grid and it goes out in
+  one go, from the same pair of buttons the editor has: the button repeats the
   last answer, the arrow asks again, and the label counts what is selected,
   because "Export 32" is also the confirmation that there are 32 of them. A
   shoot is edited one frame at a time and written out all at once, so the
   button belongs in both places. The stacks are read from the catalog rather
-  than from anything on screen. One photograph at a time rather than in
-  parallel: a full-resolution decode and render already uses every core, and
-  forty at once is a machine out of memory rather than a faster export. Batch
-  *apply* is LIB-005's paste, which already does a selection; batch rating is
-  not done.
+  than from anything on screen.
+
+  A stack read out of the catalog carries no mask pixels, because those are
+  never stored, so they are worked out again before the frame is developed:
+  without it the masks on an exported photograph did nothing at all, and an
+  inverted painted one did its adjustment to the whole frame. The editor's own
+  export was always right, which is how two buttons came to disagree about the
+  same file. Both call one function now.
+
+  One photograph at a time rather than in parallel: a full-resolution decode
+  and render already uses every core, and forty at once is a machine out of
+  memory rather than a faster export. The rest of the batch is elsewhere and
+  done: applying settings to a selection is LIB-005's paste, and rating one is
+  LIB-003 — 0–5, P, X and U act on everything selected, as does the
+  right-click menu's Rating.
 - ✅ **LIB-008**: Albums, independent of folders. An album can hold photographs
   from any library. Albums are listed in the library picker under a heading of
   their own, between the libraries and the people, and picking one shows its
@@ -632,7 +668,10 @@ dependency at all.
   as one because they are.
 
   Old **CANVAS-002**: Pan and zoom, wheel-proportional, floored at fit.
-- ◻️ **CANVAS-003**: Checkerboard transparency background.
+- ❌ **CANVAS-003**: ~~Checkerboard transparency background.~~ *Dropped: nothing
+  here is ever transparent. A photograph is opaque, the crop shows the frame
+  beyond its edge rather than a hole, and there are no layers with gaps. A
+  checkerboard would be a pattern behind something that always covers it.*
 - ✅ **CANVAS-004**: Guide overlays — none, thirds or an eight-part grid, from a
   button on the editor bar or G. Drawn over the photograph's own rectangle,
   dark under light so they read on sky and shadow alike, and taking no clicks,
@@ -645,7 +684,24 @@ dependency at all.
   that, Fit reports the real ratio (30 % where it said 15 %), zooming keeps its
   centre, and the render resolution was already asked in screen pixels. The
   grid's thumbnails follow the scale too (LIB-004). Tried with GDK_SCALE=2.
-- ◻️ **CANVAS-006**: Reference view — a second image side by side.
+- ✅ **CANVAS-006**: Reference view — a second photograph beside the one being
+  worked on, which is how a set is matched to the frame that is already right.
+  Reference in the editor bar keeps the frame on screen, developed as it is at
+  that moment, in a pane sharing the canvas's room; stepping through the
+  filmstrip then compares each frame against it, and the pane says which frame
+  it is holding. Off again, or leaving the editor, puts it away.
+
+  It costs one render. The reference is not decoded or re-read: it is
+  `apply_stack` over the proxy already in memory, the same 30 ms a render tick
+  pays, and after that comparing is free — a texture beside the canvas, with no
+  work per step. Masks are resolved into it first, so a frame with local
+  adjustments is the reference as it looks rather than as it would look without
+  them.
+
+  Not the same thing as UX-007's Before, which is this photograph as it came
+  off the camera. Equal halves rather than natural widths: a 2400-pixel picture
+  in a box that hands out natural sizes first took nearly the whole room and
+  left the canvas a strip.
 - ✅ **CANVAS-007**: Nearest-neighbour scaling above 1:1, so magnified pixels
   read as pixels rather than as a soft photograph.
 - ✅ **CANVAS-008**: Under a tile there is now the whole frame at proxy size, so
@@ -925,7 +981,13 @@ dependency at all.
 
 ### TOOL — Tools
 
-- ◻️ **TOOL-001**: Tool system — one active tool, consistent event handling.
+- ❌ **TOOL-001**: ~~Tool system — one active tool, consistent event handling.~~
+  *Dropped: the tools were built without one and do not want one. Crop, the
+  masks' brush and lasso, the pipette, the retouch spot and the straighten
+  drag each own the canvas while their panel is open, and which one is active
+  is which page the panel is on — one state, already visible, with no mode to
+  remember or a toolbar to hold it. An abstraction over five handlers that
+  agree on nothing but taking a drag would be a layer to read past.*
 - ✅ **TOOL-002**: Crop — handles, aspect presets, straighten, thirds overlay.
 
   The aspect presets are toggles that stay chosen, not buttons that fire once.
@@ -1352,8 +1414,15 @@ dependency at all.
 ### FILTER — Effects
 
 - ✅ **FILTER-004**: Clarity (local contrast, shares HDR-001's machinery).
-- ◻️ **FILTER-001**: Gaussian blur.
-- ◻️ **FILTER-002**: Unsharp mask — see DETAIL-001 for the real sharpening.
+- ❌ **FILTER-001**: ~~Gaussian blur.~~ *Dropped: a photograph is not blurred as
+  a whole. Where softening is wanted it is local — a mask over a background, a
+  retouch spot — and negative Clarity and Sharpening already reach for it
+  there, with the mask machinery deciding where. FILTER-008 dropped the depth
+  version for the same reason.*
+- ❌ **FILTER-002**: ~~Unsharp mask.~~ *Dropped: DETAIL-001 is the sharpening,
+  and it is an unsharp mask — radius, amount, detail and a masking threshold,
+  with the halo control this item would have lacked. A second, blunter one
+  beside it would only be a way to get a worse result.*
 - ✅ **FILTER-003**: Vignette — amount, midpoint, roundness, feather. Up to two
   stops at the corners, in stops so a sky and a shadow darken alike; roundness
   runs from the frame's rectangle through its ellipse to a circle. Placed by
@@ -1397,8 +1466,10 @@ dependency at all.
   guided filter HDR-001 already uses, at a small radius, with the slider moving
   the variance that counts as noise rather than a blend weight. Colour takes the
   hue from a heavily blurred copy and the brightness from the original, which is
-  what makes it noise reduction and not a blur. Both default to off: the right
-  amount depends on the ISO, and guessing it is worse than leaving it.
+  what makes it noise reduction and not a blur. Luminance defaults to off and colour noise to 25:
+  the right amount of luminance smoothing depends on the ISO and guessing it is
+  worse than leaving it, while colour noise is never wanted (DETAIL-002 below
+  says why).
 
   Under the luminance slider, Detail and Contrast. Detail moves the line
   between grain and structure — a quarter to four times the variance that
@@ -1718,7 +1789,10 @@ dependency at all.
   Above those parts is the mask itself: a name, a strength and a duplicate. The
   name is what it is called rather than what it is, because three radial masks
   on one frame are "Radial 1/2/3" until someone says which one is the face;
-  blank puts the automatic name back. The strength fades everything the mask
+  blank puts the automatic name back. The number only appears when there is
+  something to tell apart: one radial mask is "Radial", and it counts masks of
+  that name rather than places in the list, so deleting the first of three
+  leaves "Radial 1" and "Radial 2" instead of "Radial 2" and "Radial 3". The strength fades everything the mask
   does at once, which is how "slightly less of that" is actually asked — the
   alternative is walking back seven sliders by eye. Duplicating carries the
   pixels across, so a found mask does not pay for the segmentation model twice.
@@ -2085,8 +2159,12 @@ dependency at all.
   true and "Dog" on it is not. The tooltip says how sure: "Probably a bird —
   100 %". Runs off the main thread once the segmentation lands and renames the
   chip when it answers. Optional (PP-ResNet50, `dev/fetch-models.sh`); without
-  it the chips are what they were. The mask a renamed chip makes is still
-  called by its classes. Measured on 35 frames, see ENGINEERING, "Naming the
+  it the chips are what they were. The mask the chip makes is called what the
+  chip said — "Bird", not "Animal" — and the rename field shows that word, so
+  blanking it still puts the class name back. A second click on the same chip
+  points at the mask the first one made rather than adding an empty copy of it,
+  as long as that mask is still untouched; a double-click therefore makes one
+  mask, not two. Measured on 35 frames, see ENGINEERING, "Naming the
   animal": no wrong name, and deer, which ImageNet has no word for, stay
   "Animal".
 
@@ -2395,6 +2473,15 @@ dependency at all.
   White balance counts as moved against what the camera chose rather than
   against zero, and the sharpening's neutral is what a RAW is developed at
   rather than nothing — so a default is not an edit.
+
+  Two corrections from an outside review (FT-006): the marks were put on the
+  panel's own sliders only, so a mixer band, a grade, a point colour or a
+  spot's radius showed nothing however far it had been moved — every slider
+  goes through one row builder, which now registers it, and the marks run over
+  all of them. And a double-click reset went to the readout's idea of neutral
+  rather than the slider's own, so Sharpening and Colour noise landed on 0
+  where their neutral is 25; each slider's neutral is registered where it is
+  built and both the mark and the reset read it.
 - ✅ **UX-004**: Keyboard-first navigation and accessible names. Every button
   that is only an icon takes its tooltip as its accessible name, set once over
   the whole window rather than at each of the places one is made. The editor's
@@ -2631,19 +2718,11 @@ The status markers above are the roadmap; the tier lists that stood here went
 stale as items were built, so this list is generated from them instead. What
 is not yet built, in the order the groups appear:
 
-- partly built — **LIB-004** Thumbnail size control and a single-photo loupe
-- partly built — **LIB-014** Names on faces
-- partly built — **LIB-007** Batch export
 - partly built — **CULL-003** Faces, from YuNet: eyes open or closed are not detected
 - partly built — **CULL-004** A suggested rating, 0–5, shown beside the photograph
 - partly built — **CULL-005** A score learned from this photographer's own ratings
-- planned — **CANVAS-003** Checkerboard transparency background
-- planned — **CANVAS-006** Reference view
 - partly built — **RENDER-009** Colour space
 - planned — **RENDER-010** GPU pipeline, if the CPU one ever stops being enough
-- planned — **TOOL-001** Tool system
-- planned — **FILTER-001** Gaussian blur
-- planned — **FILTER-002** Unsharp mask
 - planned — **DETAIL-008** Settle whether a developed frame is as sharp as Lightroom's
 - planned — **HDR-003** HDR display output (PQ/HLG)
 - partly built — **MASK-008** Background and people masks, and **Person and Animal find a
