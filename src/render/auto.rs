@@ -1,0 +1,749 @@
+use crate::core::document::{Basic, Document, Perspective};
+use crate::core::mask::{Mask, Shape};
+use crate::core::mask::Alpha;
+use crate::core::image::LinearImage;
+use crate::core::plane::{self, Plane};
+use crate::core::tone;
+
+use super::{ramp, region_gain, tone_position, ENDPOINT_STOPS, REGION_STOPS};
+
+const MOST_EXPOSURE: f32 = 0.75;
+
+const BLOWN: f32 = 0.988;
+const DIM: f32 = 0.74;
+
+const BLACK_POINT: f32 = 0.035;
+const WHITE_POINT: f32 = 0.94;
+
+const CLOSE_ENOUGH: f32 = 0.012;
+
+const WORTH_MOVING: f32 = 0.006;
+
+const SUBJECT_TARGET: f32 = 0.55;
+const SUBJECT_LOW: f32 = 0.40;
+
+const MOST_SUBJECT_EXPOSURE: f32 = 2.0;
+const LEAST_SUBJECT_EXPOSURE: f32 = 0.33;
+
+const MOST_HDR: f32 = 40.0;
+const MOST_VIBRANCE: f32 = 22.0;
+
+const COLOUR_TARGET: f32 = 0.30;
+
+const LOW: f32 = 0.005;
+const HIGH: f32 = 0.995;
+
+pub struct Auto {
+    pub basic: Basic,
+
+    pub subject: Option<Basic>,
+}
+
+pub const SUBJECT_MASK: &str = "Subject";
+
+impl Auto {
+
+    pub fn apply(&self, document: &mut Document) -> Option<usize> {
+        let mut basic = document.basic();
+        basic.exposure = self.basic.exposure;
+        basic.whites = self.basic.whites;
+        basic.blacks = self.basic.blacks;
+        basic.highlights = self.basic.highlights;
+        basic.hdr = self.basic.hdr;
+        basic.vibrance = self.basic.vibrance;
+        document.set_basic(basic);
+
+        let lift = self.subject?;
+        let mut masks = document.masks();
+        masks.retain(|mask| mask.name.as_deref() != Some(SUBJECT_MASK));
+        let mut mask = Mask::new(Shape::Segment { classes: super::segment::MATTEABLE.to_vec() });
+        mask.matte = true;
+        mask.basic = lift;
+        mask.name = Some(SUBJECT_MASK.to_string());
+        masks.push(mask);
+        document.set_masks(masks);
+        Some(document.masks().len() - 1)
+    }
+}
+
+pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
+    let mut basic = Basic::default();
+    let Some(sorted) = luminances(image, None) else {
+        return Auto { basic, subject: None };
+    };
+
+    let inside = subject.and_then(|alpha| luminances(image, Some(alpha)));
+
+    let at = |fraction: f32| {
+        let index = ((sorted.len() - 1) as f32 * fraction).round() as usize;
+        sorted[index.min(sorted.len() - 1)].max(1e-6)
+    };
+
+    let brightest = tone::curve(at(HIGH));
+    let wanted = match brightest {
+        above if above > BLOWN => Some(tone::scene_value_for(WHITE_POINT)),
+        below if below < DIM => Some(tone::scene_value_for(WHITE_POINT)),
+        _ => None,
+    };
+    basic.exposure = wanted
+        .map(|target| (target / at(HIGH)).log2().clamp(-MOST_EXPOSURE, MOST_EXPOSURE))
+        .unwrap_or(0.0);
+    let gain = 2.0f32.powf(basic.exposure);
+
+    basic.whites = solve(|amount| display_at(at(HIGH) * gain, 0.0, amount), WHITE_POINT);
+    basic.blacks = solve(|amount| display_at(at(LOW) * gain, amount, 0.0), BLACK_POINT);
+
+    let highest = display_at(at(HIGH) * gain, basic.blacks, basic.whites);
+    if highest > WHITE_POINT + 0.005 {
+        basic.highlights = solve(
+            |amount| {
+                let lit = at(HIGH) * gain;
+                let position = tone_position(lit);
+                let region = region_gain(amount, ramp((position - 0.5) / 0.5), REGION_STOPS)
+                    * region_gain(basic.whites, ramp((position - 0.75) / 0.25), ENDPOINT_STOPS);
+                tone::curve(lit * region)
+            },
+            WHITE_POINT,
+        )
+        .min(0.0);
+    }
+
+    let subject = inside.and_then(|values| {
+        let middle = values[values.len() / 2].max(1e-6) * gain;
+        let short = (tone::scene_value_for(SUBJECT_TARGET) / middle).log2();
+        let worth_it = tone::curve(middle) < SUBJECT_LOW && short >= LEAST_SUBJECT_EXPOSURE;
+        worth_it.then(|| Basic {
+            exposure: short.min(MOST_SUBJECT_EXPOSURE),
+            ..Basic::default()
+        })
+    });
+
+    if let Some(lift) = &subject {
+        basic.hdr = (lift.exposure / MOST_SUBJECT_EXPOSURE * MOST_HDR).clamp(0.0, MOST_HDR).round();
+    }
+
+    let colour = colourfulness(image);
+    basic.vibrance = (((COLOUR_TARGET - colour) / COLOUR_TARGET) * 100.0)
+        .clamp(0.0, MOST_VIBRANCE)
+        .round();
+
+    Auto { basic, subject }
+}
+
+fn colourfulness(image: &LinearImage) -> f32 {
+    let pixels = image.pixel_count();
+    if pixels == 0 {
+        return COLOUR_TARGET;
+    }
+    let step = (pixels / 50_000).max(1);
+    let mut values: Vec<f32> = image
+        .data
+        .chunks_exact(3)
+        .step_by(step)
+        .filter_map(|pixel| {
+            let high = pixel[0].max(pixel[1]).max(pixel[2]);
+            let low = pixel[0].min(pixel[1]).min(pixel[2]);
+
+            (high > 0.004).then(|| ((high - low) / high).clamp(0.0, 1.0))
+        })
+        .collect();
+    if values.len() < 64 {
+        return COLOUR_TARGET;
+    }
+    values.sort_by(f32::total_cmp);
+    values[values.len() / 2]
+}
+
+fn display_at(lit: f32, blacks: f32, whites: f32) -> f32 {
+    let position = tone_position(lit);
+    let region = region_gain(blacks, ramp((0.25 - position) / 0.25), ENDPOINT_STOPS)
+        * region_gain(whites, ramp((position - 0.75) / 0.25), ENDPOINT_STOPS);
+    tone::curve(lit * region)
+}
+
+fn solve(measure: impl Fn(f32) -> f32, wanted: f32) -> f32 {
+    let resting = measure(0.0);
+    if (resting - wanted).abs() < CLOSE_ENOUGH {
+        return 0.0;
+    }
+
+    let (mut low, mut high) = (-100.0f32, 100.0f32);
+    let amount = if measure(low) > wanted {
+        low
+    } else if measure(high) < wanted {
+        high
+    } else {
+        for _ in 0..16 {
+            let middle = (low + high) / 2.0;
+            if measure(middle) < wanted {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        (low + high) / 2.0
+    };
+
+    if (measure(amount) - resting).abs() < WORTH_MOVING || amount.abs() < 2.0 {
+        return 0.0;
+    }
+    amount
+}
+
+fn luminances(image: &LinearImage, only: Option<&Alpha>) -> Option<Vec<f32>> {
+    let pixels = image.pixel_count();
+    if pixels == 0 {
+        return None;
+    }
+
+    let step = (pixels / 100_000).max(1);
+    let (width, height) = (image.width as usize, image.height as usize);
+
+    let mut values: Vec<f32> = image
+        .data
+        .chunks_exact(3)
+        .enumerate()
+        .step_by(step)
+        .filter(|(index, _)| match only {
+
+            Some(alpha) => {
+                let (x, y) = (index % width, index / width);
+                let ax = (x * alpha.width / width.max(1)).min(alpha.width.saturating_sub(1));
+                let ay = (y * alpha.height / height.max(1)).min(alpha.height.saturating_sub(1));
+                alpha.data.get(ay * alpha.width + ax).copied().unwrap_or(0.0) > 0.6
+            }
+            None => true,
+        })
+        .map(|(_, pixel)| 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2])
+        .filter(|value| value.is_finite())
+        .collect();
+
+    if values.len() < 64 {
+        return None;
+    }
+    values.sort_by(f32::total_cmp);
+    Some(values)
+}
+
+const EDGE_FLOOR: f32 = 0.12;
+
+const LEAN: f32 = 0.6;
+
+const ENOUGH: usize = 400;
+
+const WORTH_IT: f32 = 2.0;
+
+pub fn perspective(luma: &Plane) -> (Perspective, f32) {
+    let (width, height) = (luma.width, luma.height);
+    if width < 32 || height < 32 {
+        return (Perspective::default(), 0.0);
+    }
+
+    let smooth = plane::blur(luma, (width.max(height) / 400).max(1));
+
+    let mut upright = Fit::default();
+    let mut across = Fit::default();
+    let mut strongest = 0.0f32;
+    let mut edges: Vec<(f32, f32, f32, f32)> = Vec::new();
+
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let at = |dx: isize, dy: isize| {
+                smooth.data[(y as isize + dy) as usize * width + (x as isize + dx) as usize]
+            };
+
+            let gx = (at(1, -1) + 2.0 * at(1, 0) + at(1, 1))
+                - (at(-1, -1) + 2.0 * at(-1, 0) + at(-1, 1));
+            let gy = (at(-1, 1) + 2.0 * at(0, 1) + at(1, 1))
+                - (at(-1, -1) + 2.0 * at(0, -1) + at(1, -1));
+            let strength = gx.hypot(gy);
+            if strength <= 0.0 {
+                continue;
+            }
+            strongest = strongest.max(strength);
+            edges.push((x as f32, y as f32, gx, gy));
+        }
+    }
+
+    let floor = strongest * EDGE_FLOOR;
+    let (centre_x, centre_y) = (width as f32 / 2.0, height as f32 / 2.0);
+
+    for (x, y, gx, gy) in edges {
+        let strength = gx.hypot(gy);
+        if strength < floor {
+            continue;
+        }
+
+        if gy.abs() < gx.abs() * LEAN {
+
+            upright.add(x - centre_x, -gy / gx, strength);
+        } else if gx.abs() < gy.abs() * LEAN {
+            across.add(y - centre_y, -gx / gy, strength);
+        }
+    }
+
+    let mut perspective = Perspective::default();
+    let mut angle = 0.0;
+
+    if let Some((lean, slope)) = upright.solve(ENOUGH) {
+        perspective.vertical = worth_it((slope * (height as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
+
+        let tilt = -lean.atan().to_degrees().clamp(-10.0, 10.0);
+        angle = if tilt.abs() >= 0.2 { tilt } else { 0.0 };
+    }
+    if let Some((_, slope)) = across.solve(ENOUGH) {
+        perspective.horizontal =
+            worth_it((slope * (width as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
+    }
+
+    (perspective, angle)
+}
+
+fn worth_it(amount: f32) -> f32 {
+    if amount.abs() >= WORTH_IT {
+        amount
+    } else {
+        0.0
+    }
+}
+
+#[derive(Default)]
+struct Fit {
+    weight: f64,
+    x: f64,
+    y: f64,
+    xx: f64,
+    xy: f64,
+    count: usize,
+}
+
+impl Fit {
+    fn add(&mut self, x: f32, y: f32, weight: f32) {
+        let (x, y, w) = (x as f64, y as f64, weight as f64);
+        self.weight += w;
+        self.x += w * x;
+        self.y += w * y;
+        self.xx += w * x * x;
+        self.xy += w * x * y;
+        self.count += 1;
+    }
+
+    fn solve(&self, enough: usize) -> Option<(f32, f32)> {
+        if self.count < enough || self.weight <= 0.0 {
+            return None;
+        }
+        let mean_x = self.x / self.weight;
+        let mean_y = self.y / self.weight;
+        let variance = self.xx / self.weight - mean_x * mean_x;
+        if variance < 1e-6 {
+            return None;
+        }
+        let covariance = self.xy / self.weight - mean_x * mean_y;
+        let slope = covariance / variance;
+        Some(((mean_y - slope * mean_x) as f32, slope as f32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn auto_before_and_after() {
+        let (Ok(path), Ok(out)) = (std::env::var("FRAME"), std::env::var("OUT")) else {
+            println!("set FRAME and OUT");
+            return;
+        };
+        let path = std::path::PathBuf::from(path);
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let linear = crate::io::raw::decode_linear(&path).unwrap();
+        let mut document = Document::new(path.display().to_string());
+        let working = crate::render::to_working_space(&document, &linear);
+
+        let before = crate::render::apply_stack(&document, &working, 1.0);
+        let (mut after, auto, _) = run(&mut document, &working, &before);
+        report(&stem, &auto);
+
+        let mut basic = document.basic();
+        if let Ok(hdr) = std::env::var("HDR") {
+            basic.hdr = hdr.parse().unwrap();
+            document.set_basic(basic);
+            after = crate::render::apply_stack(&document, &working, 1.0);
+        }
+        if std::env::var("MASK").as_deref() == Ok("0") {
+            document.set_masks(Vec::new());
+            after = crate::render::apply_stack(&document, &working, 1.0);
+        }
+
+        let shrink = |image: &image::RgbImage| {
+            let scale = 1400.0 / image.width().max(image.height()) as f32;
+            image::imageops::resize(
+                image,
+                (image.width() as f32 * scale) as u32,
+                (image.height() as f32 * scale) as u32,
+                image::imageops::FilterType::Lanczos3,
+            )
+        };
+        for (name, image) in [("voor", &before), ("na", &after)] {
+            let file = format!("{out}/{stem}-{name}.jpg");
+            shrink(image).save(&file).unwrap();
+            println!("  {file}");
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn what_auto_now_does() {
+        let paths = match std::env::var("FRAME") {
+            Ok(one) => vec![std::path::PathBuf::from(one)],
+            Err(_) => {
+                let Ok(dir) = std::env::var("RAF_DIR") else {
+                    println!("set RAF_DIR or FRAME to run this");
+                    return;
+                };
+                let mut found: Vec<_> = std::fs::read_dir(&dir)
+                    .unwrap()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| crate::io::raw::is_supported(path))
+                    .collect();
+                found.sort();
+                let count: usize =
+                    std::env::var("FRAMES").ok().and_then(|n| n.parse().ok()).unwrap_or(8);
+                let step = (found.len() / count.max(1)).max(1);
+                found.into_iter().step_by(step).take(count).collect()
+            }
+        };
+
+        for path in paths {
+            let Ok(full) = crate::io::raw::decode_linear(&path) else { continue };
+
+            let linear = full.downscaled(2000).unwrap_or(full);
+            let mut document = Document::new(path.display().to_string());
+            let working = crate::render::to_working_space(&document, &linear);
+            let before = crate::render::apply_stack(&document, &working, 1.0);
+            let (after, auto, subject) = run(&mut document, &working, &before);
+
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            report(&stem, &auto);
+            let (rw, rh) = crate::render::raster_size(before.width(), before.height(), crate::render::MASK_RASTER);
+            let read = |image: &image::RgbImage| measure(image, subject.as_ref(), rw, rh);
+            let (was_subject, was_median, was_high) = read(&before);
+            let (is_subject, is_median, is_high) = read(&after);
+            println!(
+                "    onderwerp {was_subject:.3} -> {is_subject:.3}   \
+beeld {was_median:.3} -> {is_median:.3}   p99.5 {was_high:.3} -> {is_high:.3}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn the_subject_mask_as_a_picture() {
+        let (Ok(path), Ok(out)) = (std::env::var("FRAME"), std::env::var("OUT")) else { return };
+        let path = std::path::PathBuf::from(path);
+        let full = crate::io::raw::decode_linear(&path).unwrap();
+
+        let proxy = match std::env::var("FULL").is_ok() {
+            true => full,
+            false => full.downscaled(2400).unwrap_or(full),
+        };
+        let document = Document::new(path.display().to_string());
+        let working = crate::render::to_working_space(&document, &proxy);
+        let frame = crate::render::apply_stack(&document, &working, 1.0);
+        let (rw, rh) = crate::render::raster_size(frame.width(), frame.height(), crate::render::MASK_RASTER);
+        let found = crate::render::segment::of(&frame).expect("model installed");
+        println!("segmentation photo {}x{}, raster {rw}x{rh}", found.photo().width(), found.photo().height());
+
+        if std::env::var("SAVE_PHOTO").is_ok() {
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            found.photo().save(format!("{out}/photo-{stem}.png")).unwrap();
+        }
+        for (class, share) in found.present() {
+            println!("  class {class} {:?} {:.2}%", crate::render::segment::label(class), share * 100.0);
+        }
+
+        let classes: Vec<u16> = std::env::var("CLASSES")
+            .ok()
+            .map(|list| list.split(',').filter_map(|c| c.parse().ok()).collect())
+            .unwrap_or_else(|| crate::render::segment::MATTEABLE.to_vec());
+        let mut mask = Mask::new(Shape::Segment { classes: classes.clone() });
+        mask.matte = classes.iter().all(|class| crate::render::segment::MATTEABLE.contains(class));
+        crate::render::resolve_mask(&mut mask, Some(&found), None, Some(&frame), rw, rh);
+        for (name, pixels) in [("unshaped", &mask.unshaped), ("map", &mask.map)] {
+            let Some(alpha) = pixels.0.as_deref() else { println!("{name}: none"); continue };
+            let share: f64 = alpha.data.iter().map(|v| *v as f64).sum::<f64>() / alpha.data.len() as f64;
+            println!("{name}: {:.2}% of the frame, feather {} shift {}", share * 100.0, mask.feather, mask.shift);
+            let image = image::GrayImage::from_fn(rw as u32, rh as u32, |x, y| {
+                image::Luma([(alpha.data[y as usize * rw + x as usize].clamp(0.0, 1.0) * 255.0) as u8])
+            });
+            let file = format!("{out}/mask-{name}.png");
+            image.save(&file).unwrap();
+            println!("  {file}");
+        }
+    }
+
+    fn run(
+        document: &mut Document,
+        working: &LinearImage,
+        before: &image::RgbImage,
+    ) -> (image::RgbImage, Auto, Option<Alpha>) {
+        let (rw, rh) = crate::render::raster_size(before.width(), before.height(), crate::render::MASK_RASTER);
+        let found = crate::render::segment::of(before);
+        let resolve = |mask: &mut Mask| {
+            crate::render::resolve_mask(mask, found.as_ref(), None, Some(before), rw, rh)
+        };
+
+        let mut probe = Mask::new(Shape::Segment { classes: crate::render::segment::MATTEABLE.to_vec() });
+        probe.matte = true;
+        resolve(&mut probe);
+        let subject = probe.map.0.as_deref().cloned();
+
+        let auto = tone(working, subject.as_ref());
+        auto.apply(document);
+
+        let mut masks = document.masks();
+        masks.iter_mut().filter(|mask| mask.is_pending()).for_each(resolve);
+        if let (Ok(out), Some(mask)) = (std::env::var("OUT"), masks.last()) {
+            for (name, pixels) in [("run-unshaped", &mask.unshaped), ("run-map", &mask.map)] {
+                if let Some(alpha) = pixels.0.as_deref() {
+                    let image = image::GrayImage::from_fn(rw as u32, rh as u32, |x, y| {
+                        image::Luma([(alpha.data[y as usize * rw + x as usize].clamp(0.0, 1.0) * 255.0) as u8])
+                    });
+                    image.save(format!("{out}/{name}.png")).unwrap();
+                }
+            }
+        }
+        document.set_masks(masks);
+
+        (crate::render::apply_stack(document, working, 1.0), auto, subject)
+    }
+
+    fn report(stem: &str, auto: &Auto) {
+        let basic = &auto.basic;
+        println!(
+            "{stem}: exposure {:+.2}  blacks {:.0}  whites {:.0}  highlights {:.0}  hdr {:.0}  vibrance {:.0}  onderwerp {}",
+            basic.exposure,
+            basic.blacks,
+            basic.whites,
+            basic.highlights,
+            basic.hdr,
+            basic.vibrance,
+            match &auto.subject {
+                Some(lift) => format!("{:+.2} EV in een masker", lift.exposure),
+                None => "geen".to_string(),
+            }
+        );
+    }
+
+    fn measure(
+        image: &image::RgbImage,
+        subject: Option<&Alpha>,
+        rw: usize,
+        rh: usize,
+    ) -> (f32, f32, f32) {
+        let (mut inside, mut all) = (Vec::new(), Vec::new());
+        for (x, y, pixel) in image.enumerate_pixels() {
+            let luma = (0.2126 * pixel[0] as f32
+                + 0.7152 * pixel[1] as f32
+                + 0.0722 * pixel[2] as f32)
+                / 255.0;
+            all.push(luma);
+            if let Some(alpha) = subject {
+                let ax = (x as usize * rw / image.width() as usize).min(rw - 1);
+                let ay = (y as usize * rh / image.height() as usize).min(rh - 1);
+                if alpha.data[ay * rw + ax] > 0.6 {
+                    inside.push(luma);
+                }
+            }
+        }
+        all.sort_by(f32::total_cmp);
+        inside.sort_by(f32::total_cmp);
+        (
+            inside.get(inside.len() / 2).copied().unwrap_or(-1.0),
+            all[all.len() / 2],
+            all[all.len() * 995 / 1000],
+        )
+    }
+
+    #[test]
+    fn converging_verticals_are_found_and_upright_ones_are_not_touched() {
+        let (w, h) = (256usize, 256usize);
+
+        let draw = |keystone: f32| {
+            let mut data = vec![0.2f32; w * h];
+            for line in [-0.3, -0.1, 0.1, 0.3] {
+                let base = w as f32 / 2.0 + line * w as f32;
+                for y in 0..h {
+                    let dy = y as f32 - h as f32 / 2.0;
+                    let x = base + (base - w as f32 / 2.0) * keystone * dy / (h as f32 / 2.0);
+                    let x = x.round() as isize;
+                    for width in -1..=1 {
+                        let at = x + width;
+                        if (0..w as isize).contains(&at) {
+                            data[y * w + at as usize] = 0.9;
+                        }
+                    }
+                }
+            }
+            Plane::new(w, h, data)
+        };
+
+        let (straight, straight_angle) = perspective(&draw(0.0));
+        assert!(
+            straight.vertical.abs() < 6.0,
+            "upright lines need no correction: {}",
+            straight.vertical
+        );
+        assert!(straight_angle.abs() < 1.5, "and no rotation: {straight_angle}");
+
+        let (keyed, _) = perspective(&draw(0.35));
+        assert!(keyed.vertical.abs() > 12.0, "a keystone is found: {}", keyed.vertical);
+
+        let (other, _) = perspective(&draw(-0.35));
+        assert!(
+            other.vertical * keyed.vertical < 0.0,
+            "opposite keystones, opposite corrections: {} and {}",
+            keyed.vertical,
+            other.vertical
+        );
+    }
+
+    #[test]
+    fn a_frame_with_no_lines_is_left_alone() {
+        let (w, h) = (128usize, 128usize);
+        let data = (0..w * h)
+            .map(|index| ((index * 2654435761usize) % 997) as f32 / 997.0)
+            .collect();
+        let (found, angle) = perspective(&Plane::new(w, h, data));
+        assert_eq!(found, Perspective::default());
+        assert_eq!(angle, 0.0);
+    }
+
+    #[test]
+    fn an_endpoint_that_cannot_reach_its_target_stays_put() {
+
+        let unreachable = solve(|amount| display_at(0.0004, amount, 0.0), 0.5);
+        assert_eq!(unreachable, 0.0, "a target it cannot reach is not an answer");
+
+        let resting = display_at(0.9, 0.0, 0.0);
+        assert_eq!(solve(|amount| display_at(0.9, 0.0, amount), resting), 0.0);
+
+        let wanted = display_at(0.9, 0.0, 40.0);
+        let found = solve(|amount| display_at(0.9, 0.0, amount), wanted);
+        assert!((found - 40.0).abs() < 1.0, "solved to {found}, wanted 40");
+    }
+
+    #[test]
+    fn the_exposure_answers_to_the_ends_and_not_to_the_middle() {
+        let flat = |value: f32, brightest: f32| {
+            let (w, h) = (64u32, 64u32);
+            let count = (w * h) as usize;
+            let data = (0..count)
+                .flat_map(|index| {
+
+                    let level = if index >= count - count / 150 { brightest } else { value };
+                    [level, level, level]
+                })
+                .collect();
+            LinearImage::new(w, h, data)
+        };
+
+        let high_key = tone(&flat(0.55, tone::scene_value_for(0.93)), None).basic;
+        assert_eq!(high_key.exposure, 0.0, "a bright scene is not a mistake");
+
+        let blown = tone(&flat(0.4, tone::scene_value_for(0.9995)), None).basic;
+        assert!(blown.exposure < -0.05, "a blown frame comes down: {}", blown.exposure);
+
+        let dark = tone(&flat(0.01, 0.03), None).basic;
+        assert!(dark.exposure > 0.05, "a dark frame goes up: {}", dark.exposure);
+
+        for basic in [blown, dark] {
+            assert!(basic.exposure.abs() <= MOST_EXPOSURE + 1e-4);
+        }
+    }
+
+    #[test]
+    fn a_subject_in_shadow_gets_a_mask_and_the_frame_keeps_its_exposure() {
+
+        let (w, h) = (64u32, 64u32);
+        let bright = tone::scene_value_for(0.9);
+        let data = (0..w * h)
+            .flat_map(|index| {
+                let (x, y) = (index % w, index / w);
+                let dark = (16..48).contains(&x) && (16..48).contains(&y);
+                let value = if dark { bright / 32.0 } else { bright };
+                [value, value, value]
+            })
+            .collect();
+        let image = LinearImage::new(w, h, data);
+
+        let alpha = Alpha::new(
+            w as usize,
+            h as usize,
+            (0..w * h)
+                .map(|index| {
+                    let (x, y) = (index % w, index / w);
+                    match (16..48).contains(&x) && (16..48).contains(&y) {
+                        true => 1.0,
+                        false => 0.0,
+                    }
+                })
+                .collect(),
+        );
+
+        let auto = tone(&image, Some(&alpha));
+        let lift = auto.subject.expect("a subject five stops down is one to lift");
+        assert!(lift.exposure > 1.0, "and lifted by a real amount: {}", lift.exposure);
+        assert!(lift.exposure <= MOST_SUBJECT_EXPOSURE + 1e-4, "but not past its limit");
+        assert!(auto.basic.hdr > 0.0, "with a hand under everything else down there");
+        assert_eq!(auto.basic.shadows, 0.0, "and never the slider that cannot reach");
+
+        assert_eq!(auto.basic.exposure, 0.0, "the frame keeps its exposure");
+
+        let flat = LinearImage::new(w, h, vec![tone::scene_value_for(0.55); (w * h * 3) as usize]);
+        let everything = Alpha::new(w as usize, h as usize, vec![1.0; (w * h) as usize]);
+        let lit = tone(&flat, Some(&everything));
+        assert!(lit.subject.is_none(), "a lit subject needs no mask");
+        assert_eq!(lit.basic.hdr, 0.0, "and no local tone mapping either");
+    }
+
+    #[test]
+    fn colour_is_added_to_a_flat_frame_and_not_to_a_colourful_one() {
+        let (w, h) = (64u32, 64u32);
+        let of = |red: f32, green: f32, blue: f32| {
+            LinearImage::new(
+                w,
+                h,
+                (0..w * h).flat_map(|_| [red, green, blue]).collect::<Vec<_>>(),
+            )
+        };
+
+        let flat = tone(&of(0.20, 0.21, 0.22), None).basic;
+        assert!(flat.vibrance > 0.0, "a flat frame gets some: {}", flat.vibrance);
+        assert!(flat.vibrance <= MOST_VIBRANCE, "and never more than a fifth of the slider");
+
+        let vivid = tone(&of(0.40, 0.10, 0.05), None).basic;
+        assert_eq!(vivid.vibrance, 0.0, "a colourful frame is left alone");
+        assert_eq!(vivid.saturation, 0.0, "and never by the blunt slider");
+    }
+
+    #[test]
+    fn auto_refuses_everything_that_is_a_matter_of_taste() {
+        let (w, h) = (64u32, 64u32);
+        let data = (0..w * h)
+            .flat_map(|index| {
+                let value = (index % (w * h)) as f32 / (w * h) as f32 * 1.5;
+                [value, value, value]
+            })
+            .collect();
+        let basic = tone(&LinearImage::new(w, h, data), None).basic;
+
+        assert_eq!(basic.contrast, 0.0);
+        assert_eq!(basic.saturation, 0.0);
+        assert_eq!(basic.shadows, 0.0);
+        assert_eq!(basic.clarity, 0.0);
+        assert_eq!(basic.texture, 0.0);
+    }
+}

@@ -1,0 +1,688 @@
+/* UX-003: the look. Colours come from libadwaita's named palette, so light and
+   dark themes and the user's accent colour all follow automatically. */
+
+/* ---------- Adjustment panel ---------- */
+
+.adjustment {
+    background: @window_bg_color;
+    border-left: 1px solid alpha(currentColor, 0.1);
+}
+
+/* UX-014: a label, not a heading. These are signposts between groups of
+   sliders and there are seven of them on a page — at full weight and half
+   opacity they compete with the values, which are the only numbers on the
+   panel worth reading. */
+.section-header {
+    font-size: 0.72em;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    opacity: 0.38;
+}
+
+.slider-name {
+    font-size: 0.92em;
+}
+
+.slider-value {
+    font-size: 0.92em;
+    opacity: 0.75;
+    /* Tabular figures: without these the readout jitters while dragging. */
+    font-feature-settings: "tnum";
+}
+
+/* A slim bipolar slider. GTK draws the handle inside the trough by default, so
+   the negative margin is what lets a 14 px handle sit on a 4 px track.
+   
+   -5 rather than -6: the trough's minimum is the handle's minimum plus these
+   margins, and at -6 that arithmetic lands on 2 px with our own handle and
+   below zero with a theme whose handle is smaller — which GTK reports as
+   "trough reported min height -2" and then draws anyway. */
+.adjustment scale {
+    min-height: 0;
+    padding: 5px 0;
+}
+
+.adjustment scale trough {
+    min-height: 3px;
+    border-radius: 2px;
+    background: alpha(currentColor, 0.14);
+}
+
+/* UX-003: a slider that has been moved off its neutral is the accent colour;
+   one still sitting there is grey. The question a photograph raises on the
+   second pass through it is "what did I do to this one", and seventeen
+   identical sliders do not answer it — the answer should be the shape of the
+   panel rather than something to read. */
+.adjustment scale highlight {
+    min-height: 3px;
+    border-radius: 2px;
+    background: alpha(currentColor, 0.22);
+}
+
+.adjustment scale.touched highlight {
+    background: @accent_bg_color;
+}
+
+/* UX-014: smaller, and without the drop shadow. A shadow under a 14 px dot is
+   a detail nobody sees as a shadow; what it does is thicken the dot, and
+   eighteen thickened dots down a column is most of why the panel read as
+   heavy. */
+.adjustment scale slider {
+    min-width: 11px;
+    min-height: 11px;
+    margin: -4px;
+    border-radius: 50%;
+    background: alpha(currentColor, 0.5);
+    border: none;
+    box-shadow: none;
+}
+
+.adjustment scale.touched slider {
+    background: @accent_bg_color;
+}
+
+.adjustment scale:hover slider {
+    background: alpha(currentColor, 0.7);
+}
+
+.adjustment scale.touched:hover slider {
+    background: mix(@accent_bg_color, white, 0.15);
+}
+
+.adjustment scale:disabled slider {
+    background: alpha(currentColor, 0.3);
+}
+
+/* UX-017: hierarchy from state. Under `.quiet` a slider at rest paints almost
+   nothing — a hairline, no handle — and comes back to a full track on hover or
+   once it has been moved. Sizes never change between the two states, only
+   what is painted, so nothing on the page shifts when a hand passes over it. */
+.quiet scale trough {
+    background: alpha(currentColor, 0.07);
+    transition: background 120ms ease-out;
+}
+
+.quiet scale slider {
+    background: transparent;
+    transition: background 120ms ease-out;
+}
+
+.quiet scale:hover trough,
+.quiet scale.touched trough {
+    background: alpha(currentColor, 0.14);
+}
+
+.quiet scale:hover slider {
+    background: alpha(currentColor, 0.7);
+}
+
+.quiet scale.touched slider {
+    background: @accent_bg_color;
+}
+
+.quiet scale.touched:hover slider {
+    background: mix(@accent_bg_color, white, 0.15);
+}
+
+.quiet .slider-name {
+    opacity: 0.8;
+}
+
+.quiet .slider-value {
+    opacity: 0.55;
+}
+
+.quiet .touched .slider-value,
+.quiet .lead .slider-name {
+    opacity: 1;
+}
+
+.quiet .lead .slider-name {
+    font-weight: 600;
+}
+
+/* ---------- Histogram ---------- */
+
+.histogram {
+    background: alpha(black, 0.35);
+    border-radius: 4px;
+}
+
+/* ADJ-002. Square, because a tone curve is read as a diagonal and a stretched
+   one lies about how steep the shape is. */
+.tone-curve {
+    background: alpha(black, 0.35);
+    border-radius: 4px;
+}
+
+/* The clipping lights are indicators first and buttons second: they appear
+   only when there is something to report, and they name their end by colour. */
+.clip-light {
+    min-width: 14px;
+    min-height: 14px;
+    padding: 0;
+    margin: 0;
+    border-radius: 3px;
+    border: none;
+    opacity: 0.55;
+}
+
+.clip-light:hover { opacity: 0.85; }
+.clip-light:checked { opacity: 1; }
+
+.clip-shadow { background: #2858ff; }
+.clip-highlight { background: #ff4040; }
+
+/* ---------- Canvas ---------- */
+
+.canvas-area {
+    background: darker(@window_bg_color);
+}
+
+/* ---------- Library grid ---------- */
+
+/* LIB-015: the cards in the rows. The padding is also
+   `CHROME` in justified.rs, which needs it to give the picture its shape. */
+.photo-rows > box {
+    padding: 6px;
+    border-radius: 10px;
+    transition: background 120ms ease;
+}
+
+.photo-rows > box:hover {
+    background: alpha(currentColor, 0.07);
+}
+
+.photo-rows > box:selected {
+    background: alpha(@accent_bg_color, 0.28);
+    outline: 2px solid @accent_bg_color;
+    outline-offset: -2px;
+}
+
+.thumbnail {
+    border-radius: 6px;
+    background: alpha(black, 0.25);
+}
+
+.photo-name {
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+/* Stars stay quiet until a photo is actually rated. */
+.photo-badge {
+    font-size: 0.8em;
+    opacity: 0.35;
+    letter-spacing: 0.06em;
+}
+
+.photo-badge.rated {
+    opacity: 0.9;
+    color: @accent_color;
+}
+
+.photo-badge.rejected {
+    opacity: 0.8;
+    color: @error_color;
+}
+
+/* ---------- Bars ---------- */
+
+.toolbar-row {
+    padding: 5px 10px;
+    background: @window_bg_color;
+    border-bottom: 1px solid alpha(currentColor, 0.1);
+}
+
+/* Chrome should not compete with the photo: smaller, flatter, quieter. */
+.toolbar-row button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px 6px;
+}
+
+.toolbar-row button.suggested-action {
+    padding: 2px 14px;
+}
+
+/* IO-012: the arrow beside Export is an icon, not a word, and the padding that
+   makes a labelled button comfortable makes this one look like a mistake. */
+.toolbar-row .linked button.suggested-action:not(:first-child) {
+    padding-left: 4px;
+    padding-right: 4px;
+    min-width: 20px;
+}
+
+.zoom-readout {
+    font-size: 0.88em;
+    opacity: 0.7;
+    font-feature-settings: "tnum";
+}
+
+.profile-note {
+    font-size: 0.78em;
+    opacity: 0.45;
+}
+
+.info-block {
+    font-size: 0.78em;
+    opacity: 0.6;
+    font-feature-settings: "tnum";
+}
+
+.empty-state {
+    font-size: 1.05em;
+    opacity: 0.55;
+}
+
+/* CULL: a suggestion, said quietly. Small, dim and never coloured like the
+   rating badge — the two must not be mistaken for each other. */
+.cull-note {
+    font-size: 0.72rem;
+    opacity: 0.62;
+    margin-top: -2px;
+}
+
+/* UX-009: the strip under the canvas. The current frame is marked by its
+   border rather than by a tint, so the thumbnail keeps its own colour — which
+   is the thing being judged. */
+.filmstrip {
+    background: alpha(black, 0.25);
+}
+
+.filmstrip-frame {
+    padding: 2px;
+    min-height: 0;
+    min-width: 0;
+    border: 2px solid transparent;
+}
+
+.filmstrip-frame.current {
+    border-color: @accent_bg_color;
+}
+
+/* DOC-002: quiet, and never coloured like the rating badge. */
+.edited-mark {
+    opacity: 0.7;
+}
+
+/* LIB-003: the rating on a filmstrip frame. Small, high contrast against a
+   photograph of any brightness, and out of the way in the corner. */
+.strip-badge {
+    font-size: 0.7rem;
+    color: white;
+    background: alpha(black, 0.6);
+    border-radius: 4px;
+    padding: 0 4px;
+    margin: 2px;
+}
+
+.strip-badge.rejected {
+    color: #ff9a8a;
+}
+
+/* LIB-003: the toolbar's rating button. Dim until the photograph has a rating,
+   so an unrated one is findable without shouting. */
+.rating-button {
+    opacity: 0.6;
+}
+
+.rating-button.rated {
+    opacity: 1;
+    color: @accent_color;
+}
+
+.rating-button.rejected {
+    opacity: 1;
+    color: #ff7a66;
+}
+
+/* MASK-004: what the panel is currently about. Tinted rather than quiet: the
+   panel has changed underneath the reader — half its sections are gone and
+   every slider now writes somewhere else — and a note in small type is not how
+   you tell someone that. */
+.mask-scope {
+    background: alpha(@accent_bg_color, 0.2);
+    border-radius: 7px;
+    padding: 2px;
+}
+
+.mask-scope button {
+    min-height: 26px;
+    padding: 2px 6px;
+}
+
+.mask-scope menubutton > button {
+    font-weight: 600;
+}
+
+/* TOOL-002: four aspect buttons across a 240-pixel panel. The default button
+   padding puts their combined minimum past that, and the panel is then as wide
+   as this row rather than as wide as it was meant to be.
+
+   UX-014: and flat. These rows are a choice between four things, not four
+   commands, so what marks the choice is a quiet fill rather than a raised
+   button — the only thing on the panel drawn as a *button* should be something
+   that does something when pressed. */
+.aspect-ratios button {
+    padding-left: 6px;
+    padding-right: 6px;
+    min-height: 28px;
+    font-size: 0.92em;
+    background: alpha(currentColor, 0.06);
+    box-shadow: none;
+    border-color: alpha(currentColor, 0.08);
+}
+
+.aspect-ratios button:hover {
+    background: alpha(currentColor, 0.12);
+}
+
+.aspect-ratios button:checked {
+    background: alpha(currentColor, 0.2);
+    font-weight: 600;
+}
+
+/* MASK-004: the row for the mask being edited, so the list agrees with the
+   banner above the tabs. DOC-004: and the step in the history that is on
+   screen, which is the same idea about a different list. */
+.current-mask,
+.current-step {
+    background: alpha(@accent_bg_color, 0.22);
+}
+
+/* UX-012: the path across the top of the editor. Flat buttons that read as
+   text, because a row of framed buttons reads as a toolbar and this is a
+   position, not a set of commands. */
+.breadcrumbs button {
+    padding-left: 6px;
+    padding-right: 6px;
+    font-weight: 600;
+}
+
+.breadcrumbs .crumb-arrow {
+    opacity: 0.4;
+}
+
+/* MASK-005: what a mask is made of, under the mask it belongs to. Quieter than
+   the list above it: these are the parts of one row, not siblings of it. */
+.mask-part {
+    font-size: 0.92em;
+    min-height: 34px;
+}
+
+.mask-part title {
+    opacity: 0.8;
+}
+
+/* ADJ-007: the hue slider carries the wheel it selects from. A hue picker
+   without colour on it is a number between 0 and 360, which nobody can aim —
+   the whole point of the control is that you reach for the colour you want.
+
+   The stops are the six corners of the wheel plus the wrap back to red, so the
+   position under the handle is the colour it returns. */
+.adjustment scale.hue-slider trough {
+    background: linear-gradient(to right,
+        #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%,
+        #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%);
+}
+
+/* The filled part would paint over the gradient, and there is nothing for it
+   to mean here: a hue has no neutral to fill from. */
+.adjustment scale.hue-slider highlight {
+    background: none;
+}
+
+/* Against a full-strength gradient the usual translucent handle disappears.
+   White with a dark ring reads on every hue. */
+.adjustment scale.hue-slider slider {
+    min-width: 13px;
+    min-height: 13px;
+    margin: -4px;
+    background: white;
+    border: 2px solid alpha(black, 0.45);
+}
+
+/* ADJ-005: the colour mixer's tracks.
+
+   The panel used to be a tab per channel over eight named bands, which asks
+   which *operation* you want before which colour you want it on. Nobody thinks
+   "I would like to change some hues"; they think "the sky is too cyan". So the
+   colour is picked first, as a colour, and the three sliders below describe it.
+
+   Every gradient here is generated from the band's own hue in BANDS, so the
+   swatch, the track and the arithmetic cannot drift apart. The hue track runs
+   thirty degrees either side, which is how far the slider reaches. */
+
+/* A floor above zero, not at it. `.linked` pulls every child but the first
+   back by a pixel so their borders overlap, and against a minimum of 0 that
+   arithmetic lands on -1 — which GTK reports once per button and then draws
+   anyway. Eight swatches, seven complaints, which is the tell. */
+/* UX-014: round, spaced, and small. The colour is still the whole of the
+   button — this is the one control where the thing itself is the label — but a
+   dot says "pick one of these" where a bar of eight touching rectangles says
+   "look at me". */
+.mixer-bands button {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    box-shadow: none;
+    opacity: 0.55;
+}
+
+.mixer-bands button:hover {
+    opacity: 0.85;
+}
+
+/* The ring sits outside the dot rather than over it, so the chosen colour is
+   not the one with a bite taken out of it. */
+.mixer-bands button:checked {
+    opacity: 1;
+    outline: 2px solid alpha(currentColor, 0.85);
+    outline-offset: 2px;
+}
+
+.adjustment scale.mixer-track trough {
+    min-height: 5px;
+}
+
+/* The filled part would paint over the gradient, and these have no neutral to
+   fill from — the handle's position is the value, as on the hue slider. */
+.adjustment scale.mixer-track highlight {
+    background: none;
+}
+
+.adjustment scale.mixer-track slider {
+    min-width: 13px;
+    min-height: 13px;
+    margin: -4px;
+    background: white;
+    border: 2px solid alpha(black, 0.45);
+}
+
+
+/* Red */
+.mixer-bands button.band-0 { background: #ff0000; }
+.adjustment scale.track-hue.band-0 trough {
+    background: linear-gradient(to right, #ff0080, #ff0000, #ff8000);
+}
+.adjustment scale.track-saturation.band-0 trough {
+    background: linear-gradient(to right, #8c8787, #cc7070, #ff0000);
+}
+.adjustment scale.track-luminance.band-0 trough {
+    background: linear-gradient(to right, #2e0000, #ff0000, #ffbfbf);
+}
+
+/* Orange */
+.mixer-bands button.band-1 { background: #ff8000; }
+.adjustment scale.track-hue.band-1 trough {
+    background: linear-gradient(to right, #ff0000, #ff8000, #ffff00);
+}
+.adjustment scale.track-saturation.band-1 trough {
+    background: linear-gradient(to right, #8c8987, #cc9e70, #ff8000);
+}
+.adjustment scale.track-luminance.band-1 trough {
+    background: linear-gradient(to right, #2e1700, #ff8000, #ffdfbf);
+}
+
+/* Yellow */
+.mixer-bands button.band-2 { background: #ffff00; }
+.adjustment scale.track-hue.band-2 trough {
+    background: linear-gradient(to right, #ff8000, #ffff00, #80ff00);
+}
+.adjustment scale.track-saturation.band-2 trough {
+    background: linear-gradient(to right, #8c8c87, #cccc70, #ffff00);
+}
+.adjustment scale.track-luminance.band-2 trough {
+    background: linear-gradient(to right, #2e2e00, #ffff00, #ffffbf);
+}
+
+/* Green */
+.mixer-bands button.band-3 { background: #00ff00; }
+.adjustment scale.track-hue.band-3 trough {
+    background: linear-gradient(to right, #80ff00, #00ff00, #00ff80);
+}
+.adjustment scale.track-saturation.band-3 trough {
+    background: linear-gradient(to right, #878c87, #70cc70, #00ff00);
+}
+.adjustment scale.track-luminance.band-3 trough {
+    background: linear-gradient(to right, #002e00, #00ff00, #bfffbf);
+}
+
+/* Aqua */
+.mixer-bands button.band-4 { background: #00ffff; }
+.adjustment scale.track-hue.band-4 trough {
+    background: linear-gradient(to right, #00ff80, #00ffff, #0080ff);
+}
+.adjustment scale.track-saturation.band-4 trough {
+    background: linear-gradient(to right, #878c8c, #70cccc, #00ffff);
+}
+.adjustment scale.track-luminance.band-4 trough {
+    background: linear-gradient(to right, #002e2e, #00ffff, #bfffff);
+}
+
+/* Blue */
+.mixer-bands button.band-5 { background: #0000ff; }
+.adjustment scale.track-hue.band-5 trough {
+    background: linear-gradient(to right, #0080ff, #0000ff, #8000ff);
+}
+.adjustment scale.track-saturation.band-5 trough {
+    background: linear-gradient(to right, #87878c, #7070cc, #0000ff);
+}
+.adjustment scale.track-luminance.band-5 trough {
+    background: linear-gradient(to right, #00002e, #0000ff, #bfbfff);
+}
+
+/* Purple */
+.mixer-bands button.band-6 { background: #8000ff; }
+.adjustment scale.track-hue.band-6 trough {
+    background: linear-gradient(to right, #0000ff, #8000ff, #ff00ff);
+}
+.adjustment scale.track-saturation.band-6 trough {
+    background: linear-gradient(to right, #89878c, #9e70cc, #8000ff);
+}
+.adjustment scale.track-luminance.band-6 trough {
+    background: linear-gradient(to right, #17002e, #8000ff, #dfbfff);
+}
+
+/* Magenta */
+.mixer-bands button.band-7 { background: #ff00ff; }
+.adjustment scale.track-hue.band-7 trough {
+    background: linear-gradient(to right, #8000ff, #ff00ff, #ff0080);
+}
+.adjustment scale.track-saturation.band-7 trough {
+    background: linear-gradient(to right, #8c878c, #cc70cc, #ff00ff);
+}
+.adjustment scale.track-luminance.band-7 trough {
+    background: linear-gradient(to right, #2e002e, #ff00ff, #ffbfff);
+}
+
+/* UX-017 on the Colour page. These come last because the mixer's band rules
+   above carry three classes each, and the only way to win against them at
+   equal specificity is to be written later.
+
+   The rule: colour stays where the colour says what the slider does — the hue
+   tracks — and goes everywhere else until a hand arrives. The mixer's dots are
+   the same eight colours at a third of their strength, the chosen one at full;
+   its saturation and luminance tracks are grey at rest and coloured on hover;
+   the grading wheel is grey while the saturation that would apply it is zero.
+   The coloured tracks keep their white handle at rest: a hue track with no
+   handle on it is a rainbow, not a value. */
+.adjustment .quiet .mixer-bands button {
+    opacity: 0.3;
+}
+
+.adjustment .quiet .mixer-bands button:hover {
+    opacity: 0.85;
+}
+
+.adjustment .quiet .mixer-bands button:checked {
+    opacity: 1;
+}
+
+.adjustment .quiet scale.track-saturation trough,
+.adjustment .quiet scale.track-luminance trough,
+.adjustment .quiet scale.hue-slider.idle trough {
+    background: alpha(currentColor, 0.07);
+}
+
+.adjustment .quiet scale.track-saturation trough,
+.adjustment .quiet scale.track-luminance trough,
+.adjustment .quiet scale.hue-slider.idle trough,
+.adjustment .quiet scale.track-saturation slider,
+.adjustment .quiet scale.track-luminance slider,
+.adjustment .quiet scale.hue-slider.idle slider {
+    transition: background 120ms ease-out, border-color 120ms ease-out;
+}
+
+.adjustment .quiet scale.track-saturation slider,
+.adjustment .quiet scale.track-luminance slider,
+.adjustment .quiet scale.hue-slider.idle slider {
+    background: transparent;
+    border-color: transparent;
+}
+
+.adjustment .quiet scale.track-saturation:hover slider,
+.adjustment .quiet scale.track-luminance:hover slider,
+.adjustment .quiet scale.hue-slider.idle:hover slider {
+    background: white;
+    border-color: alpha(black, 0.45);
+}
+
+.adjustment .quiet scale.track-saturation:hover trough,
+.adjustment .quiet scale.track-luminance:hover trough {
+    background: alpha(currentColor, 0.14);
+}
+
+/* ADJ-005: the pipette beside the mixer's eight colours.
+   Not one of them: `.mixer-bands button` makes every button in that row a
+   coloured dot, and a dot with no colour assigned is a dot nobody can see —
+   which is what this was until it was moved out of the row. */
+.band-pipette {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    opacity: 0.55;
+}
+
+.band-pipette:hover { opacity: 0.9; }
+
+.band-pipette:checked {
+    opacity: 1;
+    background: alpha(@accent_bg_color, 0.35);
+}
+
+/* CANVAS-002: the readout is the button now, so it has to look like one that
+   can be pressed while still reading as a number. */
+.zoom-readout {
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+/* LIB-014: a face beside its name. */
+.face-portrait {
+  border-radius: 6px;
+}
