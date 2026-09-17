@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Numa
+Comment=Develop raw photographs
+Exec=numa %F
+Icon=com.tijmen.Numa
+Terminal=false
+Type=Application
+Categories=Graphics;Photography;GNOME;GTK;
+StartupNotify=true
+MimeType=image/jpeg;image/png;image/heic;image/heif;image/x-fuji-raf;image/x-sony-arw;image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;image/x-adobe-dng;image/x-panasonic-rw2;image/x-olympus-orf;image/x-pentax-pef;image/x-samsung-srw;
+Keywords=raw;photo;photography;develop;RAF;ARW;CR2;NEF;DNG;

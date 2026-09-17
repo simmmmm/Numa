@@ -1,0 +1,76 @@
+# Flatpak, which is the format this application actually wants.
+#
+# The AppImage has to carry GTK and libadwaita, and therefore carries whatever
+# versions the build base had — Ubuntu 24.04 means libadwaita 1.5, which is the
+# GNOME 46 stylesheet and visibly not what a 2026 desktop looks like. A runtime
+# solves that by construction: the platform brings its own libadwaita to every
+# machine regardless of what that machine has installed, and the host's glibc
+# stops mattering at all.
+#
+# Runtime 50 rather than 49, checked rather than assumed: 49 carries libadwaita
+# 1.8.7 and GTK 4.20, while 50 carries 1.9.3 and 4.22 — which is exactly what
+# this desktop is running, so the build looks like the build.
+id: com.tijmen.Numa
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: numa
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # A photo editor reads photographs from wherever the photographer keeps them,
+  # which is routinely an external drive rather than the home directory. The
+  # narrower permission would break the first library anyone adds.
+  - --filesystem=host
+
+modules:
+  - name: camera-profiles
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/numa/profiles
+      - install -m644 rtdata/dcpprofiles/*.dcp /app/share/numa/profiles/
+      - install -Dm644 LICENSE /app/share/numa/profiles/LICENSE.GPL-3.0.txt
+      - install -Dm644 profiles-README.txt /app/share/numa/profiles/README.txt
+    sources:
+      - type: git
+        url: https://github.com/Beep6581/RawTherapee.git
+        tag: '5.11'
+      - type: file
+        path: profiles-README.txt
+
+  - name: numa
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/numa/cargo
+      # Cargo fetches the crate graph during the build. That makes this build
+      # non-reproducible and is why Flathub would not take it as is; vendoring
+      # is the fix when that matters, and for a build handed to testers it is
+      # not worth the tarball.
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release
+      - install -Dm755 target/release/numa /app/bin/numa
+      - install -Dm644 data/com.tijmen.Numa.desktop
+        /app/share/applications/com.tijmen.Numa.desktop
+      - install -Dm644 data/icons/hicolor/256x256/apps/com.tijmen.Numa.png
+        /app/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png
+      - install -Dm644 data/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png
+        /app/share/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png
+      - install -Dm644 data/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
+        /app/share/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - dist
+          - .git
+          - packaging/appimage/AppDir

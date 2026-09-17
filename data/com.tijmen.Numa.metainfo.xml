@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop">
+  <id>com.tijmen.Numa</id>
+  <name>Numa</name>
+  <summary>Develop raw photographs</summary>
+  <developer id="com.tijmen">
+    <name>Tijmen</name>
+  </developer>
+  <description>
+    <p>
+      A raw developer for Linux. It reads the files twenty-nine cameras write,
+      renders them through the camera's own colour profile, and keeps every
+      edit as a list of operations rather than as pixels — so nothing is ever
+      written back over the original.
+    </p>
+    <p>What it does:</p>
+    <ul>
+      <li>Exposure, contrast, the four tone regions, and a tone curve</li>
+      <li>Colour balance, a hue/saturation/luminance mixer, and colour grading
+          across shadows, midtones and highlights</li>
+      <li>Masks: gradients, a brush, a lasso, and regions the photograph is
+          asked to find for itself — sky, subject, greenery</li>
+      <li>Heal and clone</li>
+      <li>Lens corrections from the camera's own tables, or from lensfun</li>
+      <li>Crop, straighten, noise reduction and sharpening</li>
+      <li>A library with ratings and flags, and export in batches</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.tijmen.Numa.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
+  <releases>
+    <release version="0.9.1" date="2026-09-16">
+      <description>
+        <p>
+          Renamed from Photo Editor to Numa. A catalog made under the old name
+          moves across on the first run, with its ratings and edits.
+        </p>
+      </description>
+    </release>
+    <release version="0.9.0" date="2026-09-15">
+      <description>
+        <p>
+          Everything a raw developer needs to be one: masks that find what is in
+          the photograph, heal and clone, colour grading, lens corrections for
+          every make, and export in batches. Not 1.0, because it has only ever
+          run on one machine and been pointed at two makes of camera.
+        </p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+</component>
