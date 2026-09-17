@@ -3,6 +3,7 @@ pub mod dcp;
 pub mod denoised;
 pub mod export;
 pub mod foreign;
+pub mod icc;
 pub mod lensfun;
 pub mod presets;
 pub mod raw;

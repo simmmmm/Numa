@@ -366,17 +366,19 @@ source checkout, `./dev/fetch-models.sh` fetches the models as well.
 
 | | |
 |---|---|
-| Library catalog, backups | `<your library>/.numa/` |
-| Application settings, list of libraries | `~/.local/share/numa/catalog.db` |
+| Library catalog, history, snapshots, backups | `<your library>/.numa/` |
+| Grid thumbnails | `<your library>/.numa/thumbs/` |
+| Application settings, list of libraries, albums | `~/.local/share/numa/catalog.db` |
 | Models | `~/.local/share/numa/models/` |
+| Presets | `~/.local/share/numa/presets/` |
 | Camera profiles you add | `~/.local/share/numa/profiles/` |
 | Downloaded RawTherapee profiles | `~/.local/share/numa/rawtherapee-dcpprofiles/` |
-| Thumbnails | `~/.cache/numa/thumbs/` |
-| Exports | `<your library>/edited/` |
+| Larger thumbnails, AI denoise results | `~/.cache/numa/` |
+| Exports | `<your library>/edited/` unless another folder is chosen |
 
 These are the usual locations; inside a Flatpak they are under `~/.var/app`.
-Preferences shows the actual folders. Deleting the thumbnail cache only means
-thumbnails are generated again.
+Preferences shows the actual folders. Deleting a thumbnail folder or the
+cache only means those files are made again.
 
 ### Packages
 
@@ -456,22 +458,16 @@ recognition thresholds, and the bugs that were hardest to find.
 ## Roadmap
 
 [`docs/FEATURES.md`](docs/FEATURES.md) tracks every feature by ID and is the
-only place status is kept: currently **102 built**, 11 partly built, 48 planned
-and 6 withdrawn, each withdrawal with its reason.
+only place status is kept: currently **149 built**, 9 partly built, 9 planned
+and 7 withdrawn, each withdrawal with its reason.
 
-**Next.** Onboarding for new users of the AppImage · a single-photo loupe in
-the library · camera profiles for the Fujifilm X-T5, fitted to the camera's own
-rendering.
+**Still open.** A single-photo loupe in the library · a reference view beside
+the photograph · GPU inference · eyes-closed detection for culling · a neutral
+Fujifilm X-T5 camera profile, which needs Provia reference frames.
 
-**Towards a complete professional editor.** Presets · vignette, dehaze and
-grain · AI denoise (SCUNet) · camera calibration · guided perspective, where
-you draw the lines · point colour and a white balance eyedropper · bracket
-alignment, so HDR merge works handheld · folders inside a library.
-
-**Further out.** A culling score learned from your own ratings · lens blur from
-a depth map · generative removal · named snapshots per photograph · a
-reference view side by side · a GPU pipeline, if the CPU one stops being fast
-enough.
+The full list, generated from the status markers, is at the end of
+[`docs/FEATURES.md`](docs/FEATURES.md). How each number in it was reached is in
+[`docs/ENGINEERING.md`](docs/ENGINEERING.md) — corrections welcome.
 
 ---
 

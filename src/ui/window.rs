@@ -6518,6 +6518,7 @@ fn build_retouch(state: &App) -> gtk::Box {
 
     for (index, value) in [(0usize, 3.0), (1, 50.0), (2, 100.0)] {
         state.retouch_sliders[index].set_value(value);
+        set_neutral(&state.retouch_sliders[index], value);
     }
 
     let names = [
@@ -6705,6 +6706,7 @@ fn build_grading(state: &App) -> gtk::Box {
         ("Blending", Readout::Positive(0)),
         ("Balance", Readout::Signed(0)),
     ];
+    set_neutral(&state.grading_shape[0], Grading::default().blending as f64);
     for (index, (name, readout)) in shaping.into_iter().enumerate() {
         let scale = &state.grading_shape[index];
         scale.connect_value_changed(glib::clone!(
@@ -11190,6 +11192,15 @@ fn build_adjustment_panel(state: &App) -> gtk::Box {
     pages.set_vexpand(true);
     let all = state.sliders.each();
 
+    {
+        let scratch = Sliders::new();
+        scratch.write(Basic::default());
+
+        for ((_, real, _), (_, rest, _)) in all.iter().zip(scratch.each().iter()).skip(2) {
+            set_neutral(real, rest.value());
+        }
+    }
+
     state.global_only.borrow_mut().clear();
     let global_only = |widget: &gtk::Widget| {
         state.global_only.borrow_mut().push(widget.clone());
@@ -12278,6 +12289,19 @@ fn shift_moves_ten(widget: &impl IsA<gtk::Widget>, adjustment: &gtk::Adjustment)
     widget.as_ref().add_controller(keys);
 }
 
+thread_local! {
+
+    static NEUTRALS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
+}
+
+fn set_neutral(scale: &gtk::Scale, value: f64) {
+    NEUTRALS.with(|neutrals| neutrals.borrow_mut().insert(scale.as_ptr() as usize, value));
+}
+
+fn neutral_of(scale: &gtk::Scale) -> Option<f64> {
+    NEUTRALS.with(|neutrals| neutrals.borrow().get(&(scale.as_ptr() as usize)).copied())
+}
+
 fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: Readout) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
     row.set_margin_bottom(6);
@@ -12322,6 +12346,8 @@ fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: Readout) -> 
                     .borrow()
                     .as_ref()
                     .map_or(5500.0, |photo| photo.as_shot.temperature as f64),
+
+                _ if neutral_of(&scale).is_some() => neutral_of(&scale).unwrap_or_default(),
                 Readout::Signed(_) | Readout::Positive(_) | Readout::Degrees => 0.0,
 
                 Readout::Radius => 1.0,

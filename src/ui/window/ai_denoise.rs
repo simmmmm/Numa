@@ -35,6 +35,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
 
     let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
     amount.set_value(100.0);
+    set_neutral(&amount, 100.0);
     let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
     row.set_sensitive(false);
     column.append(&row);
