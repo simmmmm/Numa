@@ -26,10 +26,39 @@
       <li>A library with ratings and flags, and export in batches</li>
     </ul>
   </description>
+  <url type="homepage">https://github.com/simmmmm/Numa</url>
   <launchable type="desktop-id">com.tijmen.Numa.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.19.2" date="2026-09-22">
+      <description>
+        <p>
+          The Flatpak can reach the network again, for model downloads and the
+          update check, and Numa keeps its icon in the menu after moving from
+          the AppImage.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.1" date="2026-09-21">
+      <description>
+        <p>
+          A menu entry left by a deleted AppImage no longer hides the Flatpak's.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.0" date="2026-09-21">
+      <description>
+        <p>
+          Black and white, AI sharpen, Super Resolution, Remove and Remove
+          people, sensor dust found for you, and exports in AVIF, JPEG XL, DNG,
+          16-bit TIFF and HDR with a gain map. Photographs in the screen's own
+          colour, two to four side by side in Compare, and hair traced by
+          Refine edge. The first release built as a Flatpak, sharing its
+          libraries and models with any other Numa on the computer.
+        </p>
+      </description>
+    </release>
     <release version="0.9.1" date="2026-09-16">
       <description>
         <p>

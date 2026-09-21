@@ -17,6 +17,10 @@ fn main() -> glib::ExitCode {
 
     #[cfg(debug_assertions)]
     glib::log_set_default_handler(|domain, level, message| {
+
+        if matches!(level, glib::LogLevel::Debug | glib::LogLevel::Info) && std::env::var_os("G_MESSAGES_DEBUG").is_none() {
+            return;
+        }
         eprintln!("{}: {message}", domain.unwrap_or("glib"));
         if matches!(level, glib::LogLevel::Critical | glib::LogLevel::Error) {
             static ONCE: std::sync::Once = std::sync::Once::new();
@@ -26,9 +30,10 @@ fn main() -> glib::ExitCode {
         }
     });
 
-    let flags = match std::env::var_os("NUMA_OPEN") {
-        Some(_) => gio::ApplicationFlags::NON_UNIQUE | gio::ApplicationFlags::HANDLES_OPEN,
-        None => gio::ApplicationFlags::HANDLES_OPEN,
+    let beside = ["NUMA_OPEN", "NUMA_COMPARE", "NUMA_IMPORT"].iter().any(|name| std::env::var_os(name).is_some());
+    let flags = match beside {
+        true => gio::ApplicationFlags::NON_UNIQUE | gio::ApplicationFlags::HANDLES_OPEN,
+        false => gio::ApplicationFlags::HANDLES_OPEN,
     };
 
     glib::set_prgname(Some(APP_ID));

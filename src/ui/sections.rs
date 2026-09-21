@@ -55,12 +55,12 @@ glib::wrapper! {
 
 impl Sections {
 
-    pub fn new(sections: &[(&str, Vec<String>)]) -> Self {
+    pub fn new<S: AsRef<str>>(sections: &[(S, Vec<String>)]) -> Self {
         let model: Self = glib::Object::new();
         let imp = model.imp();
         let mut items = Vec::new();
         for (title, labels) in sections.iter().filter(|(_, labels)| !labels.is_empty()) {
-            imp.sections.borrow_mut().push((title.to_string(), items.len() as u32));
+            imp.sections.borrow_mut().push((title.as_ref().to_string(), items.len() as u32));
             items.extend(labels.iter().map(|label| gtk::StringObject::new(label)));
         }
         *imp.items.borrow_mut() = items;
@@ -76,7 +76,7 @@ impl Sections {
         self.imp().sections.borrow().len()
     }
 
-    pub fn is(&self, sections: &[(&str, Vec<String>)]) -> bool {
+    pub fn is<S: AsRef<str>>(&self, sections: &[(S, Vec<String>)]) -> bool {
         let other = Self::new(sections);
         *self.imp().sections.borrow() == *other.imp().sections.borrow()
             && self.imp().items.borrow().iter().map(|item| item.string()).eq(other.imp().items.borrow().iter().map(|item| item.string()))
