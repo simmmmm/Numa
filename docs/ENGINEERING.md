@@ -45,7 +45,11 @@ times its reciprocal, and `white_balance_for` turns those into a temperature and
 tint exactly as it does for the as-shot coefficients. One solver, so the pipette
 and the camera cannot disagree about what a Kelvin is. A grey card under known
 light comes back within 2 % in a test; in the window a click on a chart's grey
-moved 4702 K / −48 to 5201 K / −41. Both pipettes draw their own cursor, a
+moved 4702 K / −48 to 5201 K / −41 (in the stored sign; the panel now shows
+Adobe's, +48 and +41 — see "Lightroom's answers" below). The frame it samples
+carries the base tone curve per channel and no sRGB encoding after it, so the
+codes go back through `tone::scene_value_for`; read as plain sRGB, as they first
+were, a 3200 K card came back as 2791 K (FT-028 #5). Both pipettes draw their own cursor, a
 pipette with its tip as the hotspot: the theme has no colour-picker cursor, and
 the crosshair it fell back to was a coarse plus that hid the pixel being picked.
 
@@ -81,7 +85,7 @@ curve rolls off into. Being per-channel, the sigmoid also desaturates blown
 highlights towards white on its own, which replaced a hand-rolled clipping step.
 
 The numbers are one camera's calibration (`BASELINE_EV = 1.241`,
-`CURVE_CONTRAST = 0.943`). A second body needs a per-camera table.
+`CURVE_CONTRAST = 0.939`). A second body needs a per-camera table.
 
 ## Camera profiles
 
@@ -115,8 +119,8 @@ the grant, and the `ProfileCopyright` tag inside each file (46 say public
 domain, 9 CC0, 63 name Maciej Dworak) is an authorship statement rather than
 permission withheld — which was the first reading, and was wrong. What it
 obliges is shipping the licence and the attribution beside them, which both the
-AppImage and the download do. The Flatpak's sandbox sees none of those folders,
-which is why the download exists. The panel names whichever profile is in use.
+AppImage and the download do. The Flatpak bundles RawTherapee's set and reads
+the host's `~/.local/share/numa` (see *The Flatpak* below). The panel names whichever profile is in use.
 
 Matching is on the profile's own `UniqueCameraModel` tag, not its file name.
 Adobe writes `Fujifilm X-T5 Adobe Standard.dcp` and RawTherapee writes
@@ -274,8 +278,8 @@ is what the crop tool shows, and what a crop drawn on it has to mean.
 what is out there is black. The crop that avoids it is written into the crop
 rectangle rather than hidden inside the render, so the crop tool shows the whole
 corrected frame with what was cut away darkened and a corner can be pulled back
-out. `fitted_crop` finds the largest crop of the chosen shape that the
-photograph fills. It first shrank the rectangle about its own centre until one
+out. The fit (`image::fit`, behind `crop_inside`) finds the largest crop of the
+chosen shape that the photograph fills. It first shrank the rectangle about its own centre until one
 corner touched, which gave up a band of photograph on the opposite sides for
 nothing. Now it uses the fact that the map is a projection: what the photograph
 covers, taken back through the keystone, is a convex quadrilateral, and a
@@ -284,10 +288,36 @@ centres that work are that quadrilateral intersected with itself moved by each
 corner — a convex polygon, clipped with Sutherland–Hodgman — which is either
 empty or not. So the size is found by bisection (24 passes, up to the whole
 frame), the centre is the point of that polygon nearest where the crop was, and
-the answer is checked against `source_map` itself and shrunk by a hair if the
-two disagree. A test on the frame the fault was reported on finds a crop larger
-than the centred one, with nothing larger fitting beside it. A frame with no
-perspective correction is never quietly zoomed into.
+the answer is checked against `source_map` itself (`crop_fits`, asking of the
+corner pixels' centres exactly what `cropped` will sample) and shrunk by a hair
+if the two disagree. A test on the frame the fault was reported on finds a crop
+larger than the centred one, with nothing larger fitting beside it. A frame with
+no correction is never quietly zoomed into.
+
+**Two rectangles, one crop.** `source_map` turns the frame about the crop
+rectangle's own centre *in the source*, so the crop's frame is an upright
+rectangle of the crop tool's view — the whole corrected frame — whose centre is
+the rectangle's, turned back through the straighten angle and the aspect
+stretch (`crop_in_view`). Off the middle and straightened those differ: the
+left half of a 40 MP frame at five degrees lands 168 pixels off what was drawn. The tool draws and
+drags in the view and crosses to the stored rectangle when it commits
+(`crop_from_view`), so no crop already stored renders differently. The masks,
+which are fractions of the crop they were made on, are mapped from the view
+the same way while the tool is open (`view_to_crop`, an affine map, since a
+straighten since then turns one frame against the other); the tests hold both
+to `cropped`'s own pixels.
+
+**The photograph is the largest frame.** `crop_inside` is the fit capped at the
+crop's own size, so it never grows: a crop that fits is left alone, one that
+does not shrinks to the largest of its shape that fits, as near where it was as
+that allows. It is the only fit there is — the keystone's grew the crop up to
+the whole frame, which enlarged a crop drawn small — and every commit goes
+through it, so straightening, a keystone, a quarter turn and a drag all end on
+the photograph; a drag also stops at the edge while it is happening, each axis
+on its own when no ratio holds them together. The fit is made from the
+rectangle the photographer left rather than from the last fit, as long as
+nobody has moved it since, so a keystone or an angle taken back to nothing
+gives the crop back as it was (FT-028 #3).
 
 **Flips** (`GEOM-004`) are one flag on the turn: a left-to-right mirror applied
 before the quarter turns, so a vertical flip is that mirror and half a turn, and
@@ -400,6 +430,110 @@ visible: at 1:1 and in an export it plainly is, on a proxy it is not.
 `io::raw::Demosaic` picks accordingly, and rawler's own pipeline hardcodes
 bilinear for X-Trans, so `markesteijn_develop` repeats the geometry around it —
 rescale, region of interest, default crop — and swaps the one step that matters.
+
+### The colour it invents, and the step that takes it back
+
+Two thirds of an X-Trans frame has no red and no blue sample, so where the
+interpolation guesses wrong it writes a coloured pixel the scene never had.
+FT-019 measured the cause twice, each time with one variable: inside
+RawTherapee, turning `CcSteps` on took 81 % of the high-pass a\* and 71 % of
+the b\* out of a flat patch; and on rawler's own Markesteijn output, a 3×3
+median of the log2 channel ratios took 63 % / 68 %. Three Markesteijn passes
+took 1.5 % for 0.9 s, which is why there is one pass and a median rather than
+three passes.
+
+`suppress_false_colour` is that median, and two things about it are worth
+keeping.
+
+**It medians the ratio, not the colour.** Green is never written; R and B come
+back as `G × median(R/G)` and `G × median(B/G)`. A median commutes with a
+monotonic transform, so the median of `log2(R/G)` is the log2 of the median of
+`R/G` — the plain ratio is computed and 240 million logarithms are skipped for
+the same answer. Because green is untouched, the luminance the sensor actually
+resolved cannot be blurred by a colour repair: the green-channel acutance is
+the same number before and after, to five digits.
+
+**A sorting network, not a quickselect.** `select_nth_unstable_by` on a
+nine-element array, eighty million times, cost **0.59 s** on a 40 MP frame.
+Smith's 19-comparison median-of-nine network, branchless on `f32::min`/`max`,
+costs **0.14 s** for the identical output — every reference hash matches
+between the two. A false-colour step that cost two thirds of the `passes: 3`
+FT-019 rejected would have been arguing with its own ticket.
+
+**It runs after the lens geometry, and that is most of what it is worth.**
+For one commit it ran at the demosaic, where FT-019 measured it, and two
+thirds of the benefit was thrown away downstream. `correct_geometry` samples
+R, G and B at three different radii to undo lateral colour
+(`LensProfile::source_radius`); on DSCF9580's lens those radii differ by
+3.4e-4, which near the frame edge is about a pixel — enough that R is no
+longer read from where G was read, so the frame's own luminance texture comes
+back as ratio noise *after* the step that cleaned it. Measured at the end of
+`decode_with` on FT-019's patch:
+
+| | hp log2(R/G) | hp log2(B/G) |
+|---|---|---|
+| no step | 0.0585 | 0.0965 |
+| at the demosaic | 0.0492 (−16 %) | 0.0623 (−35 %) |
+| after the geometry | 0.0207 (−65 %) | 0.0351 (−64 %) |
+
+The rig's own at-demosaic figures are 0.0184 and 0.0308, so after the geometry
+the finished photograph lands within a hair of what the measurement promised.
+In CIELAB on the same patch at sharpening 0 and colour 0, high-pass a\* goes
+2.364 → 0.843 and b\* 5.085 → 1.864. It costs nothing to move: 3 847 ms
+against 3 850 ms for a decode and a full develop, the same work in a different
+place.
+
+`correct_vignetting` is the same gain on all three channels and cannot move a
+ratio, so which side of it this falls on does not matter. What does matter is
+the black floor: `apply_scaling` leaves the pixels at 0..1 and the baseline
+multiply has moved them by the time the late call sees them, so the threshold
+travels with them as `BLACK_FLOOR * baseline`.
+
+**After the geometry, green's acutance stops being the whole answer.** At the
+demosaic the step could not touch luminance detail and one number said so:
+green is never written, and its acutance was identical to five digits. That
+argument does not survive the move, because `correct_geometry` has resampled R
+and B onto green's grid by then, so a median of the ratios *can* reach real
+red and blue detail. The honest measurement is one acutance per channel over
+a detailed patch — the stag's head on DSCF9580:
+
+| | R | G | B |
+|---|---|---|---|
+| at the demosaic | 0.060394 | 0.056129 | 0.072289 |
+| after the geometry | 0.061307 (+1.5 %) | 0.056129 (=) | 0.075907 (+5.0 %) |
+
+Red and blue come out **sharper**. The resampling that undoes lateral CA is
+bilinear, which softens R and B relative to green; pulling their ratios back
+onto green's structure puts that back. Meanwhile high-pass L\* on that patch
+falls 3.2 %, which reads like the opposite until you notice the two metrics
+measure different things: high-pass L\* is an RMS residual after a 3×3 mean
+and is dominated by noise, acutance is mean gradient magnitude and is
+dominated by structure. Noise leaving while structure holds moves them in
+opposite directions, and that is the whole of it.
+
+**Two ways this step is easy to misjudge, both arithmetic.** They are worth
+writing down because the acceptance for A9 was stated in exactly these terms.
+
+*High-pass L\* falls on a flat patch even when nothing was blurred.* About
+28 % of the luminance comes from R and B, so removing their noise removes some
+of the luminance noise with it: 0.721 → 0.695 on FT-019's out-of-focus grass.
+The test that separates noise from detail is to measure a patch that **has**
+detail — the stag's head at (1350, 3650) — where the same change moves
+high-pass L\* 1.473 → 1.468, three tenths of a per cent, while high-pass a\*
+falls 34 % and b\* 44 %. RawTherapee's own `CcSteps` moved the flat patch's
+high-pass L\* by −8.4 % and FT-019 called it unchanged; this is −3.6 %.
+
+*A mean of `sqrt(a*² + b*²)` is biased upwards by chroma noise*, because a
+magnitude cannot cancel the way a signed mean can. On a bright, saturated edge
+that hardly matters: the red lettering on a pale wall in DSCF0567 has noise a
+tenth of its chroma, and the band's mean C\* moves −0.5 %. On a dark, noisy
+one it dominates: the bamboo culm against leaf litter in DSCF0247 has noise
+half its chroma, and its mean C\* reads −7.3 % — while the mean a\*/b\*
+*vector* over the same band grows 1.2 % longer, and subtracting the measured
+noise power from the magnitude gives the same +1.2 %. The edge is not being
+desaturated; the noise that was inflating the average has gone. Any future
+saturation test on a noisy edge wants the signed means printed beside the
+magnitude, which `tests/demosaic_probe.rs::coloured_edge` now does.
 
 ## Matching the camera's own rendering
 
@@ -584,9 +718,12 @@ a property of.
 
 **Calibration** is a matrix, as in a camera profile: each primary's colour — its
 distance from the grey of the same brightness — is turned about the neutral axis
-(up to 30°, towards the next primary, the way Lightroom's sliders go) and scaled,
-and the drift from white is taken back out in proportion to each primary's share
-of brightness, so grey stays grey. A shadow tint moves green in the shadows only.
+(up to 30°, towards the next primary, the way Lightroom's sliders go) and scaled.
+It acts on what is over a pixel's grey — `min(r, g, b)` taken off, which leaves at
+most the two primaries the colour is made of — so grey and white stay put by
+construction. It first held white by taking the drift back out of every primary
+in proportion to its brightness, which carried Red −100 into aqua further than
+into red (FT-028 #8). A shadow tint moves green in the shadows only.
 It runs where a profile acts: after the detail passes and before anything reads
 colour.
 
@@ -625,13 +762,325 @@ space visit it and come back, and the pass runs straight after the mixer, at the
 same point and for the same reason. "Show affected area" is a flag on the
 render's copy of the document only, never serialised.
 
+## Lightroom's answers, and the controls that did something else
+
+`docs/CONTROL_AUDIT.md` measured every control against what it says it does
+(FT-028). What it found, and the rule for fixing it — the photographer's, 21
+September: where Lightroom has an answer, take it.
+
+**The four tone regions are one curve.** Each region's gain depends on
+luminance alone, so their product is a curve of it, and pulled down hard
+enough near white it turned over: Highlights −100 rendered scene 0.52 → 1.0 as
+178 → 146. `ToneCurve` works it out once per render over log2 luminance in
+hundredths of a stop and holds it to a quarter of its slope from the bottom
+up, so every tone below where it would have turned keeps exactly what the
+sliders asked and the ones above stay in order. Per pixel it is a log2, a lerp
+and an exp2 where it was five `powf`s. Auto solves its endpoints against the
+same curve, so it cannot disagree with the render about what a slider does.
+
+**Contrast and Blacks as Adobe describes them.** Lightroom's Contrast stretches
+tones from the middle or presses them towards it, one the mirror of the other,
+so −c is the reciprocal of +c: −100 halves the slope where it used to make it
+zero. Blacks sets the black point — to the left the darkest tones clip
+progressively (about the twentieth code at −100), to the right they rise up to
+two stops without clipping — and reaches nothing above scene 0.1. Adobe
+publishes no curves, and Lightroom was not to hand, so those three numbers are
+chosen to give the described behaviour rather than fitted to Lightroom's
+output; FT-003's machine is where they would be checked.
+
+**Tint's sign.** The units were Adobe's all along — a hundred and fifty of tint
+is 0.05 of CIE 1960 v, the DNG SDK's `kTintScale` — but + was greener, the
+opposite of Adobe's. Every stored edit is in that sign, so `WhiteBalance` keeps
+it and the sign is turned where a person or a file meets it: the two Tint
+sliders and Lightroom's `crs:Tint` on import, which had been read the wrong way
+round. No stored photograph renders differently.
+
+**Luminance that left grey alone.** The mixer's table had one saturation row,
+so a band's luminance scaled every pixel whose hue rounded into it, greys
+included — Magenta −100 took middle grey from 118 to 1. Two rows now, grey and
+full colour, the luminance fading between them; hue and saturation are the same
+in both. Point Colour's luminance fades the same way below the chroma at which
+its weight starts to count hue (−100 on an orange point had taken grey from 118
+to 28).
+
+**Calibration over the grey.** White was held by taking its drift back out of
+every primary in proportion to brightness, which carried Red −100 into aqua
+further than into red. The matrix now acts on what is over a pixel's grey —
+`min(r, g, b)` taken off, leaving at most the two primaries the colour is made
+of — so grey and white stay by construction and the complement is untouched.
+
+**Radius in tenths.** One box blur at the rounded radius made 23 of Lightroom's
+25 steps the same picture. The two whole-pixel blurs either side are mixed by
+the fraction; a whole radius costs what it did, and below half a pixel on
+screen the pass still does nothing (FT-021). On a soft edge a tenth is under
+one eight-bit code, so the test measures at sixteen bits.
+
+**The vignette's squaring** divided by the scale meant to keep the corner at √2
+where it should multiply, so Roundness −100 left the corners at 0.84 of the way
+out. And a grade is kept whenever anything moved, not only when it changes a
+pixel, so a hue chosen before its saturation survives stepping away.
+
+## What a mask carries
+
+A mask is the same edit, faded in by a shape. Everything a photograph's
+`Basic` holds, a mask's holds too, and `apply_masks` runs the same passes
+over a copy of the pixels before blending it back by the mask's own weight.
+
+**Temperature and Tint inside a mask are relative to the photograph's white
+balance, not absolute Kelvin.** This is the one place a reader will guess
+wrong. By the time pixels reach a mask they have already been balanced — in
+camera space, before the colour matrix, which is the only place white balance
+can honestly be applied — so their white is neutral by construction. A mask
+asking for 5 000 K would be asking about a photograph that no longer exists.
+What it asks for is the difference: `temperature: -5.0` means five Kelvin
+cooler than whatever the photograph was set to, and the gains that produces
+are computed in the working space from the two white points' ratio,
+normalised on green so the mask does not also change how bright it is.
+
+**A mask rests where a photograph does not.** Two of `Basic::default`'s
+values are deliberately not zero: `sharpen: 25` and `denoise_colour: 25`,
+because a demosaic produces both softness and colour speckle and every
+photograph starts by undoing its own decoding. A mask is applied *on top of* a
+photograph that has already had both, so a mask carrying them would sharpen
+its own area twice for nobody's asking. `Basic::local` is where a mask rests,
+`Mask::is_idle` compares against it, and `#[serde(default = "Basic::local")]`
+makes a stack written before the detail passes reached masks read back as a
+mask that asks for neither — which is exactly what it did.
+
+The four detail passes run inside a mask too, on its own copy and in the
+photograph's own order: smooth before sharpen, or the sharpening sharpens what
+the smoothing missed; defringe after sharpening, because sharpening an edge
+sharpens the fringe on it; moiré last, because it asks about colour that
+wobbles where brightness does not and both passes above change one of those.
+On the mask's copy rather than the frame's, so softening a sky stops at the
+skyline instead of smearing the roof into it — which is the whole reason to
+ask for it locally. Five of them reach the panel inside a mask: Sharpening,
+Noise reduction, Colour noise, Defringe and Moiré. Radius and Masking shape a
+sharpening the mask takes from the photograph, Detail and Contrast shape its
+noise reduction, and a lens correction is a fact about the whole frame.
+
+The four frame-local fields — HDR, Clarity, Texture and Dehaze — work inside
+a mask as well, and `tiles_cleanly` now asks the masks as well as the
+document. All four measure the frame to decide what to do with it: the
+airlight in the whole photograph, the range the local tone mapping has to
+compress. On a tile they would measure the tile, which is a different answer
+on every tile and a different one again on the export. So a stack that
+carries them anywhere — in the document or in a mask — is rendered whole.
+
+## The machine this is for
+
+A few-year-old laptop, and it has to feel good on one. That is the
+photographer's own constraint — "naast eenvoud wil ik ook graag dat zoveel
+mogelijk mensen het kunnen gebruiken" — and it decides arguments that would
+otherwise be a matter of taste.
+
+What it rules out is not expensive work. It is expensive work **in front of
+the person waiting**. The distinction matters, and a measurement pass on 20
+September settled which is which:
+
+- **A saturated CPU is not a freeze.** A probe doing a compositor's job — wake
+  every 16.7 ms, 2 ms of work — missed zero frames out of 840 with rayon on
+  all eight cores, and zero on two cores. Linux serves a short periodic task
+  ahead of eight CPU-bound workers perfectly well. Numa may use the whole
+  machine.
+- **The main thread is the scarce thing.** `render_current` runs in a
+  frame-clock callback, so anything it does there is time the window is not
+  drawing. Before PERF-006 was widened, one tick of Temperature was 55-65 ms
+  on eight cores, 104 on four and 269 on two — a slider that made the window
+  draw four times a second on the machine this is meant for.
+- **Memory is what freezes the whole computer.** One 40 MP photograph taken to
+  1:1 peaked at 4.58 GB when that was first measured. On this machine, with
+  30 GB, that is invisible; on a 16 GB laptop with a browser open it is a
+  system-wide stall, and it is the only mechanism measured that stops more than
+  Numa itself.
+
+  **Re-measured 20 September, after PERF-009, PERF-011 and PERF-014: it is
+  1.85 GB.** The library alone is 452 MB; opening a 40 MP frame takes it to
+  1.72 GB and 1:1 to 1.85 GB. A full-size export peaks at 1.30 GB.
+
+  What is left is not ours to take. The decode alone peaks at **1.27 GB** and
+  settles at 497 MB, and that peak is inside rawler's Markesteijn — the mosaic
+  floats, the three-channel output and the demosaic's own tile buffers, all
+  alive at once. PERF-011 took what could be taken around it. The rest needs a
+  fork of the dependency, and 1.85 GB on a 16 GB laptop is no longer the thing
+  that stalls it.
+
+So the order to think in: do not do the work at all if something already has
+the answer; do it off the main thread if it must be done; do it at a lower
+priority if nobody is waiting for it; and count the buffers, because a
+gigabyte held is worse than a second spent.
+
+The three numbers to keep a change honest are the ones above: a tick of the
+thing being dragged, the longest block of the main thread, and peak RSS. Two
+of them come out of the measuring hooks in `window/measure.rs`; the third
+wants `/usr/bin/time -v`.
+
+**And a fourth thing, found on 20 September: look for the part that does not
+scale.** Two of the routes on that list turned out to be nothing, and the one
+that paid did so because a single step was serial while the others were not.
+
+*The export.* Per frame on a 24 MP file, decode is 700 ms and 5.7× faster on
+sixteen threads than on one; develop is 456 ms and 6.4×; writing the JPEG is
+340 ms and **1.0×** — 345 ms on one thread, 347 ms on sixteen. A fifth of
+every frame was one core working and fifteen idle. Overlapping that encode
+with the next frame's decode took a shoot from 1.50 s a frame to 1.22 s
+(PERF-013), and no amount of making the parallel parts faster would have
+found it.
+
+*The startup.* The 0.78 s that was quoted is the time until the main loop
+goes idle, not a wait: the window is on screen at 342 ms with 2 319
+photographs and 205 ms with 440. What is left in front of the person is 44 ms
+of GTK, 68 ms to the library page, and 134 ms building cards — and only the
+last of those grows with the shoot.
+
+*The grid's sweep*, suspected of being O(all cards), is 442 µs for 2 319 of
+them: 190 ns each for the 2 298 that are not on screen, on a debounced
+callback. Real, lineair, and nothing.
+
+*The AI denoise* was the largest single number on the list — 805 tiles at
+roughly half a second — and it has no knob on the processor. Tried both:
+
+| tile | per tile | per megapixel | a 40 MP frame |
+|---|---|---|---|
+| 128 | 127 ms | 8 s | 554 s |
+| 192 | 238 ms | 6 s | 385 s |
+| **256 (shipped)** | **500 ms** | **8 s** | **403 s** |
+| 320 | 792 ms | 8 s | 385 s |
+| 512 | 2 s | 9 s | 463 s |
+| 640 | 4 s | 10 s | 478 s |
+
+Flat, and the best of them is 4 % off what is shipped — less than the spread
+between runs. And running tiles side by side does nothing at all: twelve tiles
+take 5.93 s one at a time, 5.94 s two at once, 5.93 s four at once. That is
+worth knowing for its own sake, because SCUNet uses only **4.4 of 16 cores**
+(205 s of user time against 46 s of wall clock over the whole sweep) — the
+eleven idle ones are not available to it, and ONNX Runtime will not hand them
+out by being asked twice.
+
+So on the processor the denoise costs what it costs. **On the GPU the tile is
+a lever**, and it is the one place the shape of the answer changes:
+
+| tile | processor, 40 MP | WebGPU, 40 MP |
+|---|---|---|
+| 256 (shipped) | 403 s | 190 s |
+| 320 | 385 s | 176 s |
+| 512 | 463 s | 159 s |
+
+Two things follow. The card is worth **2.1×** on this model, which is the
+weakest of the three it is used for — the masks are 5.9× and the SAM encoder
+4.2×, because SCUNet is heavier on memory than on arithmetic and a tile is
+never big enough to hide the transfer. And the two devices want different
+tiles: 512 is 16 % better on the card and 15 % worse on the processor, while
+**320 is better than 256 on both** (−4.5 % and −7.5 %).
+
+**And the card gives the same photograph, which is the part that had to be
+checked before any of this mattered.** The same tile through SCUNet on both
+devices: 180 046 of 196 608 values differ, and the largest difference is
+**1.4e-6** — 0.0003 of an 8-bit code value. The denoised frame is kept at
+twelve bits, and at that precision 174 of 196 608 codes differ, always by one.
+0.09 %, in the last bit of a twelve-bit value. So turning the plugin on is a
+speed decision and not a picture decision, which is what makes it safe to
+offer as a switch at all.
+
+That makes 320 the only change worth making, because a tile size that depends
+on the device would mean the same photograph denoises differently depending on
+whether the plugin is installed, and that is the inconsistency `RenderInputs`
+exists to prevent. It is not made here: changing the tile moves every seam, so
+it is a pixel change to a feature the photographer turns on deliberately, and
+it wants his word rather than an afternoon's.
+
+*The cold start* was the last open question and it is answered: the loop that
+reads 2 319 thumbnails' dimensions takes **52 ms cold and 0.7 ms warm**, with
+the whole thumbnail cache pushed out of the page cache on purpose
+(`posix_fadvise(DONTNEED)` over all 40 093 files). The comment beside it
+quotes 330 ms, and that is the single-threaded figure it is there to explain —
+the `par_iter` is what turns a third of a second into fifty milliseconds, and
+a cold start is the one a photographer gets in the morning.
+
+The lesson for the next pass is the shape of the question. "Where does the
+time go" found two non-problems; "which step does not get faster when the
+machine does" found the one that did.
+
+## What resolution a mask is actually made at
+
+Three model families make masks, and every one of them answers at a size that
+is not the photograph's. What a mask edge looks like at 1:1 is decided by the
+coarsest link in that chain, not by the model:
+
+| step | answers at | to reach a 40 MP frame |
+|---|---|---|
+| semantic (`segment.rs`, EfficientViT) | 1024 | 7.5× |
+| **promptable (`sam.rs`, the decoder)** | **256** | **30×** |
+| matting (`matte.rs`, IS-Net) | 1024, on a crop | depends on the crop |
+| the raster masks live on (`MASK_RASTER`) | 2048 | 3.8× |
+
+SAM's decoder answering at a quarter of its encoder's edge is the family's
+own convention, not a choice made here — but it means a mask built by clicking
+starts life 30 times smaller than the frame it will be applied to. The matting
+pass is what rescues it (`search_edge` hands the coarse alpha to
+`matte::refine`), which is why that pass exists and why its own edge quality
+is the thing worth measuring.
+
+`MASK_RASTER` is a choice made here, and it is the last multiplication before
+the render. Nothing above it can produce an edge finer than 2048 across.
+
+**And how often the subject is found at all, measured 20 September over 30
+photographs spread across the whole library: 23.** Seven got no mask — the
+model reached no confident opinion or called the whole frame the subject — and
+three of the twenty-three came back covering 45 to 53 % of the frame, which is
+the same failure wearing a different face.
+
+So roughly a quarter of photographs get nothing, and that is a **detection**
+failure rather than an edge one. The two are worth keeping apart: a better
+edge model does nothing for a photograph the model never saw a subject in, and
+the shootout above measured only the edge, on a bird it already found.
+`tests/matte_survey.rs` is the rig, and the seven it missed are the test set a
+detection question should be asked on.
+
+**The failure the photographer actually sees is a third kind: the mask runs on
+into whatever touches the subject.** Reviewed over 72 panels on 20 September:
+the kitesurfers plus a piece of the wave behind them; a person fused with the
+lifeguard hut she stands in front of; a woman plus a length of fence. The
+subject is found and the edge is not stepped — the mask simply does not stop
+where the object does.
+
+That is what a salient-object model is: IS-Net answers "what stands out here",
+and a person in front of a hut is one salient blob. It has no notion of where
+one object ends. No matting model fixes this, which is why the BiRefNet
+shootout could not have found it, and why `matte::subject` asking one model
+about the whole frame is the shape of the problem. The model that does know a
+person from a building is the semantic one already installed beside it.
+
+So a complaint about a stair-stepped edge is a question about this table
+before it is a question about models. A better model answering at the same
+size cannot fix the multiplication that comes after it.
+
 ## The render pipeline
+
+**A render is a function of what it is handed.** Two exports of the same
+document five minutes apart should never differ — and until `RenderInputs`
+they could, because the pipeline reached for two things on disk while it ran:
+the kept denoised frame, which the background job might have finished writing
+in between, and the camera profile the document names, which was looked up
+behind a memo. Neither is a property of the document, and both changed the
+picture. That is a correctness bug rather than a question of layering, and it
+is the reason the renderer is now given `RenderInputs` by its caller and opens
+no file itself. The layering follows from it: a crate that takes everything as
+an argument is one a test can run in CI with no disk, no cache and no model
+folder, and one whose tile, proxy and export paths cannot disagree by accident.
+
+`Default` is "nothing handed in", which renders exactly as an empty cache and
+an unnamed profile did. The canvas may use it — it shows a proxy while the job
+runs. An export may not: it calls `io::denoised::ensure` first and then builds
+its inputs, because an export that quietly shipped the undenoised picture
+would be the same bug wearing the fix's clothes.
 
 ```
 RAW file
   └─ decode (io::raw::decode_with) ─────> linear RGB, f32, camera-native
        │  rawler's develop without WhiteBalance, Calibrate and SRgb,
        │    or Markesteijn for X-Trans at full size        (IO-013)
+       │    ──> a 3x3 median of the channel ratios, X-Trans only  (IO-013)
        │  × baseline exposure                              (RENDER-004)
        │  lens falloff ──> lens distortion and lateral colour  (OPTICS-001/002/005)
        │  × the camera's own exposure for this scene       (RENDER-008)
@@ -666,6 +1115,132 @@ RAW file
 
 Non-RAW files enter through `decode_linear_any`, which undoes sRGB's encoding
 and joins the same path at the colour stage with no profile.
+
+**Who owns the frame, and why the renderer asks.** Each of the two boxes above
+that writes pixels — the colour stage and the pixel stack — needs a buffer it
+may scribble on, and each used to get one the same way: clone the frame it was
+handed. On a 40 MP Fuji that is 456 MB apiece, and a full-resolution develop
+therefore held three copies of the same photograph at once before the 8-bit
+result was even allocated. Measured with `VmHWM`, the render stage of one
+develop peaked at 2.25 GB.
+
+Neither function could do better, because neither knew anything about its
+caller. Some callers genuinely need the frame afterwards: the editor keeps
+`photo.working` and `photo.full_working` between slider ticks, which is the
+whole basis of `PERF-006` — a drag re-runs only the stack. Others never look
+at it again: an export decodes a frame, develops it once and drops it.
+
+So `to_working_space`, `apply_stack`, `apply_pixels` and `develop` take
+`impl Into<Cow<'_, LinearImage>>`. Passing `&image` is the old behaviour to the
+byte, and every call site that wants it kept compiling unchanged. Passing
+`image` hands the frame over, and the pass writes into the buffer it was given
+instead of a copy of it (`std::mem::take` on the `Vec`, so the frame's width,
+height, clip and film simulation stay readable beside it). `apply_stack` also
+drops a handed-over frame the moment the geometry pass has replaced it, rather
+than at the end of the function.
+
+Export and thumbnails went from 2.25 GB to 1.37 GB that way, and the editor's
+full-resolution colour stage from 0.93 GB to 0.48 GB. The editor's stack did
+not move, and should not: it is the caller that keeps its frame on purpose.
+
+The two `From` impls that make `&image` and `image` both convert to a `Cow`
+live next to `LinearImage` in `numa-core`; `std` writes them out for `str` and
+`[T]` but has no blanket one for an arbitrary `T`.
+
+**Nothing the decode has finished with lives past the line that finished with
+it.** PERF-009 left a bigger number behind: `decode_with` peaked at 2.02 GB to
+produce a 456 MB frame, four times its own answer. Measured stage by stage with
+`VmHWM` — on an X-T5 RAF, where every full frame is 456 MB — the four multiples
+were not four passes each needing a buffer. They were one pass needing a buffer
+and three bindings that had gone quiet but not out of scope:
+
+| after | RSS, before | RSS, after |
+|---|---|---|
+| the demosaic returns | 651 MB | 490 MB |
+| the frame is flattened to interleaved f32 | 1106 MB | 490 MB |
+| the geometry correction | 1562 MB | 490 MB |
+| the frame is turned upright | 2023 MB | 495 MB |
+
+Rust drops a binding at the end of its scope, and `decode_with` is one long
+scope. So the mosaic and the mapped file stayed on the heap through every pass
+below them; `Color2D::flatten` copied the demosaic's output into a second
+buffer and left the first alive; shadowing `image` with the straightened frame
+kept the bent one; and `oriented` took `&self`, so the sideways frame outlived
+the upright one it had produced. Each is 456 MB of a photograph nothing was
+ever going to read again.
+
+The fix is scoping, not cleverness. The rawler objects live in a block that
+ends where the mosaic is no longer needed. `into_flatten` consumes what
+`flatten` copied. The geometry arm drops its source the moment the pass
+returns. `into_oriented` takes the frame by value — and hands it straight back
+untouched when the camera was held level, which is most photographs and used to
+be a 456 MB clone of something identical.
+
+Two places were also holding a second copy while making the first: rawler's
+`apply_scaling` has already turned the mosaic into floats, so `markesteijn_develop`
+takes that buffer rather than asking `as_f32` for a copy of it; and the default
+crop is only ever a shift towards the origin, so the rows move down inside the
+buffer they are in instead of being gathered into a new one.
+
+A decode now peaks at 1.27 GB, and every pass after the demosaic runs flat at
+one frame. What is left is rawler's own demosaic, which holds the mosaic, a
+cropped copy of it, a per-pixel bounds table and the output at once; that is a
+1.27 GB floor nothing this side of the crate boundary can move.
+
+**How far a fingerprint can be trusted.** `tests/reference_render.rs` renders
+every reference frame on both decode routes, and it is what every claim of "no
+photograph changed" in this file rests on. One thing has to be known about it
+before relying on one: **the render is not bit-stable between processes, and a
+hash comparison therefore cannot prove that nothing changed.**
+
+Measured on 20 September, ten runs of the same binary on the same frame: eight
+gave one hash and two gave another on the draft route, seven and three on the
+Markesteijn route. Comparing the renditions byte for byte rather than by hash
+says what the difference actually is:
+
+    FRAME DSCF9580.RAF  moved 1876 bytes, worst 1
+    BEST  DSCF9580.RAF  moved    7 bytes, worst 1
+    FRAME DSCF9580.RAF  moved 1863 bytes, worst 1
+    BEST  DSCF9580.RAF  moved  936 bytes, worst 1
+    ...
+
+Between 7 and 3 400 bytes of 119 443 968, and **never more than one code value
+of 255**. In the floating-point pipeline it is at most 122 ULP and 3.6e-6
+absolute. It is a rounding difference, not a difference in the photograph.
+
+Three things are known about where it comes from. The decode is exactly
+reproducible — `decode_linear` and `decode_linear_best` both hash the same on
+every run. `RAYON_NUM_THREADS=1` and `=2` are exactly reproducible end to end;
+from three threads up it wobbles, which is the signature of work-stealing
+changing how buffers and iterations line up rather than of a race writing the
+wrong pixel. And the first step whose output moves is `detail::denoise_colour`,
+whose `blur` is itself reproducible on synthetic data — so the wobble is in how
+the same arithmetic gets laid out, not in the algorithm.
+
+Two earlier statements in this file were wrong and are withdrawn. An early
+report that `main` gave four hashes in six runs was recorded here as "has not
+reproduced": it reproduces, and the fourteen matching runs that were used to
+dismiss it were luck. And the wobble was recorded as invisible after the
+eight-bit quantisation and absent from the bilinear draft: it survives the
+quantisation, and the draft route moves *more* bytes than the Markesteijn one.
+
+**So "byte-identical" means zero code values moved, not one hash.** Set
+`REF_DIR` and the harness writes each rendition the first time and compares it
+byte for byte afterwards. The floor to judge against is the one above: a couple
+of thousand bytes at worst 1. A real change is nothing like it — A9's median
+moved every Fuji Markesteijn rendition by millions of bytes. The two are three
+orders of magnitude apart, so the test still answers the question it is for; it
+just has to be asked in bytes.
+
+**What it cannot see.** rawler's X-Trans Markesteijn splits the frame into
+64-pixel tiles and writes them in parallel through a shared raw pointer, on the
+stated assumption that two tiles never write the same pixel (`markesteijn.rs`,
+`SharedColor2D` and the `unsafe` write inside `process_tile`). Measured, two
+runs of the same commit differ in about four channels out of 119 million, by
+around 4e-6 — so the assumption is very nearly true and not quite. That is a
+second, smaller source on top of the one above, and the same conclusion applies
+to it: worth knowing about, not worth acting on until something measures it
+larger.
 
 **What gets rendered, and at what size.** Interactive editing does *not* simply
 run on a proxy. It renders the region on screen at the resolution the screen can
@@ -790,6 +1365,35 @@ standing toast Analyse uses says "Making thumbnails — 38 of 42". Counted in ru
 because only what is on screen is made and scrolling asks for more; and there is
 no Stop, because the cards on screen would only stay blank.
 
+**Showing the edit** (`LIB-022`). A photograph the photographer has worked on
+shows his render in the grid and the filmstrip, not the camera's: seeing the
+edit is what says he has been here, and the original is the less interesting of
+the two by then. The camera's embedded preview cannot be adjusted into it — the
+stack is defined against scene-referred camera-native pixels and a preview is
+already developed — so `thumbs::edited` decodes the raw as opening it would,
+runs the stack at 1024 pixels and shrinks the result. Measured in a release
+build over the seven edited frames of a Zwitserland shoot: 0.50 to 1.78 s each,
+median 0.65 s, against 17–45 ms for the camera's preview — and 0.3–0.5 ms to
+read one back once it is kept.
+
+That cost shapes the rest of it. The entry is keyed on the stored edit JSON
+along with the path, mtime and edge, so a slider moved one step is a different
+picture rather than a stale one, and a photograph with no edits keeps exactly
+the name its thumbnail had before any of this — no render, no entry, no cost.
+The stack is read from the catalog when the card is asked for rather than when
+it was built, so the picture is of the edit as it now stands. Two jobs are
+queued for such a card, the camera's thumbnail first: it fills only a picture
+that is still empty, so a card is never blank while a render is running and the
+render cannot be painted over by the original it replaces. And renders get a
+lane of their own in the loader — one at a time, since a decode is half a
+gigabyte for a 40 MP frame and eight of them would hold every worker while the
+rest of the screen waited on memory it did not need. Saving an edit marks that
+card so the next sweep asks again; the loupe is left alone, since a render at
+its size is a decode in the middle of stepping through a shoot. The renderer is
+handed the profile the document names, as the canvas and the export are, but
+not the kept denoised frame: that is a full-size buffer to read from disk, as
+dear as the decode, and what it changes cannot be seen in 320 pixels.
+
 ## A catalog per library
 
 Each library's catalog is in `.numa/catalog.db` inside the library's folder
@@ -838,6 +1442,70 @@ a move across drives is a copy that can stop halfway. A name already taken on
 disk is refused rather than letting `rename` replace an empty folder silently,
 and if the catalog cannot be updated afterwards the folder is renamed back, so
 the list of libraries never names a folder that is not there.
+
+## When a photograph was taken
+
+`IO-005`. `Sort::Captured` read the file's modified time, on the reasoning that
+a camera writes it at the shutter — true of a card straight out of one, and
+wrong for every archive that has ever been copied. `cp` without `-p` stamps the
+day of the copy, and a copy that walks a folder in parallel stamps it in no
+particular order. A real 11 509-frame library carried the afternoon it was
+moved on every folder, and one trip's files ran *backwards* against the
+shutter: a minute apart on disk and a week apart in life.
+
+The grid's order was the smaller half of the damage. `analysed()` hands CULL-002
+its frames in that same order and it cuts bursts out of the seams, so a shuffled
+archive produced runs that were never one moment, and a best-of-burst chosen
+from them — a wrong label on a card with nothing on screen to explain it.
+
+So the capture time is a column of its own beside the file's date, and
+everything that orders on time takes `COALESCE(taken, mtime)`: the grid's
+capture sort, the tie-break that the rating, sharpness and suggestion sorts
+fall back on, and the queries that hand the frames to Analyse and to the
+grouping. Sorting by name is the one that does not, since it never asked.
+
+Both dates are kept because either can be the only one there is: a walk of the
+folder always has the file's date, and a photograph with no EXIF — a scan of a
+negative, an export that dropped its tags — has no other. So the fallback is to
+the file's date rather than to the beginning of time, which is where a null
+would have sorted it. A library catalogued before this gets the column by
+migration, null on every row, and the next scan fills them in.
+
+**Three ways to read one tag** (`io::exif`). The container's own EXIF block
+first, for JPEG and HEIF — Fujifilm's HIF is ordinary HEIF, which is most of
+this archive once the RAFs are counted out, and rawler cannot read any of these
+formats. Then the RAF's embedded TIFF, walked by hand at the offsets
+`raw::lens_model` already uses for the lens: the main TIFF structure twelve
+bytes past the pointer at offset 84, with the Exif IFD hanging off it, and only
+the tag differs. Then rawler's decoder, for every other RAW and for the RAF the
+shortcut could not read, which makes a file the fast path misses slow rather
+than undated.
+
+The middle path is what makes the whole thing possible. rawler maps the file
+with `populate` and `WillNeed`, so reading one tag out of a 50 MB RAF first
+faults in all 50 MB: over the same twenty files that is 33 ms a frame against
+56 µs for the hand-walk, and the archive's 8538 RAFs go by in 1.7 seconds where
+the decoder would have spent five minutes reading 400 GB to find 8538
+timestamps. That is the difference between reading the date inside the scan
+loop, beside the `stat` that is happening anyway, and building a second
+background pass around it with its own work list and its own progress bar.
+Measured on a real library: 4653 files scanned in 945 ms, every one of them
+with a capture time. `tests/bench.rs` keeps that measurement runnable, since
+the design rests on it, and an ignored test beside the reader holds the
+hand-walked path against the decoder over twenty RAFs — hand-walked offsets
+into a layout nobody documents for us are only honest while the thing that does
+understand the format agrees they are.
+
+It is read in `catalog::scan`, which already runs off the main thread, and not
+in `apply_scan`, which does not. EXIF records local clock time with no zone, so
+there is nothing to convert from and it is read as if it were UTC: wrong by the
+traveller's offset, and it does not matter, because every frame is wrong by its
+own offset in the same direction and the only thing ever asked of the number is
+which of two frames came first. A camera with no clock set writes
+`0000:00:00 00:00:00`, and a date in year zero sorted ahead of everything real
+is worse than no date at all, so that one is refused. The date arithmetic is
+Howard Hinnant's `days_from_civil`, which is the whole of what this needs and
+therefore the whole reason there is no date crate in the dependency list.
 
 ## Keeping up with the folder
 
@@ -995,6 +1663,35 @@ one opinion of a keeper and nobody's in particular. Every star already in the
 catalog is a label of exactly the taste the suggestion is for, so at the end of
 Analyse `cull::learn` fits a ridge regression on them.
 
+**The ends the rule divides by** are read off the library being analysed.
+`CULL-004` stretched its five stars between fixed numbers — 0.15 and 1.15, the
+fifth and ninety-fifth percentiles of sharpness in the 10 729-frame reference
+library, rounded — and those are someone else's cameras, lenses and subjects. A
+photographer whose frames hold less fine detail than that reference, which is
+what wide apertures, fog, long exposures and a lot of smooth sky produce, had
+every photograph they own scored a star or two low: a scale that is wrong about
+a whole library at once. `cull::Scale::of` now takes the two percentiles of
+what this Analyse actually measured, of the sharpness that is scored — the
+face's where there is a face — so the ends describe the same quantity the score
+divides. The number then means "against your own work", which is the only
+comparison a cull is ever making. It is not a more objective number for it: a
+percentile is a rank, so a library of uniformly soft frames still has a
+ninety-fifth percentile and still hands out fives. Under fifty measured frames
+a percentile is one photograph's opinion rather than a distribution, and ends
+closer together than 0.10 would stretch a sliver over five stars; in both cases
+the reference scale stands. The scale is per library, which is per trip only as
+long as a library is one folder — a library holding a studio session and a week
+outdoors lets the studio's detail pull the top end up and costs everything else
+half a star — and the marker in `regroup_bursts` names grouping on the
+containing folder as the way out on the day subfolders are used for separate
+shoots.
+
+The nudge on top of it — four tenths of a star for the pick of a run — is
+chosen the same way. `best_of_each` ranks a burst on the face's sharpness where
+there is one, because ranking on the frame picks the portrait with the crisp
+background and the soft eyes, which is the one judgement the score exists to
+avoid making.
+
 The features are the eleven numbers Analyse already has: the rule's own score
 (so the model starts from it and learns what to add), the logarithm of frame
 and face sharpness (sharpness matters in ratios), blown highlights, the number
@@ -1048,7 +1745,7 @@ the frame.
 Every model is an ONNX file, and every model module (`render::segment`,
 `render::sam`, `render::matte`, `render::classify`, `render::ai_denoise`,
 `cull::faces`, `cull::people`) reaches the runtime through one door:
-`src/infer.rs`. A `Model` is built from a path and handed arrays; nothing else
+`crates/numa-infer`. A `Model` is built from a path and handed arrays; nothing else
 in the code knows what is behind it.
 
 The models are EfficientViT-Seg B2 for the found masks (it replaced SegFormer-B0,
@@ -1084,6 +1781,58 @@ of every photograph floor. Same model, same 1600×2400 frame, mean 101.4 in both
 puts `LC_NUMERIC` back to `C` at startup, before any model loads. Any check of a
 model's answers has to be made under the locale the application runs in.
 
+**The GPU** (PERF-012) goes through the same door and nowhere else. ONNX
+Runtime's WebGPU execution provider is not part of this build: it is a 15 MB
+`libonnxruntime_providers_webgpu.so` that Microsoft publishes for linux x64,
+downloaded beside the models as a 7 MB Python wheel and registered at run time
+with `Environment::register_ep_library`. `ort`'s own `webgpu` feature was the
+obvious road and was rejected after measuring it: it links Dawn as a
+`DT_NEEDED`, so the binary will not start without the library, and on every
+machine where WebGPU finds no adapter — which is most of them — the process
+**segfaults at exit**, five runs out of five. The plugin does neither, and a
+missing file is an ordinary `Err`.
+
+Which models ask for it is a property of the model in `numa-infer`, a list of
+file names, so no call site carries a flag and no call site can be wrong about
+it. Measured on an RX 9070 XT through Mesa's RADV, against Numa's own session
+settings on both sides (Level3, every thread), which is a fairer CPU baseline
+than FT-009 used:
+
+| model | CPU | WebGPU | |
+|---|---|---|---|
+| EfficientViT, found masks | 224 ms | 38 ms | 5.9× — on |
+| SAM encoder, click to select | 671 ms | 160 ms | 4.2× — on |
+| SCUNet, AI denoise | 484 ms/tile | 181 ms/tile | 2.7× — on |
+| IS-Net, subject edge | 196 ms | 141 ms | 1.4× — CPU |
+| YuNet, faces | 1.3 ms | 3.0 ms | slower — CPU |
+| SFace, recognising | 2.9 ms | 21.7 ms | slower — CPU |
+| PP-ResNet50, naming | 6.8 ms | 10.0 ms | slower — CPU |
+
+A session built without `with_devices` stays on the processor and is not
+disturbed by the plugin being registered: 206 ms before any GPU work, 207 ms
+with the plugin registered and unused, 211 ms after a GPU session in the same
+process. There is no cheap probe — `Environment::devices` lists a WebGPU
+device whether or not an adapter is behind it — so the probe is to build the
+session and fall back on error, about 41 ms when the answer is no.
+
+**GTK's Vulkan renderer and the provider's own Vulkan instance** share the
+process, which nothing had tested. They coexist: Numa under `GSK_RENDERER=vulkan`
+on the real session, with the provider registered, ran the segmentation on the
+card and quit with status 0 five times out of five. The `radv is not a
+conformant Vulkan implementation` line appears twice in the log — once per
+instance — and nothing else.
+
+**One crash must not cost the application.** The provider is registered lazily,
+and just before it is, `numa-infer` writes a marker beside the settings and
+removes it as soon as a session has stood. A start that finds the marker still
+there knows the last start died inside the graphics driver: it stays on the
+processor, switches the preference off and says so. It is darktable's trick
+with OpenCL, and it is the difference between a slower mask and a Numa that
+will not open. Two Numas at once (only `NUMA_OPEN`, `NUMA_COMPARE` and
+`NUMA_IMPORT` make the application non-unique) could have the second read the first's marker mid-registration and
+switch itself off for nothing; that is the safe side of the mistake and one
+click to undo.
+
 **What it costs.** `ort` downloads a prebuilt ONNX Runtime at build time (the
 `download-binaries` feature, on by default) and links it statically: `ldd` on
 the binary shows no `libonnxruntime`, so the AppImage stays one file and the
@@ -1098,7 +1847,8 @@ with no network, a platform ONNX Runtime does not cover:
    hand:
 2. `Cargo.toml`: remove `ort` and `ndarray`, restore
    `tract-onnx = { version = "0.23.7", default-features = false }`.
-3. Delete `src/infer.rs` and its `pub mod infer;` line in `src/lib.rs`.
+3. Delete `crates/numa-infer` and every dependency on it (it was `src/infer.rs`
+   when this was written).
 4. In each of the model modules listed above: `use tract_onnx::prelude::*;`
    back; `type Plan = TypedRunnableModel;`; the `plan()` function builds with
    `tract_onnx::onnx().model_for_path(&path)` then `.with_input_fact(0,
@@ -1122,10 +1872,6 @@ lock only costs anything when two callers want the same model at once. The mask
 and face models are loaded once and kept for the session; SCUNet is loaded for
 a denoise run and dropped after it, because it runs once per photograph and
 77 MB of weights plus the runtime's arena is a lot to hold on to for that.
-
-**GPU.** Not wired. ONNX Runtime has execution providers for it; the one for
-this machine's Radeon is ROCm or the newer Vulkan path, neither measured. Add
-one in `src/infer.rs` when a photograph needs it, and nowhere else.
 
 ## Naming the animal
 
@@ -1189,10 +1935,20 @@ desktop this runs on, it resumes an interrupted download with `--continue-at`,
 and it follows the redirects GitHub and Hugging Face both answer with. Each file
 is written to a `.part` name and renamed when complete, so a half-downloaded
 model is never loaded; a failed download offers its link in a browser, and a
-file fetched that way is found under the name its link gives it. There is no
-checksum yet: a truncated file fails to load and says so. The profiles arrive as
+file fetched that way is found under the name its link gives it. Every file is
+checked against its SHA-256 before it is renamed (`E3`, 21 September) —
+`sha256sum` for the reason `curl` fetches it — and one that does not match is
+removed and the next link tried; the digests are GitHub's own for the mirror's
+assets and Hugging Face's LFS ids, matched against the files installed here
+before they were written down. The profiles arrive as
 one archive and are unpacked into a folder of their own, apart from the
-photographer's, so neither can be mistaken for the other.
+photographer's, so neither can be mistaken for the other. The GPU provider
+(`PERF-012`) travels the same road with one difference: Microsoft publishes it
+only as a Python wheel, so the download is a `.whl` and three files are taken
+out of it into the models folder — the provider, ONNX Runtime's MIT licence
+and its third-party notices, each under a name that says what it belongs to.
+It is deliberately not part of "Download all": on a machine whose driver
+cannot run it, it is 7 MB and a probe bought for nothing.
 
 **Looking for a new version** (`START-009`). An AppImage does not update
 itself. Numa asks once, and only after a library has been added so the first
@@ -1264,3 +2020,473 @@ feature list. What it found, and what was done about it.
 - **Sharpness against Lightroom and Capture One** (DETAIL-008) still needs
   exports from those two; see `dev/mtf50.py`.
 
+
+### The subject mask, as the photographer sees it — 20 September
+
+Reviewed over 72 panels. Three faults, in the order they matter:
+
+1. **The subject chosen is not the subject.** Not a boundary problem — the
+   model picks the wrong thing to be salient about.
+2. **It runs over, and it falls short.** The kitesurfers plus a piece of wave;
+   a person fused with the lifeguard hut behind her; a woman plus a length of
+   fence — and parts of the subject missing too. Both directions.
+3. **The edge still shows at 1:1**, though "much better than it was".
+
+Only (3) is what the matting shootout measured, and (3) is the one he calls
+improved.
+
+**But the panels he judged were made by the wrong rig, and that has to be said
+before any of this is acted on.** They called `matte::subject` directly. The
+application does not: `auto.rs` builds a `Shape::Segment` mask over
+`MATTEABLE` — person and animal — with `matte = true`, and `resolve_mask`
+reaches for the matting model *only when the semantic model finds neither*.
+So what those 72 panels showed is the fallback in isolation, not the path a
+photographer takes.
+
+That makes (1) and (2) a question about **when the fallback fires**, not about
+the matting model as such: where the semantic model names a person, it has
+said something about that person and the mask stops at her. Where it does not
+— a kitesurfer too small or too far to be a `person`, say — IS-Net answers
+"what stands out", and what stands out includes the wave. Re-measuring along
+the real path is the first thing, because it decides whether there is a
+boundary problem at all or only a detection one wearing its coat.
+
+### The real path, measured — 20 September, later
+
+`tests/matte_survey.rs` gained `where_the_real_path_fails`, which walks the
+route the editor takes rather than asking the matting model on its own: the
+proxy, `apply_stack`, `MASK_RASTER`, a `Segment` mask over `MATTEABLE`, and
+`resolve_mask`. Thirty photographs, every 284th of the 8 537 in the library.
+
+**The fallback is not an edge case.** Sixteen of the thirty were answered by
+the semantic model and **fourteen fell back to matting** — so the 72 panels
+were measuring something the photographer meets on nearly half his frames,
+even if they were not measuring the path he takes to it.
+
+And on the semantic route, where the matting model is only supposed to sharpen
+the edge, it does one of two things and neither is what it was asked for:
+
+| | named by the model | delivered | soft band | edge step |
+|---|---|---|---|---|
+| DSCF6390 | 35.63 % | **0.85 %** | 1.76 % | 0.007 |
+| DSCF2310 | 9.67 % | **0.24 %** | 0.32 % | 0.000 |
+| DSCF7577 | 30.15 % | 30.19 % | **0.87 %** | **0.078** |
+| DSCF6674 | 36.48 % | 24.83 % | **24.57 %** | 0.007 |
+
+Either the mask collapses to a fortieth of what the model named, or it comes
+back as one long ramp with no inside, or it keeps its area and delivers a
+**cut-out**: 0.87 % of the frame in the soft band around a mask covering 30 %.
+Rendered as a picture, DSCF7577's subject mask is a silhouette with no hair in
+it at all — which is what a photographer sees as "a hard edge around her" the
+moment a lift is applied inside it.
+
+**`CERTAINTY` has no say in any of this.** The constant that the comment beside
+it calls "the part that reads as too much feather" is measured, at 1.0 and at
+3.0, to make no difference at all to the delivered mask: the numbers above are
+the same to three decimals. It only bites with the matting model out of the
+way (`MATTE=0` in the rig), where it does exactly what it claims — the edge
+step on DSCF7577 goes 0.035 to 0.118. On the path the application takes,
+`matte::refine`'s answer **replaces** the alpha it was handed, so the whole
+semantic refinement — guided filter, radius, steepening — is thrown away
+wherever the matting model commits.
+
+Which puts the edge where `matte.rs` decides it: IS-Net at **1024 on a crop
+resized to a square**. For the portrait above the subject's box is about
+700 × 1500, so it is squashed to 1024 × 1024 — two thirds of the vertical
+detail gone before the model sees it — and interpolated back up onto a 2048
+raster that is then stretched again to the frame. Hair is one to three pixels
+at that raster. No stage ever samples it, so no stage can return it.
+
+Three things it is *not*, each struck off by measurement rather than by
+argument:
+
+- **Not the graphics card.** The same seven portraits on the processor and on
+  WebGPU agree to two decimals in coverage and soft band. `c32aa45` did not
+  change the mask.
+- **Not the smaller proxy** from `41eadf9`. At 2400, 1920 and 1400 the edge
+  step is identical to three decimals; the mask is built at `REFINE` = 2048
+  either way.
+- **Not `PERF-014` or the B3 panel work.** Neither touches the alpha chain, and
+  `git log -S` on `search_edge`, `matte::refine` and `!matted` reaches back to
+  MASK-008 and no further.
+
+So the hard edge is not something that broke today. It is what this chain has
+always produced on hair, first looked at on hair. The repair is not a better
+matting model — BiRefNet drew the same wing with a harder edge — it is to stop
+stretching a 2048 alpha to a 40 megapixel frame and instead upsample it
+edge-aware against the photograph itself, which is the guided filter that is
+already in `local.rs`, on the other side of the multiplication.
+
+### What was done about it — 21 September
+
+Three changes, each measured on the same thirty frames, and one road measured
+and not taken.
+
+**Auto stopped guessing.** The subject lift now asks only the semantic model:
+sixteen of the thirty lift, fourteen do not, which is that column exactly. The
+matting fallback is still there and still reachable by pressing the Subject
+chip — a photographer choosing the frame is what makes "what stands out here"
+the right question to answer.
+
+**A refinement below half is a refusal.** `matte::refine` was allowed to
+replace the alpha it was handed with anything, including a fortieth of it.
+Seven frames of thirty recover every pixel the model named:
+
+| | before | after |
+|---|---|---|
+| DSCF6390 | 0.85 % | 35.63 % |
+| DSCF2310 | 0.24 % | 9.67 % |
+| DSCF3760 | 0.50 % | 7.98 % |
+| DSCF3169 | 1.06 % | 2.95 % |
+| DSCF9990 | 0.31 % | 0.68 % |
+| DSCF3474 | 0.00 % | 0.15 % |
+| DSCF7083 | 0.01 % | 0.08 % |
+
+Three more than expected. DSCF3169 and DSCF9990 were losing two thirds and a
+half rather than everything; DSCF7083 is a frame where the fallback fired and
+the matting model never committed, so the semantic mask was the base and the
+refinement ate that instead.
+
+**The model stopped being shown a squashed subject.** A tall crop is read as
+two overlapping squares rather than pressed into one. On DSCF7577 the box is
+756 × 1460: all 756 columns reached the model before and 1024 of the 1460
+rows; now both reach it whole. Two frames of thirty move — one of the two
+masks that came back as one long ramp with no inside becomes a proper mask
+(DSCF8091: 20.79 % coverage with 25.19 % soft, to 35.62 % with 8.95 %) and the
+other gets slightly softer. It costs a second run of the model on a tall
+subject, 520 ms to 720.
+
+And DSCF7577 itself, the frame all of this was measured for, does not move:
+30.19 % to 30.18 %, the edge step 0.078 to 0.076. **So the squashing was real
+and it is not what makes that edge a cut-out.**
+
+### The edge-aware upsample, measured and dropped
+
+The remaining idea was to stop stretching a 2048 alpha onto a 7728-pixel frame
+and instead pull it onto the photograph's own edges at the size it is drawn,
+with the guided filter that already exists in `local.rs`. It was built, and it
+does not pay.
+
+A mask that only changes exposure is a multiply, so the rendered frame divided
+by the unrendered one gives the border back exactly at full size. Measured
+there, over the 420-pixel panel at the border's hardest point:
+
+| | edge step | follows the photograph | a full frame |
+|---|---|---|---|
+| stretched, as it ships | 0.0110 | 0.874 | 512 ms |
+| edge-aware, best of four settings | 0.0109 | **0.899** | 650 ms |
+
+Two and a half per cent of agreement, for between a quarter and three quarters
+more time — against a budget of fifteen. A 1:1 pan would go from 50 ms to 80.
+
+The reason is worth keeping, because it says where the fault is not. By the
+time the alpha reaches the frame it has been interpolated twice and is
+already smooth: there is no staircase left at that point to remove. And a
+filter cannot pull the border onto hair that the alpha never had — the detail
+was lost at 1024, on a crop, and nothing downstream can return what was never
+sampled. The border's problem is not the last multiplication.
+
+### The raster, and the drag that was holding it down — 21 September
+
+FT-026 closed the modelling road: there is no matting model in reach that
+answers at the size hair exists at, and asking this one about native-resolution
+tiles of a border makes it decline on most of them — 61 of 62 on a person
+against a wall — and draw blobs on the rest. A salient-object model needs an
+object, and a border has none.
+
+So the remaining ground was the raster, and the cost that decides it is not the
+render. `Mask::field` samples the raster per output pixel and does not care how
+big it is, so an export and a 1:1 pan cost the same at 4096 as at 2048. The
+cost is the **drag**: Feather and Edge reshape the whole raster on every tick.
+
+| raster | border follows the photograph | a drag tick | a settle | memory per mask |
+|---|---|---|---|---|
+| 2048 | 0.321 | 2 ms | — | 22 MB |
+| 3072 | 0.381 | 5 ms | — | 50 MB |
+| **4096 with PERF-015** | **0.458** | **3 ms** | 11 ms | 89 MB |
+
+Eleven milliseconds is inside a frame on this machine and outside one on a
+laptop three times slower, which is what put the raster at 3072 for an hour.
+That was the wrong move: the trade did not want splitting, it wanted
+dissolving, and the pattern was already in the file. PERF-006 draws a draft
+while the hand is moving and the real thing when it stops; the edge does the
+same now. A drag shapes a half-size copy — a quarter of the cells, and the same
+border, because `shape_edge` takes its blur radius as a fraction of the alpha's
+own long side — and the settle shapes the real one.
+
+**The general shape of that, because it comes up again**: the way to have the
+better answer without paying for it everywhere is rarely to let someone choose
+between fast and good. It is to find the moment where the expensive step does
+not matter — a frame that is about to be replaced, a hand that is still moving
+— and be cheap only there. That costs no setting, no explanation, and everyone
+gets the same photograph. A quality setting would have meant the same
+photograph rendering differently on two machines, which is the inconsistency
+`RenderInputs` exists to prevent and the reason the denoise tile was left alone
+on 20 September.
+
+### What the raster actually bought, which was mostly the filter — 21 September
+
+The two changes of that evening were measured one at a time, at 4096, and they
+are not independent:
+
+| | soft band | follows the photograph |
+|---|---|---|
+| 2048, with the staircase filter | 0.93 % | 0.321 |
+| 4096, **without** the filter | 0.92 % | 0.330 |
+| 4096, with it | 1.46 % | **0.458** |
+
+A finer raster on its own is worth almost nothing — 0.330 against 0.321. What
+it does is give the guided filter more cells and a finer guide to work with,
+and *that* pair is worth 43 %. The filter is not smoothing the border; it is
+moving it onto the photograph, by 116 % on DSCF2195 and 39 % on DSCF7577.
+
+Worth keeping in mind when reading either number alone, and worth the habit:
+two changes shipped together should be measured apart at least once, or the
+credit lands on whichever was committed last.
+
+The price is half a per cent of the frame in the transition, which is what a
+border that follows a subject costs here.
+
+---
+
+## Wide-gamut exports follow the file — 21 September
+
+With the working-space picker gone from the panel (PANEL_PLAN P1) every
+photograph was edited in sRGB, and the colour stage clips to the working
+space. So a Display P3 export held sRGB's colours in P3's numbers: on the
+camera corpus 0.0 % of every frame lay outside sRGB. Extended-range sRGB —
+keeping the negatives through the stack — was looked at and set aside:
+exposure clamps at zero and contrast is a per-channel `powf`, so it would have
+been a change to every operation and to the byte-for-byte sRGB path.
+
+What the export does instead (`Document::set_output_space`) is render a
+photograph edited in sRGB in the file's own space. Measured on the corpus,
+comparing each export back in Lab against the sRGB render, on the pixels both
+can hold:
+
+| space | outside sRGB | median ΔE | p95 ΔE |
+|---|---|---|---|
+| Display P3 | 0.0–3.0 % | 0.15–0.44 | 0.6–2.4 |
+| Adobe RGB | 0.0–2.3 % | 0.16–0.59 | 1.4–1.9 |
+| ProPhoto | 0.1–3.9 % | 0.5–1.6 | 2.3–3.9 |
+
+The look is a per-channel tone curve, and the same curve in wider primaries is
+very nearly the same picture; ProPhoto drifts most, and Lightroom renders in
+ProPhoto primaries too. The mixer's table is read in the pixels' own space
+(`Look::in_space`) — without it a band acted on a P3 pixel as if it were sRGB,
+which the test that fails without it shows.
+
+## Export formats, and whose encoder — 21 September
+
+**AVIF** is rav1e and avif-serialize directly: ravif writes every file as
+sRGB, and a P3 file described as sRGB drains. Without rav1e's assembly (it
+wants nasm to build) a 20 MP frame is 6.3 s on eight cores and 651 kB where
+the JPEG is 8 MB. Its colour box has codes for sRGB and P3 only, so Adobe RGB
+and ProPhoto are written as P3. **JPEG XL** loads the system's libjxl when
+asked: the only lossy encoder in Rust is AGPL, and a library missing from a
+desktop should cost one entry in a list, not the start. Only the handle API
+and the two structs libjxl keeps padded for this are touched, so 0.7 onwards
+will do. **DNG** is rawler's writer driven as its converter drives it, with
+Numa's render as the preview — turned back to the sensor's orientation, since
+the tag applies to previews too — and the edit as Camera Raw settings, the
+import (`foreign`) run backwards and checked by translating it back.
+
+**HDR** is an Ultra HDR JPEG. The HDR rendition is the scene's own luminance
+wherever the base curve compressed it, and the SDR frame elsewhere: the curve
+takes scene 0.05 to 0.016 on purpose and lifts 0.3 to 0.356, so a gain above
+one only starts past about 0.8 of scene white, capped three stops over paper
+white. The first maps lifted nothing: `image`'s resize clamps a float channel
+to 0..1, and every gain worth having is above one. They are resized as stops
+now, and the test asks a frame a stop up for more than a stop of gain.
+
+## A cheaper AI denoise, and why it is still SCUNet — 21 September
+
+Asked for something cheaper, darktable 5.6's NAFNet (SIDD, MIT) was run beside
+SCUNet on an ISO 12800 X-T5 frame through the same tiler: 11× faster on the
+card (a 40 MP frame about 20 s against 200) and 4.7× on the processor — and
+visibly less clean, grain left in flat stone and the frame a little darker,
+even through darktable's own shadow boost (square root in, square out). The
+rule given was faster *and* better; it was only the first. SCUNet in float16
+on the card with a 512 tile is 108 s against 200, 99.9 % of the frame within
+three 8-bit codes of float32; on the processor half precision buys nothing,
+so it keeps float32 at a 320 tile.
+
+## AI sharpen, and the checkpoint that was left out — 21 September
+
+Restormer publishes six checkpoints as PyTorch; two are about blur. Measured on
+crops of three corpus cameras, each smeared nine pixels sideways and, apart,
+blurred by a 1.6-pixel Gaussian, against the untouched crop: the
+motion-deblurring checkpoint took the smears from 32.8–36.1 dB to 39.1–40.2
+and left sharp crops at 39–45 dB of themselves, and did nothing for the
+Gaussian; the defocus checkpoint made the sharp crops worse (30–34 dB) and a
+blurred one worse than its blur (35.9 to 27.5). So AI sharpen is the motion
+one, said to be for a hand that moved. Exported to ONNX with dynamic sides, it
+gives the same 40.2 dB through Numa's runtime and tiler as through PyTorch; 256
+tiles beat 512 on both devices. When denoise is on it sharpens the denoised
+frame — the cache key says which — because sharpening the noisy one and then
+mixing the two back would bring the noise back.
+
+## Taking things out — 21 September
+
+**Remove** (`RETOUCH-004`) runs LaMa where the spot is rendered and keeps the
+fill per spot and render size, as a ratio to the ring around it — so exposure
+and white balance move it afterwards without the model, and dragging the spot
+is what asks again. **Remove people** (`RETOUCH-007`) was built first on the
+masks' segmentation and found nobody on a beach frame with three people behind
+the subject: on a 128-cell grid they scored below even odds and joined the
+subject through the cells between. YOLOX-s found all three in 64 ms. The
+subject is the largest box, and a figure stays only if it stands in the middle
+of that box — the first rule, "not touching it", kept all three, because an
+arm held out stretched the subject's box across the frame.
+
+**Find dust** (`RETOUCH-005`) went from sixty finds on a face, a blurred town
+and an arm to five in a sky by four rules, each added for a false find it
+explained: smooth at the speck's own scale, not only the finest (a blurred
+field of leaves); alone, the difference around it under a quarter of its
+depth (bokeh, pores, edges); never deeper than 0.3 stop (windows); and not on
+skin, where a darker spot is a freckle.
+
+## CI, and one camera per make — 21 September
+
+`dev/check.sh` runs on every push (`E4`) on Ubuntu 24.04, the oldest desktop
+the GTK and libadwaita features allow, and with it FT-010's corpus (`A5`):
+nine CC0 files from raw.pixls.us, fetched against their SHA-256 and cached on
+the manifest's hash, each read as the application reads it and asserted on
+its size, on finite values and on developing to neither black nor white. The
+whole suite passes headless with an empty models folder, which is what a
+runner is.
+
+## The Flatpak — 21 September
+
+The manifest from 17 September built as it was; what had to change was the
+application. A Flatpak is given its own `XDG_DATA_HOME` and `XDG_CACHE_HOME`
+under `~/.var/app`, so it would have started with no libraries, none of the
+3 366 presets and none of two gigabytes of models. `numa_core::paths` asks
+for the host's folders instead when `FLATPAK_ID` is set (`HOST_XDG_*_HOME`,
+else `~/.local/share` and `~/.cache`), which `--filesystem=host` can reach
+anyway. The Flatpak, an AppImage and a development build now share one
+catalogue, as the AppImage and a development build already did; moving to
+the Flatpak costs nothing. The edits were never at risk — they live in each
+library's own `.numa` — but the list of libraries and the presets were.
+
+Three things the sandbox changes:
+
+- **The screen's profile** (A1) comes from colord on the system bus:
+  `--system-talk-name=org.freedesktop.ColorManager`.
+- **"Open photographs with Numa"** would write into the sandbox's own
+  `mimeapps.list`, which the file manager never reads, and report success.
+  Preferences says to use Open With instead; the exported desktop entry lists
+  every type, so Numa is offered there.
+- **Light or dark** reaches a sandboxed libadwaita through the settings
+  portal, not through dconf. Under a test bus without one the editor came up
+  light — and `style.css` has 80 colours written for a dark panel, so the
+  slider names were white on grey. With the portal it follows the desktop, as
+  it should. The light editor is a fault of every build on a light desktop,
+  not of the Flatpak; it waits for a decision on whether the editor is always
+  dark.
+
+What else was checked rather than assumed: GNOME 50 ships libjxl 0.11, which
+the `dlopen` in `jxl.rs` finds; ONNX Runtime is linked statically, so there is
+nothing to bundle; and the WebGPU plugin, unpacked from its wheel into the
+shared models folder, loads on radv inside the sandbox with `--device=dri`
+(Dawn's start-up warnings are in the log).
+
+The manifest's source is the working tree, and the tree holds `presets data`:
+1.3 GB of commercial presets kept for the importer's tests. It is on the skip
+list with `.claude`, `dist`, `fable-tickets*` and the camera corpus, and the
+builder's own state, build and repo go under `target/flatpak`, which is
+skipped too. The release build takes 52 s.
+
+Tested headless with `flatpak build` against a copy of the catalogue, pointed
+at through `HOST_XDG_DATA_HOME` — the Flatpak reads the real one otherwise.
+
+**Towards Flathub.** Flathub builds without a network and from source, and
+`ort` downloads a prebuilt ONNX Runtime. Staying with `ort` does not need a
+change to the application: `ort-sys` links an ONNX Runtime found through
+`ORT_LIB_PATH` (or `ORT_LIB_LOCATION`) before it considers downloading one,
+statically or, with `ORT_PREFER_DYNAMIC_LINK`, as a shared library — so a
+package can build ONNX Runtime 1.28 from source and point `ort` at it. The
+WebGPU plugin comes out of the same source tree; `numa_infer::gpu_plugin`
+looks for it in the `lib` beside the program's `bin` (`/app/lib` in a
+Flatpak) before the models folder, because a plugin built with the ONNX
+Runtime it loads into is known to agree with it and Microsoft's wheel is only
+known to agree with the one `ort` downloads. Checked by running the binary as
+`<dir>/bin/numa` with the plugin only in `<dir>/lib`: the masks went to the
+card, and with the plugin taken away they did not. The Flathub manifest
+itself is the photographer's to write — Flathub does not accept one written
+with AI.
+
+## Hearing back: crashes, usage and ideas — 22 September
+
+Numa knows nothing about how it fares on anyone else's computer: a crash on
+another machine is invisible, and so is which tools matter. START-013, 014
+and 015 plan three ways to hear back. Nothing is built yet; this is the
+decision and why.
+
+**What holds for all three.**
+- Off until the photographer says yes, and asked once, the way the update
+  check is (START-009).
+- What would be sent can be read before it goes, and it is never a photograph
+  or anything that says whose.
+  - Never paths, file names, EXIF, GPS, faces, names or library names.
+  - No identifier that ties one session to the next.
+- One switch in Preferences stops it.
+- It works inside the Flatpak, which has the network for downloads already.
+
+This is also what the GDPR asks for: consent, and no more data than the
+purpose needs.
+
+**Crashes (START-013): no server at first.**
+- **A panic** runs a hook, which writes the report into the data folder. A
+  crash below Rust — a driver, ONNX Runtime, Dawn — does not. For those, a
+  marker the GPU guard's way (written at start, removed on a clean exit) at
+  least says it happened.
+- **At the next start**, "Send report…" shows the text. "Open on GitHub"
+  pre-fills an issue; Copy is for anyone without an account. That is
+  START-011's route, one step further, and it costs nothing.
+- **When there are more reports than one person reads:**
+  [GlitchTip](https://glitchtip.com), with the MIT-licensed `sentry` crate.
+  GlitchTip is open source (MIT) and accepts Sentry's SDKs. Self-hosted it is
+  four containers in under 512 MB; hosted, the first 1,000 events a month are
+  free.
+- **Not these:**
+  - [Bugsink](https://www.bugsink.com) takes the same SDKs, but it is
+    source-available (PolyForm Shield), not open source.
+  - Sentry itself is not open source, and self-hosted it is some forty
+    containers.
+- **The Flatpak strips its binary.** Its symbols go to the `.Debug` extension,
+  so a backtrace from it has addresses rather than lines. The report has to
+  carry the build ID so it can be symbolised against that extension.
+
+**Usage (START-014):**
+- **What.** A handful of counts per session:
+  - which tools were used;
+  - how long AI denoise, AI sharpen and Super Resolution took, and on which
+    device;
+  - Flatpak, AppImage or a build;
+  - the camera make, which decides which camera goes into the corpus next.
+- **Where to.** [Aptabase](https://aptabase.com) is made for exactly this:
+  analytics for desktop and mobile apps, with no unique identifiers, and
+  GDPR-compliant by design.
+  - The server is AGPLv3, so it can be self-hosted; the SDKs are MIT.
+  - Hosted, in the EU if chosen, 20,000 events a month are free.
+- **How.** There is no Rust SDK, and none is needed: an event is one HTTPS
+  POST, and Numa already runs `curl` for the update check. The events wait in
+  the data folder and go once per session, so a session without a network
+  loses nothing.
+- **Considered and passed over:**
+  - [Umami](https://umami.is) (MIT) and Plausible are web analytics first.
+  - PostHog is far more than this needs.
+  - KDE's KUserFeedback is Qt.
+
+**Ideas and tips (START-015).** GitHub Discussions with an Ideas category,
+and issue forms for bugs, both free. "Send feedback…" in the main menu
+pre-fills one, with START-011's debug information only if the photographer
+ticks it. Most photographers do not have a GitHub account, so mail is the
+second way in. It shows their address to one person, which is their choice
+to make.
+
+Sources: [GlitchTip review and pricing, 2026](https://cubeapm.com/blog/glitchtip-pricing-and-review/),
+[Self-host Sentry or GlitchTip, 2026](https://danubedata.ro/blog/self-host-sentry-glitchtip-error-tracking-2026),
+[Aptabase on GitHub](https://github.com/aptabase/aptabase),
+[Bugsink](https://www.bugsink.com/).

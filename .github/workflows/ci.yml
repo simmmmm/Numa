@@ -1,0 +1,27 @@
+# E4: what dev/check.sh asks of a change, asked of every push — the tests, the
+# camera corpus (A5) and the shape ratchet — on the oldest desktop Numa
+# promises to build on: Ubuntu 24.04, GTK 4.14, libadwaita 1.5.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: GTK and libadwaita
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev
+      - uses: Swatinem/rust-cache@v2
+      # raw.pixls.us is asked once per manifest, not once per push.
+      - uses: actions/cache@v6
+        with:
+          path: tests/corpus/*/
+          key: corpus-${{ hashFiles('tests/corpus/manifest.tsv') }}
+      - run: dev/fetch-corpus.sh
+      - run: dev/check.sh
+        env:
+          NUMA_CORPUS: required

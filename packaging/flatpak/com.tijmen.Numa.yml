@@ -23,10 +23,15 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
+  # Models, camera profiles and the GPU plugin are downloaded from Preferences,
+  # and the update check asks GitHub.
+  - --share=network
   # A photo editor reads photographs from wherever the photographer keeps them,
   # which is routinely an external drive rather than the home directory. The
   # narrower permission would break the first library anyone adds.
   - --filesystem=host
+  # RENDER-014 (A1): the screen's colour profile, from colord on the system bus.
+  - --system-talk-name=org.freedesktop.ColorManager
 
 modules:
   - name: camera-profiles
@@ -60,17 +65,29 @@ modules:
       - install -Dm755 target/release/numa /app/bin/numa
       - install -Dm644 data/com.tijmen.Numa.desktop
         /app/share/applications/com.tijmen.Numa.desktop
-      - install -Dm644 data/icons/hicolor/256x256/apps/com.tijmen.Numa.png
-        /app/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png
-      - install -Dm644 data/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png
-        /app/share/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png
+      - install -Dm644 data/com.tijmen.Numa.metainfo.xml
+        /app/share/metainfo/com.tijmen.Numa.metainfo.xml
+      - for size in 32 48 64 128 256; do
+          for name in com.tijmen.Numa com.tijmen.Numa-dark; do
+            install -Dm644 data/icons/hicolor/${size}x${size}/apps/$name.png
+              /app/share/icons/hicolor/${size}x${size}/apps/$name.png;
+          done;
+        done
       - install -Dm644 data/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
         /app/share/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
     sources:
       - type: dir
         path: ../..
+        # Everything that is not the source, and above all `presets data`:
+        # commercial presets for the importer's tests, which must never end up
+        # in anything handed to someone.
         skip:
           - target
           - dist
           - .git
+          - .claude
+          - presets data
+          - tests/corpus
+          - fable-tickets
+          - fable-tickets.old
           - packaging/appimage/AppDir

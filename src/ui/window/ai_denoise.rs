@@ -5,71 +5,148 @@ use numa::render::ai_denoise;
 
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Pass {
+    Denoise,
+    Sharpen,
+}
+
+impl Pass {
+    const BOTH: [Pass; 2] = [Pass::Denoise, Pass::Sharpen];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Pass::Denoise => "AI denoise",
+            Pass::Sharpen => "AI sharpen",
+        }
+    }
+
+    fn about(self) -> &'static str {
+        match self {
+            Pass::Denoise => "A neural network (SCUNet) over the whole photograph at full size. \
+                              The first time takes minutes; after that it is kept.",
+            Pass::Sharpen => "Undoes the smear of a hand that moved (Restormer), over the whole \
+                              photograph at full size. Not for a lens that missed focus. \
+                              The first time takes minutes; after that it is kept.",
+        }
+    }
+
+    fn amount(self, document: &Document) -> f32 {
+        match self {
+            Pass::Denoise => document.ai_denoise,
+            Pass::Sharpen => document.ai_sharpen,
+        }
+    }
+
+    fn set(self, document: &mut Document, value: f32) {
+        match self {
+            Pass::Denoise => document.ai_denoise = value,
+            Pass::Sharpen => document.ai_sharpen = value,
+        }
+    }
+
+    fn installed(self) -> bool {
+        match self {
+            Pass::Denoise => ai_denoise::is_installed(),
+            Pass::Sharpen => ai_denoise::sharpen_installed(),
+        }
+    }
+
+    fn missing(self) -> &'static str {
+        match self {
+            Pass::Denoise => "AI denoise needs the SCUNet model — download it in Preferences",
+            Pass::Sharpen => "AI sharpen needs the Restormer model — download it in Preferences",
+        }
+    }
+
+    fn kept(self, path: &Path, document: &Document) -> bool {
+        match self {
+            Pass::Denoise => denoised::is_cached(path),
+            Pass::Sharpen => denoised::is_sharpened(path, document.ai_denoise > 0.0),
+        }
+    }
+}
+
 thread_local! {
 
-    static CONTROLS: RefCell<Option<(gtk::Switch, gtk::Scale)>> = const { RefCell::new(None) };
+    static CONTROLS: RefCell<[Option<(gtk::Switch, gtk::Scale)>; 2]> = const { RefCell::new([None, None]) };
 
     static RUNNING: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn build(state: &App) -> gtk::Box {
+fn controls(pass: Pass) -> Option<(gtk::Switch, gtk::Scale)> {
+    CONTROLS.with_borrow(|controls| controls[pass.index()].clone())
+}
+
+pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    {
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        header.set_margin_top(6);
+        header.set_margin_bottom(6);
+        let title = gtk::Label::new(Some(pass.name()));
+        title.set_xalign(0.0);
+        title.set_hexpand(true);
+        title.add_css_class("slider-name");
+        let switch = gtk::Switch::new();
+        switch.set_valign(gtk::Align::Center);
+        switch.update_property(&[gtk::accessible::Property::Label(pass.name())]);
+        header.set_tooltip_text(Some(pass.about()));
+        header.append(&title);
+        header.append(&switch);
+        column.append(&header);
 
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    header.set_margin_top(6);
-    header.set_margin_bottom(6);
-    let title = gtk::Label::new(Some("AI denoise"));
-    title.set_xalign(0.0);
-    title.set_hexpand(true);
-    title.add_css_class("slider-name");
-    let switch = gtk::Switch::new();
-    switch.set_valign(gtk::Align::Center);
-    switch.update_property(&[gtk::accessible::Property::Label("AI denoise")]);
-    header.set_tooltip_text(Some(
-        "A neural network (SCUNet) over the whole photograph at full size. \
-         The first time takes minutes; after that it is kept.",
-    ));
-    header.append(&title);
-    header.append(&switch);
-    column.append(&header);
+        let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+        amount.set_value(100.0);
+        set_neutral(&amount, 100.0);
+        let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
+        row.set_sensitive(false);
+        column.append(&row);
 
-    let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
-    amount.set_value(100.0);
-    set_neutral(&amount, 100.0);
-    let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
-    row.set_sensitive(false);
-    column.append(&row);
-
-    switch.connect_active_notify(glib::clone!(
-        #[strong] state,
-        move |switch| switched(&state, switch.is_active())
-    ));
-    amount.connect_value_changed(glib::clone!(
-        #[strong] state,
-        move |_| commit(&state)
-    ));
-
-    CONTROLS.set(Some((switch, amount)));
+        switch.connect_active_notify(glib::clone!(
+            #[strong] state,
+            move |switch| switched(&state, pass, switch.is_active())
+        ));
+        amount.connect_value_changed(glib::clone!(
+            #[strong] state,
+            move |_| commit(&state, pass)
+        ));
+        CONTROLS.with_borrow_mut(|controls| controls[pass.index()] = Some((switch, amount)));
+    }
     column
 }
 
 pub(super) fn write(state: &App) {
-    let Some((switch, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
-    let (value, path) = match state.open.borrow().as_ref() {
-        Some(photo) => (photo.document.ai_denoise, photo_path(photo)),
-        None => return,
-    };
-
-    let was = state.applying.replace(true);
-    switch.set_active(value > 0.0);
-    if value > 0.0 {
-        amount.set_value(value as f64);
+    for pass in Pass::BOTH {
+        let Some((switch, amount)) = controls(pass) else { continue };
+        let Some(value) = state.open.borrow().as_ref().map(|photo| pass.amount(&photo.document)) else { return };
+        let was = state.applying.replace(true);
+        switch.set_active(value > 0.0);
+        if value > 0.0 {
+            amount.set_value(value as f64);
+        }
+        set_amount_sensitive(&amount, value > 0.0);
+        state.applying.set(was);
     }
-    set_amount_sensitive(&amount, value > 0.0);
-    state.applying.set(was);
+    start_what_is_owed(state);
+}
 
-    if let Some(path) = path.filter(|path| value > 0.0 && ai_denoise::is_installed() && !denoised::is_cached(path)) {
-        run(state, path);
+fn start_what_is_owed(state: &App) {
+    let owed = {
+        let open = state.open.borrow();
+        let Some(photo) = open.as_ref() else { return };
+        let Some(path) = photo_path(photo) else { return };
+        [Pass::Sharpen, Pass::Denoise].into_iter().find(|pass| {
+            pass.amount(&photo.document) > 0.0 && pass.installed() && !pass.kept(&path, &photo.document)
+        })
+        .map(|pass| (pass, path, photo.document.ai_denoise > 0.0))
+    };
+    if let Some((pass, path, on_denoised)) = owed {
+        run(state, path, pass, on_denoised);
     }
 }
 
@@ -86,68 +163,64 @@ fn set_amount_sensitive(amount: &gtk::Scale, on: bool) {
     }
 }
 
-fn set_switch(state: &App, on: bool) {
-    let Some((switch, _)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
+fn set_switch(state: &App, pass: Pass, on: bool) {
+    let Some((switch, amount)) = controls(pass) else { return };
     let was = state.applying.replace(true);
     switch.set_active(on);
     state.applying.set(was);
-    commit(state);
-    CONTROLS.with_borrow(|controls| controls.as_ref().map(|(_, amount)| set_amount_sensitive(amount, on)));
+    commit(state, pass);
+    set_amount_sensitive(&amount, on);
 }
 
-fn commit(state: &App) {
+fn commit(state: &App, pass: Pass) {
     if state.applying.get() {
         return;
     }
-    let Some((on, value)) = CONTROLS.with_borrow(|controls| {
-        controls.as_ref().map(|(switch, amount)| (switch.is_active(), amount.value() as f32))
-    }) else {
-        return;
-    };
+    let Some((switch, amount)) = controls(pass) else { return };
+    let (on, value) = (switch.is_active(), amount.value() as f32);
     {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
         let wanted = if on { value } else { 0.0 };
-        if photo.document.ai_denoise == wanted {
+        if pass.amount(&photo.document) == wanted {
             return;
         }
-        photo.document.ai_denoise = wanted;
+        pass.set(&mut photo.document, wanted);
     }
     request_render(state);
     schedule_history_push(state);
 }
 
-fn switched(state: &App, on: bool) {
+fn switched(state: &App, pass: Pass, on: bool) {
     if state.applying.get() {
         return;
     }
-    CONTROLS.with_borrow(|controls| controls.as_ref().map(|(_, amount)| set_amount_sensitive(amount, on)));
+    if let Some((_, amount)) = controls(pass) {
+        set_amount_sensitive(&amount, on);
+    }
     if !on {
-        commit(state);
+        commit(state, pass);
+
+        start_what_is_owed(state);
         return;
     }
 
-    let path = match state.open.borrow().as_ref() {
-        Some(photo) => photo_path(photo),
-        None => return,
-    };
-    let Some(path) = path else {
-        state.toast("AI denoise works on one photograph, not on a merge");
-        set_switch(state, false);
-        return;
-    };
-    if !ai_denoise::is_installed() {
-        state.toast("AI denoise needs the SCUNet model — download it in Preferences");
-        set_switch(state, false);
+    let has_file = state.open.borrow().as_ref().and_then(photo_path).is_some();
+    if !has_file {
+        state.toast(&format!("{} works on one photograph, not on a merge", pass.name()));
+        set_switch(state, pass, false);
         return;
     }
-    commit(state);
-    if !denoised::is_cached(&path) {
-        run(state, path);
+    if !pass.installed() {
+        state.toast(pass.missing());
+        set_switch(state, pass, false);
+        return;
     }
+    commit(state, pass);
+    start_what_is_owed(state);
 }
 
-fn run(state: &App, path: PathBuf) {
+fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
 
     if RUNNING.replace(true) {
         return;
@@ -155,7 +228,7 @@ fn run(state: &App, path: PathBuf) {
 
     let cancel = Cancel::default();
     let (toast, text, bar) = progress_toast(state, &cancel);
-    text.set_text("AI denoise — reading the photograph");
+    text.set_text(&format!("{} — reading the photograph", pass.name()));
 
     let done = Arc::new(AtomicUsize::new(0));
     let total = Arc::new(AtomicUsize::new(0));
@@ -170,7 +243,7 @@ fn run(state: &App, path: PathBuf) {
             let (done, total) = (done.load(Ordering::Relaxed), total.load(Ordering::Relaxed));
             if total > 0 && done > 0 {
                 let left = started.elapsed().as_secs_f64() / done as f64 * (total - done) as f64;
-                text.set_text(&format!("AI denoise — about {} min left", (left / 60.0).ceil().max(1.0)));
+                text.set_text(&format!("{} — about {} min left", pass.name(), (left / 60.0).ceil().max(1.0)));
                 bar.set_fraction(done as f64 / total as f64);
             }
             glib::ControlFlow::Continue
@@ -183,14 +256,24 @@ fn run(state: &App, path: PathBuf) {
         let work = path.clone();
         let result = gio::spawn_blocking(move || {
             let full = Source::Photo { id: 0, path: work.clone() }.full_resolution()?;
-            let kept = ai_denoise::ensure(&work, &full, |finished, tiles| {
+            let progress = |finished, tiles| {
                 done.store(finished, Ordering::Relaxed);
                 total.store(tiles, Ordering::Relaxed);
                 !stop.load(Ordering::Relaxed)
-            })?;
+            };
+            let kept = match pass {
+                Pass::Denoise => denoised::ensure(&work, &full, progress)?,
+                Pass::Sharpen => denoised::ensure_sharpened(&work, &full, on_denoised, progress)?,
+            };
             drop(full);
             if let (true, Some((width, height))) = (kept, proxy) {
-                ai_denoise::warm(&work, width, height);
+                let stored = match pass {
+                    Pass::Denoise => denoised::load(&work),
+                    Pass::Sharpen => denoised::load_sharpened(&work, on_denoised),
+                };
+                if let Some(stored) = stored {
+                    ai_denoise::warm(&work, &stored, width, height);
+                }
             }
             Ok::<bool, String>(kept)
         })
@@ -204,25 +287,28 @@ fn run(state: &App, path: PathBuf) {
             Ok(Ok(true)) if still_open => {
                 if let Some(photo) = state.open.borrow_mut().as_mut() {
 
-                    photo.working = render::to_working_space(&photo.document, &photo.proxy);
+                    photo.inputs = render_inputs(&photo.document);
+                    photo.working = render::to_working_space(&photo.document, &photo.proxy, &photo.inputs);
                     photo.full_working = None;
                     photo.full_working_key = None;
                     photo.draft = None;
                     photo.view = None;
                 }
                 request_render(&state);
+
+                start_what_is_owed(&state);
             }
             Ok(Ok(true)) => {}
-            Ok(Ok(false)) if still_open => set_switch(&state, false),
+            Ok(Ok(false)) if still_open => set_switch(&state, pass, false),
             Ok(Ok(false)) => {}
             Ok(Err(err)) => {
-                log::warn!("{}: AI denoise: {err}", path.display());
-                state.toast(&format!("AI denoise failed: {err}"));
+                log::warn!("{}: {}: {err}", path.display(), pass.name());
+                state.toast(&format!("{} failed: {err}", pass.name()));
                 if still_open {
-                    set_switch(&state, false);
+                    set_switch(&state, pass, false);
                 }
             }
-            Err(_) => state.toast("AI denoise failed"),
+            Err(_) => state.toast(&format!("{} failed", pass.name())),
         }
     });
 }

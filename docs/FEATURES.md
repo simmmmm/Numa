@@ -1,9 +1,3 @@
-  **The mask is measured on the pixels its own mask covers.** The photograph
-  that every mask is cut from is now reduced with Lanczos rather than a
-  triangle filter: from a full frame that is a threefold reduction, and a
-  triangle reads four of every nine pixels, so a feather against sky came out
-  ragged before any model saw it.
-
 # Feature index
 
 Every feature has an ID. Reference it in commit messages, PR titles and TODO
@@ -177,6 +171,37 @@ entry does not exist, and the messages that say what is missing name
   progress rather than a fault. Counted per run of the queue, because only
   what is on screen is made and scrolling asks for more; a run that only read
   the cache says nothing. No Stop, since the cards on screen would stay blank.
+- ◻️ **START-013**: Crash reports, sent only when the photographer says so.
+  - **Rust panics.** A panic hook writes a report into the data folder. It
+    holds the version, how Numa runs (Flatpak, AppImage or a build), GTK,
+    the GPU line, and the panic with its backtrace. Paths become `~`, and
+    file names become `<photo>`.
+  - **Native crashes** (a driver, ONNX Runtime, Dawn). The panic hook never
+    runs for these, so a marker the way the GPU guard works: written at start,
+    removed on a clean exit.
+  - **At the next start** a toast says Numa closed unexpectedly. "Send
+    report…" shows the whole text before anything leaves. "Open on GitHub"
+    pre-fills an issue; Copy is there for anyone without an account.
+  - No server and no cost. A crash server (GlitchTip) waits until there are
+    more reports than one person reads. See ENGINEERING, *Hearing back*.
+- ◻️ **START-014**: What gets used, if the photographer agrees. Off until
+  asked, asked once, the way the update check is.
+  - **What is sent:** a short list of counts and nothing else — which tools
+    were used, how long the slow ones took and on which device, how Numa runs,
+    the camera make.
+  - **What never is:** no photographs, paths, names, places, EXIF, faces or
+    library names, and no identifier that ties one session to the next.
+  - **Seeing and stopping it:** Preferences shows exactly what would go, and
+    the switch stops it.
+  - **Where it goes:** Aptabase — privacy-first analytics made for desktop
+    apps, open source, EU hosting, free for 20,000 events a month — over the
+    `curl` Numa already calls for the update check. See ENGINEERING,
+    *Hearing back*.
+- ◻️ **START-015**: Ideas and tips from the photographer. "Send feedback…" in
+  the main menu: a text field and, ticked off by default, the debug information
+  of START-011. It opens GitHub Discussions (an Ideas category and issue forms,
+  both free), pre-filled. Mail is the way in for anyone without a GitHub
+  account.
 
 ### APP — Application shell
 
@@ -211,6 +236,47 @@ entry does not exist, and the messages that say what is missing name
   by, and is written under a `.part` name until it is whole. What was copied,
   what was already there and what failed is said afterwards. Not a way to open
   a single file outside a library, which is IO-001.
+
+  **Import from a card or a camera** (the brief's C7, extended by the
+  photographer on 21 September: a connected camera, and "a folder that seems
+  logical — a little smart is fine"). A card in a reader and a camera on a
+  cable both arrive as a GIO mount — the camera through GVFS, read by its FUSE
+  path — and either is offered by a toast the moment it appears; the camera
+  button in the header opens the same dialog on whatever is there, or any
+  folder (`importing.rs`, `numa::io::import`). The card is read from its
+  `DCIM`, at the top or one folder down as a camera lists it. What a library
+  already has — the same name, size and first and last 64 kB — is left on the
+  card and said once ("3 already in Mallorca"). The rest is split into shoots
+  where the camera was put down for two days, and each is offered a place: the
+  library whose dates it falls in or beside (two days either way), else a new
+  folder where new ones go, read off the libraries there are — a year folder
+  when most of them sit in one (`Fotos/2026/`), their common folder otherwise —
+  named for its first day and renamable in the dialog; "Change…" puts it in
+  any folder. An optional pattern renames (`{date} {time} {n} {name}`, one
+  count per frame so a RAW and its JPEG keep one stem). The copy is APP-005's —
+  `.part` until whole, modified time kept, nothing overwritten; a name taken by
+  a different photograph gets `-2` rather than losing either — with a count
+  and a Stop on the toast; new folders become libraries, the rest are
+  rescanned, and the first opens. Checked on a card made of Mallorca frames:
+  three found already there, two put into Mallorca by their date, three into
+  a new library named in the dialog, modified times kept and no `.part` left.
+
+  **The libraries as folders** (the photographer's, 21 September: "a page
+  before it, like the thumbnails in the drop-down, as a kind of folders"): the
+  page before a library, as the editor is the page after one — "Libraries",
+  the first step of the path at the top of the grid and of the editor, leads
+  there (the photographer's, in place of a back arrow of its own); the
+  library's own step shows its chevron only while it is pointed at or open.
+  Every library as a stack of
+  three prints at 132 px, its name and "362 photos · Sep 2025 – Oct 2025",
+  shelved by year folder and in the order they were shot, "All libraries"
+  first; a press opens it (`folders.rs`, on `places`' fan, now drawn at any
+  size). Adding a folder and importing are in its header too. The prints on a stack —
+  here and in the picker — are the library's best, not its newest (the
+  photographer's, the same day): the highest rated, then the picked, then the
+  edited, then Analyse's suggestion, the newest last; never a rejected frame,
+  and one of each burst, chosen by that same order — a RAW and its HEIF are
+  one burst whose sharpest is often the HEIF nobody edited.
 - ✅ **APP-006**: Recent files integration. A photograph opened from outside and
   every exported file are added to the desktop's recent files, so the file
   manager's Recent and any file dialog offer them again.
@@ -260,6 +326,26 @@ entry does not exist, and the messages that say what is missing name
   the pixels and a viewer applying it again would turn the photograph on its
   side, and the pointer to the thumbnail, which is of the unedited frame.
 
+  **IPTC, and the location left behind** (21 September). What the camera does
+  not write goes in an XMP packet — IPTC Core, which Lightroom, Bridge,
+  exiftool, Windows and every photo site read, where the old IIM block is kept
+  only for software older than XMP: the creator and copyright typed in the
+  export dialog, and from the catalogue the stars, the people in the
+  photograph (IPTC's persons shown) and the albums it is in, people and albums
+  together as keywords. In a JPEG as its own APP1, in a TIFF as tag 700, in a
+  JPEG XL as its `xml ` box; an AVIF has no box for it yet. *Remove location*
+  rebuilds the camera's EXIF without its GPS directory, in every format that
+  carries one.
+  The capture time is read too, kept beside the file's own date, and it is what
+  the grid orders on. The file date alone was the first version, on the
+  reasoning that a camera writes it at the shutter — true of a card straight out
+  of one, and wrong for every archive that has ever been copied: `cp` without
+  `-p` stamps the day of the copy, and a parallel copy stamps it in no
+  particular order. A real 11 509-frame archive read back shuffled, and CULL-002
+  cut bursts out of that order which were never one moment. A photograph with no
+  capture time — a scan, an export stripped of its tags — falls back to the file
+  date rather than to the beginning of time.
+
   A TIFF-based RAW — ARW, NEF, CR2, DNG — keeps its metadata in the file's own
   IFDs and its preview carries no APP1 at all, so those exported bare. They now
   get a block that is written rather than copied: eleven tags out of IFD0 and
@@ -300,6 +386,43 @@ entry does not exist, and the messages that say what is missing name
 - ✅ **IO-010**: Demosaic backend settled: rawler, no libraw.
 - ✅ **IO-013**: Markesteijn demosaic for X-Trans at full size; bilinear for the
   proxy, where the difference is 3.6 % rather than 81 %.
+
+  **FT-021 B1, 20 September: the editor's proxy comes off Markesteijn too.**
+  The 3.6 % that justified bilinear for the proxy was measured on the decode
+  alone; what it costs in the finished picture at fit zoom is **15 %** of
+  acutance against what the export produces, because the box filter down to
+  2400 px is applied to a worse demosaic. Capture sharpening, which the proxy
+  skips at that scale, turns out to be worth only 1.4-1.6 % after the same
+  filter — so the demosaic was fourteen of the fifteen points. `decode_for_
+  editing` picks Best for a raw; the fitted view is now within 1.2-1.4 % of
+  its own ground truth and agrees with 1:1, which already used that decode.
+  0.34 s on opening, nothing on a slider tick. Thumbnails keep the draft
+  decode: a 320-pixel card cannot show it, and a library has hundreds.
+
+  **Brief A9 and FT-022, 20 September: the false-colour step.** Markesteijn
+  invents coloured pixels where its guess at the two thirds of the mosaic that
+  has no red and no blue sample goes wrong, and rawler ships no step to remove
+  them. One 3x3 median of the channel ratios, run **after the lens geometry**:
+  green is left exactly as it was and R and B are rebuilt as `G x median`.
+  On FT-019's patch of DSCF9580 it takes 64 % of the high-pass a\* and 63 %
+  of the b\* out at sharpening 0, colour 0, for no measurable time at all.
+
+  Where it runs is most of what it is worth. At the demosaic, where it first
+  landed, it removed the same noise and then `correct_geometry` put two thirds
+  of it back — that pass resamples R, G and B on three different radii to undo
+  lateral colour, which is about a pixel apart near the frame edge, so
+  luminance texture returns as ratio noise after the step that cleaned it.
+  Moved after the geometry, 16 % / 35 % becomes 65 % / 64 %.
+
+  It does not cost detail, and after the move that needs saying per channel
+  rather than for green alone: over the stag's head on DSCF9580, red's acutance
+  rises 1.5 % and blue's 5.0 % while green's does not move, because the
+  bilinear resampling that undoes lateral CA softens R and B relative to green
+  and pulling their ratios back onto green's structure puts that back.
+
+  X-Trans only: Bayer never enters this path and the bilinear draft decode is
+  untouched. 150 frames across 2022 to 2026 decode, render and export through
+  it without a failure.
 - ✅ **IO-014**: Each library keeps its own catalog, in a hidden `.numa`
   folder inside it: photographs, ratings, flags, edit stacks, analysis and the
   names on faces. The folder is the library — moved to another drive or
@@ -330,6 +453,31 @@ entry does not exist, and the messages that say what is missing name
   range where the stream says BT.601 full range. With libheif's fallback
   instead it matches libheif to 47–57 dB on 18 iPhone files, 50–70 ms each.
   A RAW and a HEIF of the same frame sit side by side, as a JPEG does (LIB-018).
+
+  **A Fujifilm .HIF opens at its preview size, and says so.** Raised on
+  2026-09-17 by a Mallorca shoot: every `.HIF` in it failed with "picture is
+  not fully covered by slices", one line per file. The file is a 2×2 grid of
+  HEVC **Range Extensions** tiles — 4:2:2 at ten bits, which is what `ffprobe`
+  calls profile Rext — and the decoder gets part of the way through a tile
+  before the CABAC state drifts and the slice ends early. It is not a missing
+  feature that can be switched on: heic-rs implements the RExt flags it parses
+  and rejects the ones it does not, so this is a bug in it on this stream, and
+  there is no newer release.
+
+  What the file also carries is three previews of its own — 1920×1280, 640×480
+  and 160×120 — written as **JPEG** items rather than HEVC ones, which is why
+  they were never the problem. So when the primary image will not decode, the
+  largest preview that does stands in: 1280×1920 in 21 ms, turned by the
+  primary's own `irot`, identical to ffmpeg's decode of the same frame. A
+  photograph at 1920 across is a library, a loupe, a cull and a print at
+  postcard size; failing is none of those. It is logged once per file, and the
+  info panel then shows the preview's size, which is the honest number for what
+  is on screen — the RAF beside it is the file to develop. `irot` turns
+  counter-clockwise where `image`'s rotations turn clockwise, which is asserted
+  rather than assumed.
+
+  `tests/heif_probe.rs` is the tool for the next one: it prints every item, its
+  type and size, and whether it decodes.
 - ✅ **IO-016**: Thumbnails kept in the library's `.numa` folder instead of the
   user's cache, so a library moved to another computer or drive shows at once
   instead of decoding every frame again — the same reason the catalog moved
@@ -340,11 +488,40 @@ entry does not exist, and the messages that say what is missing name
   the move. The cache is still read first-time-round, and a library that cannot
   be written to keeps its thumbnails there. Not pruned when a file changes or
   goes, any more than the cache is.
-- ✅ **IO-011**: JPEG and PNG, with the quality asked for. Two formats because
-  two is what the build carries: the `image` crate comes in with those features
-  and a TIFF nobody asked for is a decoder in the binary for every user who does
-  not want one. The extension follows the format rather than the name template,
-  so the two cannot disagree.
+- ✅ **IO-011**: JPEG, PNG and — the brief's A3 — TIFF 16-bit, the round-trip
+  format for every other editor. The extension follows the format rather than
+  the name template, so the two cannot disagree. The TIFF is developed at
+  sixteen bits from the same stack (`render::develop16`; only the final
+  rounding differs, and the eight-bit frame is the sixteen brought down to
+  within one step — a test), written by rawler's TIFF writer rather than the
+  `image` crate's, which would be a decoder in the binary for every user:
+  RGB, Deflate over horizontal differences, the ICC of its space, and the
+  camera's EXIF as a real Exif directory without the MakerNote. A 40 MP X-T5
+  frame is 191 MB (239 uncompressed; LZW was 236, and without the predictor
+  304 — larger than nothing); exiftool reads make, model, lens, exposure and
+  date off it, ImageMagick reads it as 16-bit sRGB, and the q100 JPEG of the
+  same stack is 0.0034 RMSE from it.
+
+  **AVIF, JPEG XL and DNG** (21 September). All three from the sixteen-bit
+  develop. *AVIF* is one AV1 still frame at ten bits, 4:4:4, from rav1e in pure
+  Rust — without its assembly, which would need nasm to build: 6.3 s for a 20 MP
+  frame on eight cores, 651 kB where the JPEG is 8 MB. rav1e and avif-serialize
+  directly rather than through ravif, which describes every file as sRGB; the
+  colour box and the AV1 header both name the primaries. AVIF has codes for
+  sRGB and Display P3 only, so Adobe RGB and ProPhoto are written as P3 and the
+  dialog says so. *JPEG XL* goes through the libjxl already on the computer,
+  loaded when it is first asked for: the only lossy encoder in Rust is under the
+  AGPL. Quality maps to libjxl's distance as `cjxl` does (90 is 1.0, "visually
+  lossless"), 100 is lossless, and the file carries the ICC, the camera's Exif
+  and an XMP box; where there is no libjxl the format is not offered. *DNG* is
+  Lightroom's DNG export: the sensor's own values, losslessly compressed by
+  rawler's writer, a 2048-pixel preview of the photograph as edited — turned
+  back to the way the sensor lay, since the orientation tag applies to previews
+  too — and the edit as Camera Raw settings (`foreign::to_lightroom`, the import
+  run backwards: exposure to grain, the mixer, black and white, grading, white
+  balance), so Camera Raw opens it looking roughly as it does here. The crop,
+  curves, masks and retouching stay behind. A test writes each format from a
+  corpus raw and reads it back; avifdec, jxlinfo and exiftool read all four.
 - ✅ **IO-012**: Size on the way out — full, or a long edge of 4096 down to
   1080, Lanczos, never enlarging — and the edge that takes off, put back.
   Reducing a 40 MP frame to 2048 averages fourteen pixels into one, and the
@@ -360,9 +537,19 @@ entry does not exist, and the messages that say what is missing name
   the arrow's whole job is to open one dialog and a menu of one entry is a click
   in the way of it. Exporting a shoot is the same question forty times, and
   answering it once is what remembering it is for. The button's tooltip says
-  what it will do, since it will not ask. Still missing:
-  output sharpening after the resize, saved presets, and choosing the folder
-  (everything goes to the library's `edited/`).
+  what it will do, since it will not ask.
+
+  **Presets, a watermark and the file name** (21 September). The dialog is a
+  dialog of its own now, 480 wide, with the settings in groups and Metadata and
+  Watermark folded away. Presets are named sets of every answer but the
+  folder, chosen from the first row, saved and forgotten beside it; choosing
+  one fills the rows, which can still be changed after. The watermark is a line
+  of text in a corner, set in the system's sans at a size in thousandths of the
+  long edge, white at seven tenths over a faint shadow so it reads on sky and
+  shadow alike, drawn over the finished frame at its final size by Pango — the
+  copyright line when no text is given. The name template, which the
+  preferences had and the dialog did not, is a row. Colour space's notes were
+  cut to a few words so the value beside them is no longer cut to "s…".
 
 ### LIB — Library
 
@@ -370,9 +557,16 @@ entry does not exist, and the messages that say what is missing name
 - ✅ **LIB-002**: Filter and sort the grid.
 - ✅ **LIB-003**: Keyboard culling (`0`–`5`, `P`, `X`, `U`) in the grid *and* in
   the editor, a star row in the editor's toolbar, the rating on each filmstrip
-  frame, and the same on a right-click menu — which is how anyone finds out the keys exist, and the only
-  place deleting belongs. Deleting moves the file to the desktop's trash and
-  forgets the catalog row; it says so before it does it.
+  frame, and the same on a right-click menu — which is how anyone finds out the
+  keys exist. Deleting moves the file to the desktop's trash and forgets the
+  catalog row; it says so before it does it. `Delete` in the grid
+  asks that same question: the dialog and the trashing were already there
+  behind the menu, and the key every file manager uses for them was the one
+  gesture a cull reaches for that did nothing. It is bound in the grid's own
+  key controller rather than as an application shortcut, because that
+  controller sits on the window and bubbles — a focused entry has consumed the
+  key first, so Delete still deletes text in the search and rename fields,
+  which an accel would have taken before them.
 - ✅ **LIB-004**: Thumbnail size control and a single-photo loupe. The size is a
   button at the end of the filter bar holding two sliders, how tall a
   row aims to be and how much space sits between the photographs, both
@@ -416,6 +610,19 @@ entry does not exist, and the messages that say what is missing name
   where it is developed. Its keys run before the grid's own, since the grid
   keeps the focus underneath it and its arrows would otherwise move the cursor
   without the loupe following.
+
+  **Compare** (the brief's C4) is C: two to four selected photographs side by
+  side, over the grid the way the loupe is and on the loupe's thumbnails
+  (`compare.rs`). One zoom and one centre for all of them — the wheel zooms
+  about the point under the pointer, a drag pans, a double click goes to one
+  thumbnail pixel a screen pixel there and back — so the eye in one frame is
+  the eye in the next; above 1:1 it is nearest-neighbour, as the canvas is.
+  The culling keys act on the frame under the pointer, whose name is the one
+  in bold, through the same `apply_to_ids` the grid's keys use, so a rating
+  given here is the same `photos` row (checked in the catalogue: 4 and pick on
+  DSCF1192). Enter edits that frame, Escape or C closes. Opening is half a
+  millisecond and cached frames are in within 8 ms; one not yet cached at
+  1920 took 235. The loupe stays: it is the other half of the same look.
 
   UX-009's strip follows the same rule as of today: a frame is as tall as the
   strip and as wide as the photograph's shape, from the thumbnail cache, where
@@ -486,6 +693,15 @@ entry does not exist, and the messages that say what is missing name
   every photograph they are in from every library that can be reached, in the
   filter's order. The rating, flag and sort filters still apply. The People
   dialog stays the place to name them, and works on the library last picked.
+  Libraries sharing a parent folder are listed under its name, in the same kind
+  of section: a library is a folder, so one trip photographed across several
+  years is several of them, and a flat list of "2015, 2019, 2023" says nothing
+  about where any of them was. A folder becomes a heading only when the
+  libraries do not all sit in the same one — a single heading over the whole
+  list is what the section already is — and never for a folder holding one
+  library, which says nothing its own row does not. The cost of that first
+  rule, named where it is made: one trip and nothing else reads as a bare
+  "2015" and "2023" until a second trip is added.
   A sidebar on the left, the size of the editor's, holding all of it is for
   later — for now the photographer finds it more than the list needs.
 - ✅ **LIB-005**: Copy and paste adjustments between photos, with a checklist of
@@ -510,6 +726,24 @@ entry does not exist, and the messages that say what is missing name
   replaced. The presets are not rows in the menu itself: a GTK menu builds
   every row at once, and 3500 imported ones held the window back for over
   forty seconds.
+
+  **Presets do not stack.** Picking a second one is changing your mind about
+  the first, not asking for both — so a preset is applied to the stack as it
+  was *before* the one on it now, which the open photograph remembers from the
+  moment the first one lands. Before this, a second preset settled on top of
+  the first wherever it had nothing to say: a tone-and-colour look followed by
+  a colour-only one left half of each, with nothing to say which half. The
+  memory is cleared the moment the photographer changes anything by hand —
+  after that the picture is theirs, and the next preset builds on it. A paste
+  is unchanged and still lands on what is there: a paste is something you
+  built and aimed, a preset is a look.
+
+  **Resting on one shows it.** The canvas renders the open photograph with
+  that preset, from the same proxy the ordinary preview uses, so what hovering
+  shows is what clicking gives — including when another preset is already on,
+  because the preview reads the same baseline. Nothing is written. A hover
+  books a render 160 ms later rather than starting one, and only the newest
+  booking counts: a pointer crossing the list walks every row on the way.
 - ✅ **LIB-020**: Lightroom and Capture One presets, imported and translated —
   Lightroom Classic `.lrtemplate`, Lightroom `.xmp`, Capture One `.costyle` and
   `.costylepack`. Tone, presence, dehaze, vignette, grain, vibrance and
@@ -524,6 +758,42 @@ entry does not exist, and the messages that say what is missing name
   the same: nothing here was fitted against Lightroom's own render. Of a
   collection of 4383, 3844 translate; the rest are brush presets or hold only
   local, lens or reset settings. The whole collection imports in 0.2 s.
+- ✅ **LIB-021**: Presets as thumbnails of the photograph itself, two to a
+  row, rendered on its proxy and cached under `~/.cache/numa/` keyed on the
+  pair. A list of names asks the photographer to remember what forty names
+  look like on this frame; a grid of the frame answers it. PANEL_PLAN P3.
+
+  Both halves are built. Resting on a preset renders it onto the canvas (see
+  LIB-006), which answers the question for the one under the pointer; the tab
+  itself is a grid of two columns where every card is this photograph with
+  that preset on it.
+
+  A card is developed from a 360-pixel copy of the open proxy rather than
+  straight at 130: a thumbnail rendered at 130 sizes every detail pass against
+  a frame a twentieth of the real one, and what a preset does to sharpening
+  would be invisible in the one place it is being judged. **6 ms a card**,
+  measured over 65 of them, so the phase's two seconds for forty is 0.24 s.
+  One card per idle, only for the rows on screen, so scrolling never waits for
+  a render.
+
+  The cache is in memory rather than on disk, which is a departure from the
+  plan and cheap to revisit: at 6 ms the rebuild costs less than reading forty
+  files would. It is thrown away when the Presets tab is shown and the
+  photograph or its stack has changed since — not when a slider moves, because
+  re-rendering forty frames on every tick of a drag is work nobody is looking
+  at. And the stack a card is laid over is the one a *click* would land on —
+  the stack as it was before the preset now on the photograph — so a card is a
+  promise the click keeps.
+- ✅ **LIB-022**: A photograph that has been worked on shows the edit in the
+  grid and the filmstrip, rather than the camera's own picture — seeing the
+  render is what says it has been edited, and by then the original is the
+  less interesting of the two. Kept beside the ordinary thumbnail and keyed on
+  the stored stack as well, so changing an adjustment makes a new picture and
+  nothing else does; a photograph with no edits keeps the thumbnail it had and
+  costs nothing. The camera's picture is shown first and replaced when the
+  render lands, so no card is blank while one is running, and only one renders
+  at a time — it is a decode of the whole raw, about 0.7 s for a 40 MP frame
+  against 40 ms for the camera's preview. The loupe keeps showing the original.
 - ✅ **LIB-007**: Batch export — pick a shoot in the grid and it goes out in
   one go, from the same pair of buttons the editor has: the button repeats the
   last answer, the arrow asks again, and the label counts what is selected,
@@ -559,9 +829,29 @@ entry does not exist, and the messages that say what is missing name
   elsewhere — which is why membership is kept on the library's side.
 - ✅ **LIB-009**: Manage the libraries themselves — a list with photo counts,
   add, remove, rename, and the one that was open last reopening on start.
-  Removing one forgets every rating, flag and edit stack for the photographs in
-  it, because the rows cascade, so it says so first. Still missing: reaching a
+  Removing one only stops showing it: every rating, flag and edit stack is in
+  the folder's own catalog (IO-014), so adding the folder back brings all of it
+  back, which is what the confirmation says. Still missing: reaching a
   subfolder without adding it as its own library, which is LIB-010.
+
+  A folder moved or renamed outside Numa reads as "Not connected", and that row
+  alone offers **Find this folder where it is now**: a folder picker, and the
+  catalog's note of where to look is changed. Nothing on disk is touched, which
+  is why it cannot lose anything — and it beats the only way out of this
+  before, which was removing the row and adding the folder again. A folder
+  another row already holds is refused, since the same library twice is one
+  catalog under two ids. Tested in `tests/smoke.rs`: a folder renamed under
+  Numa's feet, relocated, with its five-star rating still on its photograph.
+
+  **A row's title is Pango markup, and a path is not.** A folder called
+  "Chili & Argentinie" made GTK parse an entity that never ends, so it dropped
+  the whole title and the row showed nothing at all — the photographer found it
+  in the log, with the line repeated for every refresh. Titles that carry a
+  path, a file name or something typed now turn markup off rather than escape
+  it, so what is shown is exactly what was passed and a name read back off the
+  row has no `&amp;` in it; subtitles, which nothing reads back, are escaped,
+  since this libadwaita has no switch for them. Toasts are markup too and are
+  escaped in the one function every one of the eighty of them goes through.
 - ✅ **LIB-010**: Folders inside a library, navigable as a tree. A folder picker
   in the filter bar lists every folder under the library that holds photographs,
   and the ones above them, indented by depth — so a shoot is picked by itself
@@ -581,6 +871,14 @@ entry does not exist, and the messages that say what is missing name
   does not hold the window; the grid is rebuilt only when something changed,
   at the same scroll position, and in the editor it waits until the grid is
   shown again.
+
+  A folder that is not there is a state rather than an event, and is said once.
+  Renaming folders outside Numa left it walking paths that had gone, failing
+  and reporting it twice over — once from the walk and once from applying it —
+  on every return to the window and every tick of the minute timer, which is a
+  log nobody can read. Now the walk is skipped while the folder is missing, the
+  line is logged the first time only, and the library list says "Not
+  connected"; if the folder comes back and goes again, it is said again.
 
 ### CULL — Assisted culling
 
@@ -609,8 +907,15 @@ is out of focus" is a slow way to compute a number we can get exactly.
   Laplacian energy over a standardised luma at a fixed size, so the number is
   independent of exposure, contrast and megapixels — without that it ranks
   contrast at least as strongly as focus. Thresholds measured against a 10 729
-  frame library rather than taken from a paper: soft below 0.25, which is about
-  one frame in twelve, where the first value tried would have flagged 45 %.
+  frame library rather than taken from a paper: soft below 0.25, which was about
+  one frame in twelve there, where the first value tried would have flagged 45 %.
+  That intent — the softest one in twelve — is what the threshold now is, read
+  off the library being looked at rather than fixed. Held against two real
+  libraries the fixed number flagged 10 % and 13 %, because both hold about two
+  thirds of the reference's fine detail; on their own scale both come back to
+  8 %, which is 226 fewer photographs handed to the photographer to look at
+  again in the larger of the two. A library with too little measured to have a
+  distribution keeps the fixed number.
 - ✅ **CULL-002**: Burst grouping by perceptual hash, and the best frame of
   each burst by CULL-001. Fifteen frames of the same scene is where the time
   actually goes. The hash is a 64-bit difference hash written here rather than
@@ -619,7 +924,12 @@ is out of focus" is a slow way to compute a number we can get exactly.
   grid is read rather than stored: a flag written once goes stale the moment the
   rule behind it changes, and it did — an earlier version called the only frame
   of a run of one that run's best, which put the label on 1936 of 2337
-  photographs.
+  photographs. A run is a stretch of the order the catalog hands over, and
+  since IO-005 that is capture order rather than file order: an archive copied
+  without `-p` arrives in whatever order the copy wrote it, and runs were being
+  cut out of an order nothing had ever been photographed in. Two bodies
+  shooting one event still interleave, but that is the interleaving of two
+  clocks now rather than of two copy operations.
 - 🟡 **CULL-003**: Faces, from YuNet (OpenCV Zoo, Apache-2.0, 232 kB) through
   `tract`. Turns the frame measure into the one that matters for a portrait: a
   crisp background with a soft face scores well on CULL-001 and is a reject.
@@ -637,8 +947,13 @@ is out of focus" is a slow way to compute a number we can get exactly.
   someone's photographs with a black box of unknown training is worse than not
   scoring them. So: the sharpness that counts (the face's when there is one),
   less up to two stars for blown highlights, plus a nudge for the pick of a
-  run. Every term can be argued with, and the tooltip shows the working. The
-  real answer is CULL-005.
+  run. The five stars are stretched between **this library's own** fifth and
+  ninety-fifth percentiles of sharpness, not a reference library's: fixed ends
+  scored a photographer whose frames hold less fine detail than that reference
+  — wide apertures, fog, a lot of smooth sky — a star or two low across
+  everything they own. Under fifty measured frames, or ends too close together
+  to divide by, the reference scale stands. Every term can be argued with, and
+  the tooltip shows the working. The real answer is CULL-005.
 - 🟡 **CULL-005**: A score learned from this photographer's own ratings. No
   general image embedding exists in the pipeline, so it is a ridge regression
   over what Analyse measures — the rule itself, frame and face sharpness, blown
@@ -734,8 +1049,38 @@ dependency at all.
   off the camera. Equal halves rather than natural widths: a 2400-pixel picture
   in a box that hands out natural sizes first took nearly the whole room and
   left the canvas a strip.
+
+  **It follows the canvas.** It did not, at first — the pane fitted its whole
+  frame and stood still whatever the canvas did, so zooming in to compare two
+  frames' detail compared a magnified crop against a postage stamp. Now every
+  pan and zoom re-places it: the pane is a window at the canvas's magnification
+  and the reference is laid into it. Because it is a *different* photograph,
+  "the same edge" is meaningless and the same **fraction of the frame** is what
+  a comparison wants — so its whole frame is laid out at the size the canvas
+  gives its own, and the fractions then line up whatever the two resolutions or
+  shapes are. Measured at 1:1: correlation 0.9995 between the two halves, scale
+  1.002.
+
+  It stays a proxy render, so above about 31 % it is the reference magnified
+  rather than the reference at full size. Deliberately: the full-resolution
+  frame the canvas keeps for 1:1 (PERF-002) belongs to the photograph that is
+  *open*, and there is nothing of the reference in it — matching it would mean
+  a second 1.2 s decode and half a gigabyte for a picture nobody is editing.
 - ✅ **CANVAS-007**: Nearest-neighbour scaling above 1:1, so magnified pixels
   read as pixels rather than as a soft photograph.
+- ✅ **CANVAS-009**: Double-click the photograph for 1:1, double-click again
+  for where you came from. Judging sharpness means 100 %, and the ways there
+  were the wheel and the plus button — both of which leave you somewhere
+  between the two, and neither of which comes back. The point under the
+  pointer is what lands in the middle, because "that bit, at full size" is the
+  question a double-click on a photograph asks.
+
+  The gesture sits on the canvas, under the tool overlays, so a crop handle or
+  a mask stroke never becomes a zoom, and it stands down while a pipette is
+  armed — two clicks would otherwise pick a colour twice on the way. "Already
+  at 1:1" has a little room in it: the wheel lands on 0.9998 as easily as on
+  1.0, and a double-click there means "take me back" rather than "stay".
+
 - ✅ **CANVAS-008**: Under a tile there is now the whole frame at proxy size, so
   a view the renderer has not caught up with is a soft photograph rather than a
   cropped one — which was the complaint, and the right one: a crop says
@@ -751,6 +1096,40 @@ dependency at all.
   Seen rather than reasoned about: rendering the paintable on its own produces a
   900 x 1350 node with the backdrop and a 306 x 459 one without, which is the
   bug exactly — the node was only ever as big as the tile.
+- ✅ **CANVAS-010**: The camera's own rendering as a second source for the
+  Reference pane. "Camera" beside "Reference" in the editor bar, one pane, one
+  picture at a time.
+
+  **It is not UX-007.** "Before" is Numa's render of an empty document — the
+  base curve, the film simulation, sharpen 25 — so it cannot answer "is my
+  render softer than the camera's": it *is* my render, at a different
+  resolution and off a different demosaic. This is the JPEG the camera embedded
+  in the raw file, shown as the camera wrote it: no `apply_stack`, no tone, no
+  film simulation, no sharpening, sRGB as Fuji stores it, and never through the
+  proxy's box filter. It is the only thing on screen that is not ours.
+
+  It follows the canvas's zoom and pan, so at 1:1 the same edge is on screen in
+  both — through the same placement CANVAS-006 now uses, because a pane that
+  syncs for one of its two sources and not the other is a difference nobody can
+  explain. The pane is treated as a window at the canvas's magnification and
+  the camera's picture is laid into that window — that way round, because what
+  Fujifilm embeds is a *preview*, not the JPEG it writes to
+  the card: 2944 x 4416 of an X-T5's 5152 x 7728, 1920 x 1280 on an X-T20. So
+  the camera's side is enlarged x1.75 or x3.12 to meet the canvas, and the zoom
+  readout says which, the way it already says "soft". At fit both simply show
+  the whole frame, since a viewport there would cut a strip off for the
+  caption's sake at a magnification nobody judges sharpness at.
+
+  Measured at 1:1 on 1920x1080, by cross-correlating a column profile of the
+  two halves of the screenshot: scale 1.002 and correlation 0.997 on the X-T5,
+  1.004 and 0.981 on the X-T20, with the centres 13-14 px apart against the 12
+  px predicted by the pane being 744 px wide where the canvas viewport is 768.
+  The same edge, at the same size, in both.
+
+  It costs one JPEG decode per photograph — 125 ms on an X-T5 file, off the
+  main thread, and thrown away when the pane is put away. Panning and zooming
+  cost nothing after that: the frame is one texture and only its placement is
+  recomputed.
 
 ### RENDER — Pipeline and colour
 
@@ -764,6 +1143,11 @@ dependency at all.
   lists every profile installed for the body, plus "none", which is the colour
   matrix on its own. The list is the same scan the automatic match uses, so it
   can never offer something the renderer would refuse.
+
+  ❌ *The dropdown leaves the panel in PANEL_PLAN P1. Automatic is right on
+  every frame the photographer has, and "none" is a diagnostic — FT-012 used
+  it and found the profile moves the baseline by 0.003 EV. A stack that
+  carries `None` still renders as `None`, and the history line still says so.*
 
   A profile's look table is applied now, where it used to be thrown away on the
   grounds that RENDER-006 owned the look — which left every profile rendering
@@ -820,6 +1204,31 @@ dependency at all.
   yellows, blues and purples, and neutral greys and whites. Profiles fitted from our own frames can ship. This
   is also how RENDER-006's film simulations would come back. *Parked by the
   photographer on 2026-09-17, to return to.*
+- ✅ **RENDER-014** (the brief's A1): photographs in the screen's own colour.
+  colord's default profile for the primary display — the automatic EDID one
+  GNOME makes, or the one chosen in Settings › Colour — read at start and
+  again when colord or Mutter says a screen changed (`ui::display`); its
+  primaries and curves turn every frame's sRGB into the screen's numbers at
+  the moment it becomes a texture (`render::display`): the canvas, the
+  thumbnails, the loupe and compare, the reference. After the histogram,
+  which describes the photograph and not the screen; not the clipboard or
+  any file, which stay sRGB. On this machine's Acer X32Q FS, whose red is a
+  third further out than sRGB's, sRGB red goes out as 214, 63, 38 and a skin
+  tone of 220, 170, 140 as 205, 170, 143; grey and white stay put. 5 ms a
+  4 MP frame.
+
+  Nothing is converted with no colord, no profile, one that is sRGB (every
+  code within one of itself — so byte for byte what it was), one made of
+  lookup tables (which Preferences says), or when Mutter is doing it itself:
+  its sdr-native and HDR colour modes map every window to the screen, and the
+  default mode does not — GNOME applies a profile itself only when it is a
+  measured calibration one, and then colord reports sRGB. A test gives a
+  Display P3 and an Adobe RGB profile as the screen's and gets the colour
+  spaces' own conversion of eight patches within one code value. Preferences
+  › Colour says which: "Display: Acer Technologies 32" (automatic)".
+
+  Screenshots taken headless under Xvfb are converted too, since the profile
+  is the real screen's.
 - ✅ **RENDER-013**: Camera profiles in every package, and a predictable
   Automatic. The AppImage bundles RawTherapee's profiles; the Flatpak does not,
   and its sandbox cannot see `/usr/share/rawtherapee` or `~/.local/share/numa`,
@@ -864,8 +1273,29 @@ dependency at all.
   a blown frame at −5 EV: 15.4 % of it carried a cast in the highlights, now
   0.0 %, with frames that clip nothing untouched to the last bit. Estimating
   the light that was really there is reconstruction, and not this.
-- 🟡 **RENDER-009**: Colour space — four of them, chosen for the editing and
-  again for the file. sRGB, Display P3, Adobe RGB and ProPhoto RGB.
+- ✅ **RENDER-009**: Colour space — four of them, chosen for the file. sRGB,
+  Display P3, Adobe RGB and ProPhoto RGB.
+
+  **The export renders in the space it writes** (P4, 21 September). With the
+  working-space picker gone from the panel every photograph was edited in
+  sRGB, and the colour stage clips to the working space — so a Display P3 file
+  was sRGB's colours written in P3's numbers, 0.0 % of any corpus frame
+  outside sRGB. Now a photograph edited in sRGB is rendered in the export's
+  own space (`Document::set_output_space`): on the camera corpus 0.1–3.9 % of
+  the frame lands outside sRGB, which is the saturated colour the sensor saw.
+  What sRGB can hold barely moves — a median ΔE of 0.15–0.6 in P3 and Adobe
+  RGB (p95 0.6–2.4), 0.5–1.6 in ProPhoto — because the look is a per-channel
+  tone curve, and the same curve in wider primaries is very nearly the same
+  picture. The screen, and an sRGB file, are the arithmetic they always were.
+  The mixer's table is read in the pixels' own space, so its bands name the
+  same colours in any of them. A stack stored with a space of its own, from
+  when the picker was on the Colour page, still renders in it; the picker's
+  dead code is gone.
+
+  ❌ *The picker leaves the panel in PANEL_PLAN P1 for the export dialog, where
+  the other decision about the file already lives, and where it can be tagged
+  with an ICC profile (brief A2). The working space stays with the edit; what
+  goes is the row, not the choice.*
 
   Two separate decisions and they are made in two places, because they are not
   the same question. The **working space** sits beside the camera profile on
@@ -894,15 +1324,14 @@ dependency at all.
   working space's primaries. Undo that encoding, turn the primaries, put the
   target's own encoding on. sRGB to sRGB cancels exactly.
 
-  **Half built.** The file is converted but not yet *tagged*: there is no ICC
-  profile in it, so anything reading it assumes sRGB and a P3 export looks
-  oversaturated rather than right. Until that is written, a non-sRGB export is
-  for a workflow that knows what it was given. And the luminance weights each
-  space carries are used by the tone regions but not yet by the detail passes,
-  which still use sRGB's — a second-order error, largest on ProPhoto, and
-  listed here rather than hidden.
+  **Still half built**, for two reasons. The luminance weights each space
+  carries are used by the tone regions but not yet by the detail passes, which
+  still use sRGB's — a second-order error, largest on ProPhoto, and listed here
+  rather than hidden. And the working space has no picker since P1 moved the
+  row out of the panel: a stack keeps the space it was made in, and a new one
+  is edited in sRGB.
 
-  Every export now carries an ICC profile for its space, sRGB included. They
+  Every export carries an ICC profile for its space, sRGB included. They
   went out untagged, which every viewer reads as sRGB — the drained wide-gamut
   photograph this section warns about, happening to the files it was meant to
   protect. The profiles are written by `io::icc` from the same primaries and
@@ -915,11 +1344,23 @@ dependency at all.
 
 - ✅ **OPTICS-001**: Vignetting from the camera's own lens profile.
 - ✅ **OPTICS-002**: Distortion and chromatic aberration, from the camera's own
-  tables — the same FujiIFD and the same nine radii OPTICS-001 reads, so all
-  three corrections are one profile and one file read. Both are applied in one
-  resampling pass: every destination pixel reads from a radius of its own and
-  the three channels read from three slightly different ones, which is the same
-  arithmetic twice if they are done separately.
+  tables — the same FujiIFD OPTICS-001 reads, so all three corrections are one
+  profile and one file read. Both are applied in one resampling pass: every
+  destination pixel reads from a radius of its own and the three channels read
+  from three slightly different ones, which is the same arithmetic twice if they
+  are done separately.
+
+  The three tables do not always agree about where they were sampled. X-Trans IV
+  and V state nine radii for all three; X-Trans III states eleven for falloff and
+  distortion and ten of its own for aberration. The reader asked that the
+  aberration table match the falloff table's radii, which meant every X-T20 frame
+  had its aberration table read, rejected and dropped without a log line — 60 of
+  60 sampled in each of two 2022 folders. It is now resampled onto the profile's
+  radii instead, and 60 of 60 keep it. What it corrects is small: on the X-T20 the
+  correction is 0.33 px outward for red and 0.66 px inward for blue at the very
+  corner, measured on a rendered frame as 0.16 and 0.41 px at r = 0.93 against a
+  green channel that does not move. Nothing on an X-Trans IV or V frame changes —
+  the rendered bytes are identical.
 
   Which way the correction goes was measured against the camera's own corrected
   JPEG rather than read off: each direction given its own best global scale,
@@ -972,6 +1413,31 @@ dependency at all.
   correction code does it. Applied to the frame before the turns and the crop,
   because a lens's centre is the frame's, and part of what a cached view was
   cut under. *Adds to a profile; turning a wrong profile off is not built.*
+
+  PANEL_PLAN P4 and its rule 5 — things appear only when there is nothing to
+  reveal by hand: the Lens section carries one line naming the profile that was
+  applied ("Corrected for XF70-300mmF4-5.6 R LM OIS WR"), and the two sliders
+  are there only when none was. A profile that applied has already taken both
+  faults out, so a second pair of controls over them is two answers to one
+  question. When nothing matched the line says so, and the sliders under it are
+  what that sentence is for.
+
+  "Matched" means the profile *corrects something*, not merely that one was
+  found — falloff or geometry, `LensProfile::corrects_anything`. A camera can
+  record a table of zeroes and lensfun can hold a model that works out to
+  nothing at the focal length and aperture used; behind the narrower test a
+  photographer would be left with a bent frame, a line saying it had been
+  corrected, and nothing to straighten it with. The two questions are not the
+  same one: falloff bends no geometry, so `bends_anything` alone would hide the
+  sliders from a frame whose only correction was light in the corners. Sampled
+  over the reference library — four frames from each of sixteen folders — every
+  RAF gets a profile that corrects something, on Fujifilm's own tables and on
+  lensfun's for a Sigma on a Sony; the unmatched state is a non-raw frame.
+
+  The sliders come back on a photograph whose stack already moves them even
+  when a profile did apply. A preset or a paste can put a value there, it still
+  renders, and a correction nobody can see or take off is worse than a section
+  with five rows in it.
 - ✅ **OPTICS-005**: Lens corrections for everything that is not a Fujifilm RAF,
   out of the lensfun database. The camera's own table stays first where there is
   one: it describes the lens that was actually mounted at the settings actually
@@ -989,9 +1455,9 @@ dependency at all.
   1.85 and 2.04 for three lenses that should have agreed, which is what a wrong
   model looks like when it is fed enough parameters.
 
-  Nothing here corrects a pixel. The database is sampled onto the same nine
-  radii a RAF carries and handed to the code that has been bending Fujifilm
-  frames since OPTICS-002 — one correction, two sources.
+  Nothing here corrects a pixel. The database is sampled onto the nine radii an
+  X-Trans IV or V RAF carries and handed to the code that has been bending
+  Fujifilm frames since OPTICS-002 — one correction, two sources.
 
   Checked against the one reference that already agrees with a camera: Fujifilm's
   own tables. On the 16-80 the two curves track each other to within a constant
@@ -1037,6 +1503,38 @@ dependency at all.
   there is: nothing on screen ever said the rectangle had been accepted, so the
   tool looked like it was still waiting for something. Reset takes the lock off
   with the rectangle, because the whole frame is not 4:5.
+
+  **The photograph is the largest frame** (the photographer's, 21 September:
+  "as Auto does — the photograph's edges are the maximum"). Straightened,
+  turned or dragged, the crop stays on the photograph: a crop that fits is
+  left alone, one that does not shrinks about its centre only as far as it
+  has to, and nothing grows back when the angle returns (`crop_inside`). A
+  dragged corner stops at the edge and, free of a ratio, slides along it. Each
+  preset is a long and a short side that reads lying down or standing up —
+  5:4 · 3:2 · 16:9, or 4:5 · 2:3 · 9:16 — as the crop already lies when the
+  tool opens, and pressing the chosen one again turns both the ratios and the
+  rectangle (Free turns the free one), and straight back gives back the same
+  rectangle. **Custom** is a ratio of the photographer's own, typed the way it
+  should lie. And one quarter-turn button rather than a left and a right (the
+  photographer's: lying down or standing up needs one button; three presses
+  go the other way).
+
+  **The tool cuts what it draws.** The renderer turns the frame about the crop
+  rectangle's centre in the source, so off the middle and straightened, the
+  crop it cut was not the rectangle the tool drew — for the left half of a
+  40 MP frame at five degrees, 168 pixels off. The tool now works in the view it shows
+  and crosses to the document's crop when it commits (`crop_in_view` and back;
+  a test holds the two to the crop's own pixels). No stored crop is read
+  differently: only what the tool shows moved.
+
+  **Masks stay on their pixels while it is open.** A mask is fractions of the
+  crop it was made on, and the tool shows the whole frame — so it was laid
+  across the whole frame and slid off its subject, further the tighter the
+  crop. It is now mapped from the view into the crop the tool opened on,
+  straightening included (`view_to_crop`), until Done makes it again for the
+  new one. Measured on the rig: the face under a person mask held at 253 while
+  the rectangle went from the whole frame to a 5:7 around it, where it fell to
+  215 before.
 - ✅ **TOOL-003**: Orientation from EXIF, plus manual quarter turns.
 - ✅ **TOOL-004**: White balance eyedropper. "Pick a neutral" under the white
   balance sliders, then a click on something that should be grey: a few pixels
@@ -1046,6 +1544,13 @@ dependency at all.
   grey card under 3200 K and 7500 K comes back within 2 %. Both pipettes show
   a drawn pipette cursor: the theme has no colour-picker cursor, and the
   crosshair it fell back to was a coarse plus.
+
+  **It no longer overshoots** (FT-028 #5). The frame it samples carries the
+  base tone curve per channel and no sRGB encoding after it, and it was read
+  back as plain sRGB — which bent the channels' ratios: a 3200 K card came
+  back as 2791 K, an 8000 K one as 10 777 K. It goes back through the curve
+  now (`tone::scene_value_for`), and the card it is pointed at renders grey
+  to within three codes.
 - ✅ **TOOL-005**: Colour picker for Point Colour (ADJ-006). The pipette under
   the mixer arms the canvas with the drawn pipette cursor, and a click adds the
   colour there as a new point: a 5×5 average of the unadjusted frame. Only one
@@ -1105,6 +1610,13 @@ dependency at all.
 
   Like a straighten it stops the renderer tiling: the region a pixel came from
   is a quadrilateral now, and a different one at every corner.
+
+  **A correction taken back takes its crop back** (FT-028 #3). The fit is
+  made from the rectangle the photographer left, not from the last fit, as
+  long as nobody has moved it since — so Vertical +40 and back to 0, or a
+  straighten and back, gives the whole frame again. Keystones and angles go
+  through one fit (`crop_inside`), which also no longer grows a crop past the
+  size it was drawn at.
 - ✅ **GEOM-002**: Auto perspective, from the photograph's own lines.
 
   In a frame with converging verticals, how far a line leans depends on where
@@ -1243,9 +1755,44 @@ dependency at all.
   Pressed twice, one subject: the previous mask is replaced rather than
   stacked, or the exposure doubles every time the button is hit.
 
+  **Auto lifts what the model can name, and nothing else** (FT-025). Measured
+  over thirty photographs along the path the application actually takes:
+  fourteen of them never reach the semantic model's opinion — no person, no
+  animal — and the mask then comes from the matting model, which answers "what
+  stands out here". That is the kitesurfer plus a piece of wave and the person
+  fused with the lifeguard hut behind her, and a wrong subject lifted a stop is
+  worse than a photograph left alone. So `auto::subject_mask` asks only the
+  model that can name what it found; on the other fourteen Auto does the
+  frame's half of the answer, as it already does on a landscape. The fallback
+  is not disabled, only unasked — the Subject chip still reaches it, because a
+  photographer choosing the frame is what makes "what stands out" the right
+  question.
+
   **The button is off the page for now**, at the photographer's call, until
   the subject mask is reliably the shape of the subject. Everything behind it
   stays built and measured; showing it again is two lines in `window.rs`.
+
+  **A refinement that keeps a sixteenth of the mask is declining** (FT-025).
+  `matte::refine` is asked where an edge is; four of the sixteen frames where
+  the semantic model found the person answered the other question instead —
+  whether there is a subject at all — and came back with almost nothing, which
+  was then used: 35.63 % of the frame became 0.85 %, 9.67 % became 0.24 %. An
+  answer below half of what it was handed is not that subject's edge, so the
+  mask that was named is kept and the fact is logged. Seven of the thirty
+  recover to every pixel that was named; twenty-three are unchanged to two
+  decimals.
+
+  **And the model is no longer shown a squashed subject** (FT-025). A standing
+  figure's box is 756 × 1460 on DSCF7577; pressed into the 1024 square the
+  model answers on, all 756 columns arrive and 1024 of the 1460 rows do — three
+  rows in ten thrown away on the axis where hair is. Letterboxing is worse and
+  the arithmetic says so: it scales both sides by 0.70, leaving the rows
+  unchanged and taking the columns to 529. A crop more than 1.3 times longer
+  than it is wide is read as two squares of three fifths of its long side,
+  overlapping by a fifth, each scaled *up* into the square, cross-faded on the
+  distance to each piece's own edge. Never for `matte::subject` itself, which
+  asks about the whole photograph on purpose. Two frames of thirty move: one
+  ramp with no inside becomes a mask, one gets slightly softer.
 
   **The matting model is IS-Net, and it replaced MODNet for a measured reason.**
   MODNet is a 2020 portrait model that answers at 512. Asked about the whole
@@ -1257,7 +1804,27 @@ dependency at all.
   2.5 seconds, drew every primary and every scallop of the leading edge, and
   gave the same answer on both copies to the cell. BiRefNet's Swin-tiny
   variant was measured as well: no better on this bird and eight times
-  slower. Over ten frames, IS-Net finds a subject on one more (a dark one
+  slower. The photograph every mask is cut from is reduced with Lanczos rather
+  than a triangle filter: from a full frame that is a threefold reduction, and
+  a triangle reads four of every nine pixels, so a feather against sky came
+  out ragged before any model saw it.
+
+  **Asked again on 20 September, with a graphics card and BiRefNet's full
+  973 MB model rather than its lite one, the answer did not change.** On the
+  same bird, IS-Net and BiRefNet draw the same wing — the same primaries, the
+  same gaps — and BiRefNet's edge is the harder of the two (mean step across
+  the soft cells 0.212 against 0.121), which is what a model trained for
+  dichotomous segmentation rather than for matting gives. It is also 4 to 6
+  seconds against IS-Net's 0.28, and it **cannot run on WebGPU at all**: its
+  decoder asks for 17 storage buffers in one shader where the standard allows
+  16, so the provider refuses the graph. MODNet, measured beside them, still
+  turns the far wing into a half-transparent smear.
+
+  What the shootout did find is that **IS-Net belongs on the card**: 282 ms on
+  the processor against 149 ms on it, three runs each, and the two alphas are
+  identical to the code value over the whole 1024 square. It had never been
+  tried there, because the line about small models paying more to move tensors
+  than to compute was written about models that are small, and 171 MB is not. Over ten frames, IS-Net finds a subject on one more (a dark one
   MODNet missed) and invents none.
 
   **The mask is the shape of the bird, which took a second look.** Asked about
@@ -1324,6 +1891,28 @@ dependency at all.
   is the whole reason it is a button: applied on open it would be a correction
   nobody asked for on every photograph it was wrong about. UX-017 is what makes
   this readable — the sliders it moved are the ones that light up.
+
+  **The four tone regions are one curve that never turns over** (FT-028 #1,
+  #2). Each region's gain depends on luminance alone, so together they are a
+  curve of it — and Highlights or Whites pulled below about −60 turned it
+  over near white: scene 0.52 → 1.0 rendered 178 → 146 at Highlights −100. The
+  curve is now worked out once per render over log2 luminance and held to a
+  quarter of the slope it had at the least, from the bottom up, so every tone
+  below where it would have turned keeps exactly what the sliders asked and
+  the ones above stay in order. Per pixel it is a lookup where it was five
+  `powf`s.
+
+  **Contrast and Blacks, as Lightroom has them** (FT-028 #9, #10). Contrast
+  stretches tones out from middle grey or presses them towards it, the one the
+  mirror of the other: +100 doubles the slope as before, −100 halves it — it
+  was a slope of nothing, one flat grey. Blacks sets the black point, as
+  Adobe describes it: to the left the darkest tones clip to black
+  progressively (at −100 the point is about the twentieth code of a frame
+  rendered as the camera would), to the right they come up by as much as two
+  stops without clipping, and neither reaches scene value 0.1. It was one
+  stop over the bottom quarter, where the base curve had already crushed
+  everything it could have moved. Auto predicts both with the render's own
+  curve.
 - ✅ **ADJ-002**: Tone curve. Point curve on the composite channel, with the
   histogram behind it and the black and white points draggable. Monotonic cubic
   (Fritsch–Carlson), so a steep segment cannot make the curve turn back on
@@ -1357,6 +1946,14 @@ dependency at all.
   proxy size and in working space.
 - ✅ **ADJ-003**: Vibrance and saturation.
 - ✅ **ADJ-004**: White balance in Kelvin and tint, applied in camera space.
+
+  **Tint reads as Lightroom's: + is magenta** (FT-028 #4; the photographer's,
+  21 September: "take what Lightroom decided"). The units were already
+  Adobe's — a hundred and fifty of tint is 0.05 of CIE 1960 v, the DNG SDK's
+  scale — and only the sign was the other way. Every stored edit is in the old
+  sign, so the document keeps it and the sign is turned where a person or a
+  file meets it: the Tint slider, the mask's, and a Lightroom preset's Tint on
+  import (which had been read the wrong way round).
 - ✅ **ADJ-005**: HSL / colour mixer — and a pipette, because eight named dots
   are a fine list and a poor question. The sky in front of you is either Aqua
   or Blue and the only way to find out from the list is to try both. So the
@@ -1394,6 +1991,16 @@ dependency at all.
   degrees. Placed at their sRGB numbers the "Green" slider would act on
   something closer to yellow-green. The mapping is computed from the matrices
   rather than written down, and tested against measured values.
+- ❌ **Point Colour as its own section** leaves the panel in PANEL_PLAN P1:
+  merged into the Mixer, whose pipette becomes the one pipette and whose Range
+  appears after a pick. Two pipettes for "point at a colour" was the same
+  question asked twice. The feature itself is ADJ-006 below and does not change.
+
+  **Luminance leaves grey alone** (FT-028 #6). The table had one saturation
+  row, so a band's luminance scaled every pixel whose hue rounded into it,
+  greys included: Magenta −100 took a middle-grey frame from 118 to 1. It has
+  two rows now, grey and full colour, and the luminance fades out towards
+  grey; hue and saturation are the same in both rows and act as before.
 - ✅ **ADJ-006**: Point Colour — pick a colour from the image, adjust that range,
   see the affected region. The mixer's eight bands split the wheel by hue
   alone, so skin and brick are both Orange to it. A point is the colour itself:
@@ -1406,6 +2013,11 @@ dependency at all.
   Points are in history and copied with colour settings. *Picked from the
   unadjusted frame and matched after exposure, so a large exposure change can
   make a point miss; the lightness tolerance is wide for that.*
+
+  **Luminance leaves grey alone** (FT-028 #7). A point picked on orange
+  weighed a neutral grey at 0.75 through the chroma term alone, and its
+  Luminance −100 took middle grey from 118 to 28. The luminance change now
+  fades out below the chroma at which the weight starts to count hue.
 - ✅ **ADJ-007**: Colour grading — shadows, midtones, highlights and global,
   with blending and balance. The grade that gets asked for is warm highlights
   against cool shadows, and a white balance cannot say it: that moves the whole
@@ -1436,12 +2048,50 @@ dependency at all.
   of which pixels are shadows. It is in the history snapshot and travels with a
   pasted look, both of which are the kind of omission that is only found when an
   undo silently does nothing.
+
+  **What the page shows is what is kept** (FT-028 #13): a hue chosen before
+  its saturation, the blending and the balance used to be dropped with a
+  grade that changed no pixel yet, and stepping away and back lost them. And
+  the range it opens on is **All** (the photographer's, 21 September): a grade
+  usually starts as one tint over the whole photograph.
+
+  The per-range slider is **Luminance**, Lightroom's word and the mixer's; it
+  was Brightness (FT-028 #15).
 - ✅ **ADJ-008**: Calibration — hue and saturation of the red, green and blue
   primaries, and a green–magenta tint in the shadows. A matrix, as in a camera
   profile: each primary's colour is turned about the neutral axis (up to 30°,
-  towards the next primary as Lightroom's sliders go) and scaled, and the drift
-  from white taken back out by brightness share so grey stays grey. Applied
+  towards the next primary as Lightroom's sliders go) and scaled, acting only
+  on the colour over a pixel's grey, so grey stays grey. Applied
   where a profile acts, before anything reads colour. Global only.
+
+  ❌ *The Calibration section leaves the panel in PANEL_PLAN P1. It is a
+  profile-maker's control, not an editing one — the place it belongs is a
+  camera profile, which RENDER-005 already installs. The value stays in
+  `Basic` and an imported Lightroom stack that carries calibration renders
+  unchanged.*
+
+  **A primary stays its own** (FT-028 #8). White was held by taking its drift
+  back out of every primary in proportion to its brightness, which carried
+  Red −100 into aqua further than into red. The grey in a pixel is now left
+  as it is and the matrix acts only on what is over it — at most the two
+  primaries the colour is made of — so grey and white stay put by
+  construction and the complement is not touched.
+- ✅ **ADJ-009**: Black & white (brief B2) — a switch at the head of the
+  Colour section, as Lightroom's treatment is. On, the mixer's eight dots
+  become the black-and-white mix: one Luminance per colour, which sets how
+  light that colour's grey comes out, up to two stops either way for a fully
+  saturated colour and less as the colour pales, so a grey never moves.
+  Vibrance and Saturation dim, having nothing left to act on. The colour
+  bands and the grey mix are kept apart in the document, and switching back
+  loses neither.
+
+  Where it converts is Lightroom's place: after the masks, so a mask's
+  warmth is a colour the mix can still lighten or darken, and before the
+  grade, so a grade tones the grey — split toning is Colour grading on a
+  black-and-white photograph. The grey is the working space's luminance.
+  Lightroom presets and styles that were black and white (`ConvertToGrayscale`
+  with `GrayMixer*`, Capture One's `BwEnabled`) now arrive as that instead of
+  as Saturation −100 with a note that the mix was left behind.
 
 ### FILTER — Effects
 
@@ -1461,6 +2111,12 @@ dependency at all.
   where a pixel is in the cropped frame, so a 1:1 tile and the export agree.
   Last but grain in the pipeline. Lightroom's defaults (midpoint and feather
   50), so a preset that names only the amount means what it meant there.
+
+  **Squaring it no longer weakens it** (FT-028 #11). Below zero Roundness
+  raises the distance's power, and the scale meant to keep the corner at √2
+  divided where it should multiply: at −100 the corner sat at 0.84 of the
+  way out and darkened 7 codes against 88. It multiplies now; the corners
+  darken as far at every roundness.
 - ❌ **FILTER-005**: ~~Texture.~~ *Built as DETAIL-004, where it belongs: it
   is a band of the same local tone mapping as clarity, not a filter of its
   own.*
@@ -1494,6 +2150,12 @@ dependency at all.
   deconvolution-based and pulls further ahead on very high-detail frames (0.47
   against our 0.20 on the sharpest frame in the reference library). Deconvolution
   is the upgrade path if that gap ever matters.
+
+  **Every tenth of Radius does something** (FT-028 #12). Lightroom's runs 0.5
+  to 3.0 in tenths; one box blur at the rounded radius made 23 of those 25
+  steps the same picture. Between two whole radii the two blurs are mixed by
+  how far along it is, so a whole radius costs what it did. Below half a pixel
+  at the magnification on screen it still does nothing, as FT-021 decided.
 - ✅ **DETAIL-002**: Noise reduction — luminance and colour. Luminance is the
   guided filter HDR-001 already uses, at a small radius, with the slider moving
   the variance that counts as noise rather than a blend weight. Colour takes the
@@ -1502,6 +2164,14 @@ dependency at all.
   the right amount of luminance smoothing depends on the ISO and guessing it is
   worse than leaving it, while colour noise is never wanted (DETAIL-002 below
   says why).
+
+  ❌ *"Contrast" leaves the panel in PANEL_PLAN P1, and on the measurement
+  rather than for room. FT-015: at noise reduction 40 and Contrast 50 — a
+  setting someone would type — an ISO 6400 frame at 1:1 moves by one code value
+  on no pixels; with both sliders at maximum, two code values on 0.29 % of
+  them. What a guided filter at radius 2 takes out of a real frame is the grain
+  itself, and blurring grain at radius 4 leaves nothing to give back. Nobody
+  had set it in 69 edit stacks. The value stays in `Basic`.*
 
   Under the luminance slider, Detail and Contrast. Detail moves the line
   between grain and structure — a quarter to four times the variance that
@@ -1512,6 +2182,23 @@ dependency at all.
   much is added back. It is the difference between a denoised face and a
   plastic one. The test builds a ripple under a checkerboard of grain and fails
   if either slider is disconnected.
+
+  **A10, 20 September: the colour half now runs after dehaze**, which means
+  dehaze moved ahead of the whole detail group rather than the pass moving
+  past the sharpening. Dehaze is an affine stretch per channel, so it
+  multiplies channel differences — chroma noise among them — by one over its
+  own contrast term, and it was undoing part of what this pass had just done.
+  Measured on FT-019's patch: with dehaze at +40 the high-pass b\* was 4.253
+  against a 3.695 floor, +15 %; it is 4.027 now, +9 %. Not all of it, because
+  the pass is a spatial filter rather than a scaling and the two do not simply
+  commute — but a third of the penalty is gone.
+
+  Dehaze was the one that moved because `blur_colour` blurs absolute channel
+  values and rescales each pixel to its own brightness, so it does not commute
+  with a spatially varying gain: moving it past the sharpening would have
+  changed every photograph that has sharpening on, which is every photograph.
+  This way a stack with dehaze at zero is untouched to the byte, and three
+  reference frames prove it.
 - ✅ **DETAIL-003**: AI denoise, SCUNet through ONNX Runtime. A switch in the
   Detail page's Noise section, with an amount.
 
@@ -1537,6 +2224,19 @@ dependency at all.
   frame costs 0.5 s once and 5 ms after. Stored with the edit, in the history,
   copied with Detail. *Not yet: grid thumbnails without it, one photograph at a
   time, and a measurement against DETAIL-002's guided filter.*
+
+  **Half precision on the card, and each device its own tile** (21 September).
+  Asked for something cheaper, NAFNet — darktable 5.6's denoiser, MIT,
+  trained on SIDD — was measured beside SCUNet on an ISO 12800 X-T5 frame: 11×
+  faster on the card (a 40 MP frame about 20 s against 200), and visibly less
+  clean, with grain left in flat stone and the whole frame a little darker even
+  fed through darktable's own shadow boost. Faster, not better, so SCUNet
+  stays. What does make SCUNet cheaper: its weights in float16 on the card
+  (`dev/export-scunet-fp16.sh`, 40 MB) and a 512-pixel tile there — 108 s
+  against 200 for a 40 MP frame, 99.9 % of it within three 8-bit codes of the
+  float32 answer — while the processor keeps float32, which half precision
+  does not speed up, at a 320 tile, 7.5 % faster than 256. The half-precision
+  file comes with the GPU download.
 
 - ✅ **DETAIL-004**: Texture. The same idea as clarity at a different scale, and
   choosing between them is most of the skill: clarity works at a twenty-eighth
@@ -1598,6 +2298,34 @@ dependency at all.
 - ❌ **DETAIL-007**: ~~Defringe.~~ *Built as OPTICS-003, which is where it
   belongs: it is a lens fault, not a detail pass, even though it runs among
   them.*
+- ✅ **DETAIL-010**: AI sharpen — the smear of a hand that moved, undone.
+  Restormer (Zamir et al. 2022, MIT), its motion-deblurring checkpoint,
+  exported to ONNX here (`dev/export-restormer.sh`) because it is published as
+  PyTorch only. A switch and an amount under Sharpening, run exactly as AI
+  denoise is: once over the full-resolution frame in the background, 256-pixel
+  tiles, kept in the cache and mixed in by the amount. When AI denoise is on it
+  works on the denoised frame, and the cache knows which, so sharpening never
+  brings the noise back. On a crop smeared nine pixels sideways it goes from
+  32.8 to 40.2 dB against the unsmeared original, the same number through
+  Numa's runtime as through PyTorch; on a sharp crop it leaves the photograph
+  within 39–45 dB of itself. 249 ms a tile on the card, about 3½ minutes for
+  40 MP; 12–20 on the processor. *Not for a lens that missed focus: Restormer's
+  defocus checkpoint made sharp crops worse (30–34 dB) and a blurred one
+  sometimes worse than the blur, so it is not offered. Lightroom's AI Sharpen
+  is Topaz's model, which is not open.*
+- ✅ **DETAIL-009**: Super Resolution — an export at twice the size each way,
+  with detail an interpolation cannot make. RealPLKSR (Lee et al. 2024, MIT),
+  the ×2 checkpoint darktable 5.6 ships for the same job: trained with
+  real-world degradations and stopped at its MS-SSIM stage, before the GAN
+  training that makes other upscalers invent texture — faithful, as
+  Lightroom's is. A size in the export dialog, offered once the 30 MB model is
+  downloaded, and run over the finished frame so the edit is what gets
+  enlarged: 512-pixel tiles, 32 pixels of overlap feathered together, an HDR
+  file's gain map enlarged with it. 680 ms a tile on the card, a 40 MP frame in
+  about 2½ minutes (160 MP out); about 12 on the processor. Beside Lanczos on
+  the M10's brickwork it is crisper at the edges and in the texture, and
+  invents nothing in the sky. *Lightroom runs its Super Resolution over the
+  raw and hands back a new DNG to edit; this enlarges the edit, as Topaz does.*
 - ◻️ **DETAIL-008**: Settle whether a developed frame is as sharp as Lightroom's
   and Capture One's, with numbers rather than an impression.
 
@@ -1626,9 +2354,32 @@ dependency at all.
 ### HDR — Dynamic range
 
 - ✅ **HDR-001**: Local tone mapping via an edge-aware guided filter.
+
+  ❌ *Its panel row leaves in PANEL_PLAN P1: the Light tab is six sliders and a
+  curve without it, and HDR is the one of them that Auto sets for itself
+  (ADJ-001 sets `hdr` on half the frames it touches). The value stays in
+  `Basic`, a stack that carries it renders exactly as before, and a preset can
+  still set it.*
 - ✅ **HDR-002**: Bracket merge.
-- ◻️ **HDR-003**: HDR display output (PQ/HLG). *Deferred: needs an HDR display
-  and a compositor to verify against. `gdk::ColorState::rec2100_pq` is the hook.*
+- 🟡 **HDR-003**: HDR output — HDR files built, the HDR screen deferred.
+
+  **An HDR JPEG with a gain map** (21 September). The file every viewer shows
+  as the SDR photograph it always was, and behind it a greyscale gain map that
+  a screen with room above white uses to show the highlights brighter: the
+  Ultra HDR layout Android, Chrome and Adobe read — an XMP container directory
+  in the primary naming a second image, an MPF index giving where it is, and
+  Adobe's `hdrgm` description in the gain map's own XMP. The HDR rendition is
+  the scene's own light wherever the base curve had to compress it and the SDR
+  frame everywhere else, by luminance so colour does not move: below middle
+  grey the curve deepens shadows on purpose and just above it lifts them, so
+  only from about 0.8 of scene white does a gain rise above one, capped three
+  stops over paper white. On the corpus 1.5–11 % of a frame is lifted, by up to
+  2.5 stops. The gain map is half size each way and is resized as stops: the
+  `image` crate's resize clamps a float channel to 0..1, which the first
+  version found by writing maps that lifted nothing at all.
+
+  *Deferred: showing HDR on the screen (PQ/HLG) needs an HDR display and a
+  compositor to verify against. `gdk::ColorState::rec2100_pq` is the hook.*
 - ✅ **HDR-004**: Bracket alignment (median threshold bitmap), which is what
   makes HDR-002 usable handheld. Every merge lines its frames up with the
   middle exposure first: whole-pixel shifts of up to 63 pixels, so nothing is
@@ -1820,9 +2571,33 @@ dependency at all.
   switching what the existing ones mean is what every editor with local
   adjustments does. The panel says which, because a mode nobody can see is a
   mode that confuses — and with one selected the panel hides everything a mask
-  has no say over: white balance, the crop, HDR, the tone curve, the colour
-  mixer, clarity and the detail group. What a mask can change is exactly what
-  `apply_basic` reads, and the panel shows exactly that.
+  has no say over: the crop, the tone curve, the colour mixer, the AI denoise
+  switch, and the lens corrections.
+
+  **B3 widened what a mask carries, and this entry used to say otherwise.** It
+  is no longer "exactly what `apply_basic` reads": `apply_masks` runs the same
+  passes the photograph gets, in the photograph's own order, over a copy of
+  the pixels. White balance as a *difference* from the photograph's — its own
+  Kelvin pair on the Colour page, ±2000 K, see ENGINEERING's "What a mask
+  carries"; Dehaze, Clarity, Texture and HDR, with `tiles_cleanly` asking the
+  masks as well as the document; and the four detail passes — Sharpening,
+  Noise reduction, Colour noise, Defringe and Moiré — on the mask's own copy,
+  so softening a sky stops at the skyline instead of smearing the roof into
+  it.
+
+  A mask rests at `Basic::local`, not `Basic::default`. Two of a photograph's
+  defaults are deliberately not zero — `sharpen: 25` and `denoise_colour: 25`,
+  undoing its own demosaic — and a mask sits on top of a photograph that has
+  already had both, so a mask carrying them would sharpen its area twice with
+  nobody asking.
+
+  **A mask gets only its own values** (FT-028 #0). Six things write the
+  photograph's values into the sliders — opening, a history step, a paste, a
+  merge — and if a mask was still selected, the next slider event wrote the
+  photograph's exposure, sharpening and colour noise into it with nothing
+  touched. The panel now remembers whose values it holds, and the document
+  is written only there; a mismatch reloads the right values and says so in
+  the log.
 - ✅ **MASK-005**: Masks as a list. Every row carries the grip that says it can
   be dragged, an invert and a delete, and dragging one onto another moves it —
   the order is a decision rather than decoration, because masks are applied in
@@ -2074,6 +2849,38 @@ dependency at all.
 
   Cost: 0.74 s for a subject mask against 0.16 s, measured end to end.
 
+  **Refine edge looks again, with a matting model** (21 September). IS-Net is a
+  model of what stands out, and on DSCF1264 — a woman in front of a wall of
+  bags — the loose hair beside her head came back as one smooth shape with a
+  glow round it, because a lock with pink behind it does not stand out from
+  her. Asked again from closer it said the same; a pixel's colour against the
+  colours either side could not tell a strand from a pink bag. ViTMatte-S
+  (Apache-2.0, `vitmatte_small.onnx`) is asked a different question: the
+  photograph and a trimap — certainly her, certainly not, decide the band — and
+  it answers with coverage per pixel. The trimap is the first matte's: its
+  solid part less a fiftieth of the subject is certain, the empty background
+  beyond it is certain, and the band between, with any loose coverage near her,
+  is asked. From a frame of the original at the mask's raster size, in tiles of
+  1024 because its attention over a whole frame would want tens of gigabytes;
+  on the card 1.8 s for her border, 6.7 s without one. On DSCF1264 the glow is
+  gone and the strands are strands on both sides of her head. Only the largest
+  subject is looked at again — a man in a hat behind her, whom the first look
+  gave a third, keeps his third.
+
+  It is a recipe (`Mask::fine`), so it is done again wherever the mask is
+  resolved: after every rebuild in the editor, off the main thread with the
+  loader up at once, the original decoded once per photograph; and in the
+  export, from the original. Not in a thumbnail, whose source is the proxy.
+  Known: her ear came back at about nine tenths rather than whole.
+
+  And a matte starts without Feather. The photographer's first look at it in
+  the app was a smooth shape again: every new mask starts at Feather 12, and a
+  blur along the whole border is exactly what the closer look is there to
+  undo. Person, Animal and Auto's subject now start at nought
+  (`Mask::set_matte`), and Refine edge sets it to nought the first time it is
+  pressed on a mask — the slider moves with it, and raising it again is the
+  photographer's to do.
+
 - ✅ **MASK-009**: Click a thing, get that thing. The semantic model knows a
   hundred and fifty nouns and nothing else — asked for the kite in a photograph
   of a kite it says 0.1 % person and no animal at all, so the thing the
@@ -2125,6 +2932,13 @@ dependency at all.
   a white sky and in a black shadow without a halo. 20 ms on a ragged
   four-megapixel mask, with a test that fails past 120.
 
+  A fourth, **Matte**, landed 21 September: the mask by itself, white on black.
+  The wash tops out at a light tint — times the mask's Strength — so a strand
+  of hair at three tenths is a tint of a tint, and next to the outline, which is
+  a line at one half by construction, a matte read as a flat blue shape with a
+  hard line round it. The photographer took that for the mask. The matte view
+  shows what the render multiplies by, shade for shade.
+
   It appeared only after hiding a mask and showing it again for a while.
   `rebuild_mask_map` held a mutable borrow of the open photograph across the
   trace, and the trace reads the mask back through the same cell — so every
@@ -2140,6 +2954,10 @@ dependency at all.
   moved. The third switch, the dots, is gone on a gradient: it marks the parts a
   mask was built from, and a gradient is one shape with its handles already on
   the canvas.
+
+  Selecting a gradient cost 55 ms on the main thread, 37 of them working out
+  its eleven million cells one at a time for the overlay; across the cores,
+  with the wash painted the same way, it is 17 ms.
 - ✅ **MASK-011**: Feather, and moving the edge in or out. Both were a remap
   of the coverage values and nothing else, and no remap can widen an edge that
   has no width. Measured on a hard edge, which is what a found mask and a
@@ -2219,6 +3037,82 @@ dependency at all.
   opening, about half a second of background work that only renames a chip.
   It could wait for the chip to be hovered instead.
 
+- ✅ **MASK-013**: Editing a mask is a state the whole panel enters, not a
+  section inside Light. The histogram becomes the mask's own header — its
+  thumbnail, its name, which of them it is — the panel tints, the canvas says
+  which mask is being edited, and the rail drops to the five tabs a mask
+  carries. Esc, Done and the back arrow all leave. Before this a selected mask
+  was a handful of rows under the sliders, with nothing on screen saying the
+  sliders now meant something else. PANEL_PLAN P2, landed 19/20 September.
+
+  The Mask tab holds the shape: Show (Wash / Outline / Points / Matte), Strength,
+  Feather and Edge as ordinary slider rows, Draw on it (Brush / Lasso and
+  Size), the row of verbs — Refine edge, Invert, Duplicate, Delete — and then
+  what the mask is made of. The verbs sit *above* that list, because under it
+  they fell below the fold on any mask with three parts, and Delete is not a
+  control to go looking for.
+
+  **P2b, mask mode revised (21 September).** The photographer's three
+  objections to P2 as built: a mask's own tools do not belong in a panel tab;
+  nothing blue may lie over the photograph; the panel's tint and border go. So:
+
+  - The **filmstrip becomes the mask's toolbar** while a mask is edited, one
+    row of 56 px under the canvas (`mask_toolbar.rs`): EDITING MASK · the
+    chip (the mask small, its name, "1 of 1 · 1 part"; its popover switches
+    mask and holds the name, the parts with eye and ×, and a range mask's
+    numbers) · Tool (Brush, Lasso, Click, Linear, Radial) · Show
+    (any of Wash, Outline, Points, Matte, and the button says
+    which) · Shape (Strength, Feather, Edge; the button reads Feather) · ⋯
+    (Invert, Refine edge where the model has something to say, Duplicate,
+    Delete) · Done. The panel runs to the foot of the window beside it.
+  - **The Mask tab is gone**; the rail in a mask is Light, Colour, Effects and
+    Detail, with one quiet line above it — "These four tabs edit **Person**"
+    and the eye. The path ends in the mask's name, in its accent.
+  - **Nothing on the photograph**: no badge, no frame; the wash is white at a
+    tenth. What says "you are in a mask" is a one-pixel accent border round
+    the viewport, where the photograph is shown — the photographer's
+    addition, first round the whole window and then, once seen, round the
+    viewport only; transparent outside a mask so entering one moves nothing.
+  - **The tool's own row floats** just above the bar, over the canvas column,
+    in the OSD's glass — the photographer's, 21 September: Add | Subtract for
+    Brush, Lasso and Click, and Size and Softness only for the first two;
+    nothing for a gradient, whose tool is its handles. On the bar the sliders
+    were its widest thing and folded behind a button wherever it was short of
+    room. The toolbar's popovers open over the row.
+  - **The tool in hand is plain**: the Tool button sits in a light accent,
+    and its menu is the five side by side, without a heading, with the one in
+    hand in the full accent. Every menu of the bar opens upwards, over the
+    photograph.
+  - **Softness** is the brush's hardness, stored per stroke and not the mask's
+    Feather; fifty, the value every stroke had while it was fixed, is where it
+    starts. A **lasso** has it too (`Stroke::soft_lasso`): a band of Size ×
+    Softness, centred on the drawn line, made by filling hard and blurring the
+    bounding box — 31–39 ms for a 600-point lasso on a 4096 map. A lasso with
+    no softness, which is every one stored before this, fills bit for bit as
+    it did; so do brush strokes, checked on forty random ones against the old
+    code.
+  - **Add | Subtract** is a switch of two — a track, the pressed one a pill
+    of accent in it — so which is on is plain, as the photographer asked. It
+    stays pressed, and Shift is the other one for as long as it is held.
+    Under 750 px they are their signs; the accent stays.
+  - **Linear and Radial are tools too.** The artboard took them off the Masks
+    tab; they stayed there, by the photographer's rule for the artboards —
+    where one leaves out something that was there, keep it. A mask cannot hold
+    a gradient as one part among others, so picking one in the toolbar turns
+    an *empty* mask into it (or a gradient into the other kind); on a mask
+    with parts in it the two are greyed with the reason.
+  - **Labels are one line**, ellipsised where the room runs out — the
+    artboard set some in two ("1 of 1 · / 1 part", "Wash, / Outline"), and
+    the photographer asked for one.
+  - **It narrows by itself.** Written out, the bar is 960 px and the row
+    above it 708; the canvas column is about 980 at 1366 × 768 and never
+    under 680. An `adw::BreakpointBin` measures the bar's own width, which is
+    the row's too: under 975 the words that repeat a control go, under 750
+    Add and Subtract are their signs, the chip keeps only the name and the
+    tool is its icon — each step measured. A control is never dropped.
+    Checked at windows of 1366 and 1920.
+  - Leaving — Done, Esc, the header's back — lands on the Masks tab with the
+    list scrolled to the mask that was left.
 ### RETOUCH — Repair
 
 - ✅ **RETOUCH-001**: Heal — the source's texture under the destination's tone.
@@ -2266,7 +3160,59 @@ dependency at all.
   retouched keeps its tiling, which is asserted.
 - ✅ **RETOUCH-003**: Brush controls — size, feather, opacity. The Heal and
   clone page's sliders, per spot.
-- ◻️ **RETOUCH-004**: Generative removal.
+- ✅ **RETOUCH-004**: Remove — what is under a circle, gone, and the picture
+  around it carried in. A third tool on the Spots page, beside Heal and Clone,
+  with no source to choose: LaMa (Suvorov et al. 2022, Samsung Research,
+  Apache-2.0), the large-mask inpainter darktable offers for the same job,
+  whose Fourier convolutions see the whole window from the first layer and so
+  continue a wall, a fence or a horizon through the hole where healing smears.
+  Each spot is filled from a window five of its radii across, resampled to the
+  model's 512 and back, marked eight per cent wider than drawn so its edge is
+  not copied back, and composited with a narrow feather — a wide one let the
+  removed thing show through it. The fill is kept, per spot and per render
+  size, as a ratio to the ring around it, so exposure and white balance move it
+  afterwards with its surroundings instead of asking the model again; a tile
+  at 1:1 that cannot see the whole window renders the frame instead. 225 ms a
+  window on the card, 760 ms on the processor; a 208 MB download. On DSCF1290
+  a lamp post comes out of a cloudy sky with the clouds and the far hotels
+  continued. *A circle, not a brush: a long thin thing takes several. Not
+  generative in Lightroom's sense — nothing is invented that the window does
+  not suggest, which is also why a large hole comes out soft.*
+- ✅ **RETOUCH-005**: Sensor dust, found. *Find dust* on the Spots page heals
+  every speck a dirty sensor leaves, from the frame the masks read. A speck is
+  out of focus by the filter stack in front of it — a soft, round, slightly
+  darker disc that only shows where the picture is smooth — and that
+  description is the detector: a difference of blurs at four scales (six to
+  fifty pixels across on the proxy), in stops so a speck is as dark in a
+  bright sky as in a dim one; smooth at the finest scale and at the speck's
+  own; alone, the difference around it averaging under a quarter of its
+  depth, which is what tells it from a window in a blurred town or a pore;
+  never deeper than 0.3 stop; and not on skin, where a darker spot is a
+  freckle and the Face section's Spots are the tool. Each find is a heal,
+  sourced from the smoothest of eight places three sizes away that is not
+  dust itself; spots already there are left alone. On the Mallorca frames with
+  sky it finds its specks in the sky and nowhere else, where the first version
+  found sixty on a face, a town and an arm. 230 ms on a 2400-pixel frame.
+- ✅ **RETOUCH-007**: Remove people — Lightroom's Distraction Removal for the
+  passers-by. *Remove people* on the Spots page finds everyone in the frame
+  with YOLOX-s (Megvii, Apache-2.0, 36 MB), takes the largest to be the
+  subject, and turns every other person a quarter of the subject's size or
+  less into a Remove spot (RETOUCH-004) round their box — unless they stand in
+  the middle of the subject's box, which is someone in front of them. The
+  masks' segmentation was tried first and could not do it: on its 128-cell
+  grid three figures forty pixels tall behind a woman on a beach were smudges
+  below even odds, joined to her by the smudges between. The detector found
+  all three in 64 ms, and LaMa took them out with the water and the beach
+  carried through and her face and hand untouched. A figure that would need a
+  circle more than a tenth of the frame across is left: that is a different
+  photograph. *Reflections are not built: there is no open model for them.*
+- ✅ **RETOUCH-006**: Pet eye — Lightroom's tool for the glow an animal's eye
+  throws back at a flash. A third tool beside Heal and Clone: a circle on the
+  pupil, no source. Under it every pixel brighter than a twentieth of what
+  the ring around the eye measures is scaled down to that, and turned most of
+  the way to grey on the way, so a green glow ends as a dark pupil rather than
+  a dark green disc; a pupil the flash missed stays as it was. Size, feather
+  and strength are the spot's as for any other.
 
 ### FACE — Retouching a face
 
@@ -2507,6 +3453,147 @@ dependency at all.
   on the proxy, and could share one. `correct_geometry` is 161 ms of a 616 ms
   decode. Each of those changes pixels in the last bit or needs plumbing, so
   each wants its own pixel-diff test first.
+- ✅ **PERF-009**: The renderer stops copying frames nobody was going to read
+  again. What freezes a laptop is not a saturated CPU — the scheduler handles
+  that — but memory, and a 40 MP Fuji frame is 456 MB of f32 per copy.
+
+  Both halves of a render began by cloning the whole frame: `to_working_space`
+  so it could write the colour stage into it, and `apply_pixels` so it could
+  write the operation stack into it. Neither had any way of knowing whether the
+  caller still needed what it had been handed, so both always assumed it did.
+  Now they take a `Cow`, which is that question asked out loud. An `&image` call
+  site means exactly what it meant before and pays for its copy; a caller that
+  is finished with the frame hands it over and the pixels are worked on where
+  they already are.
+
+  Measured on an X-T5 40 MP frame (`DSCF9580.RAF`, 5152 × 7728), peak RSS of the
+  render stage alone — `VmHWM` with the mark reset after the decode, release
+  build:
+
+  | | Before | After |
+  |---|---|---|
+  | Export / thumbnail (`develop`, frame handed over) | 2.25 GB | 1.37 GB |
+  | Full-resolution colour stage (editor at 1:1) | 0.93 GB | 0.48 GB |
+  | The stack over a kept `full_working` | 1.81 GB | 1.81 GB |
+
+  The last row is unchanged on purpose. The editor keeps its working image
+  across slider ticks — that *is* PERF-006 — so it lends rather than hands over,
+  and the copy is the price of the thing that makes a drag cheap.
+
+  Not done, and bigger than any of this: the decode itself peaks at 1.97 GB to
+  produce a 456 MB frame, four times its own answer. That is where the next
+  gigabyte is. Taken in PERF-011.
+
+- ✅ **PERF-010**: Work that nobody is waiting for any more is dropped rather
+  than finished. A queued thumbnail render used to run whatever happened: a
+  card scrolled past was marked unwanted, but the job was already in the queue
+  and paid its second and a half of raw decode before the *answer* was thrown
+  away. On a shoot with ninety-two edited frames that is four hundred CPU
+  seconds spent on pictures that had left the screen. The job carries the same
+  question its answer was already checked against, asked before the work
+  instead of after it, and a dropped job still counts as done so the progress
+  toast does not stall on a total it will never reach.
+
+  With it, the whole frame rendered behind a tile at 1:1 is kept between ticks
+  instead of made fresh — half of the 82 ms a pan used to cost. Panning moves
+  the tile, not the photograph, so it is held against the same colour key that
+  decides when `working` is stale.
+
+- ✅ **PERF-011**: The decode stops holding frames it has finished with. The
+  gigabyte PERF-009 pointed at was not four passes each needing a buffer; it
+  was one pass needing a buffer and three bindings that had gone quiet without
+  going out of scope. `decode_with` is one long scope, so the mosaic and the
+  mapped file stayed on the heap to the end of it, `flatten` copied the
+  demosaic's output and left the original alive, shadowing kept the bent frame
+  beside the straightened one, and `oriented` took `&self` — which also meant a
+  456 MB clone of an identical frame for every photograph taken level.
+
+  Scoping, not cleverness: a block around the part that needs rawler,
+  `into_flatten` where `flatten` copied, one `drop` where shadowing hid one,
+  and `into_oriented` taking the frame by value. Two places that held a second
+  copy while making the first were fixed too — the Markesteijn path takes the
+  float buffer `apply_scaling` has already made instead of copying it, and the
+  default crop shifts rows down inside their own buffer rather than gathering
+  them into a new one.
+
+  Peak RSS of one decode, `VmHWM` in a fresh process, release build:
+
+  | | Before | After |
+  |---|---|---|
+  | X-T5 40 MP, proxy demosaic (`DSCF9580.RAF`) | 2.02 GB | 1.27 GB |
+  | X-T5 40 MP, Markesteijn (editor and export) | 2.03 GB | 1.27 GB |
+  | X-T20 24 MP, Markesteijn (`DSCF2455.RAF`) | 1.24 GB | 0.79 GB |
+  | Sony A7 24 MP, Bayer (`DSC07881.ARW`) | 1.24 GB | 0.77 GB |
+
+  Every pass after the demosaic now runs flat at one frame. The floor is
+  rawler's own demosaic, which holds the mosaic, a cropped copy of it, a
+  per-pixel bounds table and the output at once.
+
+- ✅ **PERF-012**: Optional GPU acceleration for the three heavy models.
+  ONNX Runtime's WebGPU execution provider is a 6.6 MB download beside the
+  models — 16 MB once unpacked — offered in Preferences like one; with it the masks and the denoise
+  run on the graphics card, measured on an RX 9070 XT through Mesa's RADV
+  against Numa's own session settings:
+
+  | | CPU | GPU | |
+  |---|---|---|---|
+  | EfficientViT, the found masks | 224 ms | 38 ms | 5.9× |
+  | SAM encoder, click to select | 671 ms | 160 ms | 4.2× |
+  | SCUNet, AI denoise | 484 ms/tile | 181 ms/tile | 2.7× |
+
+  The card gives the same photograph, not just a faster one: the same tile
+  through SCUNet on both devices differs by at most 1.4e-6, and after the
+  twelve bits the denoised frame is kept at, 174 of 196 608 codes differ and
+  never by more than one. Turning it on is a speed decision, not a picture
+  decision.
+
+  The other four models stay on the processor because the GPU is slower for
+  them — SFace by a factor of seven — and which models ask is a property of
+  the model in `numa-infer`, not a flag at the call sites.
+
+  It is switched on the moment the file is there and off again by a switch
+  that leaves the file alone, because a driver that starts misbehaving after
+  an update is a thing to turn off in a second. A session that will not build
+  on the card falls back to the processor and says so on the Info page. And a
+  marker written just before ONNX Runtime is let near Vulkan, removed as soon
+  as a session has stood, means a crash in the graphics driver costs one
+  slower mask rather than an application that will not open: the next start
+  finds the marker, stays on the processor, and says where the switch is.
+  Built as a plugin ONNX Runtime loads at run time rather than the `ort`
+  crate's `webgpu` feature, which links Dawn as a hard dependency and, on
+  every machine where WebGPU finds no adapter, segfaults at exit.
+
+- ✅ **PERF-013**: A shoot spends the encode decoding the next frame. The three
+  parts of an export do not behave alike — measured per frame on a 24 MP X-T20
+  file, decode is 700 ms and gets 5.7× faster on sixteen threads than on one,
+  develop is 456 ms and 6.4×, and writing the JPEG is 340 ms and **1.0×**: 345
+  ms on one thread and 347 ms on sixteen. So a fifth of every exported frame
+  was one core writing a file while fifteen waited.
+
+  The encode is started without waiting for it and collected on the next turn
+  of the loop, so it runs against the next frame's decode and develop. Eight
+  frames, three runs: 12.0 s in line, 9.8 s one behind — 1.50 s to 1.22 s each,
+  which on a hundred frames is half a minute. One encode in flight rather than
+  a queue of them, because two would hold two finished frames as well as the
+  one being developed.
+
+  The name is chosen on the writing side, not beside the render: `next_path`
+  returns the first name no file has yet, and the previous frame's file does
+  not exist until its encode has finished.
+
+- ✅ **START-010**: The editor is not built while nobody is looking at it. It
+  is 60 ms of widgets, and it was assembled before the window was shown on a
+  start whose whole job is to put the library on screen. Built on the first
+  idle instead — the gap between showing the window and the first frame, where
+  the main loop is waiting on the display server anyway. Measured to the first
+  frame, five runs each: a 440-photograph library goes 120 ms → 76 ms, a
+  2 319-photograph one 284 ms → 248 ms.
+
+  What the start actually costs, marked from process start with 2 319
+  photographs: 44 ms for GTK and libadwaita, 68 ms to the library page, 8 ms
+  for the catalog, 134 ms to build 2 319 cards, and the window is on screen at
+  342 ms. The 0.78 s that used to be quoted is the time until the main loop
+  goes idle, which is work behind a window that is already there.
 
 ### UX — Experience
 
@@ -2531,7 +3618,7 @@ dependency at all.
 - ✅ **UX-004**: Keyboard-first navigation and accessible names. Every button
   that is only an icon takes its tooltip as its accessible name, set once over
   the whole window rather than at each of the places one is made. The editor's
-  panel tabs are Alt+1 to Alt+7, beside the culling, compare, guides and
+  panel tabs are Alt+1 to Alt+9, beside the culling, compare, guides and
   history keys; the grid was already driven from the keyboard (LIB-015).
 - ✅ **UX-005**: Never silently discard work. Leaving the editor saved the
   stack and so did stepping to the next frame, but closing the window did not —
@@ -2545,7 +3632,16 @@ dependency at all.
   scrolled area so it stays put. It is the one thing in the panel about the
   photograph rather than about an adjustment, and it is what you watch while
   moving a slider.
-- ✅ **UX-007**: Before/after against the as-shot rendering.
+- ✅ **UX-007**: Before/after against the as-shot rendering. Held on Space,
+  which the window asks before anything with focus hears it (the
+  photographer's, 21 September: "hold it long, but not too long"). A focused
+  button — Before itself, once clicked — took the press, clicked itself a
+  quarter second later and was left down after the key came up: the canvas
+  then stayed on the original while the histogram followed the sliders,
+  which read as edits that no longer rendered. Measured under Xvfb with focus
+  on Before: shown at 0.45 s and stuck after release before; shown at 0.2 s
+  and gone on release now. Text fields keep their spaces, and a window that
+  loses the keyboard lets Before go, since the release never arrives.
 - ✅ **UX-011**: Logging — warnings visible by default, `RUST_LOG` to widen.
 - ✅ **UX-020**: The readout stops lying about what is on screen, and says
   why when the answer is not the original.
@@ -2581,6 +3677,54 @@ dependency at all.
   than as a flag. As a flag, one failure refused every later request for the
   rest of the photograph's life on screen — including requests for a different
   colour stage, which is a different question.
+- 🟡 **UX-021**: The rail — the panel's tabs as a vertical column of nine
+  icons with their names under them, on the left of the page, and Alt+1…9.
+  Six unlabelled icons across a narrow panel was a guess every time (FT-011
+  found two of them nobody could name); nine labelled ones down the side fit.
+  A 5 px dot marks a tab whose values are not all at neutral, read off the
+  page itself rather than from a table of which slider belongs where — P1
+  moved nine sliders between tabs and P2 will move more.
+
+  The panel is **372 px** where it was 240, of which the rail takes 66 — so
+  the page itself gained 66. Measured at 1920×1080 maximised, the stack gives
+  a page **795 px**, and every tab fits in it without a scrollbar:
+
+  | Tab | Content | | Tab | Content |
+  |---|---|---|---|---|
+  | Light | 774 | | Grade | 333 |
+  | Detail | 693 | | Masks | 287 |
+  | Effects | 607 | | Retouch | 279 |
+  | Colour | 563 | | Crop, Presets | built on demand |
+
+  Two of those were over before P1 moved anything: Light at 830 and Detail at
+  797. Light lost 66 when the tone curve stopped measuring itself against the
+  panel's full width — the rail is not part of the page it sits beside — and
+  Detail lost 104 when two wrapped paragraphs of prose became tooltips, which
+  is rule 7 of the plan and was going to happen in P4 anyway.
+
+  **Inside a mask the room is 631, not 795**, because the Done button takes
+  the foot of the panel. Every number reported from mask mode before 20
+  September was optimistic by 164 px: the measurement was read in the same
+  frame that showed the button, before GTK had laid it out. Under the honest
+  number the Mask tab was 804 and scrolled; the verbs moved above the list of
+  parts so that what has to be reachable is reachable, and the page scrolls
+  below that. The other four tabs a mask carries are well inside it — Light
+  345, Colour 284, Effects 201, Detail 367 — because everything the mask has
+  no say over is gone rather than greyed.
+
+  Two widths GTK had been complaining about in the logs all along, both the
+  same arithmetic: a homogeneous row of buttons is as wide as its widest
+  button times their number. The mask's four verbs asked for 349 in a 306-wide
+  page, so GTK widened the whole panel and cut every other page's readout off
+  at the window's edge; the four ways to make a mask asked for 331. The verbs
+  size themselves now and the make-a-mask row got the 6 px padding
+  `.aspect-ratios` already carried for the same reason. The artboard draws
+  both rows even; GTK says four even buttons do not fit 306, and GTK wins.
+
+  The nine icons are traced from the artboard rather than taken from the
+  theme. Five themed symbolics beside four drawn here put three families in
+  one column — a filled star next to a hairline sparkle next to a
+  toggle-shaped mask — and no amount of optical sizing makes those a set.
 - ✅ **UX-010**: Info page — camera, lens, exposure, film mode and dimensions,
   as three `AdwPreferencesGroup`s of rows with the name on the left and the
   answer dimmed on the right, which is how the rest of this desktop writes a
@@ -2764,16 +3908,15 @@ The status markers above are the roadmap; the tier lists that stood here went
 stale as items were built, so this list is generated from them instead. What
 is not yet built, in the order the groups appear:
 
-- partly built — **CULL-003** Faces, from YuNet: eyes open or closed are not detected
-- partly built — **CULL-004** A suggested rating, 0–5, shown beside the photograph
+- partly built — **CULL-003** Faces, from YuNet
+- partly built — **CULL-004** A suggested rating, 0–5, shown beside the photograph and sortable
 - partly built — **CULL-005** A score learned from this photographer's own ratings
-- partly built — **RENDER-009** Colour space
 - planned — **RENDER-010** GPU pipeline, if the CPU one ever stops being enough
-- planned — **DETAIL-008** Settle whether a developed frame is as sharp as Lightroom's
-- planned — **HDR-003** HDR display output (PQ/HLG)
-- partly built — **MASK-008** Background and people masks, and **Person and Animal find a
-- planned — **RETOUCH-004** Generative removal
+- planned — **DETAIL-008** Settle whether a developed frame is as sharp as Lightroom's and Capture One's, with numbers rather than an impression
+- partly built — **HDR-003** HDR output — HDR files built, the HDR screen deferred
+- partly built — **MASK-008** Background and people masks, and Person and Animal find a subject the semantic model has never heard of
 - partly built — **PERF-005** The grid decodes what is on screen
+- partly built — **UX-021** The rail
 
 ---
 

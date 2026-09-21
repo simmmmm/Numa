@@ -13,4 +13,4 @@ There is no profile here for the Fujifilm X-T5. RawTherapee does not ship one,
 and the Adobe Standard profile for that body is Adobe's and cannot be
 redistributed. Put your own in:
 
-  ~/.var/app/com.tijmen.Numa/data/numa/profiles/
+  ~/.local/share/numa/profiles/

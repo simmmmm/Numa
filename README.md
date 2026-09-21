@@ -75,8 +75,14 @@ mark in the library and in the filmstrip. Opening a photograph does not count
 as editing it.
 
 **Manage several libraries.** Add, rename and remove libraries, see how many
-photographs each holds, and switch between them from the header bar. Numa
-reopens the last library you had open.
+photographs each holds, and switch between them from the header bar, or from
+the **Libraries** page, where each one is a stack of its best photographs.
+Numa reopens the last library you had open.
+
+**Import from a card or a camera.** Put in a card or plug in a camera and Numa
+offers to import it. Photographs a library already has are skipped, the rest
+are split into shoots by date, and each shoot is offered the library it
+belongs to, or a new folder beside the others, with a name pattern you choose.
 
 Deleting a photograph moves the file to the desktop's trash, and the dialog
 says first that its rating and edits go with it.
@@ -98,6 +104,9 @@ From these Numa suggests a rating from 0 to 5, shown beside each photograph
 with a short note (such as *best of burst*, *soft* or *soft face*) and
 available as a sort. The suggestion comes from explicit rules rather than a
 trained aesthetic model, and it never overwrites a rating you gave.
+
+**Compare** two to four selected photographs side by side with `C`, zoomed and
+panned together, and rate or reject them from there.
 
 ## People
 
@@ -141,16 +150,20 @@ colour space before the colour matrix, which is where it is physically correct.
 **Colour.** Vibrance and saturation. An eight-colour HSL mixer with a pipette:
 click the sky in the photograph and the mixer selects whichever colour the sky
 actually is. **Colour grading** with separate tints for shadows, midtones,
-highlights and the whole frame, plus blending and balance.
+highlights and the whole frame, plus blending and balance. **Black & white**
+is a switch, as in Lightroom, and turns the mixer into the black-and-white mix:
+how light each colour's grey comes out. A grade still tones it.
 
 **Camera profiles.** Numa reads DNG camera profiles (`.dcp`): forward
-matrices, hue/saturation maps and look tables. The Colour tab lists every
-profile installed for your camera, including Adobe's *Camera Matching* profiles
-that reproduce a camera's own modes, or none at all. Profiles are matched on
-the camera model written inside the profile rather than on its filename.
+matrices, hue/saturation maps and look tables. The one made for your camera is
+used automatically, matched on the camera model written inside the profile
+rather than on its filename.
 
-**Colour spaces.** Edit in sRGB, Display P3, Adobe RGB or ProPhoto RGB, and
-export in any of them.
+**Colour spaces.** Export in sRGB, Display P3, Adobe RGB or ProPhoto RGB,
+with the matching ICC profile embedded. A wide-gamut export is rendered in its
+own space, so colours the sensor saw beyond sRGB reach the file. On screen, photographs are converted to
+your display's own colour profile, the one GNOME's colour settings use, so a
+wide-gamut screen does not oversaturate them.
 
 **Local tone mapping.** HDR compression, clarity and texture use the same
 edge-aware guided filter at different scales: clarity works at the size of a
@@ -168,7 +181,7 @@ photograph rather than a flat scan.
 
 ## Detail
 
-![Sharpening and noise reduction at 114 %](docs/screenshots/detail.webp)
+![Sharpening, noise reduction, AI sharpen and AI denoise, at 100 %](docs/screenshots/detail.webp)
 
 **Sharpening** is an unsharp mask on log luminance, applied as a gain so edges
 do not grow colour fringes. It has amount, radius and masking, where masking
@@ -176,11 +189,23 @@ keeps sharpening off flat areas and noise. It is on by default at a moderate
 25, because every demosaic softens a little.
 
 **Noise reduction** has separate luminance and colour controls. Luminance noise
-is smoothed with an edge-preserving guided filter; **Detail** decides where
-grain ends and structure begins, and **Contrast** returns the coarse texture
-the smoothing removes, so skin and foliage do not turn to plastic. Colour noise
-reduction takes hue from a heavily smoothed copy and brightness from the
-original. It is on by default, because colour speckle is never wanted.
+is smoothed with an edge-preserving guided filter, and **Detail** decides
+where grain ends and structure begins. Colour noise reduction takes hue from a
+heavily smoothed copy and brightness from the original. It is on by default,
+because colour speckle is never wanted. On X-Trans files the colour the
+demosaic invents is taken out before any of this.
+
+**AI denoise** runs SCUNet over the whole photograph once, in the background,
+and keeps the answer, so a slider never waits on it. With the optional GPU
+download it runs in half precision on the graphics card: about two minutes for
+a 40 MP frame, five on the processor.
+
+**AI sharpen** undoes the blur of a hand that moved, with Restormer, run
+once like AI denoise and on the denoised frame when both are on.
+
+**Super Resolution** exports a photograph at twice its size each way with
+RealPLKSR, the faithful upscaler darktable uses: detail rather than blur, and
+no invented texture.
 
 **Moiré** removes false colour from fine repeating patterns such as fabric and
 roof tiles. **Defringe** removes the purple and green rims that fast lenses
@@ -230,25 +255,40 @@ switch.
 
 | | |
 |---|---|
-| ![Presets found in the photograph: Sky and Bird](docs/screenshots/mask1.webp) | ![The bird selected, with its own adjustments](docs/screenshots/mask2.webp) |
+| ![Found in the photograph: Foreground, Background, Sky and Bird, the bird outlined while the pointer is on its button](docs/screenshots/mask1.webp) | ![The bird's mask open, with its own exposure](docs/screenshots/mask2.webp) |
 
 ## Retouching
 
 **Heal** replaces a spot with texture from elsewhere while keeping the
 surrounding tone, solved as a Poisson blend. **Clone** copies it as is. The
 source and destination are both drawn on the photograph, so it is always clear
-which is which.
+which is which. **Remove** takes out what is under a circle and fills it from
+around it with LaMa, which continues a wall, a fence or a horizon through the
+hole. **Remove people** finds the passers-by behind the subject and removes
+them the same way. **Find dust** heals the specks a dirty sensor leaves in
+skies and walls, and **Pet eye** puts out the glow of a flash in an animal's
+eye.
 
 **Face retouching** appears only when a face has been found: automatic spot
 removal, skin smoothing, evenness, red-eye and teeth whitening.
 
 ## Export
 
-- **JPEG or PNG**, with the JPEG quality you choose.
+- **JPEG, PNG, 16-bit TIFF, AVIF, JPEG XL or DNG**, with the quality you
+  choose and the ICC profile of the colour space you export in. JPEG XL uses
+  the libjxl on your computer. A DNG is the raw itself, with the edit as a
+  preview and as Camera Raw settings Lightroom reads.
+- **HDR**: a JPEG with a gain map, which HDR screens show with the
+  highlights as bright as the scene had them and everything else shows as the
+  ordinary photograph.
+- **Presets** for export settings, a **watermark** in a corner of your choice,
+  and a file name template.
 - **Full size, or a long edge from 4096 down to 1080 pixels**, resized with
   Lanczos and never enlarged. Output sharpening restores the edge that
   downscaling takes off.
-- **The camera's own EXIF**, carried over into the exported JPEG.
+- **The camera's own EXIF**, carried over, with the GPS position removed if
+  you ask. **IPTC** in XMP: creator, copyright, rating, and the people and
+  albums a photograph is in as keywords.
 - **Batch export** of a selection from the library, with the same settings as
   the editor. Masks are recomputed before export, so they apply the same way
   they did on screen.
@@ -278,8 +318,8 @@ uses fewer pixels.
   changed on a photograph. Double-click or right-click a slider to reset it,
   and hold Shift with the arrow keys to move it ten steps at a time.
 - **Info** shows camera, lens, exposure, Fujifilm film mode and dimensions.
-- **HDR merge** combines a bracket into one high-dynamic-range image. There is
-  no alignment yet, so shoot brackets on a tripod.
+- **HDR merge** combines a bracket into one high-dynamic-range image. A
+  bracket shot by hand is lined up first.
 - **Keyboard shortcuts** are listed under `Ctrl+/`.
 
 ---
@@ -367,8 +407,9 @@ Some features use additional files that are downloaded separately: the
 machine-learning models for masks, click to select, subject edges, faces and
 animal names, and RawTherapee's camera profiles. Numa offers them on first
 start, and **Preferences** (`Ctrl+,`) downloads them, shows what is installed
-and opens the folders they live in. Without them everything else works. From a
-source checkout, `./dev/fetch-models.sh` fetches the models as well.
+and opens the folders they live in. Every file is checked against its SHA-256
+before it is used. Without them everything else works. From a source checkout,
+`./dev/fetch-models.sh` fetches the models as well.
 
 ### Where things live
 
@@ -384,7 +425,8 @@ source checkout, `./dev/fetch-models.sh` fetches the models as well.
 | Larger thumbnails, AI denoise results | `~/.cache/numa/` |
 | Exports | `<your library>/edited/` unless another folder is chosen |
 
-These are the usual locations; inside a Flatpak they are under `~/.var/app`.
+These are the usual locations, and the Flatpak uses them too, so it shares its
+libraries, presets and models with an AppImage or a build of your own.
 Preferences shows the actual folders. Deleting a thumbnail folder or the
 cache only means those files are made again.
 
@@ -457,20 +499,26 @@ recognition thresholds, and the bugs that were hardest to find.
 | EfficientViT-Seg-B2 (ADE20K) | Semantic mask presets |
 | SlimSAM-77 | Click to select |
 | IS-Net | Matting and refined edges |
+| ViTMatte-S | Hair and fur in Refine edge |
 | YuNet | Face detection |
 | SFace | Face recognition |
 | PP-ResNet50 (ImageNet) | Naming the animal in a subject mask |
+| SCUNet | AI denoise |
+| Restormer | AI sharpen |
+| RealPLKSR | Super Resolution |
+| LaMa | Remove |
+| YOLOX-s | Finding people to remove |
 
 ---
 
 ## Roadmap
 
 [`docs/FEATURES.md`](docs/FEATURES.md) tracks every feature by ID and is the
-only place status is kept: currently **153 built**, 6 partly built, 4 planned
+only place status is kept: currently **173 built**, 7 partly built, 5 planned
 and 11 withdrawn, each withdrawal with its reason.
 
-**Still open.** GPU inference · eyes-closed detection for culling · a neutral
-Fujifilm X-T5 camera profile, which needs Provia reference frames.
+**Still open.** Eyes-closed detection for culling · a neutral Fujifilm X-T5
+camera profile, which needs Provia reference frames.
 
 The full list, generated from the status markers, is at the end of
 [`docs/FEATURES.md`](docs/FEATURES.md). How each number in it was reached is in
@@ -484,7 +532,8 @@ Numa is written by Claude, an AI model by Anthropic, working from the
 photographer's feedback: comparisons with other raw developers and the
 camera's own JPEGs, and reports of what looked wrong. Decisions and
 measurements are recorded in [`docs/ENGINEERING.md`](docs/ENGINEERING.md), and
-there are 287 automated tests.
+there are 587 automated tests, run on every push together with one camera
+file per make.
 
 ---
 
@@ -508,6 +557,11 @@ published with the downloads.
   EfficientViT, **[Xenova](https://huggingface.co/Xenova)** for the ONNX
   conversion of SlimSAM, **[rembg](https://github.com/danielgatis/rembg)** for
   the IS-Net export, and **[OpenCV Zoo](https://github.com/opencv/opencv_zoo)**
-  for YuNet, SFace and PP-ResNet.
+  for YuNet, SFace and PP-ResNet, **[SCUNet](https://github.com/cszn/SCUNet)**
+  for the denoiser, **[darktable](https://www.darktable.org)** for choosing
+  and converting RealPLKSR, **[LaMa](https://github.com/advimman/lama)** and
+  [Carve](https://huggingface.co/Carve/LaMa-ONNX)'s export of it, and
+  **[YOLOX](https://github.com/Megvii-BaseDetection/YOLOX)** from Megvii, and
+  **[Restormer](https://github.com/swz30/Restormer)** for AI sharpen.
 
 Not affiliated with or endorsed by Fujifilm.

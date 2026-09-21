@@ -1,0 +1,18 @@
+[package]
+name = "numa-cull"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+
+[dependencies]
+numa-core = { path = "../numa-core" }
+numa-infer = { path = "../numa-infer" }
+image.workspace = true
+log.workspace = true
+ndarray.workspace = true
+rayon.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+numa-io = { path = "../numa-io" }

@@ -12,22 +12,43 @@
    sliders and there are seven of them on a page — at full weight and half
    opacity they compete with the values, which are the only numbers on the
    panel worth reading. */
+/* PANEL_PLAN P1. Sizes in px rather than em: the panel is a measured layout
+   and a section label that grows with the desktop font stops being one. */
 .section-header {
-    font-size: 0.72em;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.1em;
-    opacity: 0.38;
+    letter-spacing: 1.1px;
+    color: #8d8d8d;
+    opacity: 1;
+}
+
+.slider-row {
+    min-height: 46px;
 }
 
 .slider-name {
-    font-size: 0.92em;
+    font-size: 13px;
+    color: #bdbdbd;
+}
+
+/* UX-017: one control leads its section, and says so at full weight. */
+.lead .slider-name {
+    font-weight: 600;
 }
 
 .slider-value {
-    font-size: 0.92em;
-    opacity: 0.75;
+    font-size: 12.5px;
+    color: #8d8d8d;
+    opacity: 1;
     /* Tabular figures: without these the readout jitters while dragging. */
     font-feature-settings: "tnum";
+}
+
+/* Moved: the name and the number come up to white, which is the whole of what
+   "this one has been touched" has to say. */
+.touched .slider-name,
+.touched .slider-value {
+    color: #ffffff;
 }
 
 /* A slim bipolar slider. GTK draws the handle inside the trough by default, so
@@ -43,24 +64,25 @@
 }
 
 .adjustment scale trough {
-    min-height: 3px;
-    border-radius: 2px;
-    background: alpha(currentColor, 0.14);
+    /* PANEL_PLAN P1: a 2 px hairline, and a 10 px area for the thumb to sit in. */
+    min-height: 2px;
+    border-radius: 1px;
+    background-color: rgba(255, 255, 255, 0.11);
 }
 
-/* UX-003: a slider that has been moved off its neutral is the accent colour;
-   one still sitting there is grey. The question a photograph raises on the
-   second pass through it is "what did I do to this one", and seventeen
-   identical sliders do not answer it — the answer should be the shape of the
-   panel rather than something to read. */
-.adjustment scale highlight {
-    min-height: 3px;
-    border-radius: 2px;
-    background: alpha(currentColor, 0.22);
-}
+/* PANEL_PLAN P1: what GTK draws between a slider's lower bound and its value.
+   `paint_track` draws the fill this panel wants — from the *neutral* — so
+   this one has nothing left to say.
 
-.adjustment scale.touched highlight {
-    background: @accent_bg_color;
+   ponytail: `background: none` here does not remove the accent bar that still
+   runs from the left end of Tint's track to its thumb. Neither does
+   `min-height: 0`, nor the same on `trough > fill`, and the panel's own rule
+   for that slider is provably transparent — forcing it to full width paints
+   the whole track, so the rule is live and the bar is something else. Logged
+   on P1's punch list; find it with the GTK inspector rather than by guessing
+   at selectors. */
+scale highlight {
+    background: none;
 }
 
 /* UX-014: smaller, and without the drop shadow. A shadow under a 14 px dot is
@@ -68,8 +90,8 @@
    eighteen thickened dots down a column is most of why the panel read as
    heavy. */
 .adjustment scale slider {
-    min-width: 11px;
-    min-height: 11px;
+    min-width: 10px;
+    min-height: 10px;
     margin: -4px;
     border-radius: 50%;
     background: alpha(currentColor, 0.5);
@@ -97,19 +119,22 @@
    nothing — a hairline, no handle — and comes back to a full track on hover or
    once it has been moved. Sizes never change between the two states, only
    what is painted, so nothing on the page shifts when a hand passes over it. */
+/* PANEL_PLAN P1: the track is the same hairline whether or not the slider has
+   been touched — what changes is the fill `paint_track` draws on it and the
+   thumb. A track that brightened as well said the same thing twice. */
 .quiet scale trough {
-    background: alpha(currentColor, 0.07);
-    transition: background 120ms ease-out;
+    background-color: rgba(255, 255, 255, 0.11);
 }
 
+/* Neutral: the thumb is there, dim, on its neutral position — not absent.
+   Transparent until hover was a control that appeared out of nothing. */
 .quiet scale slider {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.28);
     transition: background 120ms ease-out;
 }
 
-.quiet scale:hover trough,
-.quiet scale.touched trough {
-    background: alpha(currentColor, 0.14);
+.quiet scale:hover trough {
+    background-color: rgba(255, 255, 255, 0.18);
 }
 
 .quiet scale:hover slider {
@@ -427,12 +452,27 @@
     border-color: alpha(currentColor, 0.08);
 }
 
+/* The same arithmetic as the row above, on the mask panel: four ways to make a
+   mask across a 306-pixel panel, where the default padding puts their combined
+   minimum at 331 and GTK clips the last of them. These stay drawn as buttons —
+   each of them does something rather than choosing between four states. */
+.mask-add button {
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
 .aspect-ratios button:hover {
     background: alpha(currentColor, 0.12);
 }
 
 .aspect-ratios button:checked {
-    background: alpha(currentColor, 0.2);
+    /* PANEL_PLAN D3: which one is on, without clicking to find out.
+       `alpha(currentColor, 0.2)` was a fifth of the *label's* colour, and the
+       label on a quiet flat button is #9a9a9a — a fifth of dim grey on a dark
+       ground is nothing, which is why the three read as identical. White, and
+       the text goes white with it, the same pair that marks the rail's tab. */
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
     font-weight: 600;
 }
 
@@ -474,7 +514,10 @@
 
    The stops are the six corners of the wheel plus the wrap back to red, so the
    position under the handle is the colour it returns. */
+/* PANEL_PLAN P1: at hairline height with the rest of them. */
 .adjustment scale.hue-slider trough {
+    min-height: 2px;
+    border-radius: 1px;
     background: linear-gradient(to right,
         #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%,
         #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%);
@@ -489,8 +532,8 @@
 /* Against a full-strength gradient the usual translucent handle disappears.
    White with a dark ring reads on every hue. */
 .adjustment scale.hue-slider slider {
-    min-width: 13px;
-    min-height: 13px;
+    min-width: 10px;
+    min-height: 10px;
     margin: -4px;
     background: white;
     border: 2px solid alpha(black, 0.45);
@@ -537,8 +580,13 @@
     outline-offset: 2px;
 }
 
+/* PANEL_PLAN P1: one slider row everywhere. These were 5 px bars with a 13 px
+   white handle while every other row on the page was a 2 px hairline with a
+   10 px dot — three rows shouting in a panel built to be quiet. The gradient
+   stays, at hairline height: it is what makes a hue aimable. */
 .adjustment scale.mixer-track trough {
-    min-height: 5px;
+    min-height: 2px;
+    border-radius: 1px;
 }
 
 /* The filled part would paint over the gradient, and these have no neutral to
@@ -548,11 +596,11 @@
 }
 
 .adjustment scale.mixer-track slider {
-    min-width: 13px;
-    min-height: 13px;
+    min-width: 10px;
+    min-height: 10px;
     margin: -4px;
     background: white;
-    border: 2px solid alpha(black, 0.45);
+    border: 1px solid alpha(black, 0.45);
 }
 
 
@@ -738,4 +786,249 @@
 /* LIB-014: a face beside its name. */
 .face-portrait {
   border-radius: 6px;
+}
+
+/* PANEL_PLAN P1: the rail. 66 px, a hairline on its right, and 54x54 tabs
+   4 px apart — an icon over its name, which is what six unlabelled icons
+   across the top could not be. */
+/* No border here. The artboard draws the hairline on the rail's right, but the
+   rail is top-aligned and its border stops where the tabs do — so the line ran
+   half way down beside a page whose own `.adjustment` border ran all the way,
+   and on the two together it was two lines. The content's left edge is the one
+   that is always full height, so it carries it. */
+.rail {
+    min-width: 66px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+
+/* `button.rail-tab` rather than `.rail-tab`: Adwaita's own `button` rule has
+   horizontal padding and the two selectors were equally specific, so the tab
+   came out 68 wide where the artboard says 54. */
+button.rail-tab {
+    min-width: 54px;
+    min-height: 54px;
+    padding: 0;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: #9a9a9a;
+}
+
+.rail-tab:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.rail-tab:checked {
+    background: rgba(255, 255, 255, 0.11);
+    color: #ffffff;
+}
+
+/* 10 px, not the artboard's 9.5: GTK renders 9.5 as 9 px of ink, and 9 px on
+   a 27" at 1080p is the wrong side of legible. The artboard has the note. */
+.rail-label {
+    font-size: 10px;
+}
+
+/* The longest name is "Retouch", and at 10 px it fits inside 54. This is the
+   floor under that: a theme with a wider font shortens the word rather than
+   widening the tab and bending the column. */
+.rail-tab label {
+    margin-left: 2px;
+    margin-right: 2px;
+}
+
+.rail-dot {
+    min-width: 5px;
+    min-height: 5px;
+    border-radius: 3px;
+    background: @accent_bg_color;
+}
+
+/* ---------- PANEL_PLAN P2b: editing a mask ---------- */
+
+/* The viewport says it: a one-pixel accent border round where the photograph
+   is shown — the photographer's, 21 September, in place of P2's tinted panel
+   and the badge on the photograph; round the whole window at first, and round
+   the viewport only once it had been seen. Transparent outside a mask, so
+   entering one moves nothing by a pixel. */
+.canvas-viewport {
+    border: 1px solid transparent;
+}
+
+.canvas-viewport.editing-mask {
+    border-color: #62a0ea;
+}
+
+/* The line above the rail: whose sliders these are. Quiet — no tint and no
+   border, which the plan took away from the panel. */
+.mask-scope {
+    min-height: 34px;
+    padding: 0 2px 0 10px;
+    border-radius: 8px;
+    background: alpha(currentColor, 0.05);
+    font-size: 13px;
+}
+
+.mask-scope > image {
+    color: #62a0ea;
+}
+
+/* The eye, small: a full button filled the 34 px line top to bottom, where
+   the artboard has it at 26 with the line's air round it. */
+.mask-scope > button {
+    min-height: 26px;
+    min-width: 26px;
+    padding: 0;
+    margin: 4px 0;
+}
+
+/* The path's last step while a mask is edited, in the mask's accent. */
+.mask-crumb {
+    color: #62a0ea;
+    font-weight: 600;
+    padding: 0 6px;
+}
+
+/* The toolbar, in the filmstrip's place: one row of 56 px. */
+.mask-toolbar {
+    min-height: 56px;
+    padding: 0 12px;
+    background: #232830;
+    border-top: 1px solid rgba(98, 160, 234, 0.35);
+}
+
+.mask-editing {
+    color: #62a0ea;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+}
+
+.mask-chip > button,
+.mask-select > button {
+    min-height: 36px;
+    padding: 2px 10px;
+}
+
+.mask-chip .mask-name {
+    font-weight: 700;
+}
+
+.mask-chip .mask-where {
+    font-size: 11px;
+    color: #9fb3cc;
+}
+
+.mask-thumb {
+    border-radius: 5px;
+}
+
+/* Add or Subtract: a switch of two, the pressed one a pill of accent in its
+   track, so which is on is plain. */
+.mask-adding {
+    background: alpha(#ffffff, 0.08);
+    border-radius: 9px;
+    padding: 2px;
+}
+
+.mask-adding > button {
+    background: none;
+    box-shadow: none;
+    border-radius: 7px;
+    min-height: 28px;
+    padding: 0 10px;
+}
+
+.mask-adding > button:hover:not(:checked) {
+    background: alpha(#ffffff, 0.08);
+}
+
+.mask-adding > button:checked {
+    background: #3584e4;
+    color: #ffffff;
+}
+
+/* The tool in hand: the button in a light accent, the one in its popover in
+   the full one — Add and Subtract keep the solid blue for which way. */
+.mask-select.tool-in-hand > button {
+    background: alpha(#3584e4, 0.2);
+    color: #99c1f1;
+    box-shadow: inset 0 0 0 1px alpha(#3584e4, 0.55);
+}
+
+.tool-item {
+    padding: 6px 12px;
+    font-weight: normal;
+}
+
+.tool-item.current-tool {
+    background: #3584e4;
+    color: #ffffff;
+}
+
+/* The tool's row just above the bar: the OSD's dark glass, with the same
+   room above and below its controls as at either end. */
+.mask-drawing {
+    padding: 6px;
+    border-radius: 12px;
+}
+
+/* The headings and items of the toolbar's popovers — SHOW, SHAPE,
+   THIS MASK. */
+.popover-heading {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.1px;
+    color: alpha(currentColor, 0.55);
+    margin: 4px 10px;
+}
+
+.popover-item {
+    padding: 6px 12px;
+    font-weight: normal;
+}
+
+.popover-item.current-mask {
+    font-weight: 700;
+}
+
+.destructive-item {
+    color: #ed333b;
+}
+
+/* PANEL_PLAN: a button inside the panel — "Pick a neutral", "Auto", the mask's
+   verbs. 34 px tall and 13 px text, so it sits in the same rhythm as a slider
+   row rather than shouting over one. */
+.panel-action {
+    min-height: 34px;
+    padding-left: 14px;
+    padding-right: 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* PANEL_PLAN P2: the range mask's spin rows in a 306 px panel. Adwaita gives
+   a spin button's entry 4.5 em and its title whatever it asks for, which adds
+   up to a row that will not go below 349 — so the panel grew to fit it and
+   every other page's readout was cut off at the window's edge. The entry
+   holds three digits; this is the room for three digits. */
+.range-row spinbutton > text {
+    min-width: 2.5em;
+}
+
+/* PANEL_PLAN P3: the preset card. A photograph with a corner on it, quiet
+   enough that a grid of forty reads as a grid rather than as forty pictures
+   shouting at once. */
+.preset-card {
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+/* The Presets page is the one page not wrapped in a scroller, so it carries
+   the panel's own edge. Padding rather than a margin: a margin would take the
+   hairline with it. */
+.presets-page {
+    padding: 6px 14px 12px 14px;
 }

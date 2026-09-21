@@ -1,6 +1,5 @@
 use gtk::gdk;
-use gtk::glib::{self, Bytes};
-use gtk::prelude::*;
+use gtk::glib;
 use numa::io::thumbs;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -14,7 +13,11 @@ struct Job {
     path: PathBuf,
     mtime: i64,
     max_edge: u32,
+
+    edits: Option<String>,
     apply: Box<dyn Fn(gdk::Texture)>,
+
+    still_wanted: Box<dyn Fn() -> bool>,
 }
 
 thread_local! {
@@ -24,19 +27,40 @@ thread_local! {
     static ASKED: Cell<usize> = const { Cell::new(0) };
     static DONE: Cell<usize> = const { Cell::new(0) };
     static DECODED: Cell<bool> = const { Cell::new(false) };
+
+    static RENDERING: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn progress() -> Option<(usize, usize, bool)> {
     (ASKED.get() > DONE.get()).then(|| (DONE.get(), ASKED.get(), DECODED.get()))
 }
 
-pub fn load_thumbnail<F: Fn(gdk::Texture) + 'static>(path: &Path, mtime: i64, max_edge: u32, apply: F) {
+pub fn load_thumbnail<F: Fn(gdk::Texture) + 'static>(
+    path: &Path,
+    mtime: i64,
+    max_edge: u32,
+    edits: Option<String>,
+    apply: F,
+) {
+    load_thumbnail_while(path, mtime, max_edge, edits, || true, apply)
+}
+
+pub fn load_thumbnail_while<W: Fn() -> bool + 'static, F: Fn(gdk::Texture) + 'static>(
+    path: &Path,
+    mtime: i64,
+    max_edge: u32,
+    edits: Option<String>,
+    still_wanted: W,
+    apply: F,
+) {
     QUEUE.with(|queue| {
         queue.borrow_mut().push_back(Job {
             path: path.to_path_buf(),
             mtime,
             max_edge,
+            edits,
             apply: Box::new(apply),
+            still_wanted: Box::new(still_wanted),
         })
     });
     ASKED.set(ASKED.get() + 1);
@@ -51,14 +75,17 @@ pub fn cancel_pending() {
 
 fn pump() {
     while IN_FLIGHT.get() < max_concurrent() {
-        let Some(job) = QUEUE.with(|queue| queue.borrow_mut().pop_front()) else { return };
+        let Some(job) = next_job() else { return };
 
+        let rendering = job.edits.is_some() && !thumbs::is_cached(&job.path, job.mtime, job.max_edge, job.edits.as_deref());
+        RENDERING.set(RENDERING.get() || rendering);
         IN_FLIGHT.set(IN_FLIGHT.get() + 1);
         glib::spawn_future_local(async move {
-            let (path, mtime, max_edge) = (job.path, job.mtime, job.max_edge);
+            let (path, mtime, max_edge, edits) = (job.path, job.mtime, job.max_edge, job.edits);
             let loaded = gtk::gio::spawn_blocking(move || {
-                let decoded = !thumbs::is_cached(&path, mtime, max_edge);
-                (decoded, thumbs::load(&path, mtime, max_edge))
+                let edits = edits.as_deref();
+                let decoded = !thumbs::is_cached(&path, mtime, max_edge, edits);
+                (decoded, thumbs::load(&path, mtime, max_edge, edits))
             })
             .await
             .map(|(decoded, loaded)| {
@@ -66,24 +93,38 @@ fn pump() {
                 loaded
             });
 
+            if rendering {
+                RENDERING.set(false);
+            }
             IN_FLIGHT.set(IN_FLIGHT.get().saturating_sub(1));
             DONE.set(DONE.get() + 1);
 
             if let Ok(Ok(image)) = loaded {
-                let (width, height) = (image.width() as i32, image.height() as i32);
-                let texture = gdk::MemoryTexture::new(
-                    width,
-                    height,
-                    gdk::MemoryFormat::R8g8b8,
-                    &Bytes::from_owned(image.into_raw()),
-                    width as usize * 3,
-                );
-                (job.apply)(texture.upcast());
+
+                (job.apply)(crate::ui::display::texture(image));
             }
 
             pump();
             settle();
         });
+    }
+}
+
+fn next_job() -> Option<Job> {
+    loop {
+        let job = QUEUE.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            let at = match RENDERING.get() {
+                false => 0,
+                true => queue.iter().position(|job| job.edits.is_none())?,
+            };
+            queue.remove(at)
+        })?;
+
+        if (job.still_wanted)() {
+            return Some(job);
+        }
+        DONE.set(DONE.get() + 1);
     }
 }
 

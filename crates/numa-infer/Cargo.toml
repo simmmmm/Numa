@@ -1,0 +1,20 @@
+[package]
+name = "numa-infer"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+
+[features]
+dump-switches = []
+
+[dependencies]
+image.workspace = true
+log.workspace = true
+ndarray.workspace = true
+ort.workspace = true
+
+[dev-dependencies]
+numa-cull = { path = "../numa-cull" }
+numa-io = { path = "../numa-io" }
+numa-render = { path = "../numa-render" }

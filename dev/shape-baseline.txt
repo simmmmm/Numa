@@ -1,0 +1,2 @@
+# shape baseline — every file/function/struct over its limit. May only shrink.
+# kind	size	key

@@ -1,0 +1,18 @@
+[package]
+name = "numa-render"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+
+[dependencies]
+numa-core = { path = "../numa-core" }
+numa-cull = { path = "../numa-cull" }
+numa-infer = { path = "../numa-infer" }
+image.workspace = true
+log.workspace = true
+ndarray.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+numa-io = { path = "../numa-io" }

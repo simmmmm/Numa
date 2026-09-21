@@ -1,0 +1,110 @@
+# WRITTEN WITH AI (Claude), 22 September 2026, as a reference for a Flathub
+# manifest. Flathub does not accept manifests that are AI-generated or
+# AI-assisted, disclosed or not; see README.md beside this file.
+#
+# What makes it different from packaging/flatpak/: it builds with no network,
+# which is how Flathub builds.
+# - The crates come from cargo-sources.json, which flatpak-cargo-generator
+#   writes from Cargo.lock.
+# - ONNX Runtime is Microsoft's own release for 1.28.0, the version ort
+#   2.0.0-rc.13 is built against. ort links it as a shared library through
+#   ORT_LIB_PATH instead of downloading its own.
+id: com.tijmen.Numa
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: numa
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Downloading models, and the update check.
+  - --share=network
+  # Libraries on external drives, and the host's ~/.local/share/numa, which
+  # Numa shares with an AppImage or a build of its own.
+  - --filesystem=host
+  # The screen's colour profile (A1).
+  - --system-talk-name=org.freedesktop.ColorManager
+
+modules:
+  - name: onnxruntime
+    buildsystem: simple
+    build-commands:
+      - install -d /app/lib
+      - cp -a lib/libonnxruntime.so* /app/lib/
+      # flatpak-builder collects LICENSE by itself; the notices it does not.
+      - install -Dm644 ThirdPartyNotices.txt
+        /app/share/licenses/com.tijmen.Numa/onnxruntime/ThirdPartyNotices.txt
+    sources:
+      - type: archive
+        only-arches:
+          - x86_64
+        url: https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz
+        sha256: a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407
+      - type: archive
+        only-arches:
+          - aarch64
+        url: https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-aarch64-1.28.0.tgz
+        sha256: e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb
+
+  - name: camera-profiles
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/numa/profiles
+      - install -m644 rtdata/dcpprofiles/*.dcp /app/share/numa/profiles/
+      - install -Dm644 LICENSE /app/share/numa/profiles/LICENSE.GPL-3.0.txt
+      - install -Dm644 profiles-README.txt /app/share/numa/profiles/README.txt
+    sources:
+      - type: git
+        url: https://github.com/Beep6581/RawTherapee.git
+        tag: '5.11'
+        commit: db575c6690d30ce6428c0e1383bec8b8f1fb8d21
+      - type: file
+        path: ../flatpak/profiles-README.txt
+
+  - name: numa
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/numa/cargo
+        CARGO_NET_OFFLINE: 'true'
+        ORT_LIB_PATH: /app/lib
+        ORT_PREFER_DYNAMIC_LINK: '1'
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      - cargo --offline build --release --verbose
+      - install -Dm755 target/release/numa /app/bin/numa
+      - install -Dm644 data/com.tijmen.Numa.desktop /app/share/applications/com.tijmen.Numa.desktop
+      - install -Dm644 data/com.tijmen.Numa.metainfo.xml /app/share/metainfo/com.tijmen.Numa.metainfo.xml
+      - for size in 32 48 64 128 256; do
+          for name in com.tijmen.Numa com.tijmen.Numa-dark; do
+            install -Dm644 data/icons/hicolor/${size}x${size}/apps/$name.png
+              /app/share/icons/hicolor/${size}x${size}/apps/$name.png;
+          done;
+        done
+      - install -Dm644 data/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
+        /app/share/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
+    sources:
+      # For Flathub, the public repository at the published commit instead:
+      #   - type: git
+      #     url: https://github.com/simmmmm/Numa.git
+      #     commit: <what dev/publish.sh pushed>
+      # and cargo-sources.json regenerated from that commit's Cargo.lock.
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - dist
+          - .git
+          - .claude
+          - presets data
+          - tests/corpus
+          - fable-tickets
+          - fable-tickets.old
+          - packaging/appimage/AppDir
+      - cargo-sources.json
