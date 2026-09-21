@@ -342,10 +342,26 @@ Tested end to end on Fujifilm RAF and Sony ARW files.
 
 ## Installing
 
-Numa is distributed as a single file, `Numa-<version>-x86_64.AppImage`.
-It runs on 64-bit Intel and AMD machines with glibc 2.39 or newer: Ubuntu 24.04
-and later, Debian 13 and later, Fedora 40 and later, and current rolling
-releases such as Arch.
+Each release on the [Releases page](https://github.com/simmmmm/Numa/releases)
+comes in two forms for 64-bit Intel and AMD machines: a Flatpak bundle and an
+AppImage. Both keep their libraries, presets and models in the same folders
+(see *Where things live*), so moving from one to the other loses nothing.
+
+**Flatpak.** Needs Flatpak with Flathub added; the GNOME 50 runtime is fetched
+the first time, about a gigabyte, and shared with other applications after
+that. A newer bundle installs over the old one the same way.
+
+```sh
+flatpak install --user Numa-*-x86_64.flatpak
+flatpak run com.tijmen.Numa
+```
+
+To have photographs open in Numa, choose it under *Open With* in the file
+manager and switch on *Always use for this file type*.
+
+**AppImage.** A single file, `Numa-<version>-x86_64.AppImage`, for glibc 2.39
+or newer: Ubuntu 24.04 and later, Debian 13 and later, Fedora 40 and later, and
+current rolling releases such as Arch.
 
 A downloaded file is not executable, and until it is, double-clicking it does
 nothing. In GNOME Files, open **Properties** on the file and turn on
