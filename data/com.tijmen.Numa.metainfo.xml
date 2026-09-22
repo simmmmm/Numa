@@ -31,6 +31,15 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.19.4" date="2026-09-22">
+      <description>
+        <p>
+          A filter that narrows the library shows in the accent colour. The
+          order and its arrow are one control, and the arrow points the way the
+          grid runs. People moved to the right, with the other actions.
+        </p>
+      </description>
+    </release>
     <release version="0.19.3" date="2026-09-22">
       <description>
         <p>

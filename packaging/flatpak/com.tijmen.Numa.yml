@@ -73,8 +73,8 @@ modules:
               /app/share/icons/hicolor/${size}x${size}/apps/$name.png;
           done;
         done
-      - install -Dm644 data/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
-        /app/share/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg
+      - install -Dm644 -t /app/share/icons/hicolor/scalable/actions
+        data/icons/hicolor/scalable/actions/*.svg
     sources:
       - type: dir
         path: ../..
