@@ -28,8 +28,8 @@ install -Dm0644 data/icons/hicolor/256x256/apps/com.tijmen.Numa.png \
         "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png"
 install -Dm0644 data/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png \
         "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png"
-install -Dm644 data/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg \
-        "$APPDIR/usr/share/icons/hicolor/scalable/actions/numa-sliders-symbolic.svg"
+install -Dm644 -t "$APPDIR/usr/share/icons/hicolor/scalable/actions" \
+        data/icons/hicolor/scalable/actions/*.svg
 
 ICONS="$APPDIR/usr/share/icons/hicolor"
 install -Dm644 /usr/share/icons/hicolor/index.theme "$ICONS/index.theme"

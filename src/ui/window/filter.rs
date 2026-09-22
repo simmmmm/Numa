@@ -17,8 +17,39 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     bar.append(&flag);
     bar.append(&folder_picker);
     bar.append(&file_type);
-    bar.append(&sort);
-    bar.append(&direction);
+
+    for picker in [&rating, &flag, &folder_picker, &file_type] {
+        let mark = |picker: &gtk::DropDown| match picker.selected() {
+            0 => picker.remove_css_class("accent"),
+            _ => picker.add_css_class("accent"),
+        };
+        mark(picker);
+        picker.connect_selected_notify(mark);
+    }
+
+    let point = glib::clone!(
+        #[weak] sort,
+        #[weak] direction,
+        move || {
+            let low_first = matches!(sort_at(sort.selected()), Sort::Captured | Sort::Name) != direction.is_active();
+            direction.set_icon_name(match low_first {
+                true => "numa-arrow-up-symbolic",
+                false => "numa-arrow-down-symbolic",
+            });
+        }
+    );
+    point();
+    sort.connect_selected_notify(glib::clone!(#[strong] point, move |_| point()));
+    direction.connect_toggled(move |_| point());
+    let order = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    order.add_css_class("linked");
+    order.append(&sort);
+    order.append(&direction);
+    bar.append(&order);
+
+    let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    gap.set_hexpand(true);
+    bar.append(&gap);
 
     let everyone = gtk::Button::with_label("People");
     everyone.set_tooltip_text(Some("The faces in this library, grouped, to put names to"));
@@ -29,10 +60,6 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
         move |_| people_dialog(&state, &window)
     ));
     bar.append(&everyone);
-
-    let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    gap.set_hexpand(true);
-    bar.append(&gap);
 
     let merge = gtk::Button::with_label("Merge HDR");
     merge.set_tooltip_text(Some("Combine the selected exposures into one image"));
@@ -300,9 +327,8 @@ fn build_sort_picker(state: &App) -> gtk::DropDown {
 
 pub(super) fn build_sort_direction(state: &App) -> gtk::ToggleButton {
     let arrow = gtk::ToggleButton::new();
-    arrow.set_icon_name("view-sort-descending-symbolic");
+    arrow.set_icon_name("numa-arrow-down-symbolic");
     arrow.set_tooltip_text(Some("Reverse the order"));
-    arrow.add_css_class("flat");
     arrow.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
