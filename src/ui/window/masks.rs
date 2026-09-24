@@ -185,6 +185,29 @@ pub(super) fn build_wash(alpha: &numa::core::mask::Stored, inverted: bool) -> Op
     Some(surface)
 }
 
+pub(super) fn name_selected_mask(state: &App) {
+    if let Some(index) = state.mask_overlay.selected_mask.get() {
+        let open = state.open.borrow();
+        if let Some(photo) = open.as_ref() {
+            let masks = photo.document.masks();
+            let name = mask_label(&masks, index);
+            let parts = masks.get(index).map(parts_of).unwrap_or(0);
+            state.editor_page.mask_name_label.set_text(&name);
+            state.editor_page.mask_where_label.set_text(&format!(
+                "{} of {} \u{b7} {parts} part{}",
+                index + 1,
+                masks.len().max(1),
+                if parts == 1 { "" } else { "s" }
+            ));
+            state.editor_page.mask_crumb_label.set_text(&name);
+            state.editor_page.banner_label.set_markup(&format!(
+                "These four tabs edit <b>{}</b>",
+                glib::markup_escape_text(&name)
+            ));
+        }
+    }
+}
+
 pub(super) fn set_panel_scope(state: &App) {
     let cropping = is_cropping(state);
     let masked = state.mask_overlay.selected_mask.get().is_some() && !cropping;
@@ -224,26 +247,7 @@ pub(super) fn set_panel_scope(state: &App) {
     }
 
     state.editor_page.mask_crumb.set_visible(masked);
-    if let Some(index) = state.mask_overlay.selected_mask.get() {
-        let open = state.open.borrow();
-        if let Some(photo) = open.as_ref() {
-            let masks = photo.document.masks();
-            let name = mask_label(&masks, index);
-            let parts = masks.get(index).map(parts_of).unwrap_or(0);
-            state.editor_page.mask_name_label.set_text(&name);
-            state.editor_page.mask_where_label.set_text(&format!(
-                "{} of {} \u{b7} {parts} part{}",
-                index + 1,
-                masks.len().max(1),
-                if parts == 1 { "" } else { "s" }
-            ));
-            state.editor_page.mask_crumb_label.set_text(&name);
-            state.editor_page.banner_label.set_markup(&format!(
-                "These four tabs edit <b>{}</b>",
-                glib::markup_escape_text(&name)
-            ));
-        }
-    }
+    name_selected_mask(state);
 
     if selected_mask(state).is_some_and(|mask| is_gradient(&mask)) && state.masks.brush.get() != MaskTool::Off {
         state.masks.brush.set(MaskTool::Off);
