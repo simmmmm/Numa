@@ -1,49 +1,122 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="data/branding/icon-dark.png">
-  <img src="data/branding/icon-light.png" width="128" align="left" alt="">
-</picture>
-<br>
-<br>
-<br>
-<br>
-<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="data/branding/icon-dark.png">
+    <img src="data/branding/icon-light.png" width="112" alt="">
+  </picture>
+</p>
 
-# Numa
+<h1 align="center">Numa</h1>
 
-Numa is a RAW photo editor and library for Linux. You add a folder, cull the
-shoot, develop the frames you keep and export them. Your originals are never
-moved, copied or written to.
+<p align="center">
+  <b>A RAW photo editor and library for Linux.</b><br>
+  Add a folder, cull the shoot, develop the frames you keep, export them.<br>
+  Your originals are never moved, copied or written to.
+</p>
 
-It is a native GTK4 and libadwaita application written in Rust. It was built
+<p align="center">
+  <a href="https://github.com/simmmmm/Numa/releases"><b>Download</b></a> ·
+  <a href="#features">Features</a> ·
+  <a href="#installing">Installing</a> ·
+  <a href="#building-from-source">Building</a> ·
+  <a href="docs/ENGINEERING.md">How it works</a> ·
+  <a href="docs/FEATURES.md">Feature index</a>
+</p>
+
+<p align="center">
+  <img alt="Linux" src="https://img.shields.io/badge/platform-Linux-2b2b2b">
+  <img alt="GTK 4 and libadwaita" src="https://img.shields.io/badge/GTK_4-libadwaita-3584e4">
+  <img alt="Rust" src="https://img.shields.io/badge/written_in-Rust-b7410e">
+  <img alt="Flatpak and AppImage" src="https://img.shields.io/badge/Flatpak-AppImage-4a86cf">
+  <img alt="PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/licence-PolyForm_Noncommercial-555">
+</p>
+
+![The library: justified rows, ratings, flags, suggested ratings from Analyse and a mark on edited photographs](docs/screenshots/library.webp)
+
+Numa is a native GTK 4 and libadwaita application written in Rust. It was built
 around a Fujifilm workflow, but it opens and develops every RAW format its
-decoder reads.
+decoder reads: twenty-nine formats, 811 camera and mode combinations, plus
+JPEG, PNG and HEIF. Everything runs on your own computer, including the
+machine-learning models behind masks, faces and the AI tools.
 
 The code was written with Claude (Anthropic); see [How it was made](#how-it-was-made).
 
-![The library: photographs in rows, with suggested ratings from Analyse](docs/screenshots/library.webp)
+---
+
+## New in 0.20
+
+- **Cull mode.** The loupe is now built for going through a shoot: `Up` picks,
+  `Down` rejects, both move on to the next frame, and `Backspace` takes the
+  last mark back. Bursts are shown as a row of marks under the name, so you
+  can see which frame of the burst you are on and which one Numa thinks is
+  best.
+- **Reasons, not just scores.** Frames are flagged as *soft*, *soft · slow
+  shutter*, *blown*, *nearly black* or *nearly blank*, and a face with its
+  eyes shut asks *eyes closed?*. Clipping is measured on the raw data, not on
+  the camera's JPEG.
+- **Where the camera focused.** For Fujifilm files the loupe draws the AF
+  point; a double-click inside it goes to 1:1 on that spot.
+- **Cull to a number.** Set a target and the loupe counts picks against it:
+  *⚑ 73 / 50*.
+- **A faster editor.** Rendering runs off the main thread and the newest
+  change always wins, so sliders stay smooth while you drag, also when zoomed
+  in and on a straightened photograph.
+- **A quieter library.** Rescans only read files that changed, thumbnails are
+  made at the size they are shown, and the thumbnail cache stays under 2 GB.
+
+The full history is in the [release notes](data/com.tijmen.Numa.metainfo.xml).
 
 ---
 
-## Contents
+## Features
 
-- [Library](#library)
-- [Culling](#culling)
-- [People](#people)
-- [Developing](#developing)
-- [Detail](#detail)
-- [Lens and geometry](#lens-and-geometry)
-- [Masks](#masks)
-- [Retouching](#retouching)
-- [Export](#export)
-- [Working in the editor](#working-in-the-editor)
-- [Cameras](#cameras)
-- [Installing](#installing)
-- [Building from source](#building-from-source)
-- [How it renders](#how-it-renders)
-- [Built on](#built-on)
-- [Roadmap](#roadmap)
-- [How it was made](#how-it-was-made)
-- [Licence](#licence)
+<table>
+<tr>
+<td width="33%" valign="top">
+
+<b>Library</b><br>
+Folders instead of imports. Justified rows, ratings, flags, albums, people,
+several libraries, import from a card.
+
+</td>
+<td width="33%" valign="top">
+
+<b>Culling</b><br>
+A loupe for picking and rejecting from the keyboard, bursts, suggested
+ratings with a reason, and side-by-side compare.
+
+</td>
+<td width="33%" valign="top">
+
+<b>Developing</b><br>
+Light, tone curve, white balance, HSL mixer, colour grading, black and white,
+DNG camera profiles, wide-gamut output.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+<b>Masks</b><br>
+Gradients, brush and lasso, plus masks the photograph finds itself: sky,
+water, subject, the animal, anything you click on.
+
+</td>
+<td valign="top">
+
+<b>Detail and repair</b><br>
+Sharpening, noise reduction, AI denoise, AI sharpen, Super Resolution, heal,
+clone, Remove, dust, lens corrections.
+
+</td>
+<td valign="top">
+
+<b>Export</b><br>
+JPEG, PNG, 16-bit TIFF, AVIF, JPEG XL, DNG and HDR JPEG, with presets,
+watermarks, metadata control and batches.
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -59,54 +132,84 @@ empty.
 
 **Rows at each photograph's own shape.** Thumbnails are laid out in justified
 rows that fill the width, so portrait and landscape frames sit side by side
-without cropping. The order is the filter's order, read left to right. A
-popover sets the row size and the spacing between photographs. Thumbnails are
-generated at a resolution that stays sharp at that size on HiDPI screens, and
-only what is near the screen is decoded, so a library of thousands scrolls
-without holding all of them in memory.
+without cropping. A popover sets the row size and the spacing. Thumbnails are
+made at the resolution the row needs on HiDPI screens, only what is near the
+screen is decoded, and the cache is kept to a budget, so a library of
+thousands scrolls without holding all of them in memory.
 
 **Rate, flag and filter from the keyboard.** `0`–`5` rate, `P` picks, `X`
-rejects and `U` clears, in the library and in the editor alike. Filter by
-rating, flag and the culling measures, and sort by date, name, rating,
-sharpness or suggested rating. The filter is remembered between sessions.
+rejects and `U` clears, in the library, the loupe and the editor alike. Filter
+by rating, flag, file type and the culling measures, and sort by date, name,
+rating, sharpness or suggested rating. A filter that narrows the grid shows in
+the accent colour, and it is remembered between sessions.
 
 **See what you have worked on.** Photographs with adjustments carry a small
-mark in the library and in the filmstrip. Opening a photograph does not count
-as editing it.
+pencil mark in the library and in the filmstrip. Opening a photograph does not
+count as editing it.
 
-**Manage several libraries.** Add, rename and remove libraries, see how many
-photographs each holds, and switch between them from the header bar, or from
-the **Libraries** page, where each one is a stack of its best photographs.
-Numa reopens the last library you had open.
+**RAW and JPEG pairs.** A camera set to write both leaves two files per frame.
+Both stay in the library as their own cards, and the file-type filter narrows
+the grid to the RAWs or to everything else.
+
+**Several libraries, and albums across them.** Add, rename and remove
+libraries and switch between them from the header bar, or from the
+**Libraries** page, where each one is a stack of its best photographs. Albums
+are independent of folders and can hold photographs from any library.
+
+![The Libraries page: each library as a stack of its best photographs](docs/screenshots/libraries.webp)
 
 **Import from a card or a camera.** Put in a card or plug in a camera and Numa
 offers to import it. Photographs a library already has are skipped, the rest
 are split into shoots by date, and each shoot is offered the library it
 belongs to, or a new folder beside the others, with a name pattern you choose.
 
+**Open with Numa.** Numa can be the default application for RAW files, HEIF,
+JPEG, PNG, TIFF, WebP and BMP. A photograph opened from the file manager lands
+in the loupe, with the folder it came from in the grid behind it.
+
 Deleting a photograph moves the file to the desktop's trash, and the dialog
 says first that its rating and edits go with it.
 
 ## Culling
 
+![The loupe: one photograph large, the neighbours beside it, stars, pick, reject and Edit underneath](docs/screenshots/loupe.webp)
+
+**The loupe.** `Space` shows the selected photograph large, with its
+neighbours on either side. `Left` and `Right` step through the shoot, `Up`
+picks and `Down` rejects and both go on to the next frame, and `Backspace`
+takes the last mark back and returns to that frame. `Enter` opens the editor.
+Delete does nothing while the loupe is open, so a cull is never one slip away
+from losing a file; a reject never removes anything.
+
 **Analyse** runs over a whole library in the background, with a progress
 count and a Stop button, and measures each frame:
 
 - **Sharpness**, as Laplacian energy on a standardised version of the frame,
-  so a contrasty photograph does not score as sharper than a soft one.
-- **Blown highlights**, as the share of clipped pixels.
+  so a contrasty photograph does not score as sharper than a soft one. A soft
+  frame shot more than five stops slower than 1/focal length says *soft · slow
+  shutter*.
+- **Blown highlights**, counted on the raw's own values where there is a raw,
+  because the camera's JPEG goes white well before the sensor does.
+- **Empty frames**: a lens cap, a flash into the dark, a frame gone white, as
+  *nearly black*, *nearly white* or *nearly blank*.
 - **Faces**, found with YuNet, and how sharp each face is. A crisp background
   behind a soft face is a reject even when the frame as a whole measures sharp.
-- **Bursts**, grouped by a perceptual hash, with the sharpest frame of each
-  burst marked as the best of it.
+  Closed eyes are asked about (*eyes closed?*), never decided.
+- **Bursts**, grouped by a perceptual hash and by time, with the sharpest frame
+  of each burst marked as the best of it. The same scene shot again minutes or
+  days later is recognised as well.
 
 From these Numa suggests a rating from 0 to 5, shown beside each photograph
 with a short note (such as *best of burst*, *soft* or *soft face*) and
 available as a sort. The suggestion comes from explicit rules rather than a
-trained aesthetic model, and it never overwrites a rating you gave.
+trained aesthetic model, and it never overwrites a rating you gave. Every mark
+given in the loupe is kept in the library's catalog with its time.
 
 **Compare** two to four selected photographs side by side with `C`, zoomed and
-panned together, and rate or reject them from there.
+panned together, and rate or reject them from there. The keys act on the
+photograph under the pointer.
+
+![Compare: two photographs side by side with their ratings](docs/screenshots/compare.webp)
 
 ## People
 
@@ -127,10 +230,11 @@ YuNet's landmarks.
 
 ## Developing
 
-![The editor with the Light panel and the filmstrip](docs/screenshots/editor.webp)
+![The editor: the Light panel with adjusted sliders highlighted, the histogram and the filmstrip](docs/screenshots/editor.webp)
 
-Everything below is non-destructive. Edits are stored as a list of operations
-and parameters, and the original file is only ever read.
+Everything is non-destructive. Edits are stored as a list of operations and
+parameters, and the original file is only ever read. Preview and export run
+the same code on the same edit stack; the preview just uses fewer pixels.
 
 **Light.** Exposure, contrast, highlights, shadows, whites and blacks. **Auto**
 sets exposure and the black and white points and leaves the matters of taste
@@ -142,28 +246,32 @@ monotonic cubic, so a steep section never folds back on itself, and it is
 applied with interpolation so it does not introduce banding in skies and
 shadows.
 
-![A tone curve drawn over the photograph's histogram](docs/screenshots/curve.webp)
-
 **White balance.** Temperature in Kelvin and tint, applied in the camera's own
 colour space before the colour matrix, which is where it is physically correct.
+Or pick a neutral in the photograph.
 
 **Colour.** Vibrance and saturation. An eight-colour HSL mixer with a pipette:
 click the sky in the photograph and the mixer selects whichever colour the sky
-actually is. **Colour grading** with separate tints for shadows, midtones,
-highlights and the whole frame, plus blending and balance. **Black & white**
-is a switch, as in Lightroom, and turns the mixer into the black-and-white mix:
-how light each colour's grey comes out. A grade still tones it.
+actually is. **Black & white** is a switch, as in Lightroom, and turns the
+mixer into the black-and-white mix: how light each colour's grey comes out.
 
-**Camera profiles.** Numa reads DNG camera profiles (`.dcp`): forward
-matrices, hue/saturation maps and look tables. The one made for your camera is
-used automatically, matched on the camera model written inside the profile
-rather than on its filename.
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/colour.webp" alt="The Colour panel: white balance, vibrance and the eight-colour mixer"></td>
+<td width="50%"><img src="docs/screenshots/grade.webp" alt="Colour grading: a warm tint in the highlights"></td>
+</tr>
+<tr>
+<td><sub>White balance, vibrance and the HSL mixer.</sub></td>
+<td><sub>Colour grading per tonal range, with blending and balance.</sub></td>
+</tr>
+</table>
 
-**Colour spaces.** Export in sRGB, Display P3, Adobe RGB or ProPhoto RGB,
-with the matching ICC profile embedded. A wide-gamut export is rendered in its
-own space, so colours the sensor saw beyond sRGB reach the file. On screen, photographs are converted to
-your display's own colour profile, the one GNOME's colour settings use, so a
-wide-gamut screen does not oversaturate them.
+**Colour grading** with separate tints for shadows, midtones, highlights and
+the whole frame, plus blending and balance. A grade also tones a black and
+white conversion.
+
+**Effects.** Clarity, texture and dehaze; a vignette with amount, midpoint,
+roundness and feather; and grain with amount, size and roughness.
 
 **Local tone mapping.** HDR compression, clarity and texture use the same
 edge-aware guided filter at different scales: clarity works at the size of a
@@ -171,13 +279,32 @@ cheek or a cloud, texture at the weave of a fabric or the bark of a tree.
 Negative texture softens skin without softening eyes. Negative clarity spreads
 light like a diffusion filter rather than blurring.
 
-**Clipped highlights stay neutral.** Where all three channels hit the sensor's
-ceiling, white balance leaves them white instead of tinting them magenta.
+**Camera profiles.** Numa reads DNG camera profiles (`.dcp`): forward
+matrices, hue/saturation maps and look tables. The one made for your camera is
+used automatically, matched on the camera model written inside the profile
+rather than on its filename.
 
 **The base render.** A RAW is developed with a tone curve fitted against the
 camera's own JPEGs, and exposure is matched per image to the camera's
 rendering, so the untouched starting point already looks like a finished
-photograph rather than a flat scan.
+photograph rather than a flat scan. Where all three channels hit the sensor's
+ceiling, white balance leaves them white instead of tinting them magenta.
+
+**Colour spaces.** Export in sRGB, Display P3, Adobe RGB or ProPhoto RGB,
+with the matching ICC profile embedded. A wide-gamut export is rendered in its
+own space, so colours the sensor saw beyond sRGB reach the file. On screen,
+photographs are converted to your display's own colour profile, so a
+wide-gamut screen does not oversaturate them.
+
+![A tone curve drawn over the photograph's histogram](docs/screenshots/curve.webp)
+
+**Presets.** Save an edit, or part of one, as a preset, and apply it to the
+open photograph or a whole selection. The Presets tab shows each preset as a
+thumbnail of the photograph you are working on, and resting on one previews it
+on the canvas. Lightroom Classic `.lrtemplate`, Lightroom `.xmp` and Capture
+One `.costyle` and `.costylepack` presets can be imported; tone, presence,
+the HSL mixer, colour grading, curves, white balance, detail, vignette and
+grain are translated.
 
 ## Detail
 
@@ -219,18 +346,22 @@ corrections into each RAF, and Numa uses those first. Everything else is
 corrected from the lensfun database.
 
 **Crop and straighten** with handles, aspect ratio presets and a rule-of-thirds
-overlay. Quarter turns and EXIF orientation are handled.
+overlay. Quarter turns, mirroring and EXIF orientation are handled.
 
 **Perspective.** Vertical, horizontal and aspect corrections, or **Auto**,
 which finds the photograph's own lines and puts converging verticals back
-upright.
+upright. **Guided** lets you draw the lines that should be straight.
+
+![Crop at 5:4 with the rule-of-thirds overlay, straighten and perspective](docs/screenshots/crop.webp)
 
 ## Masks
 
-Every mask carries the full set of Light and Colour adjustments, so a local
-edit is the same edit as a global one, applied through a shape. Masks are kept
-in a list that can be reordered by dragging, and each can be inverted,
-feathered, and have its edge moved in or out.
+Every mask carries the full set of Light, Colour, Effects and Detail
+adjustments, so a local edit is the same edit as a global one, applied through
+a shape. Masks are kept in a list that can be reordered by dragging, and each
+can be inverted, feathered, and have its edge moved in or out. A mask survives
+a crop, a straighten or a quarter turn with the clicks and strokes that shaped
+it.
 
 **Draw them:** linear and radial gradients, a brush and a lasso. The brush and
 lasso add to or subtract from any mask, so a sky mask that caught the roofline
@@ -238,24 +369,32 @@ can be cleaned up by painting it out.
 
 **Let the photograph find them:**
 
-- **Semantic presets.** Sky, buildings, people, animals, greenery, ground,
-  water and more, from EfficientViT-Seg trained on ADE20K. Only the presets
-  for things actually found in the frame are offered.
+- **Found in this photograph.** Subject, Background, Sky, Water, Greenery,
+  Buildings, Ground and more, from EfficientViT-Seg trained on ADE20K. Only the
+  masks for things actually in the frame are offered, and resting on one
+  outlines it and says how much of the photograph it covers.
 - **Click to select.** Click any object and SlimSAM cuts it out, including
   things no segmentation model has a word for, such as a kite.
 - **Subject.** Person and Animal fall back to a matting model when the
   semantic model finds nothing, and the chip names the animal ("Bird", "Dog")
   when an image classifier is confident.
-- **Refine edge.** IS-Net matting traces a real edge through hair and fur.
+- **Refine.** *Edge* traces a real edge with IS-Net; *Hair* follows hair and
+  fur with ViTMatte.
 - **By colour or brightness.** Colour range and luminance range masks select
   every pixel of a colour or between two brightnesses, anywhere in the frame.
 
-A mask can be shown as a coloured wash, an outline, or both, each with its own
-switch.
+A mask can be shown as a coloured wash, an outline, or both.
 
-| | |
-|---|---|
-| ![Found in the photograph: Foreground, Background, Sky and Bird, the bird outlined while the pointer is on its button](docs/screenshots/mask1.webp) | ![The bird's mask open, with its own exposure](docs/screenshots/mask2.webp) |
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/masks-found.webp" alt="Found in the photograph: Subject, Background, Water and Greenery, the water outlined while the pointer rests on its button"></td>
+<td width="50%"><img src="docs/screenshots/mask-subject.webp" alt="The subject mask open, with its own exposure and the mask bar underneath"></td>
+</tr>
+<tr>
+<td><sub>Masks found in the photograph. Resting on <i>Water</i> outlines it.</sub></td>
+<td><sub>A subject mask with its own exposure, refined from the mask bar.</sub></td>
+</tr>
+</table>
 
 ## Retouching
 
@@ -273,6 +412,8 @@ eye.
 removal, skin smoothing, evenness, red-eye and teeth whitening.
 
 ## Export
+
+![The export dialog: format, colour space, quality, size, HDR, metadata, watermark, file name and folder](docs/screenshots/export.webp)
 
 - **JPEG, PNG, 16-bit TIFF, AVIF, JPEG XL or DNG**, with the quality you
   choose and the ICC profile of the colour space you export in. JPEG XL uses
@@ -295,16 +436,16 @@ removal, skin smoothing, evenness, red-eye and teeth whitening.
 - **Never overwriting.** Files go to an `edited` folder inside the library, or
   to a folder you choose.
 
-Preview and export run the same code on the same edit stack. The preview just
-uses fewer pixels.
-
 ## Working in the editor
 
 - **Saving is automatic**, two seconds after the last change, and when you
   step to another photograph, leave the editor or quit.
 - **Undo and redo** cover every adjustment, geometry and mask, with a
-  history list that names each step.
-- **Before and after**, compared against the as-shot rendering.
+  history list that names each step. **Snapshots** keep named versions of an
+  edit to go back to.
+- **Before and after**: hold `Space` to see the as-shot rendering.
+- **Reference**: keep one developed frame beside the one you are working on
+  and match a set to it, or show the camera's own JPEG there instead.
 - **A live RGB histogram**, with clipped shadows and highlights shown on the
   photograph.
 - **Copy and paste settings** between photographs, with a checklist of what to
@@ -321,6 +462,16 @@ uses fewer pixels.
 - **HDR merge** combines a bracket into one high-dynamic-range image. A
   bracket shot by hand is lined up first.
 - **Keyboard shortcuts** are listed under `Ctrl+/`.
+
+## Preferences
+
+Three pages, with a search across all of them. **General** has the display
+profile, opening photographs with Numa, and a daily check for new versions
+that is off until you turn it on; nothing about you or your photographs is
+sent. **Add-ons** lists the optional models with their size, licence and what
+they are for, to download one by one or all at once. **Storage** shows Numa's
+own folders and how much each takes, clears the thumbnail cache, and says what
+to delete to remove Numa again.
 
 ---
 
@@ -517,6 +668,7 @@ recognition thresholds, and the bugs that were hardest to find.
 | IS-Net | Matting and refined edges |
 | ViTMatte-S | Hair and fur in Refine edge |
 | YuNet | Face detection |
+| open-closed-eye-0001 (OpenVINO) | Asking about closed eyes in culling |
 | SFace | Face recognition |
 | PP-ResNet50 (ImageNet) | Naming the animal in a subject mask |
 | SCUNet | AI denoise |
@@ -530,11 +682,13 @@ recognition thresholds, and the bugs that were hardest to find.
 ## Roadmap
 
 [`docs/FEATURES.md`](docs/FEATURES.md) tracks every feature by ID and is the
-only place status is kept: currently **173 built**, 7 partly built, 5 planned
+only place status is kept: currently **183 built**, 8 partly built, 5 planned
 and 11 withdrawn, each withdrawal with its reason.
 
-**Still open.** Eyes-closed detection for culling · a neutral Fujifilm X-T5
-camera profile, which needs Provia reference frames.
+**Still open.** A neutral Fujifilm X-T5 camera profile, which needs Provia
+reference frames · settling whether a developed frame is as sharp as
+Lightroom's · crash reports and feedback, sent only when you say so · a GPU
+pipeline, if the processor one ever stops being enough.
 
 The full list, generated from the status markers, is at the end of
 [`docs/FEATURES.md`](docs/FEATURES.md). How each number in it was reached is in
@@ -548,7 +702,7 @@ Numa is written by Claude, an AI model by Anthropic, working from the
 photographer's feedback: comparisons with other raw developers and the
 camera's own JPEGs, and reports of what looked wrong. Decisions and
 measurements are recorded in [`docs/ENGINEERING.md`](docs/ENGINEERING.md), and
-there are 587 automated tests, run on every push together with one camera
+there are more than 600 automated tests, run on every push together with one camera
 file per make.
 
 ---
@@ -578,6 +732,22 @@ published with the downloads.
   and converting RealPLKSR, **[LaMa](https://github.com/advimman/lama)** and
   [Carve](https://huggingface.co/Carve/LaMa-ONNX)'s export of it, and
   **[YOLOX](https://github.com/Megvii-BaseDetection/YOLOX)** from Megvii, and
-  **[Restormer](https://github.com/swz30/Restormer)** for AI sharpen.
+  **[Restormer](https://github.com/swz30/Restormer)** for AI sharpen, and
+  **[OpenVINO Open Model Zoo](https://github.com/openvinotoolkit/open_model_zoo)**
+  for the open-closed eye model.
+
+### Photographs in the screenshots
+
+The tone curve and detail screenshots show the author's own RAW files. The
+others show JPEGs from the Ubuntu and Ubuntu Budgie wallpaper collections,
+used under their licences (CC BY-SA, CC BY and CC0), renamed for a demo
+library and in a few cases cropped to portrait. The photographers:
+Atlantios, Bastian Greshake Tzovaras, Brodie Vissers, dcsearle.t21, Erwan
+Hesry, fortuneblues, Frederik Schulz, Geza Radics, Jobin Babu, Julian
+Tomasini, Kacper Ślusarczyk, Manuel Arslanyan, mendhak, Michele Agostini,
+Monika Murren, Moritz Reisinger, Radu Galan, Raymond Lavoie, Renatvs88,
+Rihards Vilks, Rudy van der Veen, sigi sagi, simosx, Stephane Pakula, Sudhir
+Reddy, the5heepdev, Tiziano Consonni, Uday Nakade, William Beckwith and
+Γιωργος Αργυροπουλος.
 
 Not affiliated with or endorsed by Fujifilm.
