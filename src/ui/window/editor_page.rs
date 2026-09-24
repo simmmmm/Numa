@@ -46,6 +46,7 @@ fn build_canvas_overlay(state: &App) -> gtk::Overlay {
     overlay.add_overlay(&build_crop_overlay(state));
     overlay.add_overlay(&build_mask_overlay(state));
     overlay.add_overlay(&build_retouch_overlay(state));
+    overlay.add_controller(overlay_dot_remove(state));
 
     overlay
 }
@@ -240,6 +241,7 @@ pub(super) fn build_crumbs(state: &App) -> gtk::Box {
 }
 
 pub(super) fn show_coverage(state: &App) {
+    state.mask_overlay.wash_resting.set(false);
     state.mask_overlay.area.queue_draw();
 }
 

@@ -2,60 +2,51 @@ use super::*;
 
 pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
     let dialog = adw::PreferencesDialog::new();
-    let page = adw::PreferencesPage::new();
-    page.set_title("Add-ons and storage");
-    page.set_icon_name(Some("folder-symbolic"));
+    dialog.set_search_enabled(true);
+    let folder_row = |title: &str, dir: PathBuf| folder_row(window, title, dir);
+    dialog.add(&general_page(state, &dialog));
+    dialog.add(&addons_page(state, &dialog, &folder_row));
+    dialog.add(&storage_page(&folder_row));
+    dialog.present(Some(window));
+}
 
-    let updates = adw::PreferencesGroup::new();
-    updates.set_title("Updates");
-    let check = adw::SwitchRow::new();
-    check.set_title("Check for new versions");
-    check.set_subtitle("Once a day, from the releases page on GitHub. Nothing about you or your photographs is sent.");
-    check.set_active(state.catalog.setting(UPDATE_CHECK).as_deref() == Some("yes"));
-    check.connect_active_notify(glib::clone!(
-        #[strong] state,
-        move |row| {
-            let _ = state.catalog.set_setting(UPDATE_CHECK, if row.is_active() { "yes" } else { "no" });
+fn folder_row(window: &adw::ApplicationWindow, title: &str, dir: PathBuf) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(title);
+    set_row_subtitle(&row, &dir.display().to_string());
+    row.set_subtitle_selectable(true);
+    let open = gtk::Button::from_icon_name("folder-open-symbolic");
+    open.set_tooltip_text(Some("Open in the file manager"));
+    open.set_valign(gtk::Align::Center);
+    open.add_css_class("flat");
+    open.connect_clicked(glib::clone!(
+        #[weak] window,
+        move |_| {
+            if let Err(err) = std::fs::create_dir_all(&dir) {
+                log::warn!("could not create {}: {err}", dir.display());
+            }
+            gtk::FileLauncher::new(Some(&gio::File::for_path(&dir))).launch(
+                Some(&window),
+                None::<&gio::Cancellable>,
+                |result| {
+                    if let Err(err) = result {
+                        log::warn!("could not open the folder: {err}");
+                    }
+                },
+            );
         }
     ));
-    updates.add(&check);
-    page.add(&updates);
+    row.add_suffix(&open);
+    row
+}
+
+fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title("General");
+    page.set_icon_name(Some("emblem-system-symbolic"));
 
     page.add(&colour_group());
-
-    let folder_row = |title: &str, dir: PathBuf| {
-        let row = adw::ActionRow::new();
-        row.set_title(title);
-        set_row_subtitle(&row, &dir.display().to_string());
-        row.set_subtitle_selectable(true);
-        let open = gtk::Button::from_icon_name("folder-open-symbolic");
-        open.set_tooltip_text(Some("Open in the file manager"));
-        open.set_valign(gtk::Align::Center);
-        open.add_css_class("flat");
-        open.connect_clicked(glib::clone!(
-            #[weak] window,
-            move |_| {
-                if let Err(err) = std::fs::create_dir_all(&dir) {
-                    log::warn!("could not create {}: {err}", dir.display());
-                }
-                gtk::FileLauncher::new(Some(&gio::File::for_path(&dir))).launch(
-                    Some(&window),
-                    None::<&gio::Cancellable>,
-                    |result| {
-                        if let Err(err) = result {
-                            log::warn!("could not open the folder: {err}");
-                        }
-                    },
-                );
-            }
-        ));
-        row.add_suffix(&open);
-        row
-    };
-
-    page.add(&downloads::models_group(state, &dialog, &folder_row));
-
-    page.add(&downloads::profiles_group(&dialog, &folder_row));
+    page.add(&opening_group(dialog));
 
     if let Some(path) = appimage() {
         let menu = adw::PreferencesGroup::new();
@@ -81,30 +72,59 @@ pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
         page.add(&menu);
     }
 
-    page.add(&opening_group(&dialog));
+    let updates = adw::PreferencesGroup::new();
+    updates.set_title("Updates");
+    let check = adw::SwitchRow::new();
+    check.set_title("Check for new versions");
+    check.set_subtitle("Once a day, from the releases page on GitHub. Nothing about you or your photographs is sent.");
+    check.set_active(state.catalog.setting(UPDATE_CHECK).as_deref() == Some("yes"));
+    check.connect_active_notify(glib::clone!(
+        #[strong] state,
+        move |row| {
+            let _ = state.catalog.set_setting(UPDATE_CHECK, if row.is_active() { "yes" } else { "no" });
+        }
+    ));
+    updates.add(&check);
+    page.add(&updates);
+    page
+}
+
+fn addons_page(
+    state: &App,
+    dialog: &adw::PreferencesDialog,
+    folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow,
+) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title("Add-ons");
+    page.set_icon_name(Some("application-x-addon-symbolic"));
+    page.add(&downloads::models_group(dialog, folder_row));
+    page.add(&downloads::gpu_group(state, dialog));
+    page.add(&downloads::profiles_group(dialog, folder_row));
+    page
+}
+
+fn storage_page(folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title("Storage");
+    page.set_icon_name(Some("drive-harddisk-symbolic"));
 
     let storage = adw::PreferencesGroup::new();
-    storage.set_title("Storage");
+    storage.set_title("Numa's Files");
     storage.set_description(Some(
         "Ratings, edits and names are kept in a hidden .numa folder inside each library, \
          so they travel with the photographs. These are Numa's own files on this computer.",
     ));
-
     for (title, dir) in [
         ("Settings and list of libraries", numa::core::paths::data_dir()),
         ("Models", numa::core::paths::models_dir()),
         ("Presets", numa::io::presets::dir()),
-        ("Thumbnails (safe to delete)", numa::io::thumbs::cache_dir()),
+        ("Thumbnails", numa::io::thumbs::cache_dir()),
     ] {
         let row = folder_row(title, dir.clone());
-        let shown = dir.display().to_string();
-        glib::spawn_future_local(glib::clone!(
-            #[weak] row,
-            async move {
-                let Ok(bytes) = gio::spawn_blocking(move || folder_size(&dir)).await else { return };
-                row.set_subtitle(&format!("{shown} · {}", glib::format_size(bytes)));
-            }
-        ));
+        show_size(&row, dir.clone());
+        if dir == numa::io::thumbs::cache_dir() {
+            row.add_suffix(&clear_button(&row, dir));
+        }
         storage.add(&row);
     }
     page.add(&storage);
@@ -119,9 +139,7 @@ pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
          are never touched."
     )));
     page.add(&uninstall);
-
-    dialog.add(&page);
-    dialog.present(Some(window));
+    page
 }
 
 fn opening_group(dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
@@ -170,6 +188,46 @@ fn colour_group() -> adw::PreferencesGroup {
     colour
 }
 
+fn show_size(row: &adw::ActionRow, dir: PathBuf) {
+    let shown = dir.display().to_string();
+    glib::spawn_future_local(glib::clone!(
+        #[weak] row,
+        async move {
+            let Ok(bytes) = gio::spawn_blocking(move || folder_size(&dir)).await else { return };
+            row.set_subtitle(&format!("{shown} · {}", glib::format_size(bytes)));
+        }
+    ));
+}
+
+fn clear_button(row: &adw::ActionRow, dir: PathBuf) -> gtk::Button {
+    let clear = gtk::Button::with_label("Clear");
+    clear.set_valign(gtk::Align::Center);
+    clear.set_tooltip_text(Some("Delete the cached thumbnails; they are made again when needed"));
+    clear.connect_clicked(glib::clone!(
+        #[weak] row,
+        move |button| {
+            button.set_sensitive(false);
+            let dir = dir.clone();
+            glib::spawn_future_local(glib::clone!(
+                #[weak] row,
+                #[weak] button,
+                async move {
+                    let target = dir.clone();
+                    let _ = gio::spawn_blocking(move || {
+                        for entry in std::fs::read_dir(&target).into_iter().flatten().flatten() {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    })
+                    .await;
+                    show_size(&row, dir);
+                    button.set_sensitive(true);
+                }
+            ));
+        }
+    ));
+    clear
+}
+
 pub(super) fn folder_size(dir: &std::path::Path) -> u64 {
     let mut total = 0;
     let mut pending = vec![dir.to_path_buf()];
@@ -214,6 +272,12 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     library_group.add(&row("Look at one photograph, and put it away again", "Space"));
     library_group.add(&row("Previous / next photograph in the loupe", "Left / Right"));
     library_group.add(&row("Open the photograph in the loupe in the editor", "Enter"));
+    library_group.add(&row("Pick in the loupe and go on to the next", "Up"));
+    library_group.add(&row("Reject in the loupe and go on to the next", "Down"));
+    library_group.add(&row("Take back the last mark given in the loupe", "Backspace"));
+    library_group.add(&row("Previous / next burst in the loupe, on its best frame", "Ctrl+Left / Ctrl+Right"));
+    library_group.add(&row("Reject the rest of the burst and go on to the next", "Shift+Down"));
+    library_group.add(&row("The neighbours beside the photograph in the loupe, on or off", "F"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
     library_group.add(&row("Flag the selection picked", "P"));
     library_group.add(&row("Flag the selection rejected", "X"));

@@ -345,7 +345,7 @@ pub(super) fn ensure_faces(state: &App) {
     let state = state.clone();
     glib::spawn_future_local(async move {
         let found = busy(&state, "Looking for faces…", move || {
-            let frame = render::apply_stack(&geometry, &working, 1.0);
+            let frame = render::apply_stack(&geometry, &*working, 1.0);
             let (width, height) = (frame.width() as f32, frame.height() as f32);
             cull::faces::detect(&frame).map(|faces| {
                 let portraits = faces

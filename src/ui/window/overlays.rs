@@ -542,7 +542,7 @@ pub(super) fn show_baseline(state: &App) {
 
         if photo.baseline.is_none() {
             let original = Document::new(photo.document.source.path.clone());
-            let working = render::to_working_space(&original, &photo.proxy, &Default::default());
+            let working = render::to_working_space(&original, &*photo.proxy, &Default::default());
             let proxy_scale = photo.proxy.width.max(photo.proxy.height) as f32
                 / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
             photo.baseline = Some(

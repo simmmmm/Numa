@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 use numa_core::denoise::{Denoised, MODEL, SHARPEN_MODEL};
 
@@ -32,16 +33,34 @@ pub fn is_cached(photo: &Path) -> bool {
     cache_path(photo).is_some_and(|path| path.is_file())
 }
 
-pub fn load(photo: &Path) -> Option<Denoised> {
-    image::open(cache_path(photo)?).ok().map(|image| image.into_rgb16())
+pub fn load(photo: &Path) -> Option<Arc<Denoised>> {
+    read(cache_path(photo)?)
 }
 
 pub fn is_sharpened(photo: &Path, on_denoised: bool) -> bool {
     sharpened_path(photo, on_denoised).is_some_and(|path| path.is_file())
 }
 
-pub fn load_sharpened(photo: &Path, on_denoised: bool) -> Option<Denoised> {
-    image::open(sharpened_path(photo, on_denoised)?).ok().map(|image| image.into_rgb16())
+pub fn load_sharpened(photo: &Path, on_denoised: bool) -> Option<Arc<Denoised>> {
+    read(sharpened_path(photo, on_denoised)?)
+}
+
+fn read(path: PathBuf) -> Option<Arc<Denoised>> {
+    static READ: Mutex<Vec<(PathBuf, Weak<Denoised>)>> = Mutex::new(Vec::new());
+    let found = READ
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(at, _)| *at == path)
+        .and_then(|(_, frame)| frame.upgrade());
+    if found.is_some() {
+        return found;
+    }
+    let frame = Arc::new(image::open(&path).ok()?.into_rgb16());
+    let mut read = READ.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    read.retain(|(at, frame)| *at != path && frame.strong_count() > 0);
+    read.push((path, Arc::downgrade(&frame)));
+    Some(frame)
 }
 
 pub fn save(photo: &Path, denoised: &Denoised) -> Result<(), String> {

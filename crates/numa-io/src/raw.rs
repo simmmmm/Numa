@@ -89,6 +89,15 @@ fn developed_preview(path: &Path) -> Result<DynamicImage, String> {
     Ok(DynamicImage::ImageRgb8(numa_render::develop(&document, proxy, &Default::default())))
 }
 
+pub fn as_shot(path: &Path) -> Result<RgbImage, String> {
+    if !is_raw(path) {
+        return load_scaled(path, u32::MAX);
+    }
+    let linear = decode_linear_best(path)?;
+    let document = numa_core::document::Document::new(path.display().to_string());
+    Ok(numa_render::develop(&document, linear, &Default::default()))
+}
+
 fn open_heif(path: &Path) -> Result<DynamicImage, String> {
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     let context =
@@ -1194,6 +1203,122 @@ pub fn colour_setting(path: &Path) -> Option<u16> {
     let mut bytes = Vec::new();
     std::fs::File::open(path).ok()?.take(2 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
     makernote_tag(&bytes, 0x1003).and_then(|values| values.first().map(|v| *v as u16))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AfPoint {
+    pub x: f32,
+    pub y: f32,
+
+    pub zone: bool,
+}
+
+pub fn af_point(path: &Path) -> Option<AfPoint> {
+    use std::io::Read;
+    if !is_raf(path) {
+        return None;
+    }
+
+    const SCAN: u64 = 2 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(SCAN).read_to_end(&mut bytes).ok()?;
+
+    let at = makernote_tag(&bytes, 0x1023)?;
+    let (x, y) = (*at.first()?, *at.get(1)?);
+    let single = makernote_tag(&bytes, 0x1022).and_then(|mode| mode.first().copied()) == Some(1.0);
+
+    let offset = u32::from_be_bytes(bytes.get(84..88)?.try_into().ok()?) as usize;
+    let jpeg = bytes.get(offset..)?;
+    let (width, height) = jpeg_size(jpeg)?;
+    let orientation = ::exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(jpeg))
+        .ok()
+        .and_then(|exif| exif.get_field(::exif::Tag::Orientation, ::exif::In::PRIMARY)?.value.get_uint(0))
+        .unwrap_or(1);
+
+    let (u, v) = (x / width as f32, y / height as f32);
+    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+        return None;
+    }
+
+    let (x, y) = match orientation {
+        3 => (1.0 - u, 1.0 - v),
+        6 => (1.0 - v, u),
+        8 => (v, 1.0 - u),
+        _ => (u, v),
+    };
+    Some(AfPoint { x, y, zone: !single })
+}
+
+pub fn shot(path: &Path) -> Option<(f32, f32)> {
+    use std::io::Read;
+    let exif = if is_raf(path) {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path).ok()?.take(2 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+        let offset = u32::from_be_bytes(bytes.get(84..88)?.try_into().ok()?) as usize;
+        ::exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes.get(offset..)?)).ok()?
+    } else {
+        let file = std::fs::File::open(path).ok()?;
+        ::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok()?
+    };
+    let exposure = match &exif.get_field(::exif::Tag::ExposureTime, ::exif::In::PRIMARY)?.value {
+        ::exif::Value::Rational(values) => values.first()?.to_f64() as f32,
+        _ => return None,
+    };
+    let focal = exif.get_field(::exif::Tag::FocalLengthIn35mmFilm, ::exif::In::PRIMARY)?.value.get_uint(0)? as f32;
+    (exposure > 0.0 && focal > 0.0).then_some((exposure, focal))
+}
+
+pub fn raw_levels(path: &Path) -> Option<(f32, f32)> {
+    if !is_raw(path) {
+        return None;
+    }
+
+    let raw = std::panic::catch_unwind(|| rawler::decode_file(path).ok()).ok().flatten()?;
+    let rawler::RawImageData::Integer(data) = &raw.data else { return None };
+    let white = *raw.whitelevel.0.first()? as f32;
+    let black = raw.blacklevel.levels.first().map_or(0.0, |level| level.as_f32());
+    let clip = (white - (white - black) * 0.01) as u16;
+    let floor = (black + (white - black) * 0.01) as u16;
+
+    const BLOCK: usize = 6;
+    let (width, height) = (raw.width, raw.height);
+    let (across, down) = (width / BLOCK, height / BLOCK);
+    if across == 0 || down == 0 || data.len() < width * height {
+        return None;
+    }
+    let (mut clipped, mut dark) = (0usize, 0usize);
+    for by in 0..down {
+        for bx in 0..across {
+            let block = (0..BLOCK).flat_map(|y| {
+                let row = (by * BLOCK + y) * width + bx * BLOCK;
+                data[row..row + BLOCK].iter().copied()
+            });
+            let brightest = block.max().unwrap_or(0);
+            clipped += usize::from(brightest >= clip);
+            dark += usize::from(brightest <= floor);
+        }
+    }
+    let blocks = (across * down) as f32;
+    Some((clipped as f32 / blocks, dark as f32 / blocks))
+}
+
+fn jpeg_size(jpeg: &[u8]) -> Option<(u32, u32)> {
+    let mut at = 2;
+    while at + 9 < jpeg.len() {
+        if jpeg[at] != 0xFF {
+            return None;
+        }
+        let marker = jpeg[at + 1];
+        let length = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+        if matches!(marker, 0xC0..=0xC3) {
+            let height = u16::from_be_bytes([jpeg[at + 5], jpeg[at + 6]]) as u32;
+            let width = u16::from_be_bytes([jpeg[at + 7], jpeg[at + 8]]) as u32;
+            return (width > 0 && height > 0).then_some((width, height));
+        }
+        at += 2 + length;
+    }
+    None
 }
 
 fn find_film_mode_tag(bytes: &[u8]) -> Option<u16> {

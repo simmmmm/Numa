@@ -174,6 +174,28 @@ enum Ask {
 }
 
 fn asked_about(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Alpha> {
+    const KEEP: usize = 3;
+    type Kept = Vec<(u64, Option<Alpha>)>;
+    static KEPT: std::sync::Mutex<Kept> = std::sync::Mutex::new(Vec::new());
+
+    let key = crate::content_hash_bytes(photo.as_raw())
+        ^ crate::content_hash(&coarse.data).rotate_left(7)
+        ^ ((coarse.width as u64) << 32 | coarse.height as u64).rotate_left(29)
+        ^ u64::from(question == Ask::ThisSubject);
+    let found = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(at, _)| *at == key).map(|(_, answer)| answer.clone());
+    if let Some(answer) = found {
+        return answer;
+    }
+    let answer = asked_about_now(photo, coarse, question);
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if kept.len() >= KEEP {
+        kept.remove(0);
+    }
+    kept.push((key, answer.clone()));
+    answer
+}
+
+fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Alpha> {
     let plan = plan()?;
     let (left, top, right, bottom) = bounds(coarse)?;
 
@@ -591,6 +613,43 @@ mod tests {
                 }
             }
             None => println!("de matte gaf niets terug — geen onderwerp gevonden"),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn finer_on_a_frame() {
+        let (Ok(path), Ok(out)) = (std::env::var("FRAME"), std::env::var("OUT")) else { return };
+        let path = std::path::PathBuf::from(path);
+        let out = std::path::PathBuf::from(out);
+        let linear = numa_io::raw::decode_linear(&path).unwrap();
+        let document = numa_core::document::Document::new(path.display().to_string());
+        let working = crate::to_working_space(&document, &linear, &Default::default());
+        let frame = crate::apply_stack(&document, &working, 1.0);
+
+        let (w, h) = match frame.width() > frame.height() {
+            true => (512usize, 512 * frame.height() as usize / frame.width() as usize),
+            false => (512 * frame.width() as usize / frame.height() as usize, 512usize),
+        };
+        let coarse = subject(&frame, w, h).expect("no subject");
+        let write = |name: &str, alpha: &Alpha| {
+            let mut image = image::GrayImage::new(alpha.width as u32, alpha.height as u32);
+            for (index, value) in alpha.data.iter().enumerate() {
+                image.put_pixel(
+                    (index % alpha.width) as u32,
+                    (index / alpha.width) as u32,
+                    image::Luma([(value.clamp(0.0, 1.0) * 255.0) as u8]),
+                );
+            }
+            image.save(out.join(name)).unwrap();
+            let solid = alpha.data.iter().filter(|v| **v > 0.9).count();
+            let edge = alpha.data.iter().filter(|v| (0.1..0.9).contains(*v)).count();
+            println!("{name}: {solid} vol, {edge} randcellen van {}", alpha.data.len());
+        };
+        write("coarse.png", &coarse);
+        match finer(&frame, &coarse) {
+            Some(closer) => write("finer.png", &closer),
+            None => println!("finer gaf niets terug"),
         }
     }
 

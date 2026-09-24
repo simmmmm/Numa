@@ -78,6 +78,7 @@ mod albums;
 mod grid;
 mod merge;
 mod loupe;
+mod loupe_zoom;
 mod importing;
 mod folders;
 mod compare;
@@ -89,6 +90,7 @@ mod editor_page;
 mod export_ui;
 mod panel;
 mod render_loop;
+mod render_job;
 mod zooming;
 mod geometry;
 mod overlays;
@@ -148,6 +150,7 @@ use editor_page::*;
 use export_ui::*;
 use panel::*;
 use render_loop::*;
+use render_job::*;
 use zooming::*;
 use geometry::*;
 use overlays::*;
@@ -384,6 +387,8 @@ fn recall_window_state(state: &App, window: &adw::ApplicationWindow) {
 }
 
 fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
+
+    watch_the_button(state, window);
     state.stack.add_named(&build_library_page(state, window), Some("library"));
 
     state.stack.add_named(&build_folders_page(state), Some("folders"));
@@ -405,6 +410,16 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
 
     name_icon_buttons(view.upcast_ref());
     startup::fill_the_window(state, window);
+
+    glib::timeout_add_seconds_local_once(60, || {
+        std::thread::spawn(|| {
+            unsafe { libc::nice(19) };
+            let freed = numa::io::thumbs::prune(numa::io::thumbs::CACHE_BUDGET);
+            if freed > 0 {
+                log::info!("thumbnail cache: {} MB of the least used let go", freed >> 20);
+            }
+        });
+    });
 }
 
 fn install_window_lifecycle(state: &App, window: &adw::ApplicationWindow) {
@@ -421,8 +436,13 @@ fn install_window_lifecycle(state: &App, window: &adw::ApplicationWindow) {
         60,
         glib::clone!(
             #[strong] state,
+            #[weak] window,
+            #[upgrade_or] glib::ControlFlow::Break,
             move || {
-                rescan_in_background(&state);
+
+                if window.is_active() {
+                    rescan_in_background(&state);
+                }
                 glib::ControlFlow::Continue
             }
         ),
@@ -452,13 +472,11 @@ fn render_inputs(document: &Document) -> render::RenderInputs {
             .and_then(numa::io::dcp::by_name),
         denoised: (document.ai_denoise > 0.0)
             .then(|| numa::io::denoised::load(std::path::Path::new(&document.source.path)))
-            .flatten()
-            .map(std::sync::Arc::new),
+            .flatten(),
 
         sharpened: (document.ai_sharpen > 0.0)
             .then(|| numa::io::denoised::load_sharpened(std::path::Path::new(&document.source.path), document.ai_denoise > 0.0))
-            .flatten()
-            .map(std::sync::Arc::new),
+            .flatten(),
     }
 }
 
@@ -466,11 +484,11 @@ struct OpenPhoto {
     source: Source,
 
     edits_unreadable: bool,
-    proxy: LinearImage,
+    proxy: Arc<LinearImage>,
 
-    working: LinearImage,
+    working: Arc<LinearImage>,
 
-    draft: Option<LinearImage>,
+    draft: Option<Arc<LinearImage>>,
 
     inputs: render::RenderInputs,
 
@@ -495,12 +513,18 @@ struct OpenPhoto {
 
     full_size: (u32, u32),
 
-    full_working: Option<LinearImage>,
+    full_working: Option<Arc<LinearImage>>,
     full_working_key: Option<ColourKey>,
+
+    full_native: Option<std::sync::Arc<LinearImage>>,
 
     view: Option<ViewTile>,
 
-    behind: Option<(ColourKey, image::RgbImage)>,
+    draft_view: Option<ViewTile>,
+
+    behind: Option<(u64, Arc<image::RgbImage>)>,
+
+    tone_guide: Option<(u64, bool, Arc<render::local::ToneGuide>)>,
 
     baseline: Option<gtk::gdk::Paintable>,
 

@@ -315,11 +315,13 @@ pub fn develop<'a>(
     if settings.format == Format::Dng {
 
         let preview = ExportSettings { size: Size::LongEdge(2048), sharpen: true, ..settings.clone() };
-        let frame = fit(numa_render::develop(document, source, inputs), &preview);
+        let (source, scale) = for_size(document, source.into(), &preview);
+        let frame = fit(numa_render::develop_at(document, source, inputs, scale), &preview);
         return Developed::Dng(frame, crate::foreign::to_lightroom(document));
     }
+    let (source, scale) = for_size(document, source.into(), settings);
     if settings.hdr && settings.format == Format::Jpeg {
-        let (frame, gains) = numa_render::develop_hdr(document, source, inputs);
+        let (frame, gains) = numa_render::develop_hdr(document, source, inputs, scale);
         let gains = crate::gainmap::Gains::from_raw(frame.width(), frame.height(), gains).expect("a gain per pixel");
         let frame = fit(frame, settings);
 
@@ -333,21 +335,53 @@ pub fn develop<'a>(
         return Developed::Hdr(frame, gains);
     }
     match settings.format.is_deep() {
-        true => Developed::Sixteen(fit(numa_render::develop16(document, source, inputs), settings)),
-        false => Developed::Eight(fit(numa_render::develop(document, source, inputs), settings)),
+        true => Developed::Sixteen(fit(numa_render::develop16_at(document, source, inputs, scale), settings)),
+        false => Developed::Eight(fit(numa_render::develop_at(document, source, inputs, scale), settings)),
     }
 }
 
-pub fn enlarge(frame: Developed, settings: &ExportSettings) -> Result<Developed, String> {
+const DEVELOP_MARGIN: f32 = 2.0;
+
+fn for_size<'a>(
+    document: &numa_core::document::Document,
+    source: Cow<'a, LinearImage>,
+    settings: &ExportSettings,
+) -> (Cow<'a, LinearImage>, f32) {
+    let Size::LongEdge(edge) = settings.size else { return (source, 1.0) };
+    let (width, height) = (source.width as f32, source.height as f32);
+
+    let (width_turned, height_turned) = match document.rotation() as i32 {
+        90 | 270 => (height, width),
+        _ => (width, height),
+    };
+    let kept = document
+        .crop()
+        .map_or(width_turned.max(height_turned), |(rect, _)| (rect[2] * width_turned).max(rect[3] * height_turned));
+    let scale = edge as f32 * DEVELOP_MARGIN / kept.max(1.0);
+
+    if edge == 0 || scale > 0.6 {
+        return (source, 1.0);
+    }
+    let longest = width.max(height);
+    match source.downscaled((longest * scale).ceil() as u32) {
+        Some(smaller) => {
+            let scale = smaller.width.max(smaller.height) as f32 / longest;
+            (Cow::Owned(smaller), scale)
+        }
+        None => (source, 1.0),
+    }
+}
+
+pub fn enlarge(frame: Developed, settings: &ExportSettings, mut progress: impl FnMut(usize, usize) -> bool) -> Result<Developed, String> {
     if settings.size != Size::Double {
         return Ok(frame);
     }
     let stopped = || "stopped".to_string();
     Ok(match frame {
-        Developed::Eight(image) => Developed::Eight(crate::upscale::double(&image, |_, _| true)?.ok_or_else(stopped)?),
-        Developed::Sixteen(image) => Developed::Sixteen(crate::upscale::double(&image, |_, _| true)?.ok_or_else(stopped)?),
+        Developed::Eight(image) => Developed::Eight(crate::upscale::double(&image, &mut progress)?.ok_or_else(stopped)?),
+        Developed::Sixteen(image) => Developed::Sixteen(crate::upscale::double(&image, &mut progress)?.ok_or_else(stopped)?),
         Developed::Hdr(image, gains) => {
-            let image = crate::upscale::double(&image, |_, _| true)?.ok_or_else(stopped)?;
+            let image = crate::upscale::double(&image, &mut progress)?.ok_or_else(stopped)?;
 
             let stops = crate::gainmap::Gains::from_fn(gains.width(), gains.height(), |x, y| image::Luma([gains.get_pixel(x, y).0[0].log2() / 8.0]));
             let mut gains = image::imageops::resize(&stops, image.width().div_ceil(2), image.height().div_ceil(2), image::imageops::FilterType::Triangle);
@@ -706,6 +740,24 @@ fn with_exif(jpeg: Vec<u8>, exif: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_small_export_is_developed_small() {
+        let frame = LinearImage::new(4000, 3000, vec![0.18; 4000 * 3000 * 3]);
+        let settings = |edge| ExportSettings { size: Size::LongEdge(edge), ..ExportSettings::default() };
+        let mut document = numa_core::document::Document::new("a.RAF".into());
+
+        let (small, scale) = for_size(&document, Cow::Borrowed(&frame), &settings(1000));
+        assert_eq!((small.width, small.height, scale), (2000, 1500, 0.5));
+        let (whole, scale) = for_size(&document, Cow::Borrowed(&frame), &settings(1600));
+        assert_eq!((whole.width, scale), (4000, 1.0), "0.8 of it is not worth a second resample");
+        let (whole, _) = for_size(&document, Cow::Borrowed(&frame), &ExportSettings::default());
+        assert_eq!(whole.width, 4000, "full size");
+
+        document.set_crop([0.0, 0.0, 0.25, 0.25], 0.0);
+        let (cropped, scale) = for_size(&document, Cow::Borrowed(&frame), &settings(1000));
+        assert_eq!((cropped.width, scale), (4000, 1.0));
+    }
 
     #[test]
     fn names_are_templated_and_never_collide() {

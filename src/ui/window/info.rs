@@ -74,6 +74,15 @@ pub(super) fn build_info(state: &App) -> gtk::Box {
     column.set_orientation(gtk::Orientation::Vertical);
     column.set_spacing(18);
     column.set_margin_top(6);
+
+    let label = &state.info.render_info;
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_selectable(true);
+    label.add_css_class("profile-note");
+
+    state.info.rendering.set_label_widget(Some(&section_header("Rendering")));
+    state.info.rendering.set_child(Some(label));
     column
 }
 
@@ -181,8 +190,16 @@ pub(super) fn refresh_info(state: &App) {
         state.info.page.remove(&child);
     }
 
-    let open = state.open.borrow();
-    let Some(photo) = open.as_ref() else { return };
+    {
+        let open = state.open.borrow();
+        let Some(photo) = open.as_ref() else { return };
+        append_photo_groups(state, photo);
+    }
+    state.info.page.append(&state.info.rendering);
+    refresh_render_info(state);
+}
+
+fn append_photo_groups(state: &App, photo: &OpenPhoto) {
 
     if let Some(people) = people_group(state, photo) {
         state.info.page.append(&people);
@@ -240,6 +257,11 @@ pub(super) fn refresh_info(state: &App) {
         }
         state.info.page.append(&frame);
     }
+}
+
+pub(super) fn refresh_render_info(state: &App) {
+    let open = state.open.borrow();
+    let Some(photo) = open.as_ref() else { return };
 
     let mut lines: Vec<String> = Vec::new();
     let (width, height) = (photo.full_size.0, photo.full_size.1);
@@ -291,16 +313,10 @@ pub(super) fn refresh_info(state: &App) {
     }
     drop(open);
 
-    state.info.render_info.set_text(&lines.join("\n"));
-    state.info.render_info.set_xalign(0.0);
-    state.info.render_info.set_wrap(true);
-    state.info.render_info.set_selectable(true);
-    state.info.render_info.add_css_class("profile-note");
-
-    let disclosure = gtk::Expander::new(None);
-    disclosure.set_label_widget(Some(&section_header("Rendering")));
-    disclosure.set_child(Some(&state.info.render_info));
-    state.info.page.append(&disclosure);
+    let text = lines.join("\n");
+    if state.info.render_info.text() != text {
+        state.info.render_info.set_text(&text);
+    }
 }
 
 #[derive(Clone)]
@@ -309,6 +325,8 @@ pub(super) struct State {
     pub(super) page: gtk::Box,
 
     pub(super) render_info: gtk::Label,
+
+    pub(super) rendering: gtk::Expander,
 
     pub(super) button: gtk::MenuButton,
     pub(super) histogram_area: gtk::DrawingArea,
@@ -322,6 +340,7 @@ impl State {
         Self {
             page: gtk::Box::new(gtk::Orientation::Vertical, 18),
             render_info: gtk::Label::new(None),
+            rendering: gtk::Expander::new(None),
             button: gtk::MenuButton::new(),
             histogram_area: gtk::DrawingArea::new(),
             histogram: Rc::new(RefCell::new(None)),

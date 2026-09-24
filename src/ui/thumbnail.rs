@@ -15,6 +15,8 @@ struct Job {
     max_edge: u32,
 
     edits: Option<String>,
+
+    fit: Option<u32>,
     apply: Box<dyn Fn(gdk::Texture)>,
 
     still_wanted: Box<dyn Fn() -> bool>,
@@ -35,33 +37,42 @@ pub fn progress() -> Option<(usize, usize, bool)> {
     (ASKED.get() > DONE.get()).then(|| (DONE.get(), ASKED.get(), DECODED.get()))
 }
 
-pub fn load_thumbnail<F: Fn(gdk::Texture) + 'static>(
-    path: &Path,
-    mtime: i64,
-    max_edge: u32,
-    edits: Option<String>,
-    apply: F,
-) {
-    load_thumbnail_while(path, mtime, max_edge, edits, || true, apply)
-}
-
 pub fn load_thumbnail_while<W: Fn() -> bool + 'static, F: Fn(gdk::Texture) + 'static>(
     path: &Path,
     mtime: i64,
     max_edge: u32,
     edits: Option<String>,
+    fit: Option<u32>,
     still_wanted: W,
     apply: F,
 ) {
-    QUEUE.with(|queue| {
-        queue.borrow_mut().push_back(Job {
-            path: path.to_path_buf(),
-            mtime,
-            max_edge,
-            edits,
-            apply: Box::new(apply),
-            still_wanted: Box::new(still_wanted),
-        })
+    enqueue(path, mtime, max_edge, edits, fit, Box::new(still_wanted), Box::new(apply), false);
+}
+
+pub fn load_thumbnail_first<W: Fn() -> bool + 'static, F: Fn(gdk::Texture) + 'static>(
+    path: &Path,
+    mtime: i64,
+    max_edge: u32,
+    still_wanted: W,
+    apply: F,
+) {
+    enqueue(path, mtime, max_edge, None, None, Box::new(still_wanted), Box::new(apply), true);
+}
+
+fn enqueue(
+    path: &Path,
+    mtime: i64,
+    max_edge: u32,
+    edits: Option<String>,
+    fit: Option<u32>,
+    still_wanted: Box<dyn Fn() -> bool>,
+    apply: Box<dyn Fn(gdk::Texture)>,
+    first: bool,
+) {
+    let job = Job { path: path.to_path_buf(), mtime, max_edge, edits, fit, apply, still_wanted };
+    QUEUE.with(|queue| match first {
+        true => queue.borrow_mut().push_front(job),
+        false => queue.borrow_mut().push_back(job),
     });
     ASKED.set(ASKED.get() + 1);
     pump();
@@ -81,11 +92,12 @@ fn pump() {
         RENDERING.set(RENDERING.get() || rendering);
         IN_FLIGHT.set(IN_FLIGHT.get() + 1);
         glib::spawn_future_local(async move {
-            let (path, mtime, max_edge, edits) = (job.path, job.mtime, job.max_edge, job.edits);
+            let (path, mtime, max_edge, edits, fit) = (job.path, job.mtime, job.max_edge, job.edits, job.fit);
             let loaded = gtk::gio::spawn_blocking(move || {
                 let edits = edits.as_deref();
                 let decoded = !thumbs::is_cached(&path, mtime, max_edge, edits);
-                (decoded, thumbs::load(&path, mtime, max_edge, edits))
+                let loaded = thumbs::load(&path, mtime, max_edge, edits);
+                (decoded, loaded.map(|image| fitted(image, fit)))
             })
             .await
             .map(|(decoded, loaded)| {
@@ -107,6 +119,16 @@ fn pump() {
             pump();
             settle();
         });
+    }
+}
+
+fn fitted(image: image::RgbImage, fit: Option<u32>) -> image::RgbImage {
+    match fit {
+        Some(fit) if fit > 0 && image.height() > fit => {
+            let width = (image.width() as u64 * fit as u64 / image.height() as u64).max(1) as u32;
+            image::imageops::thumbnail(&image, width, fit)
+        }
+        _ => image,
     }
 }
 

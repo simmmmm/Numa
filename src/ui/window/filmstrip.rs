@@ -60,6 +60,7 @@ pub(super) fn build_filmstrip(state: &App) {
             edited: photo.edited,
             edge: GRID_THUMB_EDGE,
             asked: 0,
+            fitted: 0,
             picture,
             widget: frame.clone().upcast(),
             wanted: false,

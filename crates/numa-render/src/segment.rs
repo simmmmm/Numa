@@ -26,11 +26,12 @@ pub fn model_path() -> PathBuf {
 }
 
 pub fn is_installed() -> bool {
-    plan().is_some()
+    PLAN.get().map_or_else(|| model_path().exists(), Option::is_some)
 }
 
+static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+
 fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
     PLAN.get_or_init(|| {
         let path = model_path();
         if !path.exists() {

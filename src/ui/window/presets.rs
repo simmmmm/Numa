@@ -99,6 +99,8 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
 thread_local! {
 
     static HOVER: Cell<u64> = const { Cell::new(0) };
+
+    static SHOWING: Cell<bool> = const { Cell::new(false) };
 }
 
 const HOVER_REST: u64 = 160;
@@ -133,13 +135,17 @@ pub(super) fn preview_preset(state: &App, name: &str) {
 
                     let scale = photo.proxy.width.max(photo.proxy.height) as f32
                         / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
-                    let working = render::to_working_space(
-                        &document,
-                        &photo.proxy,
-                        &render_inputs(&document),
-                    );
+
+                    let built;
+                    let working = match colour_key(&document) == photo.working_key {
+                        true => &*photo.working,
+                        false => {
+                            built = render::to_working_space(&document, &*photo.proxy, &render_inputs(&document));
+                            &built
+                        }
+                    };
                     crate::ui::pixel_paintable::PixelPaintable::new(texture_from(
-                        render::apply_stack(&document, &working, scale),
+                        render::apply_stack(&document, working, scale),
                     ))
                 };
 
@@ -147,6 +153,7 @@ pub(super) fn preview_preset(state: &App, name: &str) {
                     return;
                 }
                 state.canvas.set_paintable(Some(&paintable.upcast::<gtk::gdk::Paintable>()));
+                SHOWING.set(true);
                 apply_zoom(&state);
             }
         ),
@@ -159,7 +166,8 @@ pub(super) fn end_preview(state: &App) {
         hover.get()
     });
     let _ = booked;
-    if state.open.borrow().is_some() {
+
+    if SHOWING.replace(false) && state.open.borrow().is_some() {
         render_current(state);
     }
 }
@@ -405,7 +413,7 @@ fn render_card(state: &App, name: &str) -> Option<gtk::gdk::Texture> {
     let small = CANVAS.with(|canvas| {
         let mut canvas = canvas.borrow_mut();
         if canvas.as_ref().map(|(was, _)| was != &key).unwrap_or(true) {
-            let small = photo.proxy.downscaled(CARD_EDGE).unwrap_or_else(|| photo.proxy.clone());
+            let small = photo.proxy.downscaled(CARD_EDGE).unwrap_or_else(|| (*photo.proxy).clone());
             *canvas = Some((key, small));
         }
         canvas.as_ref().map(|(_, image)| image.clone())

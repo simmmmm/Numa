@@ -249,19 +249,151 @@ const ENOUGH: usize = 400;
 
 const WORTH_IT: f32 = 2.0;
 
-pub fn perspective(luma: &Plane) -> (Perspective, f32) {
+pub fn perspective(luma: &Plane) -> Perspective {
+    let Some((edges, (width, height))) = coherent_edges(luma) else { return Perspective::default() };
+    let centre_x = width as f32 / 2.0;
+
+    let upright: Vec<(f32, f32, f32)> = edges
+        .into_iter()
+
+        .filter(|&(_, _, gx, gy, _)| gy.abs() < gx.abs() * LEAN)
+        .map(|(x, _, gx, gy, strength)| (x - centre_x, -gy / gx, strength))
+        .collect();
+
+    let mut perspective = Perspective::default();
+
+    if let Some(slope) = robust_slope(&upright, width as f32) {
+        perspective.vertical = worth_it((slope * (height as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
+    }
+    perspective
+}
+
+fn robust_slope(votes: &[(f32, f32, f32)], across: f32) -> Option<f32> {
+    let total: f32 = votes.iter().map(|vote| vote.2).sum();
+    let mut fit = Fit::default();
+    for &(at, lean, weight) in votes {
+        fit.add(at, lean, weight);
+    }
+    let (mut intercept, mut slope) = fit.solve(ENOUGH)?;
+    let mut kept = total;
+    for band in [0.15, 0.08] {
+        let mut fit = Fit::default();
+        for &(at, lean, weight) in votes {
+            if (lean - (intercept + slope * at)).abs() <= band {
+                fit.add(at, lean, weight);
+            }
+        }
+        (intercept, slope) = fit.solve(ENOUGH)?;
+        kept = fit.weight as f32;
+
+        let mean = fit.x / fit.weight;
+        let spread = (fit.xx / fit.weight - mean * mean).max(0.0).sqrt() as f32;
+        if spread < across * SPREAD {
+            return None;
+        }
+    }
+    (kept >= total * SHARE).then_some(slope)
+}
+
+const SHARE: f32 = 0.3;
+
+const SPREAD: f32 = 0.15;
+
+pub fn level(luma: &Plane) -> Option<f32> {
+    let (edges, _) = coherent_edges(luma)?;
+    let votes: Vec<(f32, f32)> = edges
+        .into_iter()
+        .filter_map(|(_, _, gx, gy, strength)| {
+
+            let turned = if gy.abs() < gx.abs() * LEVEL_LEAN {
+                (gy / gx).atan()
+            } else if gx.abs() < gy.abs() * LEVEL_LEAN {
+                -(gx / gy).atan()
+            } else {
+                return None;
+            };
+            Some((turned.to_degrees(), strength))
+        })
+        .collect();
+    crowded(&votes)
+}
+
+fn crowded(votes: &[(f32, f32)]) -> Option<f32> {
+    if votes.len() < ENOUGH {
+        return None;
+    }
+
+    const BINS: usize = 301;
+    let bin = |angle: f32| ((angle + 15.0) * 10.0).round() as usize;
+    let mut histogram = [0.0f32; BINS];
+    for &(angle, weight) in votes.iter().filter(|vote| vote.0.abs() <= 15.0) {
+        histogram[bin(angle)] += weight;
+    }
+    let smooth: Vec<f32> = (0..BINS)
+        .map(|at| {
+            (-10i32..=10)
+                .filter_map(|offset| histogram.get((at as i32 + offset) as usize).map(|v| v * (11 - offset.abs()) as f32))
+                .sum()
+        })
+        .collect();
+    let peak = (0..BINS).max_by(|a, b| smooth[*a].total_cmp(&smooth[*b])).unwrap_or(0);
+    let mut sorted = smooth.clone();
+    sorted.sort_by(f32::total_cmp);
+    let typical = sorted[BINS / 2].max(f32::EPSILON);
+
+    let mut angle = peak as f32 / 10.0 - 15.0;
+    for _ in 0..4 {
+        let (sum, weight) = votes
+            .iter()
+            .filter(|vote| (vote.0 - angle).abs() <= 1.5)
+            .fold((0.0, 0.0), |(sum, total), vote| (sum + vote.0 * vote.1, total + vote.1));
+        if weight > 0.0 {
+            angle = sum / weight;
+        }
+    }
+    if smooth[peak] < AGREE * typical {
+        return None;
+    }
+    Some(if angle.abs() >= 0.05 { angle } else { 0.0 })
+}
+
+const AGREE: f32 = 2.5;
+
+const LEVEL_LEAN: f32 = 0.27;
+
+fn coherent_edges(luma: &Plane) -> Option<(Vec<(f32, f32, f32, f32, f32)>, (usize, usize))> {
+    let (edges, (width, height)) = strong_edges(luma)?;
+    let mut products = [vec![0.0f32; width * height], vec![0.0f32; width * height], vec![0.0f32; width * height]];
+    for &(x, y, gx, gy, _) in &edges {
+        let at = y as usize * width + x as usize;
+        products[0][at] = gx * gx;
+        products[1][at] = gy * gy;
+        products[2][at] = gx * gy;
+    }
+    let reach = (width.max(height) / 300).max(2);
+    let [xx, yy, xy] = products.map(|data| plane::blur(&Plane::new(width, height, data), reach));
+    let coherent = edges
+        .into_iter()
+        .filter_map(|(x, y, gx, gy, strength)| {
+            let at = y as usize * width + x as usize;
+            let (a, b, c) = (xx.data[at], yy.data[at], xy.data[at]);
+            let coherence = ((a - b) * (a - b) + 4.0 * c * c).sqrt() / (a + b).max(f32::EPSILON);
+            (coherence >= 0.7).then(|| (x, y, gx, gy, strength * coherence.powi(4)))
+        })
+        .collect();
+    Some((coherent, (width, height)))
+}
+
+fn strong_edges(luma: &Plane) -> Option<(Vec<(f32, f32, f32, f32, f32)>, (usize, usize))> {
     let (width, height) = (luma.width, luma.height);
     if width < 32 || height < 32 {
-        return (Perspective::default(), 0.0);
+        return None;
     }
 
     let smooth = plane::blur(luma, (width.max(height) / 400).max(1));
 
-    let mut upright = Fit::default();
-    let mut across = Fit::default();
     let mut strongest = 0.0f32;
-    let mut edges: Vec<(f32, f32, f32, f32)> = Vec::new();
-
+    let mut edges: Vec<(f32, f32, f32, f32, f32)> = Vec::new();
     for y in 1..height - 1 {
         for x in 1..width - 1 {
             let at = |dx: isize, dy: isize| {
@@ -277,42 +409,12 @@ pub fn perspective(luma: &Plane) -> (Perspective, f32) {
                 continue;
             }
             strongest = strongest.max(strength);
-            edges.push((x as f32, y as f32, gx, gy));
+            edges.push((x as f32, y as f32, gx, gy, strength));
         }
     }
-
     let floor = strongest * EDGE_FLOOR;
-    let (centre_x, centre_y) = (width as f32 / 2.0, height as f32 / 2.0);
-
-    for (x, y, gx, gy) in edges {
-        let strength = gx.hypot(gy);
-        if strength < floor {
-            continue;
-        }
-
-        if gy.abs() < gx.abs() * LEAN {
-
-            upright.add(x - centre_x, -gy / gx, strength);
-        } else if gx.abs() < gy.abs() * LEAN {
-            across.add(y - centre_y, -gx / gy, strength);
-        }
-    }
-
-    let mut perspective = Perspective::default();
-    let mut angle = 0.0;
-
-    if let Some((lean, slope)) = upright.solve(ENOUGH) {
-        perspective.vertical = worth_it((slope * (height as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
-
-        let tilt = -lean.atan().to_degrees().clamp(-10.0, 10.0);
-        angle = if tilt.abs() >= 0.2 { tilt } else { 0.0 };
-    }
-    if let Some((_, slope)) = across.solve(ENOUGH) {
-        perspective.horizontal =
-            worth_it((slope * (width as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
-    }
-
-    (perspective, angle)
+    edges.retain(|edge| edge.4 >= floor);
+    Some((edges, (width, height)))
 }
 
 fn worth_it(amount: f32) -> f32 {
@@ -613,18 +715,17 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
             Plane::new(w, h, data)
         };
 
-        let (straight, straight_angle) = perspective(&draw(0.0));
+        let straight = perspective(&draw(0.0));
         assert!(
             straight.vertical.abs() < 6.0,
             "upright lines need no correction: {}",
             straight.vertical
         );
-        assert!(straight_angle.abs() < 1.5, "and no rotation: {straight_angle}");
 
-        let (keyed, _) = perspective(&draw(0.35));
+        let keyed = perspective(&draw(0.35));
         assert!(keyed.vertical.abs() > 12.0, "a keystone is found: {}", keyed.vertical);
 
-        let (other, _) = perspective(&draw(-0.35));
+        let other = perspective(&draw(-0.35));
         assert!(
             other.vertical * keyed.vertical < 0.0,
             "opposite keystones, opposite corrections: {} and {}",
@@ -639,9 +740,51 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
         let data = (0..w * h)
             .map(|index| ((index * 2654435761usize) % 997) as f32 / 997.0)
             .collect();
-        let (found, angle) = perspective(&Plane::new(w, h, data));
-        assert_eq!(found, Perspective::default());
-        assert_eq!(angle, 0.0);
+        let plane = Plane::new(w, h, data);
+        assert_eq!(perspective(&plane), Perspective::default());
+
+        let mut seed = 0x9e3779b9u32;
+        let noise = (0..w * h)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed % 1000) as f32 / 1000.0
+            })
+            .collect();
+        assert_eq!(level(&Plane::new(w, h, noise)), None);
+    }
+
+    #[test]
+    fn a_crooked_frame_is_levelled_by_its_horizon_or_its_verticals() {
+        let (w, h) = (480usize, 360usize);
+        let horizon = |x: usize, y: usize| -> f32 { if y < h / 2 { 0.8 } else if (x / 7) % 2 == 0 { 0.15 } else { 0.1 } };
+        let building = |x: usize, _: usize| -> f32 { if (x / 40) % 2 == 0 { 0.7 } else { 0.2 } };
+        let luma = |image: &LinearImage| {
+            Plane::new(
+                image.width as usize,
+                image.height as usize,
+                image.data.chunks_exact(3).map(|pixel| pixel[1]).collect(),
+            )
+        };
+        let centre = [0.2, 0.2, 0.6, 0.6];
+
+        for (name, scene) in [("horizon", &horizon as &dyn Fn(usize, usize) -> f32), ("building", &building)] {
+            let flat = LinearImage::new(
+                w as u32,
+                h as u32,
+                (0..w * h).flat_map(|index| [scene(index % w, index / w); 3]).collect(),
+            );
+            for tilt in [-4.0f32, 2.5] {
+                let shot = flat.cropped([0.0, 0.0, 1.0, 1.0], tilt, Perspective::default());
+                let found = level(&luma(&shot.cropped(centre, 0.0, Perspective::default()))).unwrap_or(0.0);
+                assert!((found + tilt).abs() < 0.3, "{name} shot at {tilt}°: levelled by {found}°");
+
+                let levelled = shot.cropped(centre, found, Perspective::default());
+                let again = level(&luma(&levelled)).unwrap_or(99.0);
+                assert!(again.abs() < 0.3, "{name} at {tilt}°, levelled, still asks for {again}°");
+            }
+        }
     }
 
     #[test]

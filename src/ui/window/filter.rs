@@ -283,14 +283,10 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
                 state.catalog.remember(GRID_SIZES, &sizes);
 
                 let edge = grid_edge(&state);
-                let mut changed = false;
                 for card in state.grid.lazy.borrow_mut().iter_mut().filter(|card| card.edge != edge) {
                     card.edge = edge;
-                    changed = true;
                 }
-                if changed {
-                    schedule_thumbnails(&state);
-                }
+                schedule_thumbnails(&state);
             }
         ));
     }

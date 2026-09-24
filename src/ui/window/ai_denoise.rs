@@ -223,6 +223,7 @@ fn switched(state: &App, pass: Pass, on: bool) {
 fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
 
     if RUNNING.replace(true) {
+        state.toast(&format!("{} starts when the pass under way is done", pass.name()));
         return;
     }
 
@@ -273,11 +274,18 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
                 };
                 if let Some(stored) = stored {
                     ai_denoise::warm(&work, &stored, width, height);
+                    return Ok((kept, Some(stored)));
                 }
             }
-            Ok::<bool, String>(kept)
+            Ok::<_, String>((kept, None))
         })
         .await;
+
+        let (result, _held) = match result {
+            Ok(Ok((kept, held))) => (Ok(Ok(kept)), held),
+            Ok(Err(err)) => (Ok(Err(err)), None),
+            Err(err) => (Err(err), None),
+        };
         ticker.remove();
         toast.dismiss();
         RUNNING.set(false);
@@ -288,7 +296,7 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
                 if let Some(photo) = state.open.borrow_mut().as_mut() {
 
                     photo.inputs = render_inputs(&photo.document);
-                    photo.working = render::to_working_space(&photo.document, &photo.proxy, &photo.inputs);
+                    photo.working = Arc::new(render::to_working_space(&photo.document, &*photo.proxy, &photo.inputs));
                     photo.full_working = None;
                     photo.full_working_key = None;
                     photo.draft = None;

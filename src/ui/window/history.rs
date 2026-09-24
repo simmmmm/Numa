@@ -94,6 +94,7 @@ pub(super) fn geometry_of_document(document: &Document) -> Geometry {
     (document.rotation(), document.crop(), [basic.optics.lens_distortion, basic.optics.lens_vignetting])
 }
 
+#[derive(Clone)]
 pub(super) struct ViewTile {
 
     pub(super) rect: [f32; 4],
@@ -103,7 +104,7 @@ pub(super) struct ViewTile {
     pub(super) geometry: Geometry,
 
     pub(super) edge: u32,
-    pub(super) image: LinearImage,
+    pub(super) image: Arc<LinearImage>,
 }
 
 pub(super) struct History {

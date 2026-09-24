@@ -25,10 +25,11 @@ pub(super) fn set_zoom(state: &App, zoom: f64) {
         if let Some(photo) = state.open.borrow_mut().as_mut() {
             photo.full_working = None;
             photo.full_working_key = None;
+            photo.full_native = None;
             photo.view = None;
         }
         request_render(state);
-        refresh_info(state);
+        refresh_render_info(state);
     }
 }
 
@@ -53,10 +54,10 @@ pub(super) fn ensure_full_resolution(state: &App) {
             return;
         }
 
-        (photo.source.clone(), photo.document.clone(), key)
+        (photo.source.clone(), photo.document.clone(), key, photo.full_native.clone())
     };
 
-    let (source, document, key) = request;
+    let (source, document, key, native) = request;
     state.render.loading_full.set(true);
     state.render.full_resolution_stale.set(false);
     state.zooming.label.set_text("…");
@@ -65,10 +66,13 @@ pub(super) fn ensure_full_resolution(state: &App) {
     let state = state.clone();
     glib::spawn_future_local(async move {
         let decoded = busy(&state, "Decoding the original…", move || {
-            let full = source.full_resolution()?;
-            let inputs = render_inputs(&document);
 
-            Ok::<_, String>(render::to_working_space(&document, full, &inputs))
+            let native = match native {
+                Some(native) => native,
+                None => std::sync::Arc::new(source.full_resolution()?),
+            };
+            let inputs = render_inputs(&document);
+            Ok::<_, String>((render::to_working_space(&document, &*native, &inputs), native))
         })
         .await;
 
@@ -84,13 +88,14 @@ pub(super) fn ensure_full_resolution(state: &App) {
         }
 
         match decoded {
-            Ok(Ok(working)) => {
+            Ok(Ok((working, native))) => {
                 if let Some(photo) = state.open.borrow_mut().as_mut() {
-                    photo.full_working = Some(working);
+                    photo.full_working = Some(Arc::new(working));
                     photo.full_working_key = Some(key);
+                    photo.full_native = Some(native);
                 }
                 request_render(&state);
-                refresh_info(&state);
+                refresh_render_info(&state);
             }
             Ok(Err(err)) => {
                 *state.render.failed_key.borrow_mut() = Some(key);

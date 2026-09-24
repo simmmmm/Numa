@@ -6,7 +6,7 @@ pub(super) fn adjustments_changed(state: &App) {
         return;
     }
 
-    if state.mask_overlay.show_coverage.replace(false) {
+    if !state.mask_overlay.wash_resting.replace(true) && state.mask_overlay.show_coverage.get() {
         state.mask_overlay.area.queue_draw();
     }
 
@@ -40,7 +40,6 @@ pub(super) fn sync_document(state: &App) {
             mask.basic.balance.temperature = state.colour.mask_temperature.value() as f32;
             mask.basic.balance.tint = -(state.colour.mask_tint.value() as f32);
             photo.document.set_masks(masks);
-            photo.view = None;
             return;
         }
         state.mask_overlay.selected_mask.set(None);
@@ -62,19 +61,12 @@ pub(super) fn sync_document(state: &App) {
 
 pub(super) fn request_render(state: &App) {
 
-    state.render.drafting.set(true);
+    let now = std::time::Instant::now();
+    let previous = state.render.last_request.replace(Some(now));
+    let burst = previous.is_some_and(|previous| now.duration_since(previous) < SETTLE);
+    state.render.drafting.set(burst || state.render.hand_down.get());
     settle_render(state);
-
-    if state.render.render_pending.replace(true) {
-        return;
-    }
-
-    let state = state.clone();
-    state.canvas.clone().add_tick_callback(move |_, _| {
-        state.render.render_pending.set(false);
-        render_current(&state);
-        glib::ControlFlow::Break
-    });
+    schedule_render(state);
 }
 
 pub(super) fn colour_key(document: &Document) -> ColourKey {
@@ -92,6 +84,11 @@ pub(super) fn proxy_runs_out_at(photo: &OpenPhoto) -> f64 {
     proxy / full
 }
 
+pub(super) fn same_kind(cut: [f32; 4], region: [f32; 4]) -> bool {
+    const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    (cut == WHOLE) == (region == WHOLE)
+}
+
 pub(super) fn covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
     inner[0] >= outer[0] - 1e-4
         && inner[1] >= outer[1] - 1e-4
@@ -99,83 +96,71 @@ pub(super) fn covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
         && inner[1] + inner[3] <= outer[1] + outer[3] + 1e-4
 }
 
-pub(super) fn render_current(state: &App) {
-
-    let zoom = state.zooming.level.get();
-    let Some((frame_width, frame_height)) = displayed_size(state) else { return };
-    let visible = visible_rect(state).unwrap_or([0.0, 0.0, 1.0, 1.0]);
-    let wanted = tile_for(state);
-
-    let mut open = state.open.borrow_mut();
-    let Some(photo) = open.as_mut() else { return };
-
-    let key = colour_stage(state, photo);
-
-    let document = rendered_document(state, photo);
-
-    let wants_full = zoom > proxy_runs_out_at(photo);
-    let have_full = photo.full_working.is_some() && photo.full_working_key.as_ref() == Some(&key);
-
-    let region = region_to_render(&document, wanted, frame_width, frame_height);
-
-    let needed = (region[2] as f64 * frame_width as f64 * zoom)
-        .max(region[3] as f64 * frame_height as f64 * zoom)
-        .ceil()
-        .clamp(1.0, u32::MAX as f64) as u32;
-
-    let geometry = geometry_of_document(&document);
-    let reusable = photo.view.as_ref().is_some_and(|view| {
-        view.key == key
-            && view.geometry == geometry
-            && view.edge >= needed
-            && covers(view.rect, visible)
-    });
-
-    if wants_full && have_full && !reusable {
-        cut_view_tile(photo, &document, &key, geometry, region, needed);
-    }
-
-    let usable_view = wants_full
-        && have_full
-        && photo.view.as_ref().is_some_and(|view| {
-            view.key == key && view.geometry == geometry && covers(view.rect, visible)
-        });
-
-    let proxy_scale = photo.proxy.width.max(photo.proxy.height) as f32
-        / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
-
-    let (rendered, placement, whole_frame) = match (usable_view, &photo.view) {
-        (true, Some(view)) => render_view_tile(&document, view, frame_width, frame_height),
-
-        (_, _) if wants_full && have_full => {
-            let full = photo.full_working.as_ref().expect("checked by have_full");
-            (render::apply_stack(&document, full, 1.0), None, true)
-        }
-
-        _ => (render_proxy(state, photo, &document, proxy_scale), None, true),
-    };
-
-    state.render.rendered_from_full.set(wants_full && have_full);
-    state.render.tile.set((!whole_frame).then_some(
-        photo.view.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |view| view.rect),
-    ));
-
-    let (backdrop, histogram) = whole_frame_behind(state, photo, &document, whole_frame, proxy_scale, &rendered, &key);
-
-    state.render.rendered_size.set(rendered.dimensions());
-    drop(open);
-
-    present(state, rendered, placement, backdrop, histogram, wants_full, have_full);
+pub(super) fn timing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NUMA_TIMING").is_some())
 }
 
-fn region_to_render(
+pub(super) fn buffers(state: &App) -> String {
+    let mut held = 0usize;
+    let mut parts = Vec::new();
+    if let Some(photo) = state.open.borrow().as_ref() {
+        let mut note = |name: &str, bytes: usize| {
+            if bytes > 0 {
+                held += bytes;
+                parts.push(format!("{name} {:.0} MB", bytes as f64 / 1_048_576.0));
+            }
+        };
+        let linear = |image: &LinearImage| image.width as usize * image.height as usize * 3 * 4;
+        note("proxy", linear(&*photo.proxy));
+        note("working", linear(&*photo.working));
+        note("draft", photo.draft.as_deref().map_or(0, linear));
+        note("full", photo.full_working.as_deref().map_or(0, linear));
+        note("tile", photo.view.as_ref().map_or(0, |view| linear(&view.image)));
+        note("mask frame", photo.mask_frame.as_ref().map_or(0, |frame| frame.len()));
+        note("denoised", photo.inputs.denoised.as_ref().map_or(0, |frame| frame.len() * 2));
+    }
+
+    let resident = std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|line| line.split_whitespace().nth(1)?.parse::<usize>().ok())
+        .map_or(0.0, |pages| pages as f64 * 4096.0 / 1_048_576.0);
+    format!(" — held {:.0} MB ({}), resident {resident:.0} MB", held as f64 / 1_048_576.0, parts.join(", "))
+}
+
+pub(super) fn measures_tone(document: &Document) -> bool {
+    let basic = document.basic();
+    basic.presence.hdr != 0.0 || basic.presence.clarity != 0.0 || basic.presence.texture != 0.0
+}
+
+pub(super) fn fingerprint(document: &Document, key: &ColourKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(document).unwrap_or_default().hash(&mut hasher);
+    format!("{key:?}").hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn edge_for(region: [f32; 4], frame: (u32, u32), zoom: f64, drafting: bool) -> u32 {
+    let needed = (region[2] as f64 * frame.0 as f64 * zoom)
+        .max(region[3] as f64 * frame.1 as f64 * zoom)
+        .ceil()
+        .clamp(1.0, u32::MAX as f64) as u32;
+    match drafting {
+        true => (needed / 2).max(1),
+        false => needed,
+    }
+}
+
+pub(super) fn region_to_render(
     document: &Document,
     wanted: Option<[f32; 4]>,
     frame_width: u32,
     frame_height: u32,
 ) -> [f32; 4] {
 
-    render::tiles_cleanly(document)
+    let guided = render::tiles_with_guide(document) && std::env::var_os("NUMA_WHOLE_FRAME").is_none();
+    (render::tiles_cleanly(document) || guided)
         .then_some(wanted)
         .flatten()
 
@@ -185,77 +170,7 @@ fn region_to_render(
         .unwrap_or([0.0, 0.0, 1.0, 1.0])
 }
 
-fn cut_view_tile(
-    photo: &mut OpenPhoto,
-    document: &Document,
-    key: &ColourKey,
-    geometry: Geometry,
-    region: [f32; 4],
-    needed: u32,
-) {
-    if let Some(within) = render::tile_in_source(document, region) {
-        let full = photo.full_working.as_ref().expect("checked by have_full");
-        let cut = full.cropped(within, 0.0, Default::default());
-        let image = cut.downscaled(needed).unwrap_or(cut);
-        photo.view = Some(ViewTile {
-            rect: region,
-            key: key.clone(),
-            geometry,
-            edge: needed,
-            image,
-        });
-    } else {
-
-        photo.view = None;
-    }
-}
-
-fn render_view_tile(
-    document: &Document,
-    view: &ViewTile,
-    frame_width: u32,
-    frame_height: u32,
-) -> (image::RgbImage, Option<crate::ui::pixel_paintable::Placement>, bool) {
-    let covered = (view.rect[2] * frame_width as f32).max(1.0);
-    let detail_scale = view.image.width as f32 / covered;
-
-    let rendered = render::apply_pixels(document, &view.image, detail_scale, view.rect);
-    let placement = crate::ui::pixel_paintable::Placement {
-        frame: (frame_width as f64, frame_height as f64),
-        tile: (
-            (view.rect[0] * frame_width as f32) as f64,
-            (view.rect[1] * frame_height as f32) as f64,
-            (view.rect[2] * frame_width as f32) as f64,
-            (view.rect[3] * frame_height as f32) as f64,
-        ),
-    };
-    let whole = view.rect == [0.0, 0.0, 1.0, 1.0];
-    (rendered, Some(placement), whole)
-}
-
-fn render_proxy(
-    state: &App,
-    photo: &mut OpenPhoto,
-    document: &Document,
-    proxy_scale: f32,
-) -> image::RgbImage {
-
-    if state.render.drafting.get() && photo.draft.is_none() {
-        let half = photo.working.width.max(photo.working.height) / 2;
-        photo.draft = photo.working.downscaled(half as u32);
-    }
-    let draft = state.render.drafting.get().then(|| photo.draft.as_ref()).flatten();
-    match draft {
-        Some(small) => {
-            let scale = proxy_scale * small.width as f32
-                / photo.working.width.max(1) as f32;
-            render::apply_stack(document, small, scale)
-        }
-        None => render::apply_stack(document, &photo.working, proxy_scale),
-    }
-}
-
-fn present(
+pub(super) fn present(
     state: &App,
     mut rendered: image::RgbImage,
     placement: Option<crate::ui::pixel_paintable::Placement>,
@@ -290,7 +205,7 @@ fn present(
 
     show(state, rendered, placement, backdrop);
 
-    refresh_info(state);
+    refresh_render_info(state);
 }
 
 pub(super) fn schedule_history_push(state: &App) {
@@ -360,7 +275,7 @@ pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance)
             edit.restore(&mut photo.document);
             if space_moved {
                 photo.inputs = render_inputs(&photo.document);
-                photo.working = render::to_working_space(&photo.document, &photo.proxy, &photo.inputs);
+                photo.working = Arc::new(render::to_working_space(&photo.document, &*photo.proxy, &photo.inputs));
                 photo.full_working = None;
                 photo.full_working_key = None;
                 photo.draft = None;
@@ -402,7 +317,7 @@ pub(super) fn copy_image(state: &App) {
     glib::spawn_future_local(async move {
         let Ok(image) = busy(&state, "Copying the picture…", move || {
             let document = render::with_masks_resolved(&document, &working);
-            render::apply_stack(&document, &working, scale)
+            render::apply_stack(&document, &*working, scale)
         })
         .await
         else {
@@ -466,6 +381,16 @@ pub(super) struct State {
 
     pub(super) drafting: Rc<Cell<bool>>,
     pub(super) settle_generation: Rc<Cell<u64>>,
+
+    pub(super) last_request: Rc<Cell<Option<std::time::Instant>>>,
+
+    pub(super) hand_down: Rc<Cell<bool>>,
+
+    pub(super) in_flight: Rc<Cell<bool>>,
+    pub(super) again: Rc<Cell<bool>>,
+
+    pub(super) planned: Rc<Cell<u64>>,
+    pub(super) presented: Rc<Cell<u64>>,
 }
 
 impl State {
@@ -484,6 +409,12 @@ impl State {
             render_pending: Rc::new(Cell::new(false)),
             drafting: Rc::new(Cell::new(false)),
             settle_generation: Rc::new(Cell::new(0)),
+            last_request: Rc::default(),
+            hand_down: Rc::new(Cell::new(false)),
+            in_flight: Rc::default(),
+            again: Rc::default(),
+            planned: Rc::default(),
+            presented: Rc::default(),
         }
     }
 }

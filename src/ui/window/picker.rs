@@ -157,15 +157,18 @@ pub(super) fn choose_place(state: &App, place: Place) {
 }
 
 pub(super) fn rescan_everywhere(state: &App) {
-    let mut added = 0;
-    for library in state.libraries.all.borrow().iter() {
-        match state.catalog.sync_library(library) {
-            Ok(count) => added += count,
-            Err(err) => log::warn!("rescan of {}: {err}", library.path.display()),
-        }
-    }
-    reload_grid(state);
-    state.toast(&format!("Rescanned: {added} new photo(s)"));
+    let libraries: Vec<Library> = state
+        .libraries
+        .all
+        .borrow()
+        .iter()
+        .filter(|library| !folder_is_missing(&library.path))
+        .cloned()
+        .collect();
+    sync_in_background(state, libraries, |state, added| {
+        reload_grid(state);
+        state.toast(&format!("Rescanned: {added} new photo(s)"));
+    });
 }
 
 pub(super) fn selected_ids(state: &App) -> Vec<i64> {

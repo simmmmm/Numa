@@ -84,7 +84,11 @@ pub fn is_cached(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) ->
 pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Result<RgbImage, String> {
 
     let found = at_least(max_edge).find_map(|edge| {
-        candidates(path, mtime, edge, edits).find_map(|cached| image::open(cached).ok())
+        candidates(path, mtime, edge, edits).find_map(|cached| {
+            let image = image::open(&cached).ok()?;
+            used(&cached);
+            Some(image)
+        })
     });
     if let Some(image) = found {
         return Ok(match image.width().max(image.height()) > max_edge {
@@ -109,6 +113,55 @@ pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Resu
     }
 
     Ok(image)
+}
+
+pub const CACHE_BUDGET: u64 = 2 << 30;
+
+const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+fn used(cached: &Path) {
+    if !cached.starts_with(cache_dir()) {
+        return;
+    }
+    let now = std::time::SystemTime::now();
+    let stale = std::fs::metadata(cached)
+        .and_then(|meta| meta.modified())
+        .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > DAY));
+    if stale {
+        let _ = std::fs::File::options().write(true).open(cached).and_then(|file| file.set_modified(now));
+    }
+}
+
+pub fn prune(budget: u64) -> u64 {
+    prune_dir(&cache_dir(), budget)
+}
+
+fn prune_dir(dir: &Path, budget: u64) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|meta| meta.is_file())?;
+            Some((meta.modified().ok()?, meta.len(), entry.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    if total <= budget {
+        return 0;
+    }
+    files.sort_by_key(|(modified, _, _)| *modified);
+    let target = budget / 4 * 3;
+    let mut removed = 0;
+    for (_, size, path) in files {
+        if total <= target {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total -= size;
+            removed += size;
+        }
+    }
+    removed
 }
 
 pub fn store(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>, image: &RgbImage) {
@@ -160,6 +213,26 @@ pub fn cached_size(path: &Path, mtime: i64, max_edge: u32) -> Option<(u32, u32)>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cache_forgets_what_was_used_longest_ago() {
+        let dir = std::env::temp_dir().join("numa-thumbs-prune-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = std::time::SystemTime::now();
+        for (index, days) in [5u64, 1, 3, 0].into_iter().enumerate() {
+            let file = dir.join(format!("{index}.jpg"));
+            std::fs::write(&file, vec![0u8; 100]).unwrap();
+            let file = std::fs::File::options().write(true).open(&file).unwrap();
+            file.set_modified(now - DAY * days as u32).unwrap();
+        }
+        assert_eq!(prune_dir(&dir, 400), 0, "at the budget");
+        assert_eq!(prune_dir(&dir, 300), 200, "down to 225: the two oldest go");
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["1.jpg", "3.jpg"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_thumbnail_name_does_not_depend_on_the_build() {

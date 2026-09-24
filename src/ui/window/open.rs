@@ -163,7 +163,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
             return;
         }
 
-        let (proxy, full_size, summary, lens_corrected) = match decoded {
+        let (proxy, full_size, summary, lens_corrected, kept) = match decoded {
             Ok(Ok(proxy)) => proxy,
             Ok(Err(err)) => {
                 state.toast(&format!("Could not open: {err}"));
@@ -194,6 +194,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
 
         let working_key = colour_key(&document);
         let inputs = render_inputs(&document);
+        drop(kept);
         let working = render::to_working_space(&document, &proxy, &inputs);
 
         *state.open.borrow_mut() = Some(OpenPhoto {
@@ -203,6 +204,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
             lens_corrected,
             segmentation: None,
             mask_frame: None,
+            draft_view: None,
             embedding: None,
             embedding_pending: false,
             faces_pending: false,
@@ -211,13 +213,15 @@ pub(super) fn open_photo(state: &App, id: i64) {
             animal: None,
             draft: None,
             full_size,
-            proxy,
-            working,
+            proxy: proxy.into(),
+            working: working.into(),
             working_key,
             full_working: None,
             full_working_key: None,
+            full_native: None,
             view: None,
             behind: None,
+            tone_guide: None,
             baseline: None,
             before_preset: None,
             history: resumed_history(&state, &photo, &document),
@@ -274,28 +278,33 @@ fn decode_for_open(
     path: PathBuf,
     edge: u32,
     (ai_denoised, ai_sharpened): (bool, bool),
-) -> Result<(LinearImage, (u32, u32), Option<raw::Summary>, bool), String> {
+) -> Result<(LinearImage, (u32, u32), Option<raw::Summary>, bool, Kept), String> {
     let linear = raw::decode_for_editing(&path)?;
 
     let (full_size, proxy) =
         ((linear.width, linear.height), linear.downscaled(edge).unwrap_or(linear));
 
+    let mut kept = Kept::new();
     if ai_denoised {
         if let Some(stored) = numa::io::denoised::load(&path) {
             render::ai_denoise::warm(&path, &stored, proxy.width, proxy.height);
+            kept.push(stored);
         }
     }
 
     if ai_sharpened {
         if let Some(stored) = numa::io::denoised::load_sharpened(&path, ai_denoised) {
             render::ai_denoise::warm(&path, &stored, proxy.width, proxy.height);
+            kept.push(stored);
         }
     }
 
     let corrected =
         raw::lens_profile(&path).is_some_and(|profile| profile.corrects_anything());
-    Ok::<_, String>((proxy, full_size, raw::summary(&path), corrected))
+    Ok::<_, String>((proxy, full_size, raw::summary(&path), corrected, kept))
 }
+
+type Kept = Vec<std::sync::Arc<numa::core::denoise::Denoised>>;
 
 fn resumed_history(state: &App, photo: &Photo, document: &Document) -> History {
     History::resumed(

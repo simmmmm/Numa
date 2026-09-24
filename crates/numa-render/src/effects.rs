@@ -54,20 +54,26 @@ pub fn dehaze(data: &mut [f32], width: usize, height: usize, amount: f32) {
 
     let cell = (width.max(height) / 64).max(1);
     let (grid_w, grid_h) = (width.div_ceil(cell), height.div_ceil(cell));
+
     let mut dark = vec![f32::MAX; grid_w * grid_h];
     let mut mean = vec![[0.0f32; 4]; grid_w * grid_h];
-    for y in 0..height {
-        for x in 0..width {
-            let index = (y * width + x) * 3;
-            let pixel = [data[index], data[index + 1], data[index + 2]];
-            let at = (y / cell) * grid_w + x / cell;
-            dark[at] = dark[at].min(pixel[0].min(pixel[1]).min(pixel[2]));
-            for channel in 0..3 {
-                mean[at][channel] += pixel[channel];
+    dark.par_chunks_mut(grid_w)
+        .zip(mean.par_chunks_mut(grid_w))
+        .enumerate()
+        .for_each(|(band, (dark, mean))| {
+            for y in band * cell..((band + 1) * cell).min(height) {
+                for x in 0..width {
+                    let index = (y * width + x) * 3;
+                    let pixel = [data[index], data[index + 1], data[index + 2]];
+                    let at = x / cell;
+                    dark[at] = dark[at].min(pixel[0].min(pixel[1]).min(pixel[2]));
+                    for channel in 0..3 {
+                        mean[at][channel] += pixel[channel];
+                    }
+                    mean[at][3] += 1.0;
+                }
             }
-            mean[at][3] += 1.0;
-        }
-    }
+        });
 
     let mut order: Vec<usize> = (0..dark.len()).collect();
     order.sort_by(|a, b| dark[*b].total_cmp(&dark[*a]));
@@ -156,6 +162,9 @@ pub fn vignette(
     let start = 0.15 + 0.85 * (midpoint / 100.0);
     let soft = 0.05 + 0.95 * (feather / 100.0);
 
+    let corner = 2f32.sqrt().powf(1.0 - 2.0 / power);
+    let euclidean = power == 2.0;
+
     data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
         let v = region[1] + (y as f32 + 0.5) / height as f32 * region[3];
         let dy = (v - 0.5) * 2.0;
@@ -166,7 +175,10 @@ pub fn vignette(
             let (cx, cy) = if aspect >= 1.0 { (dx * aspect, dy) } else { (dx, dy / aspect) };
             let (ex, ey) = (dx + (cx - dx) * circle, dy + (cy - dy) * circle);
 
-            let distance = (ex.abs().powf(power) + ey.abs().powf(power)).powf(1.0 / power) * 2f32.sqrt().powf(1.0 - 2.0 / power);
+            let distance = match euclidean {
+                true => ex.hypot(ey),
+                false => (ex.abs().powf(power) + ey.abs().powf(power)).powf(1.0 / power) * corner,
+            };
             let weight = smoothstep(start - soft * 0.5, start + soft * 0.5, distance);
             let factor = 2f32.powf(stops * weight);
             for value in pixel.iter_mut() {

@@ -199,12 +199,12 @@ pub fn warm(photo: &Path, stored: &Denoised, width: u32, height: u32) {
 
 fn remembered(photo: &Path, stored: &Denoised, width: u32, height: u32) -> Option<Arc<Vec<f32>>> {
 
-    type Memo = Vec<(std::path::PathBuf, usize, u32, u32, Arc<Vec<f32>>)>;
+    type Memo = Vec<(std::path::PathBuf, u64, u32, u32, Arc<Vec<f32>>)>;
     static MEMO: Mutex<Memo> = Mutex::new(Vec::new());
 
     let key = photo.to_path_buf();
 
-    let which = stored.as_raw().as_ptr() as usize;
+    let which = fingerprint(stored);
     let memo = MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     if let Some((_, _, _, _, answer)) = memo.iter().find(|(at, of, w, h, _)| *at == key && *of == which && (*w, *h) == (width, height)) {
         return Some(answer.clone());
@@ -222,6 +222,13 @@ fn remembered(photo: &Path, stored: &Denoised, width: u32, height: u32) -> Optio
         memo.push((key, which, width, height, answer.clone()));
     }
     Some(answer)
+}
+
+fn fingerprint(stored: &Denoised) -> u64 {
+    let raw = stored.as_raw();
+    let step = (raw.len() / 4096).max(1);
+    let seed = (u64::from(stored.width()) << 32 | u64::from(stored.height())) ^ 0xcbf2_9ce4_8422_2325;
+    raw.iter().step_by(step).fold(seed, |hash, sample| (hash ^ u64::from(*sample)).wrapping_mul(0x100_0000_01b3))
 }
 
 pub fn for_render(document: &Document, source: &LinearImage, stored: Option<&Denoised>) -> Option<LinearImage> {
@@ -294,6 +301,16 @@ mod tests {
         let before = apart(&|x, y| smeared[y * width + x]);
         let after = apart(&|x, y| sharp.get_pixel(x as u32, y as u32).0[0] as f32 / 65535.0);
         assert!(after < before * 0.6, "not nearer the unsmeared texture: {before:.1} then {after:.1}");
+    }
+
+    #[test]
+    fn a_frame_is_known_by_what_is_in_it() {
+        let one = Denoised::from_fn(64, 48, |x, y| Rgb([(x * 900 + y) as u16, 7, 9]));
+        let again = one.clone();
+        let other = Denoised::from_fn(64, 48, |x, y| Rgb([(x * 900 + y) as u16, 7, 10]));
+        assert_ne!(one.as_raw().as_ptr(), again.as_raw().as_ptr());
+        assert_eq!(fingerprint(&one), fingerprint(&again));
+        assert_ne!(fingerprint(&one), fingerprint(&other));
     }
 
     #[test]

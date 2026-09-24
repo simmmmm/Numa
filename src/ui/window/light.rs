@@ -36,7 +36,7 @@ pub(super) fn build_light(
     auto_tone_button.connect_clicked(glib::clone!(
         #[strong] state,
 
-        move |_| busy_sync(&state, "Looking at the photograph…", auto_tone)
+        move |_| auto_tone(&state)
     ));
 
     auto_tone_button.set_halign(gtk::Align::End);
@@ -246,7 +246,6 @@ fn with_curve<T>(state: &App, edit: impl FnOnce(&mut Curve) -> T) -> Option<T> {
             let mask = masks.get_mut(index)?;
             let out = edit(&mut mask.curve);
             photo.document.set_masks(masks);
-            photo.view = None;
             out
         } else {
             let mut curves = photo.document.curves();

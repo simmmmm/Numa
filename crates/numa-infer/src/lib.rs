@@ -235,21 +235,34 @@ fn device_name() -> String {
 fn build(path: &Path, on_gpu: bool) -> Result<Session, ort::Error> {
     let mut builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(threads())?;
+        .with_intra_threads(threads())?
+
+        .with_intra_op_spinning(false)?;
     if on_gpu {
         let environment = ort::environment::Environment::current()?;
-        let devices: Vec<_> =
-            environment.devices().filter(|device| device.ep().is_ok_and(|ep| ep == WEBGPU)).collect();
 
-        if devices.is_empty() {
+        let mut webgpu: Vec<_> =
+            environment.devices().filter(|device| device.ep().is_ok_and(|ep| ep == WEBGPU)).collect();
+        if webgpu.is_empty() {
             return Err(ort::Error::new("the WebGPU provider offered no device"));
         }
-        builder = builder.with_devices(devices, None)?;
+
+        let software = |device: &ort::device::Device| {
+            let hardware = device.hardware_device();
+            let vendor = hardware.vendor().unwrap_or_default().to_lowercase();
+            ["llvmpipe", "lavapipe", "swiftshader", "software"].iter().any(|name| vendor.contains(name))
+                || format!("{:?}", hardware.ty()).to_lowercase().contains("cpu")
+        };
+        let at = webgpu.iter().position(|device| !software(device)).unwrap_or(0);
+        builder = builder.with_devices(vec![webgpu.swap_remove(at)], None)?;
     }
     builder.commit_from_file(path)
 }
 
 fn threads() -> usize {
+    if let Some(asked) = std::env::var("NUMA_MODEL_THREADS").ok().and_then(|value| value.parse().ok()) {
+        return asked;
+    }
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
 }
 

@@ -36,6 +36,23 @@ pub struct LinearImage {
     pub white_point: Option<crate::color::WhiteBalance>,
 }
 
+fn turned_data(source: &[f32], width: usize, height: usize, transpose: bool, flip_x: bool, flip_y: bool) -> Vec<f32> {
+    let out_width = if transpose { height } else { width };
+    let mut data = vec![0.0f32; source.len()];
+    data.par_chunks_mut(out_width * 3).enumerate().for_each(|(y, row)| {
+        for x in 0..out_width {
+
+            let (fx, fy) = if transpose { (y, x) } else { (x, y) };
+            let sx = if flip_x { width - 1 - fx } else { fx };
+            let sy = if flip_y { height - 1 - fy } else { fy };
+
+            let from = (sy * width + sx) * 3;
+            row[x * 3..x * 3 + 3].copy_from_slice(&source[from..from + 3]);
+        }
+    });
+    data
+}
+
 impl LinearImage {
     pub fn new(width: u32, height: u32, data: Vec<f32>) -> Self {
         debug_assert_eq!(data.len(), (width as usize) * (height as usize) * 3);
@@ -76,7 +93,22 @@ impl LinearImage {
     }
 
     pub fn oriented(&self, transpose: bool, flip_x: bool, flip_y: bool) -> LinearImage {
-        self.clone().into_oriented(transpose, flip_x, flip_y)
+        if !transpose && !flip_x && !flip_y {
+            return self.clone();
+        }
+
+        let data = turned_data(&self.data, self.width as usize, self.height as usize, transpose, flip_x, flip_y);
+        let (width, height) = if transpose { (self.height, self.width) } else { (self.width, self.height) };
+        LinearImage {
+            width,
+            height,
+            data,
+            profile: self.profile.clone(),
+            clip: self.clip,
+            rendering: self.rendering.clone(),
+            film_mode: self.film_mode.clone(),
+            white_point: None,
+        }
     }
 
     pub fn into_oriented(self, transpose: bool, flip_x: bool, flip_y: bool) -> LinearImage {
@@ -84,32 +116,12 @@ impl LinearImage {
             return self;
         }
 
-        let (width, height) = (self.width as usize, self.height as usize);
-        let (out_width, out_height) = if transpose {
-            (height, width)
-        } else {
-            (width, height)
-        };
-
-        let mut data = vec![0.0f32; out_width * out_height * 3];
-
-        data.par_chunks_mut(out_width * 3)
-            .enumerate()
-            .for_each(|(y, row)| {
-                for x in 0..out_width {
-
-                    let (fx, fy) = if transpose { (y, x) } else { (x, y) };
-                    let sx = if flip_x { width - 1 - fx } else { fx };
-                    let sy = if flip_y { height - 1 - fy } else { fy };
-
-                    let from = (sy * width + sx) * 3;
-                    row[x * 3..x * 3 + 3].copy_from_slice(&self.data[from..from + 3]);
-                }
-            });
+        let data = turned_data(&self.data, self.width as usize, self.height as usize, transpose, flip_x, flip_y);
+        let (width, height) = if transpose { (self.height, self.width) } else { (self.width, self.height) };
 
         LinearImage {
-            width: out_width as u32,
-            height: out_height as u32,
+            width,
+            height,
             data,
             profile: self.profile,
             clip: self.clip,
@@ -286,18 +298,33 @@ pub fn crop_in_view(width: f32, height: f32, rect: [f32; 4], angle: f32, perspec
 }
 
 pub fn view_to_crop(width: f32, height: f32, rect: [f32; 4], rect_angle: f32, view_angle: f32, perspective: Perspective) -> [f32; 6] {
-    let [x, y, w, h] = rect;
-    let stretch = perspective.stretch();
-    let (view_sin, view_cos) = view_angle.to_radians().sin_cos();
-    let (sin, cos) = rect_angle.to_radians().sin_cos();
-    let (cx, cy) = ((x + w / 2.0 - 0.5) * width, (y + h / 2.0 - 0.5) * height);
+    between_frames(width, height, ([0.0, 0.0, 1.0, 1.0], view_angle), (rect, rect_angle), perspective)
+}
 
+pub fn between_frames(
+    width: f32,
+    height: f32,
+    from: ([f32; 4], f32),
+    to: ([f32; 4], f32),
+    perspective: Perspective,
+) -> [f32; 6] {
+    let ([fx, fy, fw, fh], from_angle) = from;
+    let ([tx, ty, tw, th], to_angle) = to;
+    let stretch = perspective.stretch();
+    let (from_sin, from_cos) = from_angle.to_radians().sin_cos();
+    let (to_sin, to_cos) = to_angle.to_radians().sin_cos();
+
+    let (from_x, from_y) = ((fx + fw / 2.0 - 0.5) * width, (fy + fh / 2.0 - 0.5) * height);
+    let (to_x, to_y) = ((tx + tw / 2.0 - 0.5) * width, (ty + th / 2.0 - 0.5) * height);
     let through = |u: f32, v: f32| {
-        let (dx, dy) = ((u - 0.5) * width, (v - 0.5) * height);
-        let (qx, qy) = ((dx * view_cos - dy * view_sin) / stretch, (dx * view_sin + dy * view_cos) * stretch);
-        let (ex, ey) = ((qx - cx) * stretch, (qy - cy) / stretch);
-        let (ox, oy) = (ex * cos + ey * sin, ey * cos - ex * sin);
-        (0.5 + ox / (w * width), 0.5 + oy / (h * height))
+
+        let (dx, dy) = ((u - 0.5) * fw * width, (v - 0.5) * fh * height);
+        let (qx, qy) = ((dx * from_cos - dy * from_sin) / stretch, (dx * from_sin + dy * from_cos) * stretch);
+        let (px, py) = (from_x + qx, from_y + qy);
+
+        let (ex, ey) = ((px - to_x) * stretch, (py - to_y) / stretch);
+        let (ox, oy) = (ex * to_cos + ey * to_sin, ey * to_cos - ex * to_sin);
+        (0.5 + ox / (tw * width), 0.5 + oy / (th * height))
     };
     let (origin, across, down) = (through(0.0, 0.0), through(1.0, 0.0), through(0.0, 1.0));
     [

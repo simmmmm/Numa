@@ -10,6 +10,8 @@ pub(super) struct LazyThumb {
     pub(super) edge: u32,
 
     pub(super) asked: u32,
+
+    pub(super) fitted: u32,
     pub(super) picture: gtk::Picture,
 
     pub(super) widget: gtk::Widget,
@@ -95,9 +97,17 @@ fn sweep(
         return;
     };
 
+    let rows = match across {
+        true => container.as_ref().height() as f32,
+        false => state.grid.wall.row_height(),
+    };
+    let fit = (rows * container.as_ref().scale_factor() as f32 * 1.5).ceil() as u32;
+    let fit_to = (fit > 0).then_some(fit);
+
     let edge = list.borrow()[0].edge;
+    let held_edge = fit_to.map_or(edge, |fit| fit.min(edge));
     let shrink = |cards: usize| {
-        let fewer = cards as f32 * (GRID_THUMB_EDGE as f32 / edge as f32).powi(2).min(1.0);
+        let fewer = cards as f32 * (GRID_THUMB_EDGE as f32 / held_edge as f32).powi(2).min(1.0);
         (fewer as usize).max(12)
     };
     let (margin, held) = (shrink(THUMBNAIL_MARGIN), shrink(THUMBNAIL_KEEP).max(shrink(THUMBNAIL_MARGIN) + 12));
@@ -108,7 +118,8 @@ fn sweep(
         let (wanted, in_load, in_keep, blurry) = {
             let cards = list.borrow();
             let card = &cards[index];
-            (card.wanted, load.contains(&index), keep.contains(&index), card.asked != card.edge)
+            let blurry = card.asked != card.edge || fit_to.is_some_and(|fit| fit > card.fitted);
+            (card.wanted, load.contains(&index), keep.contains(&index), blurry)
         };
 
         match (wanted, in_load, in_keep) {
@@ -117,15 +128,19 @@ fn sweep(
                     let mut cards = list.borrow_mut();
                     cards[index].wanted = true;
                     cards[index].asked = cards[index].edge;
+                    cards[index].fitted = fit_to.unwrap_or(u32::MAX);
                     let card = &cards[index];
                     (card.path.clone(), card.mtime, card.edge, card.id, card.edited)
                 };
 
                 let edits = edited.then(|| state.catalog.edits_json(id).ok().flatten()).flatten();
 
-                if edits.is_some() {
+                let rendered = edits
+                    .as_deref()
+                    .is_some_and(|edits| numa::io::thumbs::is_cached(&path, mtime, edge, Some(edits)));
+                if edits.is_some() && !rendered {
                     let (list, asked) = (list.clone(), path.clone());
-                    thumbnail::load_thumbnail(&path, mtime, edge, None, move |texture| {
+                    thumbnail::load_thumbnail_while(&path, mtime, edge, None, fit_to, || true, move |texture| {
                         let cards = list.borrow();
                         let still = cards.get(index).filter(|card| card.wanted && card.path == asked);
                         if let Some(card) = still.filter(|card| card.picture.paintable().is_none()) {
@@ -146,6 +161,7 @@ fn sweep(
                     mtime,
                     edge,
                     edits,
+                    fit_to,
                     still_wanted,
                     move |texture| {
                         let cards = list.borrow();
@@ -293,7 +309,7 @@ pub(super) fn save_edits(state: &App, when: Saving) {
             open.as_ref().map(|photo| {
                 let scale = photo.proxy.width.max(photo.proxy.height) as f32
                     / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
-                render::apply_stack(&photo.document, &photo.working, scale)
+                render::apply_stack(&photo.document, &*photo.working, scale)
             })
         };
         if let Some(made) = made {

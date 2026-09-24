@@ -2490,3 +2490,64 @@ Sources: [GlitchTip review and pricing, 2026](https://cubeapm.com/blog/glitchtip
 [Self-host Sentry or GlitchTip, 2026](https://danubedata.ro/blog/self-host-sentry-glitchtip-error-tracking-2026),
 [Aptabase on GitHub](https://github.com/aptabase/aptabase),
 [Bugsink](https://www.bugsink.com/).
+
+## Slow sliders, measured — 23 and 24 September
+
+The photographer's report was that editing got slower and slower, the
+processor ran all over the place, and sliders were nowhere near the 60 or 144
+Hz the screen could show. Two evenings went into it, and the rule that came
+out of both is: measure on the photographer's machine before changing
+anything. The Xvfb rig has no card, and its guesses were wrong twice.
+
+**The instrument.** `NUMA_TIMING=1` (with `RUST_LOG=info`) prints every render
+with its size, time and path — proxy, tile or full, draft or not, and
+`recut` when a tile was cut out of the full frame again — beside what the open
+photograph holds and what the process uses. And a line per render with what
+each pass of the stack cost. Almost every finding below was one of those lines
+read off the photographer's terminal.
+
+**What was wrong, in the order it was found.**
+
+1. *The models were on the processor.* ONNX Runtime was handed every WebGPU
+   device, and with two (the card and the processor's Radeon) it refused and
+   fell back without a word to the user. That was the processor running all
+   over the place, and most of the memory: 5.4 GB resident against 63 MB of
+   image buffers, the rest being model arenas. One device, a card before a
+   software renderer: segmentation 250 → 51 ms, and the editor at 0.7–1.8 GB.
+2. *A rating rebuilt the grid* when the library was filtered on flags, which
+   flickered it and cancelled the thumbnails still loading.
+3. *Masks cost the whole frame each* (PERF-016): 190 → 290 ms for the same
+   render as masks were added.
+4. *The draft only existed on the proxy* (PERF-006): at 1:1 it was the same six
+   megapixels as the finished render, and on a frame that could only be
+   rendered whole it was thirty-eight.
+5. *The sharp render started at every pause.* 130 ms of quiet counted as the
+   end of a drag, and on a careful one that was every other moment: a second
+   and a half on the main thread, which is why none of the draft's gains were
+   felt. It waits for the mouse button now — watched on the window, after a
+   gesture on the slider (never hears the release) and the pointer's modifier
+   state (always nought) both failed, the first of them shipped for an hour
+   as 0.19.17 with no sharp frame at all.
+6. *A turned frame and a frame with Clarity rendered whole at 1:1* (PERF-017,
+   PERF-018): 1.4 s and 1 s after every drag.
+
+**What held and what did not.** The proxy as the source of the tone map's
+measurement was the obvious move and would have been a mistake: up to 26
+levels off along a hard edge, exactly where a halo is judged at 1:1. Measured
+before it went in, it was kept for drafts and the full-resolution measurement,
+skipping what the base cannot see, took the sharp frame. Two of the evening's
+own changes were wrong and put right: PERF-016 handed a mask with Clarity a
+strip of the frame to measure, and 0.19.17 waited for a release it never heard.
+
+**Along the way.** The backdrop behind a tile, and the histogram read off it,
+were kept per colour stage rather than per edit, so at 1:1 the histogram
+showed the photograph from before the last slider. A lasso on a refined mask
+was reasoned away by the matting model and the hair trace ate the rest
+(MASK-008). A quarter turn or a crop drew every mask again from the models,
+with the click model still looking at the old orientation (MASK-014). Auto
+froze the window for 0.9 s.
+
+**Where it stands.** At fit: 5–8 ms a draft, 30 ms sharp, flat however many
+masks. At 1:1: about 60 ms a draft and 0.2–0.5 s once after letting go. The
+draft at 1:1 still carries the tile's panning margin — four times the pixels
+on screen — and dropping it while a slider is held is the next 6×.

@@ -54,6 +54,10 @@ fetch "face_recognition_sface_2021dec.onnx" \
     "https://github.com/simmmmm/Numa/releases/download/models/face_recognition_sface_2021dec.onnx" \
     0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
 
+fetch "open_closed_eye.onnx" \
+    "https://storage.openvinotoolkit.org/repositories/open_model_zoo/public/2022.1/open-closed-eye-0001/open_closed_eye.onnx" \
+    4daa100034482525a26c9afb9297c16580a531189e66e3d2b2ac7d32becfd593
+
 fetch "image_classification_ppresnet50_2022jan.onnx" \
     "https://github.com/simmmmm/Numa/releases/download/models/image_classification_ppresnet50_2022jan.onnx" \
     ad5486b0de6c2171ea4d28c734c2fb7c5f64fcdbd97180a0ef515cf4b766a405

@@ -100,19 +100,28 @@ pub(super) fn refresh_folders(state: &App, library: &Library, photos: &[Photo]) 
     *state.libraries.folders.borrow_mut() = folders;
 }
 
+const SCAN_AT_MOST: std::time::Duration = std::time::Duration::from_secs(15);
+
 pub(super) fn rescan_in_background(state: &App) {
     let Some(library) = state.libraries.current.borrow().clone() else { return };
 
     if folder_is_missing(&library.path) {
         return;
     }
+
+    let now = std::time::Instant::now();
+    if state.libraries.scanned.get().is_some_and(|last| now.duration_since(last) < SCAN_AT_MOST) {
+        return;
+    }
     if state.libraries.scanning.replace(true) {
         return;
     }
+    state.libraries.scanned.set(Some(now));
+    let known = state.catalog.known_files(&library).unwrap_or_default();
     let state = state.clone();
     glib::spawn_future_local(async move {
         let root = library.path.clone();
-        let found = gio::spawn_blocking(move || numa::io::catalog::scan(&root)).await;
+        let found = gio::spawn_blocking(move || numa::io::catalog::scan(&root, &known)).await;
         state.libraries.scanning.set(false);
         let Ok(found) = found else { return };
 
@@ -143,6 +152,23 @@ pub(super) fn rescan_in_background(state: &App) {
                 n => format!("{n} new photos"),
             });
         }
+    });
+}
+
+pub(super) fn sync_in_background(state: &App, libraries: Vec<Library>, done: impl FnOnce(&App, usize) + 'static) {
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let mut added = 0;
+        for library in libraries {
+            let known = state.catalog.known_files(&library).unwrap_or_default();
+            let root = library.path.clone();
+            let Ok(found) = gio::spawn_blocking(move || numa::io::catalog::scan(&root, &known)).await else { continue };
+            match state.catalog.apply_scan(&library, &found) {
+                Ok(changes) => added += changes.added,
+                Err(err) => log::warn!("rescan of {}: {err}", library.path.display()),
+            }
+        }
+        done(&state, added);
     });
 }
 
@@ -270,6 +296,8 @@ pub(super) struct State {
 
     pub(super) scanning: Rc<Cell<bool>>,
 
+    pub(super) scanned: Rc<Cell<Option<std::time::Instant>>>,
+
     pub(super) albums_menu: gio::Menu,
 
     pub(super) scale: Rc<Cell<cull::Scale>>,
@@ -293,6 +321,7 @@ impl State {
             folders: Rc::default(),
             switching: Rc::new(Cell::new(false)),
             scanning: Rc::new(Cell::new(false)),
+            scanned: Rc::default(),
             albums_menu: gio::Menu::new(),
             scale: Rc::new(Cell::new(cull::Scale::default())),
             analyse_button: Rc::default(),

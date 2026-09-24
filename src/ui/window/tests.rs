@@ -272,3 +272,20 @@ fn the_corners_of_the_graph_are_the_corners_of_the_plot() {
     let (_, _, tiny_width, tiny_height) = plot_rect(4.0, 4.0);
     assert!(tiny_width > 0.0 && tiny_height > 0.0);
 }
+
+#[test]
+fn a_hif_beside_its_raw_is_the_same_frame() {
+    let is_raw = |path: &Path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("raf"));
+    let photos = [
+        (1, Path::new("DSCF2414.RAF"), Some(100)),
+        (2, Path::new("Japan JPEG/DSCF2414.HIF"), Some(100)),
+
+        (3, Path::new("later/DSCF2414.HIF"), Some(9_000)),
+        (4, Path::new("phone.jpg"), Some(100)),
+        (5, Path::new("DSCF2415.JPG"), None),
+        (6, Path::new("DSCF2415.RAF"), None),
+    ];
+    let twins = twins(photos, is_raw);
+    assert_eq!(twins.get(&2), Some(&1));
+    assert_eq!(twins.len(), 1, "only the HIF of the same second is a twin: {twins:?}");
+}

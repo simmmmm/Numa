@@ -51,6 +51,10 @@ pub(super) struct State {
     tracing: Rc<Cell<bool>>,
     trace_again: Rc<Cell<Option<usize>>>,
 
+    searching: Rc<Cell<bool>>,
+
+    pub(super) looking: Rc<Cell<bool>>,
+
     pub(super) brush_at: Rc<Cell<Option<(f32, f32)>>>,
     pub(super) mask_empty: gtk::Label,
 }
@@ -72,6 +76,8 @@ impl State {
             fine_frame: Rc::new(RefCell::new(None)),
             tracing: Rc::new(Cell::new(false)),
             trace_again: Rc::new(Cell::new(None)),
+            searching: Rc::new(Cell::new(false)),
+            looking: Rc::new(Cell::new(false)),
             brush_at: Rc::new(Cell::new(None)),
             mask_empty: gtk::Label::new(None),
         }
@@ -165,7 +171,7 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
     column
 }
 
-pub(super) fn build_wash(alpha: &numa::core::mask::Stored, inverted: bool, opacity: f32) -> Option<gtk::cairo::ImageSurface> {
+pub(super) fn build_wash(alpha: &numa::core::mask::Stored, inverted: bool) -> Option<gtk::cairo::ImageSurface> {
     if alpha.width == 0 || alpha.height == 0 {
         return None;
     }
@@ -175,7 +181,7 @@ pub(super) fn build_wash(alpha: &numa::core::mask::Stored, inverted: bool, opaci
         alpha.height as i32,
     )
     .ok()?;
-    paint_wash(&mut surface, alpha, inverted, opacity, (0, 0, alpha.width, alpha.height));
+    paint_wash(&mut surface, alpha, inverted, (0, 0, alpha.width, alpha.height));
     Some(surface)
 }
 
@@ -423,7 +429,7 @@ pub(super) fn ensure_embedding(state: &App) {
     let state = state.clone();
     glib::spawn_future_local(async move {
         let made = busy(&state, "Working out what can be clicked…", move || {
-            let frame = render::apply_stack(&geometry, &working, 1.0);
+            let frame = render::apply_stack(&geometry, &*working, 1.0);
             sam::encode(&frame)
         })
         .await;
@@ -432,16 +438,25 @@ pub(super) fn ensure_embedding(state: &App) {
             return;
         }
 
-        let index = {
+        let waiting: Vec<usize> = {
             let mut open = state.open.borrow_mut();
             let Some(photo) = open.as_mut() else { return };
             photo.embedding_pending = false;
             photo.embedding = made.ok().flatten().map(Arc::new);
-            state.mask_overlay.selected_mask.get()
+            photo
+                .document
+                .masks()
+                .iter()
+                .enumerate()
+                .filter(|(_, mask)| !mask.points.is_empty())
+                .map(|(index, _)| index)
+                .collect()
         };
 
-        if let Some(index) = index {
-            rebuild_mask_map(&state, index);
+        if !waiting.is_empty() {
+            for index in waiting {
+                rebuild_mask_map(&state, index);
+            }
             refresh_masks(&state);
             request_render(&state);
             show_coverage(&state);
@@ -476,7 +491,7 @@ pub(super) fn ensure_segmentation(state: &App) {
     let state = state.clone();
     glib::spawn_future_local(async move {
         let found = busy(&state, "Finding what is in the photograph…", move || {
-            let frame = render::apply_stack(&geometry, &working, 1.0);
+            let frame = render::apply_stack(&geometry, &*working, 1.0);
             segment::of(&frame)
         })
         .await;
@@ -544,8 +559,10 @@ pub(super) fn draw_coverage(
     context: &gtk::cairo::Context,
     content: (f64, f64, f64, f64),
     visible: bool,
+    opacity: f32,
 ) {
     let (left, top, width, height) = content;
+    let opacity = opacity.clamp(0.0, 1.0) as f64;
     let matte = state.masks.show_matte.get();
     if matte {
         context.set_source_rgb(0.0, 0.0, 0.0);
@@ -554,7 +571,7 @@ pub(super) fn draw_coverage(
     }
     let size = state.mask_overlay.wash_size.get();
     let wash = state.mask_overlay.wash.borrow();
-    let Some(surface) = wash.as_ref().filter(|_| visible && (matte || state.mask_overlay.show_coverage.get())) else {
+    let Some(surface) = wash.as_ref().filter(|_| visible && (matte || wash_shown(state))) else {
         return;
     };
     if size.0 == 0 || size.1 == 0 {
@@ -566,15 +583,24 @@ pub(super) fn draw_coverage(
     context.scale(width / size.0 as f64, height / size.1 as f64);
 
     match matte {
-        true => context.set_source_rgb(1.0, 1.0, 1.0),
+        true => context.set_source_rgba(1.0, 1.0, 1.0, opacity),
 
-        false => context.set_source_rgba(1.0, 1.0, 1.0, 0.10),
+        false => context.set_source_rgba(0.95, 0.3, 0.3, 0.4 * opacity),
     }
     let _ = context.mask_surface(surface, 0.0, 0.0);
     let _ = context.restore();
 }
 
-pub(super) fn refine_mask_edge(state: &App, index: usize, button: &gtk::Button) {
+pub(super) fn refine_selected_mask(state: &App) {
+    if let Some(index) = state.mask_overlay.selected_mask.get() {
+        refine_mask_edge(state, index);
+    }
+}
+
+pub(super) fn refine_mask_edge(state: &App, index: usize) {
+    if state.masks.searching.get() {
+        return;
+    }
     let (width, height) = mask_raster_size(state);
     let request = {
         let mut open = state.open.borrow_mut();
@@ -583,12 +609,11 @@ pub(super) fn refine_mask_edge(state: &App, index: usize, button: &gtk::Button) 
         let embedding = photo.embedding.clone();
         let Some(mask) = photo.document.mask_mut(index) else { return };
 
-        let feathered = !mask.fine && mask.feather != 0.0;
+        let feathered = !mask.matte && mask.feather != 0.0;
         if feathered {
             mask.feather = 0.0;
         }
         mask.matte = true;
-        mask.fine = true;
         mask.matte_edge = mask.shift;
         (mask.clone(), segmentation, embedding, feathered)
     };
@@ -610,8 +635,7 @@ pub(super) fn refine_mask_edge(state: &App, index: usize, button: &gtk::Button) 
     let generation = state.open_generation.get();
     let state = state.clone();
 
-    button.set_sensitive(false);
-    let button = button.clone();
+    state.masks.searching.set(true);
     glib::spawn_future_local(async move {
         let worked = mask.clone();
         let resolved = busy_until(&state, "Tracing the edge…", std::time::Duration::ZERO, move || {
@@ -627,8 +651,7 @@ pub(super) fn refine_mask_edge(state: &App, index: usize, button: &gtk::Button) 
             mask
         })
         .await;
-        button.set_label("Search again");
-        button.set_sensitive(true);
+        state.masks.searching.set(false);
 
         if state.open_generation.get() != generation {
             return;
@@ -655,7 +678,7 @@ pub(super) fn refine_mask_edge(state: &App, index: usize, button: &gtk::Button) 
         refresh_outline(&state);
         request_render(&state);
         show_coverage(&state);
-        trace_hair(&state, index);
+        refresh_mask_toolbar(&state);
     });
 }
 
@@ -669,7 +692,7 @@ pub(super) fn trace_hair(state: &App, index: usize) {
         let open = state.open.borrow();
         let Some(photo) = open.as_ref() else { return };
         let Some(mask) = photo.document.masks().get(index).cloned() else { return };
-        if !(mask.fine && mask.matted) || mask.unshaped.0.is_none() {
+        if !mask.matted || mask.unshaped.0.is_none() {
             return;
         }
         let document = &photo.document;
@@ -685,6 +708,8 @@ pub(super) fn trace_hair(state: &App, index: usize) {
         (mask, photo.source.clone(), document.clone(), kept, key)
     };
     let (mut mask, source, document, kept, key) = request;
+
+    mask.fine = true;
     let asked = mask.unshaped.0.clone();
     let generation = state.open_generation.get();
     state.masks.tracing.set(true);
@@ -723,11 +748,13 @@ pub(super) fn trace_hair(state: &App, index: usize) {
                 return;
             }
             mask.unshaped = unshaped;
+            mask.fine = true;
             mask.reshape_edge(width, height);
             photo.view = None;
         }
         refresh_outline(&state);
         request_render(&state);
         show_coverage(&state);
+        refresh_mask_toolbar(&state);
     });
 }

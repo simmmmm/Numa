@@ -235,8 +235,23 @@ pub struct Photo {
     pub blown: Option<f32>,
     pub best_of_burst: bool,
 
+    pub burst: Option<i64>,
+
+    pub echo: Option<i64>,
+
+    pub exposure: Option<f32>,
+    pub focal35: Option<f32>,
+
+    pub raw_clipped: Option<f32>,
+    pub raw_dark: Option<f32>,
+
+    pub eyes_closed: Option<bool>,
+
     pub faces: Option<u32>,
     pub face_sharpness: Option<f32>,
+
+    pub brightness: Option<f32>,
+    pub contrast: Option<f32>,
 
     pub suggested: Option<f32>,
 
@@ -475,7 +490,19 @@ CREATE TABLE IF NOT EXISTS analysis (
     -- CULL-005: the frame's tone, which a learned score reads alongside the rest.
     brightness REAL,
     contrast REAL,
-    colourfulness REAL
+    colourfulness REAL,
+    -- FT-029 C8: the second hash, and the photograph of the same scene later
+    -- or earlier that it found (this catalog's row), if there is one.
+    shape INTEGER,
+    echo INTEGER,
+    -- FT-029 C6: the exposure time in seconds and the 35 mm focal length.
+    exposure REAL,
+    focal35 REAL,
+    -- FT-029 C2: clipping and deep shadow on the raw's own values.
+    raw_clipped REAL,
+    raw_dark REAL,
+    -- FT-029 C4: 1 when both eyes of the largest face read as closed, 0 open.
+    eyes_closed INTEGER
 );
 
 -- LIB-014: the names the photographer gave faces. Only what they typed is
@@ -503,6 +530,8 @@ CREATE TABLE IF NOT EXISTS ignored_faces (
     photo_id  INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
     embedding BLOB NOT NULL
 );
+-- Every photograph deleted looks here for its rows, for the cascade.
+CREATE INDEX IF NOT EXISTS ignored_faces_photo ON ignored_faces(photo_id);
 -- LIB-014: and every face the measure pass found, named or not. Derived, like
 -- `analysis`: dropping it costs a pass of Analyse and no work.
 CREATE TABLE IF NOT EXISTS faces (
@@ -512,6 +541,24 @@ CREATE TABLE IF NOT EXISTS faces (
     portrait  BLOB
 );
 CREATE INDEX IF NOT EXISTS faces_photo ON faces(photo_id);
+
+-- FT-029 C10: what the photographer did in the loupe, in order — every mark,
+-- every mark taken back, and every frame looked at and passed without one, with
+-- how long it was looked at. What a score learned from this photographer's own
+-- taste needs and the stars alone do not say: "seen, and not this one".
+CREATE TABLE IF NOT EXISTS decisions (
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    at       INTEGER NOT NULL,
+    action   TEXT NOT NULL,
+    dwell_ms INTEGER
+);
+
+-- FT-029 C9: what the photographer set for this shoot, which travels with it —
+-- how many picks the cull is aiming for.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 -- LIB-008: which photographs here are in which album. Here rather than beside
 -- the album's name at home, because nothing home could point with survives:
@@ -526,7 +573,12 @@ CREATE TABLE IF NOT EXISTS album_photos (
     photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
     PRIMARY KEY (album, photo_id)
 );
+-- The key leads with the album, so asking by photograph — a photograph's
+-- albums, the cascade when one is deleted — needs its own.
+CREATE INDEX IF NOT EXISTS album_photos_photo ON album_photos(photo_id);
 "#;
+
+pub type NamedFace = (i64, String, [f32; people::LENGTH]);
 
 pub const LIBRARY_DIR: &str = ".numa";
 
@@ -652,6 +704,50 @@ impl Catalog {
             .map_err(text)?;
         }
 
+        let has_shape = conn
+            .prepare("SELECT * FROM analysis LIMIT 0")
+            .map(|statement| statement.column_names().contains(&"shape"))
+            .unwrap_or(true);
+        if !has_shape {
+            conn.execute_batch(
+                "ALTER TABLE analysis ADD COLUMN shape INTEGER; \
+                 ALTER TABLE analysis ADD COLUMN echo INTEGER;",
+            )
+            .map_err(text)?;
+        }
+
+        let has_exposure = conn
+            .prepare("SELECT * FROM analysis LIMIT 0")
+            .map(|statement| statement.column_names().contains(&"exposure"))
+            .unwrap_or(true);
+        if !has_exposure {
+            conn.execute_batch(
+                "ALTER TABLE analysis ADD COLUMN exposure REAL; \
+                 ALTER TABLE analysis ADD COLUMN focal35 REAL;",
+            )
+            .map_err(text)?;
+        }
+
+        let has_raw_levels = conn
+            .prepare("SELECT * FROM analysis LIMIT 0")
+            .map(|statement| statement.column_names().contains(&"raw_clipped"))
+            .unwrap_or(true);
+        if !has_raw_levels {
+            conn.execute_batch(
+                "ALTER TABLE analysis ADD COLUMN raw_clipped REAL; \
+                 ALTER TABLE analysis ADD COLUMN raw_dark REAL;",
+            )
+            .map_err(text)?;
+        }
+
+        let has_eyes = conn
+            .prepare("SELECT * FROM analysis LIMIT 0")
+            .map(|statement| statement.column_names().contains(&"eyes_closed"))
+            .unwrap_or(true);
+        if !has_eyes {
+            conn.execute("ALTER TABLE analysis ADD COLUMN eyes_closed INTEGER", []).map_err(text)?;
+        }
+
         let has_taken = conn
             .prepare("SELECT * FROM photos LIMIT 0")
             .map(|statement| statement.column_names().contains(&"taken"))
@@ -669,6 +765,29 @@ impl Catalog {
     fn photo(&self, photo_id: i64) -> Result<(Rc<OpenLibrary>, i64), String> {
         let (library_id, local) = split_id(photo_id);
         Ok((self.library(library_id)?, local))
+    }
+
+    fn update_each(&self, photo_ids: &[i64], sql: &str, value: impl rusqlite::ToSql) -> Result<(), String> {
+        let mut by_library: Vec<(i64, Vec<i64>)> = Vec::new();
+        for &id in photo_ids {
+            let (library_id, local) = split_id(id);
+            match by_library.iter_mut().find(|(library, _)| *library == library_id) {
+                Some((_, rows)) => rows.push(local),
+                None => by_library.push((library_id, vec![local])),
+            }
+        }
+        for (library_id, rows) in by_library {
+            let open = self.library(library_id)?;
+            let tx = open.conn.unchecked_transaction().map_err(text)?;
+            {
+                let mut stmt = tx.prepare_cached(sql).map_err(text)?;
+                for row in rows {
+                    stmt.execute(params![value, row]).map_err(text)?;
+                }
+            }
+            tx.commit().map_err(text)?;
+        }
+        Ok(())
     }
 
     fn split_legacy(&self) -> Result<(), String> {
@@ -852,8 +971,17 @@ impl Catalog {
                     sharpness: None,
                     blown: None,
                     best_of_burst: false,
+                    burst: None,
+                    echo: None,
+                    exposure: None,
+                    focal35: None,
+                    raw_clipped: None,
+                    raw_dark: None,
+                    eyes_closed: None,
                     faces: None,
                     face_sharpness: None,
+                    brightness: None,
+                    contrast: None,
                     suggested: None,
                     edited: false,
                 })
@@ -895,8 +1023,19 @@ impl Catalog {
             return Ok(Vec::new());
         }
 
-        let known = self.known_faces()?;
+        let known = self.known_from(&named)?;
+        self.people_among(library_id, &named, &known)
+    }
 
+    pub fn people_among(
+        &self,
+        library_id: i64,
+        named: &[NamedFace],
+        known: &[(String, [f32; people::LENGTH])],
+    ) -> Result<Vec<(String, Vec<i64>)>, String> {
+        if named.is_empty() {
+            return Ok(Vec::new());
+        }
         let open = self.library(library_id)?;
         let found: Vec<(i64, Vec<u8>)> = open
             .conn
@@ -905,27 +1044,30 @@ impl Catalog {
             .map_err(text)?;
 
         let mut everyone: Vec<(String, Vec<i64>)> = Vec::new();
+
+        let mut seen: Vec<std::collections::HashSet<i64>> = Vec::new();
         let mut add = |name: &str, photo: i64| {
             let index = match everyone.iter().position(|(have, _)| have.eq_ignore_ascii_case(name)) {
                 Some(index) => index,
                 None => {
                     everyone.push((name.to_string(), Vec::new()));
+                    seen.push(Default::default());
                     everyone.len() - 1
                 }
             };
-            if !everyone[index].1.contains(&photo) {
+            if seen[index].insert(photo) {
                 everyone[index].1.push(photo);
             }
         };
         for (local, bytes) in &found {
-            if let Some((name, _)) = embedding_from(bytes).and_then(|face| people::recognise(&face, &known)) {
+            if let Some((name, _)) = embedding_from(bytes).and_then(|face| people::recognise(&face, known)) {
                 if !name.is_empty() {
                     add(name, global_id(library_id, *local));
                 }
             }
         }
 
-        for (photo, name, _) in &named {
+        for (photo, name, _) in named {
             if split_id(*photo).0 == library_id {
                 add(name, *photo);
             }
@@ -949,7 +1091,7 @@ impl Catalog {
                 .unwrap_or(0);
             let in_albums: Vec<String> = open
                 .conn
-                .prepare("SELECT album FROM album_photos WHERE photo_id = ?1")
+                .prepare_cached("SELECT album FROM album_photos WHERE photo_id = ?1")
                 .and_then(|mut statement| statement.query_map([local], |row| row.get::<_, String>(0))?.collect())
                 .map_err(text)?;
             let library = split_id(id).0;
@@ -1068,7 +1210,8 @@ impl Catalog {
             .conn
             .prepare(
                 "SELECT a.photo_id, a.sharpness, a.blown, a.hash, a.face_sharpness, \
-                        a.brightness, a.contrast, a.colourfulness \
+                        a.brightness, a.contrast, a.colourfulness, a.shape, a.exposure, a.focal35, \
+                        a.raw_clipped, a.raw_dark, a.eyes_closed \
                  FROM analysis a JOIN photos p ON p.id = a.photo_id \
                  ORDER BY COALESCE(p.taken, p.mtime) ASC, p.path ASC",
             )
@@ -1085,6 +1228,12 @@ impl Catalog {
                         brightness: row.get::<_, Option<f64>>(5)?.unwrap_or_default() as f32,
                         contrast: row.get::<_, Option<f64>>(6)?.unwrap_or_default() as f32,
                         colourfulness: row.get::<_, Option<f64>>(7)?.unwrap_or_default() as f32,
+                        shape: row.get::<_, Option<i64>>(8)?.unwrap_or_default() as u64,
+                        exposure: row.get::<_, Option<f64>>(9)?.unwrap_or_default() as f32,
+                        focal35: row.get::<_, Option<f64>>(10)?.unwrap_or_default() as f32,
+                        raw_clipped: row.get::<_, Option<f64>>(11)?.map(|value| value as f32),
+                        raw_dark: row.get::<_, Option<f64>>(12)?.map(|value| value as f32),
+                        eyes_closed: row.get::<_, Option<i64>>(13)?.map(|closed| closed != 0),
                     },
                     row.get::<_, Option<f64>>(4)?.map(|value| value as f32),
                 ))
@@ -1094,8 +1243,8 @@ impl Catalog {
         rows.collect::<Result<_, _>>().map_err(text)
     }
 
-    pub fn save_bursts(&self, groups: &[(i64, usize, bool, f32)]) -> Result<(), String> {
-        let mut by_library: HashMap<i64, Vec<&(i64, usize, bool, f32)>> = HashMap::new();
+    pub fn save_bursts(&self, groups: &[(i64, Option<usize>, bool, f32)]) -> Result<(), String> {
+        let mut by_library: HashMap<i64, Vec<&(i64, Option<usize>, bool, f32)>> = HashMap::new();
         for row in groups {
             by_library.entry(split_id(row.0).0).or_default().push(row);
         }
@@ -1105,7 +1254,27 @@ impl Catalog {
             for (photo_id, burst, best, suggested) in rows {
                 tx.execute(
                     "UPDATE analysis SET burst = ?1, best = ?2, suggested = ?3 WHERE photo_id = ?4",
-                    params![*burst as i64, i64::from(*best), suggested, split_id(*photo_id).1],
+                    params![burst.map(|burst| burst as i64), i64::from(*best), suggested, split_id(*photo_id).1],
+                )
+                .map_err(text)?;
+            }
+            tx.commit().map_err(text)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_echoes(&self, echoes: &[(i64, Option<i64>)]) -> Result<(), String> {
+        let mut by_library: HashMap<i64, Vec<&(i64, Option<i64>)>> = HashMap::new();
+        for row in echoes {
+            by_library.entry(split_id(row.0).0).or_default().push(row);
+        }
+        for (library_id, rows) in by_library {
+            let open = self.library(library_id)?;
+            let tx = open.conn.unchecked_transaction().map_err(text)?;
+            for (photo_id, echo) in rows {
+                tx.execute(
+                    "UPDATE analysis SET echo = ?1 WHERE photo_id = ?2",
+                    params![echo.map(|echo| split_id(echo).1), split_id(*photo_id).1],
                 )
                 .map_err(text)?;
             }
@@ -1128,6 +1297,10 @@ impl Catalog {
 
     pub fn remember<T: serde::Serialize>(&self, key: &str, value: &T) {
         let Ok(json) = serde_json::to_string(value) else { return };
+
+        if self.setting(key).as_deref() == Some(json.as_str()) {
+            return;
+        }
         if let Err(err) = self.set_setting(key, &json) {
             log::warn!("could not remember {key}: {err}");
         }
@@ -1137,7 +1310,7 @@ impl Catalog {
         serde_json::from_str(&self.setting(key)?).ok()
     }
 
-    pub fn named_faces(&self) -> Result<Vec<(i64, String, [f32; people::LENGTH])>, String> {
+    pub fn named_faces(&self) -> Result<Vec<NamedFace>, String> {
         let mut named = Vec::new();
         for library in self.libraries()? {
             let Ok(open) = self.library(library.id) else { continue };
@@ -1163,8 +1336,12 @@ impl Catalog {
     }
 
     pub fn known_faces(&self) -> Result<Vec<(String, [f32; people::LENGTH])>, String> {
+        self.known_from(&self.named_faces()?)
+    }
+
+    pub fn known_from(&self, named: &[NamedFace]) -> Result<Vec<(String, [f32; people::LENGTH])>, String> {
         let mut known: Vec<(String, [f32; people::LENGTH])> =
-            self.named_faces()?.into_iter().map(|(_, name, embedding)| (name, embedding)).collect();
+            named.iter().map(|(_, name, embedding)| (name.clone(), *embedding)).collect();
         for library in self.libraries()? {
             let Ok(open) = self.library(library.id) else { continue };
             let rows: Vec<Vec<u8>> = open
@@ -1178,14 +1355,19 @@ impl Catalog {
     }
 
     pub fn ignore_faces(&self, faces: &[(i64, [f32; people::LENGTH])]) -> Result<(), String> {
-        for (photo_id, embedding) in faces {
-            let (open, local) = self.photo(*photo_id)?;
-            open.conn
-                .execute(
-                    "INSERT INTO ignored_faces (photo_id, embedding) VALUES (?1, ?2)",
-                    params![local, embedding_bytes(embedding)],
-                )
-                .map_err(text)?;
+
+        let mut libraries: Vec<i64> = faces.iter().map(|(photo_id, _)| split_id(*photo_id).0).collect();
+        libraries.sort_unstable();
+        libraries.dedup();
+        for library_id in libraries {
+            let open = self.library(library_id)?;
+            let tx = open.conn.unchecked_transaction().map_err(text)?;
+            for (photo_id, embedding) in faces.iter().filter(|(photo_id, _)| split_id(*photo_id).0 == library_id) {
+                tx.prepare_cached("INSERT INTO ignored_faces (photo_id, embedding) VALUES (?1, ?2)")
+                    .and_then(|mut stmt| stmt.execute(params![split_id(*photo_id).1, embedding_bytes(embedding)]))
+                    .map_err(text)?;
+            }
+            tx.commit().map_err(text)?;
         }
         Ok(())
     }
@@ -1392,7 +1574,19 @@ impl Catalog {
     }
 
     pub fn sync_library(&self, library: &Library) -> Result<usize, String> {
-        self.apply_scan(library, &scan(&library.path)).map(|changes| changes.added)
+        let known = self.known_files(library).unwrap_or_default();
+        self.apply_scan(library, &scan(&library.path, &known)).map(|changes| changes.added)
+    }
+
+    pub fn known_files(&self, library: &Library) -> Result<Known, String> {
+        let open = self.library(library.id)?;
+        let mut stmt = open.conn.prepare("SELECT path, mtime, taken FROM photos").map_err(text)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<i64>>(2)?))
+            })
+            .map_err(text)?;
+        Ok(rows.flatten().map(|(path, mtime, taken)| (open.absolute(&path), (mtime, taken))).collect())
     }
 
     pub fn apply_scan(&self, library: &Library, found: &Scan) -> Result<Changes, String> {
@@ -1408,21 +1602,19 @@ impl Catalog {
             let relative = open.relative(path);
 
             let inserted = tx
-                .execute(
-                    "INSERT OR IGNORE INTO photos (path, mtime, taken) VALUES (?1, ?2, ?3)",
-                    params![relative, mtime, taken],
-                )
+                .prepare_cached("INSERT OR IGNORE INTO photos (path, mtime, taken) VALUES (?1, ?2, ?3)")
+                .and_then(|mut stmt| stmt.execute(params![relative, mtime, taken]))
                 .map_err(text)?;
 
             if inserted == 1 {
                 changes.added += 1;
             } else {
                 changes.updated += tx
-                    .execute(
+                    .prepare_cached(
                         "UPDATE photos SET mtime = ?1, taken = ?3 \
                          WHERE path = ?2 AND (mtime <> ?1 OR taken IS NOT ?3)",
-                        params![mtime, relative, taken],
                     )
+                    .and_then(|mut stmt| stmt.execute(params![mtime, relative, taken]))
                     .map_err(text)?;
             }
 
@@ -1512,11 +1704,7 @@ impl Catalog {
         } else {
             "DELETE FROM album_photos WHERE album = ?1 AND photo_id = ?2"
         };
-        for &id in photo_ids {
-            let (open, local) = self.photo(id)?;
-            open.conn.execute(sql, params![key, local]).map_err(text)?;
-        }
-        Ok(())
+        self.update_each(photo_ids, sql, key)
     }
 
     pub fn photos(&self, library_id: i64, filter: &Filter) -> Result<Vec<Photo>, String> {
@@ -1532,7 +1720,8 @@ impl Catalog {
                SELECT p.id, p.path, p.mtime, p.rating, p.flag, a.sharpness, a.blown, \
                       ({best}) AS best_of_burst, \
                       a.faces, a.face_sharpness, a.suggested, p.edits IS NOT NULL AS edited, \
-                      p.taken \
+                      p.taken, a.burst, a.brightness, a.contrast, a.echo, a.exposure, a.focal35, \
+                      a.raw_clipped, a.raw_dark, a.eyes_closed \
                FROM photos p LEFT JOIN analysis a ON a.photo_id = p.id \
                WHERE p.rating >= ?1 \
                  AND (?2 IS NULL OR p.id IN (SELECT photo_id FROM album_photos WHERE album = ?2))"
@@ -1543,7 +1732,12 @@ impl Catalog {
         if filter.only_questionable {
 
             let soft = self.scale(library_id).map(|scale| scale.soft).unwrap_or(numa_cull::SOFT);
-            sql.push_str(&format!(" AND (a.sharpness < {soft} OR a.blown > {})", numa_cull::BLOWN));
+
+            sql.push_str(&format!(
+                " AND (a.sharpness < {soft} OR COALESCE(a.raw_clipped, a.blown) > {} OR a.contrast < {})",
+                numa_cull::BLOWN,
+                numa_cull::BLANK
+            ));
         }
 
         if let Some(person) = &filter.person {
@@ -1582,6 +1776,15 @@ impl Catalog {
                     suggested: row.get(10)?,
                     edited: row.get(11)?,
                     taken: row.get(12)?,
+                    burst: row.get(13)?,
+                    brightness: row.get(14)?,
+                    contrast: row.get(15)?,
+                    echo: row.get::<_, Option<i64>>(16)?.map(|local| global_id(library_id, local)),
+                    exposure: row.get(17)?,
+                    focal35: row.get(18)?,
+                    raw_clipped: row.get(19)?,
+                    raw_dark: row.get(20)?,
+                    eyes_closed: row.get::<_, Option<i64>>(21)?.map(|closed| closed != 0),
                 })
             })
             .map_err(text)?;
@@ -1592,19 +1795,71 @@ impl Catalog {
     }
 
     pub fn set_rating(&self, photo_id: i64, rating: u8) -> Result<(), String> {
+        self.set_ratings(&[photo_id], rating)
+    }
+
+    pub fn log_decision(&self, photo_id: i64, action: &str, dwell_ms: Option<i64>) -> Result<(), String> {
         let (open, local) = self.photo(photo_id)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64);
         open.conn
-            .execute("UPDATE photos SET rating = ?1 WHERE id = ?2", params![rating.min(5), local])
+            .execute(
+                "INSERT INTO decisions (photo_id, at, action, dwell_ms) VALUES (?1, ?2, ?3, ?4)",
+                params![local, now, action, dwell_ms],
+            )
             .map_err(text)?;
         Ok(())
     }
 
-    pub fn set_flag(&self, photo_id: i64, flag: Flag) -> Result<(), String> {
+    pub fn decisions(&self, photo_id: i64) -> Result<Vec<(String, Option<i64>)>, String> {
         let (open, local) = self.photo(photo_id)?;
-        open.conn
-            .execute("UPDATE photos SET flag = ?1 WHERE id = ?2", params![flag.to_i64(), local])
+        let mut stmt = open
+            .conn
+            .prepare("SELECT action, dwell_ms FROM decisions WHERE photo_id = ?1 ORDER BY rowid")
             .map_err(text)?;
+        let rows = stmt.query_map(params![local], |row| Ok((row.get(0)?, row.get(1)?))).map_err(text)?;
+        rows.collect::<Result<_, _>>().map_err(text)
+    }
+
+    pub fn picks(&self, library_id: i64) -> Result<i64, String> {
+        let open = self.library(library_id)?;
+        open.conn
+            .query_row("SELECT COUNT(*) FROM photos WHERE flag = ?1", params![Flag::Picked.to_i64()], |row| row.get(0))
+            .map_err(text)
+    }
+
+    pub fn cull_target(&self, library_id: i64) -> Option<u32> {
+        let open = self.library(library_id).ok()?;
+        open.conn
+            .query_row("SELECT value FROM settings WHERE key = 'cull_target'", [], |row| row.get::<_, String>(0))
+            .ok()?
+            .parse()
+            .ok()
+    }
+
+    pub fn set_cull_target(&self, library_id: i64, target: Option<u32>) -> Result<(), String> {
+        let open = self.library(library_id)?;
+        match target {
+            Some(target) => open.conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('cull_target', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![target.to_string()],
+            ),
+            None => open.conn.execute("DELETE FROM settings WHERE key = 'cull_target'", []),
+        }
+        .map_err(text)?;
         Ok(())
+    }
+
+    pub fn set_flag(&self, photo_id: i64, flag: Flag) -> Result<(), String> {
+        self.set_flags(&[photo_id], flag)
+    }
+
+    pub fn set_ratings(&self, photo_ids: &[i64], rating: u8) -> Result<(), String> {
+        self.update_each(photo_ids, "UPDATE photos SET rating = ?1 WHERE id = ?2", rating.min(5))
+    }
+
+    pub fn set_flags(&self, photo_ids: &[i64], flag: Flag) -> Result<(), String> {
+        self.update_each(photo_ids, "UPDATE photos SET flag = ?1 WHERE id = ?2", flag.to_i64())
     }
 
     pub fn edits_json(&self, photo_id: i64) -> Result<Option<String>, String> {
@@ -1760,12 +2015,14 @@ fn write_analysis(
     conn.execute(
         "INSERT INTO analysis \
            (photo_id, version, sharpness, blown, hash, faces, face_sharpness, \
-            brightness, contrast, colourfulness) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+            brightness, contrast, colourfulness, shape, exposure, focal35, raw_clipped, raw_dark, \
+            eyes_closed) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
          ON CONFLICT(photo_id) DO UPDATE SET \
            version = ?2, sharpness = ?3, blown = ?4, hash = ?5, \
            faces = ?6, face_sharpness = ?7, burst = NULL, best = 0, suggested = NULL, \
-           brightness = ?8, contrast = ?9, colourfulness = ?10",
+           brightness = ?8, contrast = ?9, colourfulness = ?10, shape = ?11, echo = NULL, \
+           exposure = ?12, focal35 = ?13, raw_clipped = ?14, raw_dark = ?15, eyes_closed = ?16",
         params![
             local,
             version,
@@ -1777,6 +2034,12 @@ fn write_analysis(
             frame.brightness,
             frame.contrast,
             frame.colourfulness,
+            frame.shape as i64,
+            (frame.exposure > 0.0).then_some(frame.exposure),
+            (frame.focal35 > 0.0).then_some(frame.focal35),
+            frame.raw_clipped,
+            frame.raw_dark,
+            frame.eyes_closed.map(i64::from),
         ],
     )
     .map_err(text)?;
@@ -1851,6 +2114,8 @@ fn civil_date(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(month <= 2), month, day)
 }
 
+pub type Known = HashMap<PathBuf, (i64, Option<i64>)>;
+
 #[derive(Debug, Default)]
 pub struct Scan {
 
@@ -1871,7 +2136,7 @@ impl Changes {
     }
 }
 
-pub fn scan(root: &Path) -> Scan {
+pub fn scan(root: &Path, known: &Known) -> Scan {
     let (paths, complete) = walk_images(root);
     Scan {
         files: paths
@@ -1879,7 +2144,10 @@ pub fn scan(root: &Path) -> Scan {
             .map(|path| {
                 let mtime = mtime_secs(&path);
 
-                let taken = crate::exif::taken(&path);
+                let taken = match known.get(&path) {
+                    Some(&(was, taken)) if was == mtime => taken,
+                    _ => crate::exif::taken(&path),
+                };
                 (path, mtime, taken)
             })
             .collect(),
@@ -1982,7 +2250,13 @@ fn walk_images(root: &Path) -> (Vec<PathBuf>, bool) {
                 }
             };
             let path = entry.path();
-            if path.is_dir() {
+
+            let is_dir = match entry.file_type() {
+                Ok(kind) if kind.is_symlink() => path.is_dir(),
+                Ok(kind) => kind.is_dir(),
+                Err(_) => path.is_dir(),
+            };
+            if is_dir {
 
                 if path.file_name().is_some_and(|name| name == "edited" || name == LIBRARY_DIR) {
                     continue;
@@ -2235,9 +2509,9 @@ mod tests {
         assert_eq!(catalog.unanalysed(library.id, numa_cull::VERSION).unwrap().len(), 3);
 
         let frames = [
-            numa_cull::Frame { sharpness: 0.9, blown: 0.0, hash: 0b0011, ..Default::default() },
-            numa_cull::Frame { sharpness: 0.1, blown: 0.0, hash: 0b0001, ..Default::default() },
-            numa_cull::Frame { sharpness: 0.7, blown: 0.5, hash: u64::MAX, ..Default::default() },
+            numa_cull::Frame { sharpness: 0.9, blown: 0.0, hash: 0b0011, contrast: 0.2, ..Default::default() },
+            numa_cull::Frame { sharpness: 0.1, blown: 0.0, hash: 0b0001, contrast: 0.2, ..Default::default() },
+            numa_cull::Frame { sharpness: 0.7, blown: 0.5, hash: u64::MAX, contrast: 0.2, ..Default::default() },
         ];
         for (photo, frame) in all.iter().zip(frames.iter()) {
             catalog.set_rating(photo.id, 3).unwrap();
@@ -2250,14 +2524,16 @@ mod tests {
         assert_eq!(analysed[0].1.hash, 0b0011, "hashes must survive the round trip");
 
         let hashes: Vec<u64> = analysed.iter().map(|(_, frame, _)| frame.hash).collect();
-        let groups = numa_cull::bursts(&hashes, numa_cull::BURST_TOLERANCE);
+
+        let taken: Vec<i64> = (0..hashes.len() as i64).map(|index| index * 60).collect();
+        let groups = numa_cull::bursts(&hashes, &taken, numa_cull::BURST_TOLERANCE);
         let best = numa_cull::best_of_each(&frames, &[], &groups);
-        let rows: Vec<(i64, usize, bool, f32)> = analysed
+        let rows: Vec<(i64, Option<usize>, bool, f32)> = analysed
             .iter()
             .enumerate()
             .map(|(index, (id, frame, face))| {
                 let best = best.contains(&index);
-                (*id, groups[index], best, numa_cull::Scale::default().suggestion(frame, *face, best))
+                (*id, Some(groups[index]), best, numa_cull::Scale::default().suggestion(frame, *face, best))
             })
             .collect();
         catalog.save_bursts(&rows).unwrap();
@@ -2358,9 +2634,9 @@ mod tests {
 
         catalog
             .save_bursts(&[
-                (all[0].id, 0, true, 3.0),
-                (all[1].id, 0, false, 1.0),
-                (all[2].id, 1, true, 2.0),
+                (all[0].id, Some(0), true, 3.0),
+                (all[1].id, Some(0), false, 1.0),
+                (all[2].id, Some(1), true, 2.0),
             ])
             .unwrap();
 
@@ -2418,6 +2694,52 @@ mod tests {
 
         catalog.set_setting("last-library", "9").unwrap();
         assert_eq!(catalog.setting("last-library").as_deref(), Some("9"));
+    }
+
+    #[test]
+    fn a_cull_target_is_kept_with_its_library() {
+        let root = temp_dir("target");
+        for name in ["a.RAF", "b.RAF", "c.RAF"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+
+        assert_eq!(catalog.cull_target(library.id), None, "no target until one is set");
+        catalog.set_cull_target(library.id, Some(50)).unwrap();
+        catalog.set_cull_target(library.id, Some(40)).unwrap();
+        assert_eq!(catalog.cull_target(library.id), Some(40), "setting again replaces");
+
+        let all = catalog.photos(library.id, &Filter::default()).unwrap();
+        catalog.set_flag(all[0].id, Flag::Picked).unwrap();
+        catalog.set_flag(all[1].id, Flag::Rejected).unwrap();
+        assert_eq!(catalog.picks(library.id).unwrap(), 1);
+
+        let again = Catalog::in_memory().unwrap();
+        let reopened = again.add_library(&root).unwrap();
+        assert_eq!(again.cull_target(reopened.id), Some(40));
+
+        catalog.set_cull_target(library.id, None).unwrap();
+        assert_eq!(catalog.cull_target(library.id), None);
+    }
+
+    #[test]
+    fn decisions_are_kept_in_order() {
+        let root = temp_dir("decisions");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap()[0].id;
+
+        catalog.log_decision(photo, "passed", Some(1200)).unwrap();
+        catalog.log_decision(photo, "pick", None).unwrap();
+        catalog.log_decision(photo, "undo", None).unwrap();
+        assert_eq!(
+            catalog.decisions(photo).unwrap(),
+            vec![("passed".to_string(), Some(1200)), ("pick".to_string(), None), ("undo".to_string(), None)]
+        );
     }
 
     #[test]
@@ -2680,12 +3002,63 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         std::fs::write(root.join("a.RAF"), b"x").unwrap();
         let catalog = Catalog::in_memory().unwrap();
         let library = catalog.add_library(&root).unwrap();
-        assert_eq!(catalog.apply_scan(&library, &scan(&root)).unwrap(), Changes { added: 1, updated: 0, removed: 0 });
-        assert!(!catalog.apply_scan(&library, &scan(&root)).unwrap().any(), "nothing new");
+        let known = Known::new();
+        assert_eq!(catalog.apply_scan(&library, &scan(&root, &known)).unwrap(), Changes { added: 1, updated: 0, removed: 0 });
+        assert!(!catalog.apply_scan(&library, &scan(&root, &known)).unwrap().any(), "nothing new");
 
         std::fs::write(root.join("b.jpg"), b"x").unwrap();
         std::fs::remove_file(root.join("a.RAF")).unwrap();
-        assert_eq!(catalog.apply_scan(&library, &scan(&root)).unwrap(), Changes { added: 1, updated: 0, removed: 1 });
+        assert_eq!(catalog.apply_scan(&library, &scan(&root, &known)).unwrap(), Changes { added: 1, updated: 0, removed: 1 });
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_selection_is_rated_at_once() {
+        let (first, second) = (temp_dir("rate-first"), temp_dir("rate-second"));
+        std::fs::write(first.join("a.RAF"), b"x").unwrap();
+        std::fs::write(first.join("b.RAF"), b"x").unwrap();
+        std::fs::write(second.join("c.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let libraries: Vec<Library> = [&first, &second].iter().map(|root| catalog.add_library(root).unwrap()).collect();
+        let all = |catalog: &Catalog| -> Vec<Photo> {
+            let mut photos: Vec<Photo> =
+                libraries.iter().flat_map(|library| catalog.photos(library.id, &Filter::default()).unwrap()).collect();
+            photos.sort_by_key(|photo| photo.id);
+            photos
+        };
+        for library in &libraries {
+            catalog.sync_library(library).unwrap();
+        }
+        let ids: Vec<i64> = all(&catalog).iter().map(|photo| photo.id).collect();
+        assert_eq!(ids.len(), 3);
+
+        catalog.set_ratings(&ids[1..], 4).unwrap();
+        catalog.set_flags(&ids, Flag::Picked).unwrap();
+        let photos = all(&catalog);
+        assert_eq!(photos.iter().map(|photo| photo.rating).collect::<Vec<_>>(), [0, 4, 4]);
+        assert!(photos.iter().all(|photo| photo.flag == Flag::Picked));
+        std::fs::remove_dir_all(&first).unwrap();
+        std::fs::remove_dir_all(&second).unwrap();
+    }
+
+    #[test]
+    fn a_rescan_reads_only_what_changed() {
+        let root = temp_dir("rescan-known");
+        std::fs::write(root.join("a.jpg"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+
+        let mut known = catalog.known_files(&library).unwrap();
+        let (mtime, taken) = known[&root.join("a.jpg")];
+        assert_eq!(taken, None, "a file with no EXIF has no date");
+        known.insert(root.join("a.jpg"), (mtime, Some(42)));
+        let found = scan(&root, &known);
+        assert_eq!(found.files, vec![(root.join("a.jpg"), mtime, Some(42))], "unchanged: not read again");
+
+        known.insert(root.join("a.jpg"), (mtime - 1, Some(42)));
+        let found = scan(&root, &known);
+        assert_eq!(found.files[0].2, None, "changed: read again");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -2740,7 +3113,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
 
         std::fs::write(root.join("b.RAF"), b"x").unwrap();
         std::fs::remove_file(root.join("a.RAF")).unwrap();
-        catalog.apply_scan(&library, &scan(&root)).unwrap();
+        catalog.apply_scan(&library, &scan(&root, &Known::new())).unwrap();
         let (open, _) = catalog.photo(photo.id).unwrap();
         let left: i64 = open.conn.query_row("SELECT COUNT(*) FROM snapshots", [], |row| row.get(0)).unwrap();
         assert_eq!(left, 0);
@@ -3085,10 +3458,10 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         let analysed = catalog.analysed(library.id).unwrap();
         let groups = vec![0usize; analysed.len()];
         let pick = numa_cull::best_of_each(&frames, &faces, &groups);
-        let rows: Vec<(i64, usize, bool, f32)> = analysed
+        let rows: Vec<(i64, Option<usize>, bool, f32)> = analysed
             .iter()
             .enumerate()
-            .map(|(index, (id, _, _))| (*id, 0, pick.contains(&index), 0.0))
+            .map(|(index, (id, _, _))| (*id, Some(0), pick.contains(&index), 0.0))
             .collect();
         catalog.save_bursts(&rows).unwrap();
 
@@ -3159,8 +3532,17 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
             sharpness,
             blown: None,
             best_of_burst: false,
+            burst: None,
+            echo: None,
+            exposure: None,
+            focal35: None,
+            raw_clipped: None,
+            raw_dark: None,
+            eyes_closed: None,
             faces: None,
             face_sharpness: None,
+            brightness: None,
+            contrast: None,
             suggested: None,
             edited: false,
         };

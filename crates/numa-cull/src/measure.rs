@@ -12,6 +12,7 @@ pub fn of(image: &RgbImage) -> Frame {
         sharpness: sharpness(image),
         blown: blown(image),
         hash: hash(image),
+        shape: shape(image),
         ..tone(image)
     }
 }
@@ -79,6 +80,38 @@ pub fn hash(image: &RgbImage) -> u64 {
     bits
 }
 
+pub fn shape(image: &RgbImage) -> u64 {
+    const N: usize = 32;
+    const LOW: usize = 8;
+    let grey = imageops::resize(&imageops::grayscale(image), N as u32, N as u32, imageops::FilterType::Lanczos3);
+    let cosine: Vec<f32> = (0..LOW * N)
+        .map(|at| {
+            let (k, n) = (at / N, at % N);
+            (std::f32::consts::PI * (2 * n + 1) as f32 * k as f32 / (2 * N) as f32).cos()
+        })
+        .collect();
+    let pixel = |x: usize, y: usize| grey.get_pixel(x as u32, y as u32)[0] as f32;
+
+    let mut low = Vec::with_capacity(LOW * LOW - 1);
+    for u in 0..LOW {
+        for v in 0..LOW {
+            if u == 0 && v == 0 {
+                continue;
+            }
+            let mut sum = 0.0f32;
+            for y in 0..N {
+                let row: f32 = (0..N).map(|x| cosine[v * N + x] * pixel(x, y)).sum();
+                sum += cosine[u * N + y] * row;
+            }
+            low.push(sum);
+        }
+    }
+    let mut sorted = low.clone();
+    sorted.sort_by(f32::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    low.iter().fold(0u64, |bits, value| (bits << 1) | u64::from(*value > median))
+}
+
 pub fn tone(image: &RgbImage) -> Frame {
     let count = image.pixels().len() as f64;
     if count == 0.0 {
@@ -139,6 +172,22 @@ mod tests {
         RgbImage::from_fn(size, size, |x, _| {
             image::Rgb([(x * 255 / size.max(1)) as u8; 3])
         })
+    }
+
+    #[test]
+    fn the_shape_hash_follows_the_scene_not_the_exposure() {
+        let scene = RgbImage::from_fn(320, 240, |x, y| {
+            let v = ((x / 40 + y / 60) % 3 * 90 + (x % 7) as u32) as u8;
+            image::Rgb([v, v, v])
+        });
+        let brighter = RgbImage::from_fn(320, 240, |x, y| {
+            let p = scene.get_pixel(x, y)[0];
+            image::Rgb([p.saturating_add(30); 3])
+        });
+        let turned = imageops::rotate180(&scene);
+        let far = |a: &RgbImage, b: &RgbImage| (shape(a) ^ shape(b)).count_ones();
+        assert!(far(&scene, &brighter) <= 4, "exposure moved it {} bits", far(&scene, &brighter));
+        assert!(far(&scene, &turned) >= 16, "a different picture only {} bits away", far(&scene, &turned));
     }
 
     #[test]

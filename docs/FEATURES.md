@@ -554,7 +554,13 @@ entry does not exist, and the messages that say what is missing name
 ### LIB — Library
 
 - ✅ **LIB-001**: Rating (0–5) and flag/reject.
-- ✅ **LIB-002**: Filter and sort the grid.
+- ✅ **LIB-002**: Filter and sort the grid. A filter that narrows the grid is
+  in the accent colour; the order and its arrow are one linked control, and the
+  arrow — a plain one of Numa's own, Adwaita having only chevrons — points the
+  way the grid runs (22 September). A rating given while the grid is filtered
+  on flags no longer rebuilds it: only the filter on what was changed can drop
+  a photograph, and the rebuild flickered the library at every star and
+  cancelled the thumbnails still loading.
 - ✅ **LIB-003**: Keyboard culling (`0`–`5`, `P`, `X`, `U`) in the grid *and* in
   the editor, a star row in the editor's toolbar, the rating on each filmstrip
   frame, and the same on a right-click menu — which is how anyone finds out the
@@ -610,6 +616,68 @@ entry does not exist, and the messages that say what is missing name
   where it is developed. Its keys run before the grid's own, since the grid
   keeps the focus underneath it and its arrows would otherwise move the cursor
   without the loupe following.
+
+  FT-029 makes it the cull. Up picks and Down rejects, and both go on to the
+  next frame at once: setting rather than toggling, unlike the bar's buttons,
+  because a second Up has already moved on and a key that sometimes takes the
+  mark away has to be looked at before it is pressed. On the last frame the
+  mark lands and a toast says why the loupe stayed. Backspace takes the last
+  mark back — whichever key or button gave it, and a star as much as a flag —
+  and returns to the frame it was given to, with no question asked: the mark
+  is one key to give again. What it can take back is kept only while the loupe
+  is open. The grid's other keys are held off while it is: Up, Down, Home, End
+  and Ctrl+A used to reach the grid underneath and move the selection while
+  the loupe went on showing the frame it had, so the next P landed on a
+  photograph nobody was looking at. Delete is held off too — beside Backspace,
+  the key that takes a reject back, and a cull must never be one slip away
+  from losing a file; a reject never removes anything. A mark that takes a
+  frame out of the grid's filter no longer closes the loupe: the grid is
+  rebuilt when the loupe closes, as it is when the editor does, and into the
+  editor straight from the loupe it is the editor's to do.
+
+  Bursts (CULL-002) are visible in it. Under the name, a bracket with one mark
+  per frame of the burst — open, picked or rejected, this one larger — says
+  which frame this is, which the grid calls best, and why: the sharpest face
+  where there is one, else the sharpest frame, which is what `best_of_each`
+  ranks on (eyes are not measured, so it does not say eyes). Ctrl+Left and
+  Ctrl+Right go by burst and land on its best frame, the one to judge the rest
+  against; the arrows alone still go frame by frame, into a burst as into
+  anything else. Shift+Down rejects every frame of the burst not yet marked and
+  goes on to the next — Up never does that by itself, since a pick says "this
+  one", not "only this one" — and one Backspace takes all of it back. A burst
+  is a stretch of the grid in its own order, so a sort that scatters one shows
+  it as frames on their own.
+
+  The frames before and after sit dimmed in the space either side of the
+  photograph — about 8 % a side for a 3:2 frame on a 16:9 screen, most of the
+  screen beside a portrait one — worked out from the photograph's own shape
+  each time it is laid out, and left empty where the space is too narrow to be
+  more than a stripe. A click on one goes there; F puts them away for the frame
+  alone and is remembered. They are also what makes stepping immediate: the
+  loupe holds the frame on screen, the one before and the two after, loaded
+  ahead of the grid's own queue, so a step shows a frame already in hand rather
+  than going blank while it loads. A picked frame leaves upwards and a rejected
+  one downwards, 180 ms over the next frame that is already in its place — a
+  layer of its own, so the next photograph never waits for it, and an Adwaita
+  animation, so it is not there at all where the desktop has animations off.
+  Nothing on the library side is styled for any of it: the dimming is the
+  widget's opacity.
+
+  And 1:1 is in the loupe too, with the editor's gestures: a double-click goes
+  to 1:1 about the point clicked and a second one back, the wheel zooms about
+  the middle, and a drag pans. What is shown at 1:1 is the frame developed at
+  full size — the best demosaic and Numa's untouched rendering, about 1.9 s for
+  a 40 MP RAF — since the camera's embedded preview is 4416 pixels across a
+  7728-pixel frame and too small to judge focus on. The view zooms at once on
+  the frame already on screen, says "developing at full size…" under it, and
+  sharpens in place when the development arrives. A step keeps the
+  magnification and the place in the frame, so a burst is judged on the same
+  eye in every frame, and while zoomed the next frame is developed ahead, one
+  at a time — each is half a gigabyte while it runs — so after the first the
+  step is sharp at once. Out to the whole frame lets them go. A click on the
+  photograph no longer closes the loupe: the first click of every double-click
+  did. Zoomed in, the neighbours and the slide are not shown — there is no side,
+  and the eye is on the same corner of the next frame.
 
   **Compare** (the brief's C4) is C: two to four selected photographs side by
   side, over the grid the way the loupe is and on the loupe's thumbnails
@@ -930,15 +998,125 @@ is out of focus" is a slow way to compute a number we can get exactly.
   cut out of an order nothing had ever been photographed in. Two bodies
   shooting one event still interleave, but that is the interleaving of two
   clocks now rather than of two copy operations.
+
+  FT-029: a frame also joins its run when it comes within two seconds of the
+  frame before and looks like that one — twelve bits. The anchor alone cut a
+  burst with a moving subject into pieces: nineteen frames in twelve seconds,
+  one to nine bits apart frame to frame, made three runs, because a few
+  seconds in the subject had moved too far from where it began. On the Japan
+  raws this merged 95 runs into their neighbours, and every one looked at was
+  one scene shot a frame or two a second; a pan over minutes still ends its
+  run.
+
+  FT-029: the camera's own JPEG or HIF of a raw frame — the same name and the
+  same capture second, in whatever folder it was filed — is in no run. It sits
+  right beside its raw in capture order and looks the same, so every shot was a
+  burst of two: in the 4 644-file Japan library 1 586 of 1 969 runs were one
+  RAF and its HIF, and "best of burst" was on 1 888 cards, often the hidden
+  copy. Grouped without the twins it is 297: one per real run of more than
+  one frame.
+  The name alone would not do: a Fujifilm counts to DSCF9999 and starts again.
+  A twin takes its raw's suggestion and learns nothing twice. With "RAW only"
+  the grid and the loupe are the raws and nothing else, as fast as before —
+  the loupe was showing the raw's own preview already.
+- ✅ **CULL-006**: Frames with next to nothing in them (FT-029 C7) — a lens
+  cap, a flash into the dark, a frame gone white. The spread of the luma that
+  CULL-005 already measures, under 0.01 of its 0..0.5: across the fifteen
+  libraries here that is seven raws, of which five are blanks, a black and a
+  white, and two are frescoes shot so far under that the preview is black. So
+  the card says what the frame looks like — "nearly black", "nearly white",
+  "nearly blank" — rather than calling it a mistake, and "Only questionable"
+  includes them. Its suggestion is 0: a lens cap's frame is sensor noise, all
+  fine detail, and measured sharp it came out five stars. The first real
+  photograph above the line, an aquarium in the dark, is at 0.012 — and a
+  nearly black frame just above it still measures its noise as sharpness,
+  which is C3's to fix, not this line's.
+- ✅ **CULL-007**: Culling to a number (FT-029 C9). The loupe's bar counts the
+  picks in the library — the whole shoot, whatever the grid is filtered to — and,
+  once one is set, against how many it is being culled down to: "⚑ 73 / 50",
+  in Adwaita's warning colour while there are more. Pressed, it asks for the
+  number; 0 is none. Kept in the library's own catalog, in a small settings
+  table of its own, so it goes where the folder goes. Per library rather than
+  per folder inside one, which is the same thing as long as a library is one
+  shoot. While that field has the keys, the loupe's own are left alone: Up
+  there is one more, not a pick, and Escape closes the field.
+- ✅ **CULL-008**: The same scene again, later (FT-029 C8). Not a burst: a
+  composition tried again minutes or days on. The difference hash alone could
+  not say it — across six libraries it put ten pairs of different photographs
+  within burst distance for every two real ones — and a perceptual hash of the
+  frame's low frequencies alone did no better. The two summed did: nothing but
+  real pairs up to 24 bits (a garden four minutes apart, a statue by day and
+  lit, a mountain road, a staircase, a beach with kites); at 25 the first
+  wrong one. So Analyse measures both, and each frame is linked to the nearest
+  frame of the same scene in another run at least two minutes away — blank
+  frames (CULL-006) and a raw's own JPEG or HIF left out. The loupe says it
+  under the name: "same scene as DSCF3274, 4 min later". Measuring the second
+  hash bumped the analysis version, so the next Analyse measures afresh.
+- 🟡 **CULL-009**: Where the camera focused (FT-029 C1). The loupe draws the
+  AF point as a box — a single point small, a zone or wide area larger — in
+  Adwaita's accent colour over a dark line, and a double-click inside it goes
+  to 1:1 on the AF point itself, which is the look that answers "is it sharp
+  where it focused". Read from the file when the frame is shown, so it needs
+  no Analyse: Fujifilm's `FocusPixel` (0x1023), in the pixels of the RAF's
+  embedded JPEG before it is turned upright, found by walking from the RAF
+  header to the JPEG's frame header; the orientation from that JPEG's EXIF.
+  F puts it away with the neighbours. **No verdict yet.** Comparing edge
+  sharpness at the AF point with the sharpest part of the frame was measured
+  on 154 frames: the eight lowest were all an AF point on something with
+  nothing to judge — a hazy skyline, a white curtain, a dark wall — and no
+  missed focus among them, so a "focus missed?" note would mostly fire on sky.
+  That waits for frames known to be missed. Other makes keep their AF point in
+  MakerNotes of their own shape (Nikon and Canon AFInfo2, Sony FocusLocation)
+  and are not read yet.
+- ✅ **CULL-010**: The shutter as a reason (FT-029 C6). Analyse keeps the
+  exposure time and the 35 mm focal length from the EXIF, and a frame that is
+  soft *and* more than five stops slower than 1/focal-length says "soft · slow
+  shutter", with the stops in the tooltip. Five, not the rule as taught: on
+  2 313 raws from a stabilised X-T5, frames up to 32 times slower than 1/f
+  measure as sharp as the rest (median 0.41–0.43 against 0.42) and only past
+  that does the median fall (0.25) — the 1/f rule would have blamed the
+  shutter for 454 frames it had nothing to do with. Past the line are light
+  trails on purpose as well as shaken frames, and the shutter cannot tell them
+  apart, so it is a reason given beside "soft", never a note of its own and
+  never a verdict; a sharp long exposure says nothing. Telling shake from a
+  moving subject from missed focus in the pixels needs a sharpness map per
+  region, which does not exist yet (C1, C3). No 35 mm focal length in Canon's
+  CR2 and CR3, Olympus's ORF or the Leica DNG, and Panasonic's RW2 has one the
+  EXIF reader cannot open: no reason given for those.
+- ✅ **CULL-011**: Clipping on the raw (FT-029 C2). Analyse reads the raw's
+  own values — not demosaiced, 15–45 ms for a 40 MP RAF — and counts the 6x6
+  blocks of photosites with one within 1 % of the white level, and those with
+  none above 1 % of the range over black. "Blown", its filter and the
+  suggestion's penalty follow the raw where there is one, the camera's JPEG
+  where there is not. The JPEG is a rendering, and its highlights go white
+  well before the sensor's: of the 51 frames of a trip it showed over a tenth
+  blown, 23 held under a tenth in the raw and 10 none at all — a white Osaka
+  sky at 36 % in the JPEG whose brightest photosites stop two thirds of a stop
+  short of full. The tooltip gives both, and says "the raw holds it" where
+  that is so, and how much of the raw is deep shadow.
+- ✅ **CULL-012**: What was decided, kept (FT-029 C10). Every mark given in
+  the loupe — pick, reject, clear, a rating, Backspace's undo — is written to
+  the library's own catalog with its time, and so is every frame looked at and
+  left without one: "passed", with how long it was looked at. That is the
+  training data CULL-005 lacks: the stars say what was kept, not what was
+  seen and passed over. Nothing learns from it yet. A general aesthetic score
+  (NIMA, MUSIQ) as a tie-breaker is not built: there is no small, general,
+  well-provenanced ONNX one (CULL-004), and within a burst of technically equal
+  frames the choice is expression and gesture, which such a score is least
+  able to judge.
 - 🟡 **CULL-003**: Faces, from YuNet (OpenCV Zoo, Apache-2.0, 232 kB) through
   `tract`. Turns the frame measure into the one that matters for a portrait: a
   crisp background with a soft face scores well on CULL-001 and is a reject.
   Measured on real frames — one at frame 0.53 with a face at 0.20, another the
   other way round at 0.22 and 0.41. Run `dev/fetch-models.sh`; without the model
   the columns stay null, which the grid reads as "not looked for" rather than
-  "nobody here". Eyes open/closed is **not** built: YuNet gives eye positions,
-  not eyelids, and that needs a second classifier there is no trustworthy small
-  one of.
+  "nobody here". FT-029 C4: whether the eyes are closed is asked of OpenVINO's
+  `open-closed-eye-0001` (46 kB, Apache-2.0, in the Faces download), on a crop
+  of each eye from the preview at full size. Trained on drivers in infrared, it
+  is right about a closed eye about three times in ten on photographs; asking
+  for both eyes closed, the face turned to the camera and the eyes no darker
+  than the face (sunglasses), five of six were right — the sixth a stone statue.
+  So the card asks "eyes closed?", and the frame is never marked for it.
 - 🟡 **CULL-004**: A suggested rating, 0–5, shown beside the photograph and
   sortable. It is a **rule, not a model**, and that is a deliberate retreat from
   the original plan. The plan was a NIMA-class network; the finding is that no
@@ -2482,9 +2660,12 @@ dependency at all.
   Greenery, Ground, Water — greyed out when the thing was not here. Now the
   row is what the model found in *this* photograph, largest first.
 
-  **In groups, not in nouns.** Foreground and Background first, then the groups
-  that are here: Person, Animal, Sky, Water, Greenery, Ground, Buildings — and
-  nothing for a group under half a per cent of the frame, which is a smudge.
+  **In groups, not in nouns.** Subject and Background first, then Sky and
+  Water, then the groups that are here: Person, Animal, Greenery, Ground,
+  Buildings — and nothing for a group under half a per cent of the frame, which
+  is a smudge. That order is the photographer's (23 September): subject,
+  background, sky and water are what a photograph is edited by, and the rest is
+  occasionally useful.
   There was a chip per class as well, and it made the panel a list of nouns —
   Windowpane, Curtain, Chair, Signboard — where half of them are things this
   model is not good enough at for the chip to be worth pressing, and the ones
@@ -2492,7 +2673,7 @@ dependency at all.
   selected by clicking on it, which picks *that* one rather than every thing
   like it in the frame, and the class under the cursor is a lookup.
 
-  Foreground is whatever the photograph is of — the person or animal when the
+  Subject is whatever the photograph is of — the person or animal when the
   semantic model named one, and MASK-008's matting model when it named nothing,
   because a kite in flight is nobody's ADE20K class and the matte is not asked
   *which* thing it is, only which pixels are it. Background is that mask
@@ -2867,11 +3048,21 @@ dependency at all.
   subject is looked at again — a man in a hat behind her, whom the first look
   gave a third, keeps his third.
 
-  It is a recipe (`Mask::fine`), so it is done again wherever the mask is
-  resolved: after every rebuild in the editor, off the main thread with the
-  loader up at once, the original decoded once per photograph; and in the
-  export, from the original. Not in a thumbnail, whose source is the proxy.
-  Known: her ear came back at about nine tenths rather than whole.
+  It is a recipe (`Mask::fine`), done again when the export resolves the mask,
+  from the original; not in a thumbnail, whose source is the proxy. Known: her
+  ear came back at about nine tenths rather than whole.
+
+  **Both closer looks are asked for (23–24 September).** Refine edge ran the
+  hair trace straight after the edge search, and on a kite against the sky it
+  ate the wing tips the edge search had just got right; then every rebuild ran
+  them both again. A lasso stroke was added and at once reasoned away — the
+  matting model answers "the subject", never "the subject plus the polygon
+  just drawn" — and the hair trace ate what was left. So Refine is a split
+  button in the mask bar (Edge, and Hair, fur and feathers), ⟳ runs the edge
+  search again, and a rebuild — a stroke, a click, a gradient moved — drops
+  both flags (`Mask::matte`, `Mask::fine`): they were passes over pixels that
+  are no longer there, and neither starts again by itself. The export then
+  repeats exactly what the screen shows.
 
   And a matte starts without Feather. The photographer's first look at it in
   the app was a smooth shape again: every new mask starts at Feather 12, and a
@@ -3037,6 +3228,22 @@ dependency at all.
   opening, about half a second of background work that only renames a chip.
   It could wait for the chip to be hovered instead.
 
+- ✅ **MASK-014**: A mask survives a change of framing. A quarter turn, a
+  crop or a straighten threw every mask's pixels away and asked the models
+  again about the new frame — and the answer about a turned frame is a
+  different shape, so a subject clicked and brushed into shape came back as
+  something else; the click model's embedding was not even thrown away with
+  it, so its points asked about places in the old orientation. Now the
+  framing's change is a map: `image::between_frames` takes one framing's
+  fractions to another's, and `Mask::remap` carries the clicks, the strokes, a
+  gradient's handles and the raster through it (`carry_masks`, when the crop
+  tool closes). A quarter turn is exact and turns them instead (`Mask::turn`).
+  What the models were shown is dropped either way (`forget_model_frames`).
+  Tested: four turns come back to the start, and a mask carried into a crop of
+  the middle half keeps its clicks on the same part of the photograph. Known:
+  a crop that changes the aspect scales a stroke's width by one figure for
+  both axes.
+
 - ✅ **MASK-013**: Editing a mask is a state the whole panel enters, not a
   section inside Light. The histogram becomes the mask's own header — its
   thumbnail, its name, which of them it is — the panel tints, the canvas says
@@ -3060,11 +3267,14 @@ dependency at all.
     row of 56 px under the canvas (`mask_toolbar.rs`): EDITING MASK · the
     chip (the mask small, its name, "1 of 1 · 1 part"; its popover switches
     mask and holds the name, the parts with eye and ×, and a range mask's
-    numbers) · Tool (Brush, Lasso, Click, Linear, Radial) · Show
+    numbers) · Tool (Look, Brush, Lasso, Click, Linear, Radial) · Show
     (any of Wash, Outline, Points, Matte, and the button says
-    which) · Shape (Strength, Feather, Edge; the button reads Feather) · ⋯
-    (Invert, Refine edge where the model has something to say, Duplicate,
-    Delete) · Done. The panel runs to the foot of the window beside it.
+    which) · Shape (Strength, Feather, Edge; the button reads Feather) ·
+    Refine ▾ and ⟳ where the model has something to say (MASK-008) · ⋯
+    (Invert, Duplicate, Delete) · Done. **Look** (23 September) puts the tool
+    down: the overlay lets the canvas have the pointer, so the photograph can
+    be double-clicked to 1:1 and panned with the mask open. Picking the tool in
+    hand again puts it down too. The panel runs to the foot of the window beside it.
   - **The Mask tab is gone**; the rail in a mask is Light, Colour, Effects and
     Detail, with one quiet line above it — "These four tabs edit **Person**"
     and the eye. The path ends in the mask's name, in its accent.
@@ -3419,6 +3629,30 @@ dependency at all.
   Lowering the proxy instead would have been one line and the wrong line — it
   costs sharpness at rest, which is when the photograph is actually being
   judged.
+
+  **23–24 September: every path drafts, and the sharp frame waits for the
+  hand.** Measured on the photographer's machine with `NUMA_TIMING=1`, which
+  prints each render's size, cost and path, and each pass of the stack:
+
+  - Zoomed in, the draft and the finished render were the same six megapixels
+    — the halving only ever reached the proxy — so a drag at 1:1 cost 200 ms a
+    frame. The edge a tile is cut at is halved while drafting, and the draft
+    keeps a tile of its own (`draft_view`), so it is cut out of the full frame
+    once per zoom rather than at every tick: 200 ms became 52.
+  - A frame that can only be rendered whole — HDR, Clarity, Texture or Dehaze,
+    until PERF-018 — drafted at thirty-eight megapixels, 560 ms a frame. While
+    the hand moves, a whole-frame region now comes from the proxy.
+  - The 130 ms of quiet was the real stall: on a careful drag the full-size
+    render started at every pause, a second and a half on the main thread,
+    which hid every gain in the draft. The sharp frame now waits for the mouse
+    button to come up. Watched on the window's raw events
+    (`watch_the_button`): a gesture on a slider never hears its release,
+    because the scale claims the sequence, and the pointer's own modifier
+    state reads nought — both were tried, and the first left the photograph on
+    the draft for good.
+
+  At fit, afterwards: 5–8 ms a draft and 30 ms sharp, flat however many masks
+  are added.
 - ✅ **PERF-007**: The same pixels, sooner. Measured first, on the 2400-pixel
   proxy of a 40 MP frame, and every change below gives the same answer to the
   bit — the blur has a test that says so against the version it replaced.
@@ -3563,6 +3797,15 @@ dependency at all.
   crate's `webgpu` feature, which links Dawn as a hard dependency and, on
   every machine where WebGPU finds no adapter, segfaults at exit.
 
+  **One device (23 September).** The session was handed every WebGPU device
+  the environment listed, and on a machine with two — the RX 9070 XT and the
+  processor's own Radeon — the factory refused with "currently only supports
+  one device at a time", and every model ran on the processor, quietly, with a
+  warning in the log. It is handed one now: a card before a software renderer.
+  Segmentation on the card: 51 ms, against 250 on the processor. It was also
+  most of the memory: sessions on the processor held about 5 GB of arenas
+  after a few masks; on the card the editor sat at 0.7–1.8 GB.
+
 - ✅ **PERF-013**: A shoot spends the encode decoding the next frame. The three
   parts of an export do not behave alike — measured per frame on a 24 MP X-T20
   file, decode is 700 ms and gets 5.7× faster on sixteen threads than on one,
@@ -3580,6 +3823,51 @@ dependency at all.
   The name is chosen on the writing side, not beside the render: `next_path`
   returns the first name no file has yet, and the previous frame's file does
   not exist until its encode has finished.
+
+- ✅ **PERF-016**: A mask costs what it covers. Every mask cloned the whole
+  buffer, ran its detail passes over all of it and blended all of it back, and
+  worked its coverage out for every pixel — for a bird a twentieth of the
+  frame. On the photographer's log the same render went from 190 ms to 290 as
+  masks were added. A raster now keeps the box it covers from when it is built,
+  an ellipse is its centre and radius, and both the coverage and the passes run
+  over the rows the mask reaches, with a margin of 64 for the blurs. A mask
+  covering nothing costs nothing. A gradient and an inverted mask reach
+  everywhere and are left as they were; so is a mask with HDR, Clarity, Texture
+  or Dehaze, which measure the whole of what they are given — handed a strip
+  they came out differently, which the first version of this did from 0.19.10
+  to 0.19.20 (`rows_to_work`, tested directly).
+
+- ✅ **PERF-017**: A turned, mirrored or straightened frame at 1:1 renders the
+  part on screen. The region is a rectangle in the frame and a rotated one in
+  the photograph, so `tile_in_source` said "not a rectangle" and the whole
+  frame was rendered at full size. `cut_turned_tile` cuts the smallest upright
+  box around the region out of the working image, turns only that, and lets
+  `cropped` do the straighten angle over it. Tested against cutting the region
+  out of the whole frame after `geometry_of` for all sixteen combinations of
+  quarter turn, mirror and angle — within 1e-4 — and the test fails with the
+  turn or the angle's sign wrong. At 1:1 on a turned photograph the sharp frame
+  went from about 1.4 s to 185 ms.
+
+- ✅ **PERF-018**: HDR, Clarity and Texture at 1:1 without the whole frame.
+  Their base layer, their glow and the average they compress about are the
+  frame's, so a tile tone-mapped on its own came out differently — 17 levels
+  off at worst, 9 on average — and a frame with any of them on was always
+  rendered whole. The tone map now hands its measurement over and takes one
+  in (`local::Tone`, `measure_tone`, `apply_pixels_guided`):
+
+  - while a slider moves, measured on the draft: milliseconds, and a little
+    off along a hard edge, where nobody judges a halo;
+  - once it stops, measured on the full-resolution frame without the passes
+    its quarter-size base cannot see — sharpening, noise reduction, spots —
+    and nothing after the tone map; kept, so a pan measures nothing.
+
+  Measured on a scene built for it: the full-resolution measurement is within
+  0.05 of a level on average of the whole-frame render, and the proxy's was up
+  to 26 levels off along a hard edge, which is why the proxy only ever serves a
+  draft. In the editor, at 1:1 on the kite with Clarity at −45: 1058 ms became
+  541, and the screenshots differ in one pixel of 1.3 million by more than 1 %
+  (`NUMA_WHOLE_FRAME=1` renders the old way, to compare). Dehaze, and a mask
+  carrying any of the four, still render the whole frame.
 
 - ✅ **START-010**: The editor is not built while nobody is looking at it. It
   is 60 ms of widgets, and it was assembled before the window was shown on a
@@ -3879,7 +4167,8 @@ dependency at all.
   are not there are off before anyone reaches them. The toast when a preset
   finds nothing says "could not find", not "there is no": the model missed
   it, the photographer did not imagine it.
-- ✅ **UX-015**: One loader for everything that waits. Eight things run off the
+- ✅ **UX-015**: One loader for everything that waits. Auto joined them on 24
+  September: its models and measurement were 0.9 s on the main thread. Eight things run off the
   main thread — the two models, the face detector, the culling measures, a
   bracket merge, an export, the full-resolution decode and opening a
   photograph — and each said nothing, or said something of its own. They go

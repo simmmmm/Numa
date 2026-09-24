@@ -39,15 +39,116 @@ fn descriptions(
     })
 }
 
-fn ensure_passes(document: &Document, linear: &LinearImage) -> Result<(), String> {
+fn ensure_passes(document: &Document, linear: &LinearImage, work: &Work) -> Result<(), String> {
     let path = std::path::Path::new(&document.source.path);
     if document.ai_denoise > 0.0 && numa::render::ai_denoise::is_installed() {
-        numa::io::denoised::ensure(path, linear, |_, _| true)?;
+        work.doing(Doing::Denoise);
+        numa::io::denoised::ensure(path, linear, work.progress())?;
     }
     if document.ai_sharpen > 0.0 && numa::render::ai_denoise::sharpen_installed() {
-        numa::io::denoised::ensure_sharpened(path, linear, document.ai_denoise > 0.0, |_, _| true)?;
+        work.doing(Doing::Sharpen);
+        numa::io::denoised::ensure_sharpened(path, linear, document.ai_denoise > 0.0, work.progress())?;
     }
-    Ok(())
+    work.stopped().then_some(()).map_or(Ok(()), |()| Err("stopped".to_string()))
+}
+
+#[derive(Clone, Default)]
+struct Work {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+
+    doing: Arc<std::sync::atomic::AtomicU8>,
+    done: Arc<std::sync::atomic::AtomicUsize>,
+    total: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Doing {
+    Develop = 0,
+    Denoise = 1,
+    Sharpen = 2,
+    Enlarge = 3,
+}
+
+impl Work {
+    fn doing(&self, part: Doing) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.doing.store(part as u8, Relaxed);
+        self.done.store(0, Relaxed);
+        self.total.store(0, Relaxed);
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn progress(&self) -> impl FnMut(usize, usize) -> bool + '_ {
+        use std::sync::atomic::Ordering::Relaxed;
+        move |done, total| {
+            self.done.store(done, Relaxed);
+            self.total.store(total, Relaxed);
+            !self.stopped()
+        }
+    }
+
+    fn describe(&self) -> Option<String> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (done, total) = (self.done.load(Relaxed), self.total.load(Relaxed));
+        let name = match self.doing.load(Relaxed) {
+            1 => "AI denoise",
+            2 => "AI sharpen",
+            3 => "Super Resolution",
+            _ => return None,
+        };
+        Some(match total {
+            0 => name.to_string(),
+            total => format!("{name} {}%", done * 100 / total),
+        })
+    }
+}
+
+fn develop_one(job: ExportJob, settings: &export::ExportSettings, work: &Work) -> Result<(export::Developed, PathBuf, Option<PathBuf>), String> {
+    work.doing(Doing::Develop);
+    let linear = job.source.full_resolution()?;
+    ensure_passes(&job.document, &linear, work)?;
+
+    let mut document = render::with_masks_resolved(&job.document, &linear);
+
+    document.set_output_space(settings.written_space());
+
+    let inputs = render_inputs(&document);
+
+    work.doing(Doing::Develop);
+    let image = export::develop(&document, linear, &inputs, settings);
+    if settings.size == export::Size::Double {
+        work.doing(Doing::Enlarge);
+    }
+    let mut image = export::enlarge(image, settings, work.progress())?;
+    work.doing(Doing::Develop);
+    watermark::stamp(&mut image, &settings.watermark, &settings.copyright);
+    let raf = match &job.source {
+        Source::Photo { path, .. } => Some(path.clone()),
+        Source::Bracket { .. } => None,
+    };
+    Ok((image, job.source.name(), raf))
+}
+
+fn follow(progress: &adw::Toast, work: &Work, title: String) -> glib::SourceId {
+    glib::timeout_add_local(
+        std::time::Duration::from_millis(500),
+        glib::clone!(
+            #[strong] work,
+            #[weak] progress,
+            #[upgrade_or] glib::ControlFlow::Break,
+            move || {
+                match work.describe() {
+                    Some(doing) => progress.set_title(&format!("{} — {doing}", title.trim_end_matches('…'))),
+                    None => progress.set_title(&title),
+                }
+                glib::ControlFlow::Continue
+            }
+        ),
+    )
 }
 
 pub(super) fn run_export(
@@ -61,11 +162,19 @@ pub(super) fn run_export(
     progress.set_timeout(0);
 
     let cancel = Cancel::default();
-    if total > 1 {
+
+    let work = Work::default();
+    let has_models = settings.size == export::Size::Double
+        || jobs.iter().any(|job| job.document.ai_denoise > 0.0 || job.document.ai_sharpen > 0.0);
+    if total > 1 || has_models {
         progress.set_button_label(Some("Stop"));
         progress.connect_button_clicked(glib::clone!(
             #[strong] cancel,
-            move |_| cancel.stop()
+            #[strong] work,
+            move |_| {
+                cancel.stop();
+                work.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         ));
     }
     state.toasts.add_toast(progress.clone());
@@ -86,33 +195,23 @@ pub(super) fn run_export(
                 stopped = true;
                 break;
             }
-            if total > 1 {
-                progress.set_title(&format!("Exporting {} of {total}…", index + 1));
-            }
+            let title = match total {
+                1 => "Exporting…".to_string(),
+                _ => format!("Exporting {} of {total}…", index + 1),
+            };
+            progress.set_title(&title);
+            let ticker = follow(&progress, &work, title);
 
             let for_render = settings.clone();
             let job_source = job.source.clone();
-            let result = busy(&state, "Exporting…", move || {
-                let settings = for_render;
-                let linear = job.source.full_resolution()?;
-                ensure_passes(&job.document, &linear)?;
-
-                let mut document = render::with_masks_resolved(&job.document, &linear);
-
-                document.set_output_space(settings.written_space());
-
-                let inputs = render_inputs(&document);
-
-                let image = export::develop(&document, linear, &inputs, &settings);
-                let mut image = export::enlarge(image, &settings)?;
-                watermark::stamp(&mut image, &settings.watermark, &settings.copyright);
-                let raf = match &job.source {
-                    Source::Photo { path, .. } => Some(path.clone()),
-                    Source::Bracket { .. } => None,
-                };
-                Ok::<_, String>((image, job.source.name(), raf))
-            })
-            .await;
+            let worker = work.clone();
+            let result = busy(&state, "Exporting…", move || develop_one(job, &for_render, &worker)).await;
+            ticker.remove();
+            if work.stopped() {
+                stopped = true;
+                collect(&mut written, &mut last, &mut failures, writing.take()).await;
+                break;
+            }
 
             let started = match result {
                 Ok(Ok((image, name, raf))) => {

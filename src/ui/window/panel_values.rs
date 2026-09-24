@@ -109,8 +109,6 @@ pub(super) fn read_mixer(state: &App) {
             }
         }
         photo.document.set_mixer(mixer);
-
-        photo.view = None;
     }
 
     request_render(state);

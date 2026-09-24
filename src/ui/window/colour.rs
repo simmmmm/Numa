@@ -337,14 +337,6 @@ pub(super) fn build_colour(
         }
 
         set_neutral(scale, 0.0);
-        scale.connect_value_changed(glib::clone!(
-            #[strong] state,
-            move |_| {
-                if !state.applying.get() {
-                    adjustments_changed(&state);
-                }
-            }
-        ));
         mask_only(row.as_ref());
         colour.append(&row);
     }
@@ -401,7 +393,7 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
                 photo.document.colour_profile = chosen;
 
                 photo.inputs = render_inputs(&photo.document);
-                photo.working = render::to_working_space(&photo.document, &photo.proxy, &photo.inputs);
+                photo.working = Arc::new(render::to_working_space(&photo.document, &*photo.proxy, &photo.inputs));
                 photo.full_working = None;
                 photo.full_working_key = None;
 

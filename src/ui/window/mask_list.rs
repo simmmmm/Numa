@@ -185,7 +185,7 @@ pub(super) fn refresh_found(state: &App) {
             true => segment::MATTEABLE.to_vec(),
             false => subject,
         };
-        for (name, inverted) in [("Foreground", false), ("Background", true)] {
+        for (name, inverted) in [("Subject", false), ("Background", true)] {
             things.push((
                 segment::Found { name: name.to_string(), classes: classes.clone(), share: 0.0 },
                 inverted,
@@ -193,6 +193,9 @@ pub(super) fn refresh_found(state: &App) {
             ));
         }
     }
+
+    let mut groups = groups;
+    groups.sort_by_key(|thing| !matches!(thing.name.as_str(), "Sky" | "Water"));
     things.extend(groups.into_iter().map(|thing| (thing, false, false)));
     if things.is_empty() {
         note("Nothing it could name");
@@ -386,7 +389,7 @@ pub(super) fn mask_frame(state: &App) -> Option<Arc<image::RgbImage>> {
         }
         geometry.set_rotation(photo.document.rotation());
         geometry.set_mirrored(photo.document.mirrored());
-        let working = render::to_working_space(&geometry, &photo.proxy, &photo.inputs);
+        let working = render::to_working_space(&geometry, &*photo.proxy, &photo.inputs);
         Arc::new(render::apply_stack(&geometry, &working, 1.0))
     };
 
@@ -417,33 +420,14 @@ pub(super) fn rebuild_mask_map(state: &App, index: usize) {
         width,
         height,
     );
+
+    mask.matte = false;
+    mask.fine = false;
     photo.view = None;
 
     drop(open);
 
     refresh_outline(state);
-
-    masks::trace_hair(state, index);
-}
-
-pub(super) fn subject_alpha(state: &App) -> Option<Arc<Alpha>> {
-    if !segment::is_installed() {
-        return None;
-    }
-    let frame = mask_frame(state)?;
-    let (width, height) = mask_raster_size(state);
-
-    let found = match state.open.borrow().as_ref()?.segmentation.clone() {
-        Some(found) => Some(found),
-        None => segment::of(&frame).map(Arc::new),
-    }?;
-    if let Some(photo) = state.open.borrow_mut().as_mut() {
-        photo.segmentation = Some(found.clone());
-    }
-
-    render::auto::subject_mask(&found, &frame, width, height)
-        .and_then(|mask| mask.map.0)
-        .map(|stored| Arc::new(stored.to_alpha()))
 }
 
 pub(super) fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str, inverted: bool) {
@@ -505,7 +489,6 @@ pub(super) fn paint_segment(state: &App, from: [f32; 2], to: [f32; 2], stroke: &
         let Some(alpha) = mask.map.0.as_mut() else { return };
 
         stroke.draw_segment(Arc::make_mut(alpha), from, to);
-        photo.view = None;
     }
 
     if let (Some(surface), Some(mask)) =
@@ -522,7 +505,7 @@ pub(super) fn paint_segment(state: &App, from: [f32; 2], to: [f32; 2], stroke: &
                 (x(from[0].max(to[0])) + radius).max(0.0) as usize + 1,
                 (y(from[1].max(to[1])) + radius).max(0.0) as usize + 1,
             );
-            paint_wash(surface, alpha, mask.inverted, mask.opacity, bounds);
+            paint_wash(surface, alpha, mask.inverted, bounds);
         }
     }
 

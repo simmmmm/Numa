@@ -59,13 +59,10 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
                 rescan_everywhere(&state);
                 return;
             }
-            match state.catalog.sync_library(&library) {
-                Ok(added) => {
-                    reload_grid(&state);
-                    state.toast(&format!("Rescanned: {added} new photo(s)"));
-                }
-                Err(err) => state.toast(&format!("Rescan failed: {err}")),
-            }
+            sync_in_background(&state, vec![library], |state, added| {
+                reload_grid(state);
+                state.toast(&format!("Rescanned: {added} new photo(s)"));
+            });
         }
     ));
 
