@@ -10,6 +10,11 @@ const NEIGHBOUR_GAP: i32 = 12;
 
 const SLIDE_MS: u32 = 180;
 
+const PICK_MS: u32 = 340;
+
+const HOP: f64 = 0.35;
+const HOP_HEIGHT: f64 = 0.04;
+
 const NEIGHBOURS: &str = "loupe_neighbours";
 
 const AF_POINT: f64 = 0.06;
@@ -103,6 +108,15 @@ fn build_stage(state: &App) -> gtk::Overlay {
     leaving.set_visible(false);
     stage.add_overlay(leaving);
 
+    let framed = &state.loupe.picked_frame;
+    framed.add_css_class("accent");
+    framed.set_can_target(false);
+    framed.set_draw_func(glib::clone!(
+        #[strong] state,
+        move |area, cr, _, _| draw_picked(&state, area, cr)
+    ));
+    stage.add_overlay(framed);
+
     stage.connect_get_child_position(glib::clone!(
         #[strong] state,
         move |stage, child| place(&state, stage, child)
@@ -118,6 +132,13 @@ fn place(state: &App, stage: &gtk::Overlay, child: &gtk::Widget) -> Option<gtk::
         let half = side / 2.0;
         return Some(gtk::gdk::Rectangle::new((x - half).round() as i32, (y - half).round() as i32, side.round() as i32, side.round() as i32));
     }
+    if child == state.loupe.picked_frame.upcast_ref::<gtk::Widget>() {
+        return Some(gtk::gdk::Rectangle::new(0, 0, width, height));
+    }
+    if child == state.loupe.leaving.upcast_ref::<gtk::Widget>() && state.loupe.leaving_pick.get() {
+        let (x, y, w, h) = picked_leaving(state, width, height);
+        return Some(gtk::gdk::Rectangle::new(x.round() as i32, y.round() as i32, w.round() as i32, h.round() as i32));
+    }
     if child != state.loupe.leaving.upcast_ref::<gtk::Widget>() && loupe_zoom::zoomed(state) {
 
         return Some(gtk::gdk::Rectangle::new(0, 0, 0, 0));
@@ -126,6 +147,11 @@ fn place(state: &App, stage: &gtk::Overlay, child: &gtk::Widget) -> Option<gtk::
         let offset = (state.loupe.slide.get() * height as f64).round() as i32;
         return Some(gtk::gdk::Rectangle::new(0, offset, width, height));
     }
+    let previous = child == state.loupe.previous.upcast_ref::<gtk::Widget>();
+    Some(side_rect(state, width, height, previous).unwrap_or(gtk::gdk::Rectangle::new(0, 0, 0, 0)))
+}
+
+fn side_rect(state: &App, width: i32, height: i32, previous: bool) -> Option<gtk::gdk::Rectangle> {
     let aspect = state
         .loupe
         .picture
@@ -135,13 +161,74 @@ fn place(state: &App, stage: &gtk::Overlay, child: &gtk::Widget) -> Option<gtk::
     let shown = aspect.map_or(width, |aspect| ((height as f64 * aspect).round() as i32).min(width));
     let side = (width - shown) / 2 - NEIGHBOUR_GAP;
     if side < NEIGHBOUR_MIN {
-        return Some(gtk::gdk::Rectangle::new(0, 0, 0, 0));
+        return None;
     }
-    let x = match child == state.loupe.previous.upcast_ref::<gtk::Widget>() {
-        true => 0,
-        false => width - side,
-    };
+    let x = if previous { 0 } else { width - side };
     Some(gtk::gdk::Rectangle::new(x, 0, side, height))
+}
+
+fn picked_leaving(state: &App, width: i32, height: i32) -> (f64, f64, f64, f64) {
+    let t = state.loupe.slide.get();
+    let (w, h) = (width as f64, height as f64);
+    if t < HOP {
+        let lift = (std::f64::consts::PI * t / HOP).sin() * HOP_HEIGHT * h;
+        return (0.0, -lift, w, h);
+    }
+    let s = (t - HOP) / (1.0 - HOP);
+
+    let s = s * s * (3.0 - 2.0 * s);
+    let to = match side_rect(state, width, height, true).filter(|_| state.loupe.neighbours.get()) {
+        Some(slot) => (slot.x() as f64, slot.y() as f64, slot.width() as f64, slot.height() as f64),
+        None => (-w, 0.0, w, h),
+    };
+    (to.0 * s, to.1 * s, w + (to.2 - w) * s, h + (to.3 - h) * s)
+}
+
+fn contained(aspect: f64, (x, y, w, h): (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+    if aspect <= 0.0 || w <= 0.0 || h <= 0.0 {
+        return (x, y, w, h);
+    }
+    let (fw, fh) = if w / h > aspect { (h * aspect, h) } else { (w, w / aspect) };
+    (x + (w - fw) / 2.0, y + (h - fh) / 2.0, fw, fh)
+}
+
+fn draw_picked(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context) {
+    let Some(at) = state.loupe.at.get() else { return };
+    let (width, height) = (area.width(), area.height());
+    let picked = |at: Option<usize>| at.is_some_and(|at| flag_at(state, at) == Flag::Picked);
+    let mut boxes = Vec::new();
+
+    if picked(Some(at)) && !loupe_zoom::zoomed(state) {
+        if let Some((x, y, w, h)) = loupe_zoom::on_stage(state, 0.0, 0.0) {
+            boxes.push((x, y, w, h));
+        }
+    }
+    if state.loupe.neighbours.get() && !loupe_zoom::zoomed(state) {
+        for (previous, near) in [(true, at.checked_sub(1)), (false, Some(at + 1))] {
+
+            let arriving = previous && state.loupe.leaving_pick.get() && state.loupe.leaving.is_visible();
+            if picked(near) && !arriving {
+                if let Some(slot) = side_rect(state, width, height, previous) {
+                    boxes.push((slot.x() as f64, slot.y() as f64, slot.width() as f64, slot.height() as f64));
+                }
+            }
+        }
+    }
+    if state.loupe.leaving_pick.get() && state.loupe.leaving.is_visible() {
+        let aspect = state.loupe.leaving.paintable().map_or(0.0, |frame| frame.intrinsic_aspect_ratio());
+        boxes.push(contained(aspect, picked_leaving(state, width, height)));
+    }
+
+    let accent = area.color();
+    for (x, y, w, h) in boxes {
+        cr.rectangle(x + 2.0, y + 2.0, w - 4.0, h - 4.0);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.45);
+        cr.set_line_width(6.0);
+        let _ = cr.stroke_preserve();
+        cr.set_source_rgba(accent.red() as f64, accent.green() as f64, accent.blue() as f64, 1.0);
+        cr.set_line_width(3.0);
+        let _ = cr.stroke();
+    }
 }
 
 pub(super) fn af_here(state: &App) -> Option<raw::AfPoint> {
@@ -195,22 +282,34 @@ fn slide_away(state: &App, frame: gtk::gdk::Paintable, up: bool) {
     leaving.set_opacity(1.0);
     leaving.set_visible(true);
 
+    state.loupe.leaving_pick.set(up);
+
     let target = adw::CallbackAnimationTarget::new(glib::clone!(
         #[strong] state,
         move |value| {
             state.loupe.slide.set(value);
-            state.loupe.leaving.set_opacity(1.0 - value.abs());
+            let opacity = match state.loupe.leaving_pick.get() {
+
+                true => 1.0 - (1.0 - NEIGHBOUR_OPACITY) * ((value - HOP) / (1.0 - HOP)).clamp(0.0, 1.0),
+                false => 1.0 - value.abs(),
+            };
+            state.loupe.leaving.set_opacity(opacity);
             state.loupe.stage.queue_allocate();
+            state.loupe.picked_frame.queue_draw();
         }
     ));
-    let animation = adw::TimedAnimation::new(&state.loupe.stage, 0.0, if up { -1.0 } else { 1.0 }, SLIDE_MS, target);
-    animation.set_easing(adw::Easing::EaseInCubic);
+    let duration = if up { PICK_MS } else { SLIDE_MS };
+    let animation = adw::TimedAnimation::new(&state.loupe.stage, 0.0, 1.0, duration, target);
+    animation.set_easing(if up { adw::Easing::Linear } else { adw::Easing::EaseInCubic });
     animation.connect_done(glib::clone!(
         #[strong] state,
         move |_| {
             state.loupe.leaving.set_visible(false);
             state.loupe.leaving.set_paintable(gtk::gdk::Paintable::NONE);
             state.loupe.slide.set(0.0);
+            state.loupe.leaving_pick.set(false);
+            state.loupe.stage.queue_allocate();
+            state.loupe.picked_frame.queue_draw();
         }
     ));
     animation.play();
@@ -363,16 +462,19 @@ pub(super) fn flag_in_loupe(state: &App, flag: Flag) {
 
 pub(super) fn loupe_rating(state: &App) -> (u8, Flag) {
     let Some(at) = state.loupe.at.get() else { return (0, Flag::None) };
-    let id = state
-        .grid.lazy
-        .borrow()
-        .get(at)
-        .and_then(|card| card.widget.widget_name().parse::<i64>().ok());
-    let Some(id) = id else { return (0, Flag::None) };
+    marks_at(state, at)
+}
+
+fn marks_at(state: &App, at: usize) -> (u8, Flag) {
+    let Some(id) = id_at(state, at) else { return (0, Flag::None) };
     let cards = state.grid.cards.borrow();
     let Some((_, badge)) = cards.get(&id) else { return (0, Flag::None) };
     let text = badge.text();
     (rating_from_badge(&text), flag_from_badge(&text))
+}
+
+fn flag_at(state: &App, at: usize) -> Flag {
+    marks_at(state, at).1
 }
 
 pub(super) fn show_in_loupe(state: &App, id: i64) -> bool {
@@ -758,6 +860,7 @@ fn echo_note(state: &App, at: usize) -> Option<String> {
 }
 
 pub(super) fn refresh_loupe_bar(state: &App) {
+    state.loupe.picked_frame.queue_draw();
     let Some(at) = state.loupe.at.get() else { return };
     let id = state.grid.lazy.borrow().get(at).and_then(|card| card.widget.widget_name().parse::<i64>().ok());
     let Some(id) = id else { return };
@@ -823,6 +926,10 @@ pub(super) struct State {
     pub(super) neighbours: Rc<Cell<bool>>,
 
     pub(super) slide: Rc<Cell<f64>>,
+
+    pub(super) leaving_pick: Rc<Cell<bool>>,
+
+    pub(super) picked_frame: gtk::DrawingArea,
     pub(super) animation: Rc<RefCell<Option<adw::TimedAnimation>>>,
 
     pub(super) textures: Rc<RefCell<std::collections::HashMap<i64, gtk::gdk::Texture>>>,
@@ -861,6 +968,8 @@ impl State {
             leaving: gtk::Picture::new(),
             neighbours: Rc::new(Cell::new(true)),
             slide: Rc::new(Cell::new(0.0)),
+            leaving_pick: Rc::new(Cell::new(false)),
+            picked_frame: gtk::DrawingArea::new(),
             animation: Rc::new(RefCell::new(None)),
             textures: Rc::new(RefCell::new(std::collections::HashMap::new())),
             zoom: loupe_zoom::State::new(),
