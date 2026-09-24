@@ -147,12 +147,15 @@ pub(super) fn auto_perspective(state: &App) {
         let luma = framed_luma(&photo.document, &photo.working, angle, kept);
 
         let height = photo.document.crop().map_or(1.0, |([_, _, _, height], _)| height);
-        Perspective { vertical: render::auto::perspective(&luma).vertical / height, ..kept }
+        render::auto::perspective(&luma).map(|found| Perspective { vertical: found.vertical / height, ..kept })
     };
 
-    let perspective = measured;
-    if perspective.vertical == 0.0 {
+    let Some(perspective) = measured else {
         state.toast("No converging verticals clear enough to square up");
+        return;
+    };
+    if perspective.vertical as f64 == state.crop.perspective[0].value() {
+        state.toast("The verticals are already upright");
         return;
     }
 

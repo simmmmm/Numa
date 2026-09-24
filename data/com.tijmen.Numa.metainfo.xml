@@ -31,6 +31,16 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.20.4" date="2026-09-24">
+      <description>
+        <p>
+          A found mask with adjustments in it is no longer removed when a crop
+          or a straighten leaves it covering nothing. A mask's count of parts
+          follows every click, stroke and removal, and the Auto under
+          Perspective says so when the verticals are already upright.
+        </p>
+      </description>
+    </release>
     <release version="0.20.3" date="2026-09-24">
       <description>
         <p>

@@ -16,6 +16,7 @@ pub(super) fn refresh_masks(state: &App) {
     refresh_outline(state);
 
     refresh_mask_toolbar(state);
+    name_selected_mask(state);
     state.masks.mask_list.set_visible(!masks.is_empty());
     state.masks.mask_empty.set_visible(masks.is_empty());
 
@@ -314,6 +315,7 @@ pub(super) fn drop_empty_masks(state: &App) {
             .enumerate()
             .filter(|(_, mask)| {
                 matches!(mask.shape, Shape::Segment { .. })
+                    && mask.is_idle()
                     && !mask.is_pending()
                     && mask.points.is_empty()
                     && mask.strokes.is_empty()

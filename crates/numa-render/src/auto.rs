@@ -249,8 +249,8 @@ const ENOUGH: usize = 400;
 
 const WORTH_IT: f32 = 2.0;
 
-pub fn perspective(luma: &Plane) -> Perspective {
-    let Some((edges, (width, height))) = coherent_edges(luma) else { return Perspective::default() };
+pub fn perspective(luma: &Plane) -> Option<Perspective> {
+    let (edges, (width, height)) = coherent_edges(luma)?;
     let centre_x = width as f32 / 2.0;
 
     let upright: Vec<(f32, f32, f32)> = edges
@@ -260,12 +260,9 @@ pub fn perspective(luma: &Plane) -> Perspective {
         .map(|(x, _, gx, gy, strength)| (x - centre_x, -gy / gx, strength))
         .collect();
 
-    let mut perspective = Perspective::default();
-
-    if let Some(slope) = robust_slope(&upright, width as f32) {
-        perspective.vertical = worth_it((slope * (height as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
-    }
-    perspective
+    let slope = robust_slope(&upright, width as f32)?;
+    let vertical = worth_it((slope * (height as f32 / 2.0) * 200.0).clamp(-60.0, 60.0));
+    Some(Perspective { vertical, ..Perspective::default() })
 }
 
 fn robust_slope(votes: &[(f32, f32, f32)], across: f32) -> Option<f32> {
@@ -715,17 +712,17 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
             Plane::new(w, h, data)
         };
 
-        let straight = perspective(&draw(0.0));
+        let straight = perspective(&draw(0.0)).unwrap_or_default();
         assert!(
             straight.vertical.abs() < 6.0,
             "upright lines need no correction: {}",
             straight.vertical
         );
 
-        let keyed = perspective(&draw(0.35));
+        let keyed = perspective(&draw(0.35)).unwrap_or_default();
         assert!(keyed.vertical.abs() > 12.0, "a keystone is found: {}", keyed.vertical);
 
-        let other = perspective(&draw(-0.35));
+        let other = perspective(&draw(-0.35)).unwrap_or_default();
         assert!(
             other.vertical * keyed.vertical < 0.0,
             "opposite keystones, opposite corrections: {} and {}",
@@ -741,7 +738,7 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
             .map(|index| ((index * 2654435761usize) % 997) as f32 / 997.0)
             .collect();
         let plane = Plane::new(w, h, data);
-        assert_eq!(perspective(&plane), Perspective::default());
+        assert_eq!(perspective(&plane).unwrap_or_default(), Perspective::default());
 
         let mut seed = 0x9e3779b9u32;
         let noise = (0..w * h)
