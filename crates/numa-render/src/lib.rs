@@ -388,13 +388,24 @@ pub fn apply_stack<'a>(
     working: impl Into<Cow<'a, LinearImage>>,
     detail_scale: f32,
 ) -> RgbImage {
-    stack(document, working, detail_scale)
+    stack(document, working, detail_scale, local::Tone::Own)
+}
+
+pub fn apply_stack_recording<'a>(
+    document: &Document,
+    working: impl Into<Cow<'a, LinearImage>>,
+    detail_scale: f32,
+) -> (RgbImage, Option<local::ToneGuide>) {
+    let measured = std::cell::RefCell::new(None);
+    let image = stack(document, working, detail_scale, local::Tone::Record(&measured));
+    (image, measured.into_inner())
 }
 
 fn stack<'a, T: Sample>(
     document: &Document,
     working: impl Into<Cow<'a, LinearImage>>,
     detail_scale: f32,
+    tone: local::Tone,
 ) -> Frame<T>
 where
     image::Rgb<T>: image::Pixel<Subpixel = T>,
@@ -405,9 +416,9 @@ where
 
         Some(geometry) => {
             drop(working);
-            pixels(document, geometry, detail_scale, WHOLE_FRAME)
+            pixels(document, geometry, detail_scale, WHOLE_FRAME, tone)
         }
-        None => pixels(document, working, detail_scale, WHOLE_FRAME),
+        None => pixels(document, working, detail_scale, WHOLE_FRAME, tone),
     }
 }
 
@@ -419,7 +430,32 @@ pub fn apply_pixels<'a>(
     detail_scale: f32,
     region: [f32; 4],
 ) -> RgbImage {
-    pixels(document, working, detail_scale, region)
+    pixels(document, working, detail_scale, region, local::Tone::Own)
+}
+
+pub fn measure_tone<'a>(document: &Document, working: impl Into<Cow<'a, LinearImage>>) -> Option<local::ToneGuide> {
+    let basic = document.basic();
+    if basic.presence.hdr == 0.0 && basic.presence.clarity == 0.0 && basic.presence.texture == 0.0 {
+        return None;
+    }
+
+    let measured = std::cell::RefCell::new(None);
+    let working = working.into();
+    match geometry_of(document, &working) {
+        Some(framed) => finished(document, framed, 1.0, WHOLE_FRAME, local::Tone::Measure(&measured)),
+        None => finished(document, working, 1.0, WHOLE_FRAME, local::Tone::Measure(&measured)),
+    };
+    measured.into_inner()
+}
+
+pub fn apply_pixels_guided<'a>(
+    document: &Document,
+    working: impl Into<Cow<'a, LinearImage>>,
+    detail_scale: f32,
+    region: [f32; 4],
+    guide: &local::ToneGuide,
+) -> RgbImage {
+    pixels(document, working, detail_scale, region, local::Tone::Guided(guide, region))
 }
 
 fn pixels<'a, T: Sample>(
@@ -427,12 +463,49 @@ fn pixels<'a, T: Sample>(
     working: impl Into<Cow<'a, LinearImage>>,
     detail_scale: f32,
     region: [f32; 4],
+    tone: local::Tone,
 ) -> Frame<T>
 where
     image::Rgb<T>: image::Pixel<Subpixel = T>,
 {
-    let (data, width, height) = finished(document, working, detail_scale, region);
+    let (data, width, height) = finished(document, working, detail_scale, region, tone);
     encode(width, height, &data, &document.curves(), document.working_space, document.output_space)
+}
+
+struct Passes {
+    started: Option<std::time::Instant>,
+    costs: Vec<(&'static str, f32)>,
+}
+
+impl Passes {
+    fn new() -> Self {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let on = *ON.get_or_init(|| std::env::var_os("NUMA_TIMING").is_some());
+        Self { started: on.then(std::time::Instant::now), costs: Vec::new() }
+    }
+
+    fn mark(&mut self, name: &'static str) {
+        if let Some(started) = self.started {
+            let cost = started.elapsed().as_secs_f32() * 1000.0;
+            self.costs.push((name, cost));
+            self.started = Some(std::time::Instant::now());
+        }
+    }
+
+    fn report(mut self, width: usize, height: usize) {
+        if self.started.is_none() {
+            return;
+        }
+        self.costs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let total: f32 = self.costs.iter().map(|(_, cost)| cost).sum();
+        let worst: Vec<String> = self
+            .costs
+            .iter()
+            .filter(|(_, cost)| *cost >= 1.0)
+            .map(|(name, cost)| format!("{name} {cost:.0}"))
+            .collect();
+        log::info!("stack {width}x{height} in {total:.0} ms — {}", worst.join(", "));
+    }
 }
 
 fn finished<'a>(
@@ -440,50 +513,35 @@ fn finished<'a>(
     working: impl Into<Cow<'a, LinearImage>>,
     detail_scale: f32,
     region: [f32; 4],
+    tone: local::Tone,
 ) -> (Vec<f32>, u32, u32) {
+    let mut passes = Passes::new();
+
+    let measuring = matches!(tone, local::Tone::Measure(_));
     let mut working = working.into();
     let mut data = take_pixels(&mut working);
     let working = &*working;
 
-    retouch::apply(
-        &document.retouch(),
-        &mut data,
-        working.width as usize,
-        working.height as usize,
-        region,
-    );
-
-    let faces = document.faces();
-    if !faces.is_empty() {
-        beautify::apply(
-            &document.beautify(),
-            &faces,
-            &mut data,
-            working.width as usize,
-            working.height as usize,
-            region,
-        );
-    }
-
     let basic = document.basic();
     let (width, height) = (working.width as usize, working.height as usize);
-
-    effects::dehaze(&mut data, width, height, basic.effects.dehaze);
-    detail::passes(&mut data, width, height, &basic, detail_scale);
-
     let weights = document.working_space.luminance_weights();
-    effects::calibrate(
-        &mut data,
-        [basic.calibration.red_hue, basic.calibration.green_hue, basic.calibration.blue_hue],
-        [basic.calibration.red_saturation, basic.calibration.green_saturation, basic.calibration.blue_saturation],
-        basic.calibration.shadow_tint,
-        weights,
-    );
+    match measuring {
+        true => prefix(document, &basic, &mut data, (width, height), detail_scale, region, measuring, &mut passes),
+        false => prefix_kept(document, &basic, &mut data, (width, height), detail_scale, region, &mut passes),
+    }
 
-    run_operations(document, &mut data, working);
+    run_operations(document, &mut data, working, tone);
+
+    if measuring {
+        return (data, working.width, working.height);
+    }
+
+    passes.mark("operations");
 
     let (point, space) = (working.white_point, document.working_space);
     apply_masks(document, &mut data, width, height, region, point, space, detail_scale);
+
+    passes.mark("masks");
 
     let mixer = document.mixer();
     if mixer.monochrome {
@@ -494,6 +552,8 @@ fn finished<'a>(
         });
     }
 
+    passes.mark("monochrome");
+
     let grading = document.grading();
     if !grading.is_identity() {
         data.par_chunks_exact_mut(3).for_each(|pixel| {
@@ -502,20 +562,159 @@ fn finished<'a>(
         });
     }
 
+    passes.mark("grade");
+
     vignette_and_grain(&mut data, width, height, region, &basic, weights, detail_scale);
+    passes.mark("vignette");
+    passes.report(width, height);
     (data, working.width, working.height)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prefix(
+    document: &Document,
+    basic: &Basic,
+    data: &mut [f32],
+    (width, height): (usize, usize),
+    detail_scale: f32,
+    region: [f32; 4],
+    measuring: bool,
+    passes: &mut Passes,
+) {
+
+    if !measuring {
+        retouch::apply(
+            &document.retouch(),
+            data,
+            width,
+            height,
+            region,
+        );
+    }
+
+    passes.mark("retouch");
+    let faces = document.faces();
+    if !faces.is_empty() {
+        beautify::apply(
+            &document.beautify(),
+            &faces,
+            data,
+            width,
+            height,
+            region,
+        );
+    }
+
+    passes.mark("faces");
+
+    effects::dehaze(data, width, height, basic.effects.dehaze);
+    passes.mark("dehaze");
+
+    if !measuring {
+        detail::passes(data, width, height, basic, detail_scale);
+    }
+
+    passes.mark("detail");
+
+    let weights = document.working_space.luminance_weights();
+    effects::calibrate(
+        data,
+        [basic.calibration.red_hue, basic.calibration.green_hue, basic.calibration.blue_hue],
+        [basic.calibration.red_saturation, basic.calibration.green_saturation, basic.calibration.blue_saturation],
+        basic.calibration.shadow_tint,
+        weights,
+    );
+
+    passes.mark("calibrate");
+}
+
+fn prefix_kept(
+    document: &Document,
+    basic: &Basic,
+    data: &mut Vec<f32>,
+    size: (usize, usize),
+    detail_scale: f32,
+    region: [f32; 4],
+    passes: &mut Passes,
+) {
+    const KEEP: usize = 4;
+    const LARGEST: usize = 8_000_000 * 3;
+    type Kept = Vec<(u64, std::sync::Arc<Vec<f32>>)>;
+    static KEPT: std::sync::Mutex<Kept> = std::sync::Mutex::new(Vec::new());
+
+    #[cfg(test)]
+    let off = KEEP_OFF.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(test))]
+    let off = false;
+    if off || data.len() > LARGEST {
+        prefix(document, basic, data, size, detail_scale, region, false, passes);
+        return;
+    }
+    let settings = format!(
+        "{:?}",
+        (
+            document.retouch(),
+            document.faces(),
+            document.beautify(),
+            basic.effects.dehaze,
+            basic.detail,
+            basic.calibration,
+            document.working_space,
+            detail_scale,
+            region,
+            size,
+        )
+    );
+    let key = content_hash(data) ^ content_hash_bytes(settings.as_bytes()).rotate_left(1);
+    let found = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(at, _)| *at == key).map(|(_, kept)| kept.clone());
+    if let Some(kept) = found {
+        data.copy_from_slice(&kept);
+        passes.mark("prefix kept");
+        return;
+    }
+    prefix(document, basic, data, size, detail_scale, region, false, passes);
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    kept.retain(|(at, _)| *at != key);
+    if kept.len() >= KEEP {
+        kept.remove(0);
+    }
+    kept.push((key, std::sync::Arc::new(data.clone())));
+}
+
+#[cfg(test)]
+static KEEP_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn content_hash(data: &[f32]) -> u64 {
+    let chunks: Vec<u64> = data
+        .par_chunks(1 << 16)
+        .map(|chunk| chunk.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, value| (hash ^ u64::from(value.to_bits())).wrapping_mul(0x100_0000_01b3)))
+        .collect();
+    chunks.iter().fold(data.len() as u64, |hash, chunk| (hash ^ chunk).wrapping_mul(0x100_0000_01b3).rotate_left(17))
+}
+
+pub(crate) fn content_hash_bytes(bytes: &[u8]) -> u64 {
+    let chunks: Vec<u64> = bytes
+        .par_chunks(1 << 18)
+        .map(|chunk| chunk.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)))
+        .collect();
+    chunks.iter().fold(bytes.len() as u64, |hash, chunk| (hash ^ chunk).wrapping_mul(0x100_0000_01b3).rotate_left(17))
 }
 
 pub const HDR_STOPS: f32 = 3.0;
 
-pub fn develop_hdr<'a>(document: &Document, source: impl Into<Cow<'a, LinearImage>>, inputs: &RenderInputs) -> (RgbImage, Vec<f32>) {
+pub fn develop_hdr<'a>(
+    document: &Document,
+    source: impl Into<Cow<'a, LinearImage>>,
+    inputs: &RenderInputs,
+    detail_scale: f32,
+) -> (RgbImage, Vec<f32>) {
     let working = to_working_space(document, source, inputs);
     let (data, width, height) = match geometry_of(document, &working) {
         Some(geometry) => {
             drop(working);
-            finished(document, geometry, 1.0, WHOLE_FRAME)
+            finished(document, geometry, detail_scale, WHOLE_FRAME, local::Tone::Own)
         }
-        None => finished(document, working, 1.0, WHOLE_FRAME),
+        None => finished(document, working, detail_scale, WHOLE_FRAME, local::Tone::Own),
     };
     let curves = document.curves();
     let frame = encode(width, height, &data, &curves, document.working_space, document.output_space);
@@ -546,7 +745,7 @@ fn take_pixels(working: &mut Cow<'_, LinearImage>) -> Vec<f32> {
     }
 }
 
-fn run_operations(document: &Document, data: &mut [f32], working: &LinearImage) {
+fn run_operations(document: &Document, data: &mut [f32], working: &LinearImage, tone: local::Tone) {
 
     let mut looks: Vec<Look> = Vec::new();
     let mixer = document.mixer();
@@ -576,6 +775,7 @@ fn run_operations(document: &Document, data: &mut [f32], working: &LinearImage) 
                 basic.presence.hdr / 100.0,
                 basic.presence.clarity / 100.0,
                 basic.presence.texture / 100.0,
+                tone,
             );
         }
     }
@@ -639,11 +839,17 @@ fn apply_masks(
 
     let map = document.masks_map.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     for mask in document.masks() {
-        if mask.is_idle() {
+        if mask.is_idle() || mask.covers_nothing() {
             continue;
         }
 
         let field = mask.field_through(width, height, region, map);
+
+        let Some((top, bottom)) = rows_to_work(&mask.basic, &field, width, height) else { continue };
+        let height = bottom + 1 - top;
+        let (start, end) = (top * width * 3, (bottom + 1) * width * 3);
+        let field = &field[top * width..(bottom + 1) * width];
+        let data = &mut data[start..end];
         let mut local = data.to_vec();
 
         if let Some(from) = white_point {
@@ -698,6 +904,7 @@ fn apply_masks(
             mask.basic.presence.hdr / 100.0,
             mask.basic.presence.clarity / 100.0,
             mask.basic.presence.texture / 100.0,
+            local::Tone::Own,
         );
 
         if !mask.curve.is_identity() {
@@ -721,6 +928,23 @@ fn apply_masks(
             }
         });
     }
+}
+
+fn rows_to_work(basic: &Basic, field: &[f32], width: usize, height: usize) -> Option<(usize, usize)> {
+    const MARGIN: usize = 64;
+    let (first, last) = covered_rows(field, width)?;
+    if measures_frame(basic) {
+        return Some((0, height.saturating_sub(1)));
+    }
+    Some((first.saturating_sub(MARGIN), (last + MARGIN).min(height.saturating_sub(1))))
+}
+
+fn covered_rows(field: &[f32], width: usize) -> Option<(usize, usize)> {
+    let covered = |row: &[f32]| row.iter().any(|weight| *weight > 0.0);
+    let rows: Vec<bool> = field.par_chunks(width).map(covered).collect();
+    let first = rows.iter().position(|covered| *covered)?;
+    let last = rows.iter().rposition(|covered| *covered)?;
+    Some((first, last))
 }
 
 fn apply_point_colours(points: &PointColours, space: ColourSpace, data: &mut [f32]) {
@@ -755,16 +979,19 @@ fn apply_looks(looks: &[Look], data: &mut [f32]) {
 }
 
 pub fn tiles_cleanly(document: &Document) -> bool {
+    !measures_frame(&document.basic()) && tiles_with_guide(document)
+}
 
-    let frame_local = |basic: &Basic| {
-        basic.presence.hdr == 0.0
-            && basic.presence.clarity == 0.0
-            && basic.presence.texture == 0.0
+fn measures_frame(basic: &Basic) -> bool {
+    basic.presence.hdr != 0.0
+        || basic.presence.clarity != 0.0
+        || basic.presence.texture != 0.0
+        || basic.effects.dehaze != 0.0
+}
 
-            && basic.effects.dehaze == 0.0
-    };
-    frame_local(&document.basic())
-        && document.masks().iter().all(|mask| mask.is_idle() || frame_local(&mask.basic))
+pub fn tiles_with_guide(document: &Document) -> bool {
+    document.basic().effects.dehaze == 0.0
+        && document.masks().iter().all(|mask| mask.is_idle() || mask.covers_nothing() || !measures_frame(&mask.basic))
         && document.beautify().is_identity()
 }
 
@@ -800,9 +1027,17 @@ pub fn develop<'a>(
     source: impl Into<Cow<'a, LinearImage>>,
     inputs: &RenderInputs,
 ) -> RgbImage {
-    let working = to_working_space(document, source, inputs);
 
-    apply_stack(document, working, 1.0)
+    develop_at(document, source, inputs, 1.0)
+}
+
+pub fn develop_at<'a>(
+    document: &Document,
+    source: impl Into<Cow<'a, LinearImage>>,
+    inputs: &RenderInputs,
+    detail_scale: f32,
+) -> RgbImage {
+    apply_stack(document, to_working_space(document, source, inputs), detail_scale)
 }
 
 pub fn develop16<'a>(
@@ -810,7 +1045,16 @@ pub fn develop16<'a>(
     source: impl Into<Cow<'a, LinearImage>>,
     inputs: &RenderInputs,
 ) -> Frame<u16> {
-    stack(document, to_working_space(document, source, inputs), 1.0)
+    develop16_at(document, source, inputs, 1.0)
+}
+
+pub fn develop16_at<'a>(
+    document: &Document,
+    source: impl Into<Cow<'a, LinearImage>>,
+    inputs: &RenderInputs,
+    detail_scale: f32,
+) -> Frame<u16> {
+    stack(document, to_working_space(document, source, inputs), detail_scale, local::Tone::Own)
 }
 
 pub type Frame<T> = image::ImageBuffer<image::Rgb<T>, Vec<T>>;
@@ -876,6 +1120,99 @@ pub fn tile_in_source(document: &Document, tile: [f32; 4]) -> Option<[f32; 4]> {
             tile[3] * crop_height,
         ]),
     }
+}
+
+pub fn cut_turned_tile(document: &Document, full: &LinearImage, region: [f32; 4]) -> Option<LinearImage> {
+    let basic = document.basic();
+    if !document.perspective().is_identity()
+        || basic.optics.lens_distortion != 0.0
+        || basic.optics.lens_vignetting != 0.0
+    {
+        return None;
+    }
+    let quarter = match document.rotation() as i32 {
+        0 => 0,
+        90 => 1,
+        180 => 2,
+        270 => 3,
+        _ => return None,
+    };
+    let mirrored = document.mirrored();
+    let (width, height) = (full.width as f32, full.height as f32);
+
+    let (turned_w, turned_h) = if quarter % 2 == 1 { (height, width) } else { (width, height) };
+    let (crop, angle) = document.crop().unwrap_or(([0.0, 0.0, 1.0, 1.0], 0.0));
+
+    let crop_w = (crop[2] * turned_w).round().max(1.0);
+    let crop_h = (crop[3] * turned_h).round().max(1.0);
+    let centre = ((crop[0] + crop[2] / 2.0) * turned_w, (crop[1] + crop[3] / 2.0) * turned_h);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (dx, dy) = ((region[0] + region[2] / 2.0 - 0.5) * crop_w, (region[1] + region[3] / 2.0 - 0.5) * crop_h);
+    let middle = (centre.0 + dx * cos - dy * sin, centre.1 + dx * sin + dy * cos);
+    let (tile_w, tile_h) = (region[2] * crop_w, region[3] * crop_h);
+
+    let reach_x = (tile_w * cos.abs() + tile_h * sin.abs()) / 2.0 + 2.0;
+    let reach_y = (tile_w * sin.abs() + tile_h * cos.abs()) / 2.0 + 2.0;
+    let turned_box = [
+        (middle.0 - reach_x).max(0.0),
+        (middle.1 - reach_y).max(0.0),
+        (middle.0 + reach_x).min(turned_w),
+        (middle.1 + reach_y).min(turned_h),
+    ];
+    if turned_box[2] <= turned_box[0] || turned_box[3] <= turned_box[1] {
+        return None;
+    }
+
+    let back = |x: f32, y: f32| -> (f32, f32) {
+        let (mx, my) = match quarter {
+            1 => (y, height - x),
+            2 => (width - x, height - y),
+            3 => (width - y, x),
+            _ => (x, y),
+        };
+        if mirrored { (width - mx, my) } else { (mx, my) }
+    };
+    let corners = [
+        back(turned_box[0], turned_box[1]),
+        back(turned_box[2], turned_box[1]),
+        back(turned_box[0], turned_box[3]),
+        back(turned_box[2], turned_box[3]),
+    ];
+    let left = corners.iter().map(|c| c.0).fold(f32::MAX, f32::min).floor().max(0.0);
+    let top = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min).floor().max(0.0);
+    let right = corners.iter().map(|c| c.0).fold(f32::MIN, f32::max).ceil().min(width);
+    let bottom = corners.iter().map(|c| c.1).fold(f32::MIN, f32::max).ceil().min(height);
+    let cut = full.cropped([left / width, top / height, (right - left) / width, (bottom - top) / height], 0.0, Default::default());
+
+    let flipped = if mirrored { cut.into_oriented(false, true, false) } else { cut };
+    let small = match quarter {
+        1 => flipped.into_oriented(true, false, true),
+        2 => flipped.into_oriented(false, true, true),
+        3 => flipped.into_oriented(true, true, false),
+        _ => flipped,
+    };
+    let forth = |x: f32, y: f32| -> (f32, f32) {
+        let (mx, my) = if mirrored { (width - x, y) } else { (x, y) };
+        match quarter {
+            1 => (height - my, mx),
+            2 => (width - mx, height - my),
+            3 => (my, width - mx),
+            _ => (mx, my),
+        }
+    };
+    let (a, b) = (forth(left, top), forth(right, bottom));
+    let origin = (a.0.min(b.0), a.1.min(b.1));
+    let (small_w, small_h) = (small.width as f32, small.height as f32);
+
+    let sub_w = tile_w / small_w;
+    let sub_h = tile_h / small_h;
+    let sub = [
+        (middle.0 - origin.0) / small_w - sub_w / 2.0,
+        (middle.1 - origin.1) / small_h - sub_h / 2.0,
+        sub_w,
+        sub_h,
+    ];
+    Some(small.cropped(sub, angle, Default::default()))
 }
 
 pub fn geometry_only(document: &Document, working: &LinearImage) -> LinearImage {
@@ -1125,6 +1462,30 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_kept_prefix_is_the_prefix() {
+        use numa_core::document::{Basic, Document};
+        let (w, h) = (96usize, 64usize);
+        let data: Vec<f32> = (0..w * h * 3).map(|i| ((i * 7919) % 997) as f32 / 997.0 * 0.6).collect();
+        let frame = numa_core::image::LinearImage::new(w as u32, h as u32, data);
+        let with = |exposure: f32| {
+            let mut document = Document::new("a.RAF".into());
+            document.set_basic(Basic::with(|b| {
+                b.tone.exposure = exposure;
+                b.detail.sharpen = 60.0;
+                b.detail.denoise_colour = 40.0;
+            }));
+            document
+        };
+        super::KEEP_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+        let fresh = super::apply_stack(&with(1.0), &frame, 1.0);
+        super::KEEP_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = super::apply_stack(&with(0.0), &frame, 1.0);
+        let kept = super::apply_stack(&with(1.0), &frame, 1.0);
+        assert_eq!(fresh.as_raw(), kept.as_raw());
+    }
+
     use super::*;
 
     #[test]
@@ -1139,7 +1500,7 @@ mod tests {
             document.set_basic(Basic::with(|b| b.tone.exposure = 0.3));
             document.output_space = space;
             let eight = apply_stack(&document, &working, 1.0);
-            let sixteen: Frame<u16> = stack(&document, &working, 1.0);
+            let sixteen: Frame<u16> = stack(&document, &working, 1.0, local::Tone::Own);
             for (at, (low, high)) in eight.iter().zip(sixteen.iter()).enumerate() {
                 let brought_down = (*high as f32 / 257.0).round();
                 assert!((*low as f32 - brought_down).abs() <= 1.0, "{space:?} subpixel {at}: {low} against {high}");
@@ -1431,6 +1792,114 @@ mod tests {
     }
 
     #[test]
+    fn a_guided_tile_matches_the_whole_frame() {
+
+        let (width, height) = (800u32, 600u32);
+        let mut data = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let sky = 0.5 + 0.4 * (x as f32 / width as f32);
+                let weave = 0.03 * (((x / 3) + (y / 3)) % 2) as f32;
+                let value = if y > 260 && x > 180 && x < 620 { 0.04 + weave } else { sky };
+                data.extend([value * 0.9, value, value * 1.1]);
+            }
+        }
+        let full = LinearImage::new(width, height, data);
+
+        for (hdr, clarity, texture) in [(40.0, 0.0, 0.0), (0.0, 60.0, 0.0), (0.0, -50.0, 0.0), (0.0, 0.0, 70.0), (30.0, 40.0, 50.0)] {
+            let mut document = plain();
+            let mut basic = document.basic();
+            basic.presence.hdr = hdr;
+            basic.presence.clarity = clarity;
+            basic.presence.texture = texture;
+            document.set_basic(basic);
+
+            let (whole, measured) = apply_stack_recording(&document, &full, 1.0);
+            let from_frame = measured.expect("something was measured");
+            let quickly = measure_tone(&document, &full).expect("measured quickly");
+            let (_, proxy_measured) = apply_stack_recording(&document, full.downscaled(400).unwrap(), 0.5);
+            let from_proxy = proxy_measured.expect("the proxy was measured");
+
+            let (x, y, w, h) = (240u32, 180u32, 240u32, 180u32);
+            let region = [x as f32 / width as f32, y as f32 / height as f32, w as f32 / width as f32, h as f32 / height as f32];
+            let tile = full.cropped(region, 0.0, Default::default());
+
+            let compare = |rendered: &RgbImage| -> (u8, f32) {
+                let (mut worst, mut sum) = (0u8, 0.0f32);
+                for row in 0..h {
+                    for column in 0..w {
+                        let (a, b) = (rendered.get_pixel(column, row), whole.get_pixel(x + column, y + row));
+                        for channel in 0..3 {
+                            let off = a[channel].abs_diff(b[channel]);
+                            worst = worst.max(off);
+                            sum += off as f32;
+                        }
+                    }
+                }
+                (worst, sum / (w * h * 3) as f32)
+            };
+            let own = compare(&apply_pixels(&document, &tile, 1.0, region));
+            let same = compare(&apply_pixels_guided(&document, &tile, 1.0, region, &from_frame));
+            let quick = compare(&apply_pixels_guided(&document, &tile, 1.0, region, &quickly));
+            let proxy = compare(&apply_pixels_guided(&document, &tile, 1.0, region, &from_proxy));
+            println!(
+                "hdr {hdr} clarity {clarity} texture {texture}: tile alone {own:?}, measured on the frame {same:?}, measured quickly {quick:?}, on the proxy {proxy:?}"
+            );
+
+            assert!(same.1 < 0.05, "the frame's own measurement gives its pixels: {same:?}");
+
+            assert!(quick.1 < 0.05, "the quick measurement is as good: {quick:?}");
+
+            assert!(proxy.1 < 1.5, "the proxy's is within a level on average: {proxy:?}");
+
+        }
+    }
+
+    #[test]
+    fn a_turned_tile_is_the_whole_frame_cut() {
+
+        let (width, height) = (120u32, 80u32);
+        let mut data = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let (u, v) = (x as f32 / width as f32, y as f32 / height as f32);
+                data.extend([0.1 + 0.6 * u, 0.1 + 0.5 * v, 0.2 + 0.3 * u * v]);
+            }
+        }
+        let full = LinearImage::new(width, height, data);
+
+        for rotation in [0.0, 90.0, 180.0, 270.0] {
+            for mirrored in [false, true] {
+                for angle in [0.0, 3.0] {
+                    let mut document = plain();
+                    document.set_rotation(rotation);
+                    document.set_mirrored(mirrored);
+                    document.set_crop([0.1, 0.15, 0.8, 0.7], angle);
+                    let whole = geometry_of(&document, &full).expect("there is geometry");
+
+                    let (x, y, w, h) = (7u32, 5u32, 20u32, 14u32);
+                    let (fw, fh) = (whole.width as f32, whole.height as f32);
+                    let region = [x as f32 / fw, y as f32 / fh, w as f32 / fw, h as f32 / fh];
+                    let tile = cut_turned_tile(&document, &full, region).expect("a tile");
+                    assert_eq!((tile.width, tile.height), (w, h), "{rotation}° {mirrored} {angle}°");
+
+                    let mut worst = 0.0f32;
+                    for row in 0..h {
+                        for column in 0..w {
+                            for channel in 0..3 {
+                                let got = tile.data[((row * w + column) * 3 + channel) as usize];
+                                let want = whole.data[(((y + row) * whole.width + x + column) * 3 + channel) as usize];
+                                worst = worst.max((got - want).abs());
+                            }
+                        }
+                    }
+                    assert!(worst < 1e-4, "{rotation}° mirrored {mirrored} at {angle}°: off by {worst}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_wide_export_keeps_what_srgb_cannot_hold() {
         use numa_core::space::ColourSpace;
 
@@ -1700,6 +2169,77 @@ mod tests {
 
         let middle = rendered.get_pixel(4, 0)[0];
         assert!(middle < left && middle > right, "{left} / {middle} / {right}");
+    }
+
+    #[test]
+    fn a_mask_that_measures_the_frame_gets_all_of_it() {
+        let (width, height) = (4usize, 400usize);
+        let mut field = vec![0.0f32; width * height];
+        field[300 * width..310 * width].fill(1.0);
+
+        let plain = Basic::local();
+        assert_eq!(rows_to_work(&plain, &field, width, height), Some((236, 373)), "its rows and the margin");
+
+        for pass in ["hdr", "clarity", "texture", "dehaze"] {
+            let mut basic = Basic::local();
+            match pass {
+                "hdr" => basic.presence.hdr = 30.0,
+                "clarity" => basic.presence.clarity = 30.0,
+                "texture" => basic.presence.texture = 30.0,
+                _ => basic.effects.dehaze = 30.0,
+            }
+            assert_eq!(rows_to_work(&basic, &field, width, height), Some((0, height - 1)), "{pass}");
+        }
+        assert_eq!(rows_to_work(&plain, &vec![0.0; width * height], width, height), None, "nothing covered");
+    }
+
+    #[test]
+    fn a_mask_on_a_few_rows_leaves_the_rest_alone() {
+        use numa_core::mask::{Mask, Shape};
+
+        let flat = LinearImage::new(8, 400, vec![MIDDLE_GREY; 8 * 400 * 3]);
+
+        let mut mask = Mask::new(Shape::Radial { centre: [0.5, 0.9], radius: [0.2, 0.05], feather: 0.0 });
+        mask.basic.tone.exposure = -3.0;
+
+        let mut document = plain();
+        document.set_masks(vec![mask]);
+        let rendered = develop(&document, &flat, &Default::default());
+        let untouched = develop(&plain(), &flat, &Default::default());
+
+        assert!(
+            rendered.get_pixel(4, 360)[0] < untouched.get_pixel(4, 360)[0] / 2,
+            "inside the circle is darkened"
+        );
+        for y in [0u32, 100, 200] {
+            assert_eq!(
+                rendered.get_pixel(4, y)[0],
+                untouched.get_pixel(4, y)[0],
+                "row {y} is outside the mask and untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn a_feathered_radial_has_no_ring() {
+        use numa_core::mask::{Mask, Shape};
+
+        let flat = LinearImage::new(400, 400, vec![MIDDLE_GREY; 400 * 400 * 3]);
+        let mut mask = Mask::new(Shape::Radial { centre: [0.5, 0.5], radius: [0.3, 0.3], feather: 0.5 });
+        mask.basic.tone.exposure = -2.0;
+        let mut document = plain();
+        let mut basic = document.basic();
+        basic.presence.hdr = 50.0;
+        basic.presence.clarity = 30.0;
+        document.set_basic(basic);
+        document.set_masks(vec![mask]);
+        let out = develop(&document, &flat, &Default::default());
+
+        let row: Vec<u8> = (200..400).map(|x| out.get_pixel(x, 200)[0]).collect();
+        assert!(row[0] < row[199] / 2, "the centre is darkened: {row:?}");
+        for pair in row.windows(2) {
+            assert!(pair[1] >= pair[0], "brightness falls going outwards: {row:?}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use numa_core::beautify::{self, Beautify, Portrait};
+use rayon::prelude::*;
 use crate::local::{self, Plane};
 
 const SPOT_RADIUS: f32 = 0.0025;
@@ -58,10 +59,10 @@ pub fn apply(
         smooth_skin(settings, faces, data, width, height, &local_u, &local_v);
     }
     if settings.red_eye > 0.0 {
-        take_red_out(settings.red_eye / 100.0, faces, data, width, height, &local_u, &local_v);
+        take_red_out(settings.red_eye / 100.0, faces, data, width, &local_u, &local_v);
     }
     if settings.teeth > 0.0 {
-        whiten(settings.teeth / 100.0, faces, data, width, height, &local_u, &local_v);
+        whiten(settings.teeth / 100.0, faces, data, width, &local_u, &local_v);
     }
 }
 
@@ -71,8 +72,8 @@ fn smooth_skin(
     data: &mut [f32],
     width: usize,
     height: usize,
-    local_u: &impl Fn(usize) -> f32,
-    local_v: &impl Fn(usize) -> f32,
+    local_u: &(impl Fn(usize) -> f32 + Sync),
+    local_v: &(impl Fn(usize) -> f32 + Sync),
 ) {
 
     let mut skin = vec![0.0f32; width * height];
@@ -81,23 +82,65 @@ fn smooth_skin(
         biggest = biggest.max(face.at[2].max(face.at[3]));
     }
 
-    for y in 0..height {
-        for x in 0..width {
-            let (u, v) = (local_u(x), local_v(y));
-            let shape = faces.iter().fold(0.0f32, |most, face| {
-                most.max(beautify::skin_at(face, u, v))
-            });
+    skin.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let v = local_v(y);
+        for (x, value) in row.iter_mut().enumerate() {
+            let u = local_u(x);
+            let shape = faces.iter().fold(0.0f32, |most, face| most.max(beautify::skin_at(face, u, v)));
             if shape <= 0.0 {
                 continue;
             }
             let at = (y * width + x) * 3;
-            let rgb = [data[at], data[at + 1], data[at + 2]];
-            skin[y * width + x] = shape * skin_like(rgb);
+            *value = shape * skin_like([data[at], data[at + 1], data[at + 2]]);
         }
-    }
-    if skin.iter().all(|value| *value <= 0.0) {
+    });
+    let Some([left, top, right, bottom]) = covered(&skin, width) else { return };
+
+    let long_edge = width.max(height) as f32;
+    let radius = |fraction: f32| {
+        ((biggest * long_edge * fraction) as usize).clamp(1, width.min(height).max(2) / 2)
+    };
+
+    let reach = 2 * [SPOT_SURROUND, SKIN_RADIUS, COLOUR_RADIUS, TEXTURE_RADIUS]
+        .into_iter()
+        .map(radius)
+        .max()
+        .unwrap_or(1)
+        + 2;
+    let (x0, y0) = (left.saturating_sub(reach), top.saturating_sub(reach));
+    let (x1, y1) = ((right + reach).min(width - 1), (bottom + reach).min(height - 1));
+    let (w, h) = (x1 + 1 - x0, y1 + 1 - y0);
+    if w == width && h == height {
+        treat_skin(settings, &skin, data, width, height, &radius);
         return;
     }
+    let mut part: Vec<f32> = (y0..=y1).flat_map(|y| data[(y * width + x0) * 3..(y * width + x1 + 1) * 3].iter().copied()).collect();
+    let part_skin: Vec<f32> = (y0..=y1).flat_map(|y| skin[y * width + x0..=y * width + x1].iter().copied()).collect();
+    treat_skin(settings, &part_skin, &mut part, w, h, &radius);
+    for (row, y) in (y0..=y1).enumerate() {
+        data[(y * width + x0) * 3..(y * width + x1 + 1) * 3].copy_from_slice(&part[row * w * 3..(row + 1) * w * 3]);
+    }
+}
+
+fn covered(mask: &[f32], width: usize) -> Option<[usize; 4]> {
+    let rows: Vec<Option<(usize, usize)>> = mask
+        .par_chunks(width)
+        .map(|row| Some((row.iter().position(|value| *value > 0.0)?, row.iter().rposition(|value| *value > 0.0)?)))
+        .collect();
+    let top = rows.iter().position(Option::is_some)?;
+    let bottom = rows.iter().rposition(Option::is_some)?;
+    let (left, right) = rows.iter().flatten().fold((usize::MAX, 0), |(l, r), (a, b)| (l.min(*a), r.max(*b)));
+    Some([left, top, right, bottom])
+}
+
+fn treat_skin(
+    settings: &Beautify,
+    skin: &[f32],
+    data: &mut [f32],
+    width: usize,
+    height: usize,
+    radius: &impl Fn(f32) -> usize,
+) {
 
     let luma_of = |data: &[f32]| {
         Plane::new(
@@ -113,23 +156,18 @@ fn smooth_skin(
     };
     let mut guide = luma_of(data);
 
-    let long_edge = width.max(height) as f32;
-    let radius = |fraction: f32| {
-        ((biggest * long_edge * fraction) as usize).clamp(1, width.min(height).max(2) / 2)
-    };
-
     if settings.spots > 0.0 {
-        remove_spots(settings, &skin, data, width, height, &radius);
+        remove_spots(settings, skin, data, width, height, radius);
 
         guide = luma_of(data);
     }
 
     if settings.skin > 0.0 {
-        smooth_brightness(settings, &skin, &guide, data, width, height, &radius);
+        smooth_brightness(settings, skin, &guide, data, radius);
     }
 
     if settings.evenness > 0.0 {
-        even_colour(settings, &skin, &guide, data, width, height, &radius);
+        even_colour(settings, skin, &guide, data, width, height, radius);
     }
 }
 
@@ -168,17 +206,17 @@ fn remove_spots(
     });
     let reference = if weight_sum > 0.0 { sum / weight_sum } else { 0.0 };
 
-    for index in 0..width * height {
+    data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
         let weight = skin[index] * amount;
         if weight <= 0.0 {
-            continue;
+            return;
         }
         let near = luma(&|channel| bands[channel].0.data[index]);
         let far = luma(&|channel| bands[channel].1.data[index]);
         let ground = far.max(1e-4);
         let lit = ((far / reference.max(1e-4) - SPOT_SHADE) / 0.2).clamp(0.0, 1.0);
         if lit <= 0.0 {
-            continue;
+            return;
         }
 
         let dark = (far - near) / ground;
@@ -187,7 +225,7 @@ fn remove_spots(
             bands[0].0.data[index] / near.max(1e-4) - bands[0].1.data[index] / ground;
         let signal = (dark / SPOT_DEPTH).max(redness / SPOT_REDNESS);
         if signal <= 1.0 {
-            continue;
+            return;
         }
 
         let found = ((signal - 1.0) * 0.8).clamp(0.0, 1.0)
@@ -195,17 +233,16 @@ fn remove_spots(
                 - ((dark.abs() - SPOT_TOO_DEEP) / (SPOT_HOPELESS - SPOT_TOO_DEEP))
                     .clamp(0.0, 1.0));
 
-        let at = index * 3;
-        for channel in 0..3 {
+                for channel in 0..3 {
 
             let ceiling = ground * SPOT_CEILING;
             let band = (bands[channel].1.data[index] - bands[channel].0.data[index])
                 .clamp(-ceiling, ceiling);
             let moved =
-                (data[at + channel].max(0.0).sqrt() + band * found * weight * lit).max(0.0);
-            data[at + channel] = moved * moved;
+                (pixel[channel].max(0.0).sqrt() + band * found * weight * lit).max(0.0);
+            pixel[channel] = moved * moved;
         }
-    }
+    });
 }
 
 fn smooth_brightness(
@@ -213,31 +250,28 @@ fn smooth_brightness(
     skin: &[f32],
     guide: &Plane,
     data: &mut [f32],
-    width: usize,
-    height: usize,
     radius: &impl Fn(f32) -> usize,
 ) {
     let amount = settings.skin / 100.0;
     let flat = local::guided_by(guide, guide, radius(SKIN_RADIUS), SKIN_EPSILON);
     let grain = local::guided_by(guide, guide, radius(TEXTURE_RADIUS), TEXTURE_EPSILON);
-    for index in 0..width * height {
+    data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
         let weight = skin[index] * amount;
         if weight <= 0.0 {
-            continue;
+            return;
         }
         let from = guide.data[index];
         if from <= 1e-6 {
-            continue;
+            return;
         }
 
         let wanted = flat.data[index] + (from - grain.data[index]);
 
         let scale = 1.0 + (wanted / from - 1.0) * weight;
-        let at = index * 3;
-        for channel in 0..3 {
-            data[at + channel] *= scale;
+        for value in pixel.iter_mut() {
+            *value *= scale;
         }
-    }
+    });
 }
 
 fn even_colour(
@@ -269,15 +303,15 @@ fn even_colour(
 
     for (channel, plane) in channels.iter_mut().enumerate() {
         let smoothed = local::guided_by(guide, plane, radius, COLOUR_EPSILON);
-        for index in 0..width * height {
+        data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
             let weight = skin[index] * amount;
             if weight <= 0.0 {
-                continue;
+                return;
             }
             let luma = guide.data[index].max(1e-6);
             let ratio = plane.data[index] + (smoothed.data[index] - plane.data[index]) * weight;
-            data[index * 3 + channel] = ratio * luma;
-        }
+            pixel[channel] = ratio * luma;
+        });
     }
 }
 
@@ -286,12 +320,11 @@ fn take_red_out(
     faces: &[Portrait],
     data: &mut [f32],
     width: usize,
-    height: usize,
-    local_u: &impl Fn(usize) -> f32,
-    local_v: &impl Fn(usize) -> f32,
+    local_u: &(impl Fn(usize) -> f32 + Sync),
+    local_v: &(impl Fn(usize) -> f32 + Sync),
 ) {
-    for y in 0..height {
-        for x in 0..width {
+    data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
+        for (x, pixel) in row.chunks_exact_mut(3).enumerate() {
             let (u, v) = (local_u(x), local_v(y));
             let where_eyes = faces
                 .iter()
@@ -300,8 +333,7 @@ fn take_red_out(
                 continue;
             }
 
-            let at = (y * width + x) * 3;
-            let (r, g, b) = (data[at], data[at + 1], data[at + 2]);
+            let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
             let other = g.max(b).max(1e-6);
 
             let excess = ((r / other - 2.0) / 1.5).clamp(0.0, 1.0);
@@ -309,9 +341,9 @@ fn take_red_out(
                 continue;
             }
             let weight = where_eyes * excess * amount;
-            data[at] = r + (other - r) * weight;
+            pixel[0] = r + (other - r) * weight;
         }
-    }
+    });
 }
 
 fn whiten(
@@ -319,12 +351,11 @@ fn whiten(
     faces: &[Portrait],
     data: &mut [f32],
     width: usize,
-    height: usize,
-    local_u: &impl Fn(usize) -> f32,
-    local_v: &impl Fn(usize) -> f32,
+    local_u: &(impl Fn(usize) -> f32 + Sync),
+    local_v: &(impl Fn(usize) -> f32 + Sync),
 ) {
-    for y in 0..height {
-        for x in 0..width {
+    data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
+        for (x, pixel) in row.chunks_exact_mut(3).enumerate() {
             let (u, v) = (local_u(x), local_v(y));
             let where_mouth = faces
                 .iter()
@@ -333,8 +364,7 @@ fn whiten(
                 continue;
             }
 
-            let at = (y * width + x) * 3;
-            let (r, g, b) = (data[at], data[at + 1], data[at + 2]);
+            let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
             let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
             if luma <= 1e-5 {
                 continue;
@@ -351,10 +381,10 @@ fn whiten(
             }
 
             for (channel, value) in [r, g, b].into_iter().enumerate() {
-                data[at + channel] = value + (luma - value) * weight * 0.8;
+                pixel[channel] = value + (luma - value) * weight * 0.8;
             }
         }
-    }
+    });
 }
 
 #[cfg(test)]

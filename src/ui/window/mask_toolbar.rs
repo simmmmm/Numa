@@ -29,11 +29,16 @@ pub(super) struct Toolbar {
     show_value: gtk::Label,
     points: gtk::CheckButton,
     shape_value: gtk::Label,
+
+    refine: adw::SplitButton,
+    again: gtk::Button,
     more: gtk::Box,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Tool {
+
+    Look,
     Brush,
     Lasso,
     Click,
@@ -41,7 +46,8 @@ pub(super) enum Tool {
     Radial,
 }
 
-const TOOLS: [(Tool, &str, &str); 5] = [
+const TOOLS: [(Tool, &str, &str); 6] = [
+    (Tool::Look, "Look", "zoom-fit-best-symbolic"),
     (Tool::Brush, "Brush", "document-edit-symbolic"),
     (Tool::Lasso, "Lasso", "edit-select-symbolic"),
     (Tool::Click, "Click", "input-mouse-symbolic"),
@@ -73,6 +79,8 @@ impl Toolbar {
             show_value: gtk::Label::new(None),
             points: gtk::CheckButton::with_label("Points"),
             shape_value: gtk::Label::new(None),
+            refine: adw::SplitButton::new(),
+            again: gtk::Button::from_icon_name("view-refresh-symbolic"),
             more: gtk::Box::new(gtk::Orientation::Vertical, 0),
         }
     }
@@ -96,6 +104,28 @@ pub(super) fn build_mask_toolbar(state: &App) -> adw::BreakpointBin {
     row.append(&separator());
     row.append(&build_show_button(state));
     row.append(&build_shape_button(state));
+    row.append(&separator());
+
+    bar.refine.set_label("Refine");
+    bar.refine.set_tooltip_text(Some(
+        "Search for the real edge, from where Edge puts it — slower, and worth it on a subject",
+    ));
+    let looks = gio::Menu::new();
+    looks.append(Some("Edge"), Some("win.refine-edge"));
+    looks.append(Some("Hair, fur and feathers"), Some("win.refine-hair"));
+    bar.refine.set_menu_model(Some(&looks));
+    bar.refine.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| refine_selected_mask(&state)
+    ));
+    row.append(&bar.refine);
+    bar.again.add_css_class("flat");
+    bar.again.set_tooltip_text(Some("Search again, from where Edge puts it now"));
+    bar.again.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| refine_selected_mask(&state)
+    ));
+    row.append(&bar.again);
     row.append(&separator());
 
     let more = gtk::MenuButton::new();
@@ -306,6 +336,9 @@ fn build_tool_button(state: &App) -> gtk::MenuButton {
 }
 
 fn current_tool(state: &App) -> Tool {
+    if state.masks.looking.get() {
+        return Tool::Look;
+    }
     match state.masks.brush.get() {
         MaskTool::Brush => Tool::Brush,
         MaskTool::Lasso => Tool::Lasso,
@@ -317,7 +350,7 @@ fn current_tool(state: &App) -> Tool {
     }
 }
 
-fn is_empty_painted(mask: &Mask) -> bool {
+pub(super) fn is_empty_painted(mask: &Mask) -> bool {
     matches!(mask.shape, Shape::Painted) && mask.points.is_empty() && mask.strokes.is_empty()
 }
 
@@ -336,7 +369,12 @@ pub(super) fn pick_tool(state: &App, tool: Tool) {
                 make_gradient(state, index, tool);
             }
         }
+        Tool::Look => state.masks.brush.set(MaskTool::Off),
     }
+
+    let looking = tool == Tool::Look || (tool == current_tool(state) && state.masks.looking.get());
+    state.masks.looking.set(looking);
+    state.mask_overlay.area.set_can_target(!looking);
     refresh_mask_toolbar(state);
     state.mask_overlay.area.queue_draw();
 }
@@ -488,6 +526,7 @@ fn build_show_button(state: &App) -> gtk::MenuButton {
             #[strong] on,
             move |check| {
                 on.set(check.is_active());
+                state.mask_overlay.wash_resting.set(false);
 
                 if which == 1 && check.is_active() {
                     start_ants(&state);
@@ -553,7 +592,7 @@ fn build_shape_button(state: &App) -> gtk::MenuButton {
     button
 }
 
-fn fill_mask_menu(state: &App, mask: &Mask, index: usize) {
+fn fill_mask_menu(state: &App, _mask: &Mask, _index: usize) {
     let more = &state.masks.toolbar.more;
     while let Some(child) = more.first_child() {
         more.remove(&child);
@@ -581,23 +620,6 @@ fn fill_mask_menu(state: &App, mask: &Mask, index: usize) {
     let invert = item("Invert");
     invert.set_action_name(Some("win.invert-mask"));
     more.append(&invert);
-
-    let subject = match &mask.shape {
-        Shape::Segment { classes } => classes.iter().any(|class| segment::MATTEABLE.contains(class)),
-        Shape::Painted => true,
-        _ => false,
-    };
-    if subject && numa::render::matte::is_installed() && segment::is_installed() {
-        let refine = item(if mask.matte { "Search again" } else { "Refine edge" });
-        refine.set_tooltip_text(Some(
-            "Search for the real edge, from where Edge puts it — slower, and worth it on a subject",
-        ));
-        refine.connect_clicked(glib::clone!(
-            #[strong] state,
-            move |button| refine_mask_edge(&state, index, button)
-        ));
-        more.append(&refine);
-    }
     let duplicate = item("Duplicate");
     duplicate.set_action_name(Some("win.duplicate-mask"));
     more.append(&duplicate);
@@ -647,6 +669,7 @@ pub(super) fn refresh_mask_toolbar(state: &App) {
     let mask = &masks[index];
 
     let tool = current_tool(state);
+    state.mask_overlay.area.set_can_target(tool != Tool::Look);
     if let Some((_, label, icon)) = TOOLS.iter().find(|(which, _, _)| *which == tool) {
         bar.tool_label.set_text(label);
         bar.tool_icon.set_icon_name(Some(icon));
@@ -677,7 +700,7 @@ pub(super) fn refresh_mask_toolbar(state: &App) {
 
     let on: Vec<&str> = [
         ("Wash", state.mask_overlay.show_coverage.get()),
-        ("Outline", state.mask_overlay.show_ants.get()),
+        ("Outline", state.mask_overlay.show_ants.get() && !gradient),
         ("Points", state.mask_overlay.show_dots.get() && !gradient),
         ("Matte", state.masks.show_matte.get()),
     ]
@@ -689,6 +712,15 @@ pub(super) fn refresh_mask_toolbar(state: &App) {
         false => on.join(", "),
     });
     bar.shape_value.set_text(&format!("F {:.0}", mask.feather));
+
+    let subject = match &mask.shape {
+        Shape::Segment { classes } => classes.iter().any(|class| segment::MATTEABLE.contains(class)),
+        Shape::Painted => true,
+        _ => false,
+    };
+    let can_refine = subject && numa::render::matte::is_installed() && segment::is_installed();
+    bar.refine.set_visible(can_refine);
+    bar.again.set_visible(can_refine && mask.matte);
 
     fill_mask_menu(state, mask, index);
 }

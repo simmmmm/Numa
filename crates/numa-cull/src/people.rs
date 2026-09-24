@@ -27,11 +27,12 @@ pub fn model_path() -> PathBuf {
 }
 
 pub fn is_installed() -> bool {
-    plan().is_some()
+    PLAN.get().map_or_else(|| model_path().exists(), Option::is_some)
 }
 
+static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+
 fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
     PLAN.get_or_init(|| {
         let path = model_path();
         if !path.exists() {
@@ -100,18 +101,25 @@ const GROUP: f32 = 0.45;
 
 pub fn groups(faces: &[[f32; LENGTH]]) -> Vec<Vec<usize>> {
     let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut sums: Vec<[f32; LENGTH]> = Vec::new();
     for (index, face) in faces.iter().enumerate() {
         let best = groups
             .iter()
+            .zip(&sums)
             .enumerate()
-            .map(|(group, members)| {
-                let mean = members.iter().map(|m| likeness(&faces[*m], face)).sum::<f32>() / members.len() as f32;
-                (group, mean)
-            })
+            .map(|(group, (members, sum))| (group, likeness(sum, face) / members.len() as f32))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         match best {
-            Some((group, alike)) if alike >= GROUP => groups[group].push(index),
-            _ => groups.push(vec![index]),
+            Some((group, alike)) if alike >= GROUP => {
+                groups[group].push(index);
+                for (total, value) in sums[group].iter_mut().zip(face) {
+                    *total += value;
+                }
+            }
+            _ => {
+                groups.push(vec![index]);
+                sums.push(*face);
+            }
         }
     }
     groups.sort_by_key(|group| std::cmp::Reverse(group.len()));

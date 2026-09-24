@@ -128,9 +128,11 @@ pub(super) fn install_rating_shortcuts(state: &App, window: &adw::ApplicationWin
 
 fn hold_for_before(state: &App) -> gtk::EventControllerKey {
     let hold = gtk::EventControllerKey::new();
+    let matte_was: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
     hold.set_propagation_phase(gtk::PropagationPhase::Capture);
     hold.connect_key_pressed(glib::clone!(
         #[strong] state,
+        #[strong] matte_was,
         move |controller, key, _, _| {
             let typing = controller
                 .widget()
@@ -140,6 +142,14 @@ fn hold_for_before(state: &App) -> gtk::EventControllerKey {
             if key != gtk::gdk::Key::space || typing || state.stack.visible_child_name().as_deref() != Some("editor") {
                 return glib::Propagation::Proceed;
             }
+            if state.mask_overlay.selected_mask.get().is_some() {
+
+                if matte_was.get().is_none() {
+                    matte_was.set(Some(state.masks.show_matte.replace(true)));
+                    state.mask_overlay.area.queue_draw();
+                }
+                return glib::Propagation::Stop;
+            }
             state.editor_page.before.set_active(true);
             glib::Propagation::Stop
         }
@@ -148,6 +158,10 @@ fn hold_for_before(state: &App) -> gtk::EventControllerKey {
         #[strong] state,
         move |_, key, _, _| {
             if key == gtk::gdk::Key::space {
+                if let Some(was) = matte_was.take() {
+                    state.masks.show_matte.set(was);
+                    state.mask_overlay.area.queue_draw();
+                }
                 state.editor_page.before.set_active(false);
             }
         }
@@ -314,20 +328,27 @@ pub(super) fn apply_to_selection(state: &App, action: Action) {
 }
 
 pub(super) fn apply_to_ids(state: &App, ids: &[i64], action: Action) {
+    let result = match action {
+        Action::Rate(rating) => state.catalog.set_ratings(ids, rating),
+        Action::Flag(flag) => state.catalog.set_flags(ids, flag),
+    };
+    if let Err(err) = result {
+        state.toast(&format!("Could not save: {err}"));
+        return;
+    }
+
     let cards = state.grid.cards.borrow();
 
+    note_mark(state, ids, action);
+    if state.loupe.at.get().is_some() {
+        let before = ids
+            .iter()
+            .filter_map(|id| cards.get(id).map(|(_, badge)| badge.text()).map(|text| (*id, rating_from_badge(&text), flag_from_badge(&text))))
+            .collect();
+        state.loupe.undo.borrow_mut().push(before);
+    }
+
     for &id in ids {
-
-        let result = match action {
-            Action::Rate(rating) => state.catalog.set_rating(id, rating),
-            Action::Flag(flag) => state.catalog.set_flag(id, flag),
-        };
-
-        if let Err(err) = result {
-            drop(cards);
-            state.toast(&format!("Could not save: {err}"));
-            return;
-        }
 
         if let Some((_, badge)) = cards.get(&id) {
             let (rating, flag) = match action {
@@ -342,9 +363,15 @@ pub(super) fn apply_to_ids(state: &App, ids: &[i64], action: Action) {
     drop(cards);
 
     let filter = state.libraries.filter.borrow();
-    let narrowing = filter.min_rating > 0 || filter.flag.is_some();
+    let narrowing = match action {
+        Action::Rate(_) => filter.min_rating > 0,
+        Action::Flag(_) => filter.flag.is_some(),
+    };
     drop(filter);
-    if narrowing {
+
+    if narrowing && state.loupe.at.get().is_some() {
+        state.grid.stale.set(true);
+    } else if narrowing {
         reload_grid(state);
     }
 }

@@ -49,6 +49,11 @@ fn connect_overlay_draw(
     area: &gtk::DrawingArea,
     painting: &Rc<RefCell<Option<Stroke>>>,
 ) {
+
+    area.connect_map(glib::clone!(
+        #[strong] state,
+        move |_| start_ants(&state)
+    ));
     area.set_draw_func(glib::clone!(
         #[strong] state,
         #[strong] painting,
@@ -62,7 +67,7 @@ fn connect_overlay_draw(
                 return;
             };
 
-            masks::draw_coverage(&state, context, content, mask.visible);
+            masks::draw_coverage(&state, context, content, mask.visible, mask.opacity);
 
             if state.mask_overlay.show_ants.get() {
                 draw_ants(
@@ -86,7 +91,7 @@ fn connect_overlay_draw(
                 }
                 (MaskTool::Brush, painting) => {
 
-                    if let Some(stroke) = painting.filter(|_| !state.mask_overlay.show_coverage.get()) {
+                    if let Some(stroke) = painting.filter(|_| !wash_shown(&state)) {
                         draw_stroke(context, content, stroke);
                     }
                     draw_brush(context, content, &state)
@@ -223,9 +228,6 @@ fn connect_overlay_drag_end(
 
                     if filled {
                         rebuild_mask_map(&state, index);
-                    } else {
-
-                        refresh_outline(&state);
                     }
                     request_render(&state);
                     show_coverage(&state);
@@ -263,27 +265,42 @@ fn overlay_point_click(state: &App, moved: &Rc<Cell<bool>>) -> gtk::GestureClick
                 return;
             }
 
-            if state.mask_overlay.show_dots.get() {
-                let content = content_rect(
-                    &state,
-                    state.mask_overlay.area.width() as f64,
-                    state.mask_overlay.area.height() as f64,
-                );
-                let (left, top, width, height) = content;
-                let index = state.mask_overlay.selected_mask.get().unwrap_or(0);
-                for (at, _, part) in mask_dots(&state, &mask) {
-                    let dx = left + at[0] as f64 * width - x;
-                    let dy = top + at[1] as f64 * height - y;
-                    if dx.hypot(dy) <= DOT_REACH {
-                        toggle_mask_part(&state, index, part);
-                        return;
-                    }
-                }
+            if let Some(part) = dot_under(&state, &mask, x, y) {
+                toggle_mask_part(&state, state.mask_overlay.selected_mask.get().unwrap_or(0), part);
+                return;
             }
 
             if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v) {
                 point_at(&state, u, v, taking_away(&state, gesture.current_event_state()));
             }
+        }
+    ));
+    click
+}
+
+fn dot_under(state: &App, mask: &Mask, x: f64, y: f64) -> Option<MaskPart> {
+    if !state.mask_overlay.show_dots.get() {
+        return None;
+    }
+    let area = &state.mask_overlay.area;
+    let (left, top, width, height) = content_rect(state, area.width() as f64, area.height() as f64);
+    mask_dots(state, mask).into_iter().find_map(|(at, _, part)| {
+        let dx = left + at[0] as f64 * width - x;
+        let dy = top + at[1] as f64 * height - y;
+        (dx.hypot(dy) <= DOT_REACH).then_some(part)
+    })
+}
+
+pub(super) fn overlay_dot_remove(state: &App) -> gtk::GestureClick {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_released(glib::clone!(
+        #[strong] state,
+        move |gesture, _, x, y| {
+            let Some(mask) = selected_mask(&state) else { return };
+            let Some(part) = dot_under(&state, &mask, x, y) else { return };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            remove_mask_part(&state, state.mask_overlay.selected_mask.get().unwrap_or(0), part);
         }
     ));
     click
@@ -412,7 +429,17 @@ pub(super) fn move_mask_handle(shape: Shape, handle: Handle, shift: [f32; 2], at
 pub(super) fn selected_mask(state: &App) -> Option<Mask> {
     let index = state.mask_overlay.selected_mask.get()?;
     let open = state.open.borrow();
-    open.as_ref()?.document.masks().get(index).cloned()
+
+    open.as_ref()?
+        .document
+        .operations
+        .iter()
+        .filter_map(|operation| match operation {
+            numa::core::document::Operation::Mask(mask) => Some(mask),
+            _ => None,
+        })
+        .nth(index)
+        .cloned()
 }
 
 pub(super) fn canvas_point(state: &App, x: f64, y: f64) -> Option<(f32, f32)> {
@@ -564,7 +591,8 @@ pub(super) fn refresh_outline(state: &App) {
     let traced = selected
         .as_ref()
         .and_then(|mask| {
-            let visible = mask.visible;
+
+            let visible = mask.visible && !matches!(mask.shape, Shape::Linear { .. } | Shape::Radial { .. });
             mask.map.0.as_ref().or(made.as_ref()).filter(|_| visible).map(|alpha| {
                 let mut paths = numa::core::mask::outline(alpha, OUTLINE_EDGE);
 
@@ -581,7 +609,7 @@ pub(super) fn refresh_outline(state: &App) {
     let wash = selected.as_ref().and_then(|mask| {
         let alpha = mask.map.0.as_ref().or(made.as_ref())?;
         state.mask_overlay.wash_size.set((alpha.width, alpha.height));
-        build_wash(alpha, mask.inverted, mask.opacity)
+        build_wash(alpha, mask.inverted)
     });
     *state.mask_overlay.wash.borrow_mut() = wash;
     *state.mask_overlay.dot_cache.borrow_mut() = match &selected {
@@ -601,7 +629,9 @@ pub(super) fn start_ants(state: &App) {
 
     let state = state.clone();
     state.mask_overlay.area.clone().add_tick_callback(move |_, clock| {
-        if state.mask_overlay.outline.borrow().is_empty() || !state.mask_overlay.area.is_visible() {
+
+        let area = &state.mask_overlay.area;
+        if state.mask_overlay.outline.borrow().is_empty() || !area.is_mapped() || !state.mask_overlay.show_ants.get() {
             state.mask_overlay.ants_running.set(false);
             return glib::ControlFlow::Break;
         }
@@ -611,6 +641,10 @@ pub(super) fn start_ants(state: &App) {
         state.mask_overlay.area.queue_draw();
         glib::ControlFlow::Continue
     });
+}
+
+pub(super) fn wash_shown(state: &App) -> bool {
+    state.mask_overlay.show_coverage.get() && !state.mask_overlay.wash_resting.get()
 }
 
 pub(super) fn draw_brush(context: &gtk::cairo::Context, content: (f64, f64, f64, f64), state: &App) {
@@ -685,12 +719,10 @@ pub(super) fn paint_wash(
     surface: &mut gtk::cairo::ImageSurface,
     alpha: &numa::core::mask::Stored,
     inverted: bool,
-    opacity: f32,
     bounds: (usize, usize, usize, usize),
 ) {
     let stride = surface.stride() as usize;
     let Ok(mut pixels) = surface.data() else { return };
-    let opacity = opacity.clamp(0.0, 1.0);
     let (left, top, right, bottom) =
         (bounds.0, bounds.1, bounds.2.min(alpha.width), bounds.3.min(alpha.height));
     if top >= bottom {
@@ -703,7 +735,6 @@ pub(super) fn paint_wash(
             let value = alpha.at(y * alpha.width + x);
             let value = if inverted { 1.0 - value } else { value };
 
-            let value = value * opacity;
             line[x] = (value * 255.0).clamp(0.0, 255.0) as u8;
         }
     });
@@ -790,6 +821,8 @@ pub(super) struct State {
 
     pub(super) show_coverage: Rc<Cell<bool>>,
 
+    pub(super) wash_resting: Rc<Cell<bool>>,
+
     pub(super) brush_owner: Rc<Cell<Option<usize>>>,
 
     pub(super) previewing: Rc<Cell<bool>>,
@@ -809,9 +842,11 @@ impl State {
             dot_cache: Rc::new(RefCell::new(Vec::new())),
             ants_phase: Rc::new(Cell::new(0.0)),
             ants_running: Rc::new(Cell::new(false)),
-            show_ants: Rc::new(Cell::new(true)),
+
+            show_ants: Rc::new(Cell::new(false)),
             show_dots: Rc::new(Cell::new(true)),
             show_coverage: Rc::new(Cell::new(true)),
+            wash_resting: Rc::new(Cell::new(false)),
             brush_owner: Rc::new(Cell::new(None)),
             previewing: Rc::new(Cell::new(false)),
             selected_mask: Rc::new(Cell::new(None)),

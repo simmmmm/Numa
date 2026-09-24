@@ -111,6 +111,7 @@ pub fn defringe(data: &mut [f32], width: usize, height: usize, amount: f32, scal
     let soft = blur(&luma, radius);
 
     let strength: Vec<f32> = (0..width * height)
+        .into_par_iter()
         .map(|index| {
             let (x, y) = (index % width, index / width);
             let at = |dx: isize, dy: isize| {

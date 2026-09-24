@@ -2,7 +2,7 @@ use super::*;
 
 type ModelFile = (&'static str, &'static str, u64, &'static str);
 
-const MODELS: [(&str, &str, &[ModelFile]); 12] = [
+const MODELS: [(&str, &str, &[ModelFile]); 13] = [
     ("EfficientViT-Seg B2", "Sky, greenery and the other found masks · Apache-2.0 · 61 MB", &[(
         "efficientvit_seg_b2_ade20k_1024.onnx",
         "https://github.com/simmmmm/Numa/releases/download/models/efficientvit_seg_b2_ade20k_1024.onnx",
@@ -32,6 +32,12 @@ const MODELS: [(&str, &str, &[ModelFile]); 12] = [
         "face_recognition_sface_2021dec.onnx",
         "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
         38_696_353, "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+    )]),
+
+    ("Open-closed eye", "Eyes closed, in culling · Apache-2.0 · 0.05 MB", &[(
+        "open_closed_eye.onnx",
+        "https://storage.openvinotoolkit.org/repositories/open_model_zoo/public/2022.1/open-closed-eye-0001/open_closed_eye.onnx",
+        46_164, "4daa100034482525a26c9afb9297c16580a531189e66e3d2b2ac7d32becfd593",
     )]),
     ("PP-ResNet50", "Naming the animal in a subject mask · Apache-2.0 · 103 MB", &[(
         "image_classification_ppresnet50_2022jan.onnx",
@@ -196,7 +202,7 @@ pub(super) fn offer_additional_files(state: &App, window: &adw::ApplicationWindo
         ("weather-few-clouds-symbolic", "Masks that find things for you", "The sky, greenery, buildings, water, people", files_of(&["EfficientViT-Seg B2"])),
         ("input-mouse-symbolic", "Select anything with a click", "Including things no preset has a name for", files_of(&["SlimSAM"])),
         ("edit-cut-symbolic", "Clean edges", "Hair, fur and feathers in a subject mask", files_of(&["IS-Net", "ViTMatte-S"])),
-        ("system-users-symbolic", "Faces and people", "Face retouching, and browsing by person", files_of(&["YuNet", "SFace"])),
+        ("system-users-symbolic", "Faces and people", "Face retouching, browsing by person, and closed eyes in culling", files_of(&["YuNet", "SFace", "Open-closed eye"])),
         ("emoji-nature-symbolic", "Animals by name", "A subject mask that says Bird or Dog", files_of(&["PP-ResNet50"])),
         ("image-x-generic-symbolic", "AI denoise", "Clean high-ISO photographs, kept once worked out", files_of(&["SCUNet"])),
         ("edit-clear-symbolic", "Remove", "Take out a sign, a wire or a stranger, filled from around it", files_of(&["LaMa", "YOLOX-s"])),
@@ -498,7 +504,6 @@ fn download_row(
 }
 
 pub(super) fn models_group(
-    state: &App,
     dialog: &adw::PreferencesDialog,
     folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow,
 ) -> adw::PreferencesGroup {
@@ -533,10 +538,16 @@ pub(super) fn models_group(
             get.emit_clicked();
         }
     });
-    for row in gpu_rows(state, dialog) {
-        models.add(&row);
-    }
     models
+}
+
+pub(super) fn gpu_group(state: &App, dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Acceleration");
+    for row in gpu_rows(state, dialog) {
+        group.add(&row);
+    }
+    group
 }
 
 fn gpu_rows(state: &App, dialog: &adw::PreferencesDialog) -> Vec<gtk::Widget> {

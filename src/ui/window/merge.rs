@@ -104,13 +104,16 @@ pub(super) fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) 
         animal: None,
         draft: None,
         full_size,
-        proxy,
-        working,
+        proxy: proxy.into(),
+        working: working.into(),
         working_key,
         full_working: None,
         full_working_key: None,
+        full_native: None,
         view: None,
+        draft_view: None,
         behind: None,
+            tone_guide: None,
         baseline: None,
         before_preset: None,
         history: History::new(EditState::of(&document)),
@@ -135,5 +138,6 @@ pub(super) fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) 
     refresh_profile_picker(state);
     write_lens(state);
     refresh_crumbs(state);
+    refresh_info(state);
     request_render(state);
 }

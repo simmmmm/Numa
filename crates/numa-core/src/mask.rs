@@ -342,6 +342,8 @@ pub struct Stored {
     pub width: usize,
     pub height: usize,
     data: Vec<u16>,
+
+    covers: Option<[f32; 4]>,
 }
 
 impl Stored {
@@ -349,15 +351,78 @@ impl Stored {
     const STEPS: f32 = 65535.0;
 
     pub fn new(alpha: &Alpha) -> Self {
-        Self {
-            width: alpha.width,
-            height: alpha.height,
-            data: alpha
-                .data
-                .par_iter()
-                .map(|value| (value.clamp(0.0, 1.0) * Self::STEPS + 0.5) as u16)
-                .collect(),
+        let data: Vec<u16> = alpha
+            .data
+            .par_iter()
+            .map(|value| (value.clamp(0.0, 1.0) * Self::STEPS + 0.5) as u16)
+            .collect();
+        Self::of_cells(alpha.width, alpha.height, data)
+    }
+
+    fn of_cells(width: usize, height: usize, data: Vec<u16>) -> Self {
+        let covers = Self::box_of(&data, width, height);
+        Self { width, height, data, covers }
+    }
+
+    fn box_of(data: &[u16], width: usize, height: usize) -> Option<[f32; 4]> {
+        if width == 0 || height == 0 {
+            return None;
         }
+        let (mut left, mut top, mut right, mut bottom) = (width, height, 0usize, 0usize);
+        for (index, _) in data.iter().enumerate().filter(|(_, cell)| **cell > 0) {
+            let (x, y) = (index % width, index / width);
+            left = left.min(x);
+            right = right.max(x);
+            top = top.min(y);
+            bottom = bottom.max(y);
+        }
+        (right >= left && bottom >= top).then(|| {
+            [
+                (left.saturating_sub(1)) as f32 / width as f32,
+                (top.saturating_sub(1)) as f32 / height as f32,
+                ((right + 2) as f32 / width as f32).min(1.0),
+                ((bottom + 2) as f32 / height as f32).min(1.0),
+            ]
+        })
+    }
+
+    pub fn covers(&self) -> Option<[f32; 4]> {
+        self.covers
+    }
+
+    pub fn turned(&self) -> Self {
+        let (width, height) = (self.width, self.height);
+        let mut data = vec![0u16; self.data.len()];
+        for y in 0..height {
+            for x in 0..width {
+                data[x * height + (height - 1 - y)] = self.data[y * width + x];
+            }
+        }
+        Self::of_cells(height, width, data)
+    }
+
+    pub fn remapped(&self, map: [f32; 6], width: usize, height: usize) -> Self {
+        let mut data = vec![0u16; width * height];
+        for row in 0..height {
+            for column in 0..width {
+                let (u, v) = ((column as f32 + 0.5) / width as f32, (row as f32 + 0.5) / height as f32);
+                let (s, t) = (map[0] * u + map[1] * v + map[2], map[3] * u + map[4] * v + map[5]);
+                let (x, y) = (s * self.width as f32 - 0.5, t * self.height as f32 - 0.5);
+                if x < -1.0 || y < -1.0 || x > self.width as f32 || y > self.height as f32 {
+                    continue;
+                }
+                let (x0, y0) = (x.floor(), y.floor());
+                let (fx, fy) = (x - x0, y - y0);
+                let at = |x: f32, y: f32| {
+                    let (x, y) = (x.clamp(0.0, self.width as f32 - 1.0) as usize, y.clamp(0.0, self.height as f32 - 1.0) as usize);
+                    self.data[y * self.width + x] as f32
+                };
+                let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1.0, y0) * fx;
+                let bottom = at(x0, y0 + 1.0) * (1.0 - fx) + at(x0 + 1.0, y0 + 1.0) * fx;
+                data[row * width + column] = (top * (1.0 - fy) + bottom * fy).round() as u16;
+            }
+        }
+        Self::of_cells(width, height, data)
     }
 
     pub fn len(&self) -> usize {
@@ -472,7 +537,90 @@ pub struct Mask {
     pub unshaped: Pixels,
 }
 
+fn turned_point(at: [f32; 2]) -> [f32; 2] {
+    [1.0 - at[1], at[0]]
+}
+
+fn inverted_map(map: [f32; 6]) -> Option<[f32; 6]> {
+    let determinant = map[0] * map[4] - map[1] * map[3];
+    if determinant.abs() < 1e-12 {
+        return None;
+    }
+    let (a, b, c, d) = (map[4] / determinant, -map[1] / determinant, -map[3] / determinant, map[0] / determinant);
+    Some([a, b, -(a * map[2] + b * map[5]), c, d, -(c * map[2] + d * map[5])])
+}
+
+fn mapped_point(map: [f32; 6], at: [f32; 2]) -> [f32; 2] {
+    [map[0] * at[0] + map[1] * at[1] + map[2], map[3] * at[0] + map[4] * at[1] + map[5]]
+}
+
+impl Mask {
+
+    pub fn remap(&mut self, map: [f32; 6], width: usize, height: usize) {
+        let Some(forward) = inverted_map(map) else { return };
+
+        let scale = ((forward[0].hypot(forward[3])) * (forward[1].hypot(forward[4]))).sqrt();
+        match &mut self.shape {
+            Shape::Linear { from, to } => {
+                *from = mapped_point(forward, *from);
+                *to = mapped_point(forward, *to);
+            }
+            Shape::Radial { centre, radius, .. } => {
+                *centre = mapped_point(forward, *centre);
+                *radius = [radius[0] * forward[0].hypot(forward[3]), radius[1] * forward[1].hypot(forward[4])];
+            }
+            Shape::Segment { .. } | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
+        }
+        for point in &mut self.points {
+            point.at = mapped_point(forward, point.at);
+        }
+        for stroke in &mut self.strokes {
+            for point in &mut stroke.points {
+                *point = mapped_point(forward, *point);
+            }
+            stroke.radius *= scale;
+        }
+        for pixels in [&mut self.map, &mut self.unshaped] {
+            if let Some(stored) = pixels.0.as_deref() {
+                *pixels = Pixels(Some(Arc::new(stored.remapped(map, width, height))));
+            }
+        }
+    }
+
+    pub fn turn(&mut self) {
+        self.shape.turn();
+        for point in &mut self.points {
+            point.at = turned_point(point.at);
+        }
+        for stroke in &mut self.strokes {
+            for point in &mut stroke.points {
+                *point = turned_point(*point);
+            }
+        }
+        for pixels in [&mut self.map, &mut self.unshaped] {
+            if let Some(stored) = pixels.0.as_deref() {
+                *pixels = Pixels(Some(Arc::new(stored.turned())));
+            }
+        }
+    }
+}
+
 impl Shape {
+
+    pub fn turn(&mut self) {
+        match self {
+            Shape::Linear { from, to } => {
+                *from = turned_point(*from);
+                *to = turned_point(*to);
+            }
+            Shape::Radial { centre, radius, .. } => {
+                *centre = turned_point(*centre);
+                *radius = [radius[1], radius[0]];
+            }
+
+            Shape::Segment { .. } | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
+        }
+    }
 
     pub fn linear() -> Self {
         Shape::Linear { from: [0.5, 0.45], to: [0.5, 0.05] }
@@ -602,43 +750,26 @@ impl Mask {
     ) -> Alpha {
         let mut alpha = Alpha::new(width, height, vec![0.0; width * height]);
 
-        match (&self.shape, found) {
-            (Shape::Segment { .. }, Some(base)) => {
-                for y in 0..height {
-                    let v = (y as f32 + 0.5) / height as f32;
-                    for x in 0..width {
-                        let u = (x as f32 + 0.5) / width as f32;
-                        alpha.data[y * width + x] = base.sample(u, v);
-                    }
+        let rows = |alpha: &mut Alpha, each: &(dyn Fn(f32, f32, &mut f32) + Sync)| {
+            alpha.data.par_chunks_mut(width.max(1)).enumerate().for_each(|(y, row)| {
+                let v = (y as f32 + 0.5) / height as f32;
+                for (x, value) in row.iter_mut().enumerate() {
+                    each((x as f32 + 0.5) / width as f32, v, value);
                 }
-            }
+            });
+        };
+        match (&self.shape, found) {
+            (Shape::Segment { .. }, Some(base)) => rows(&mut alpha, &|u, v, value| *value = base.sample(u, v)),
 
             (Shape::Segment { .. }, None) | (Shape::Painted, _) => {}
-            (shape, _) => {
-                for y in 0..height {
-                    let v = (y as f32 + 0.5) / height as f32;
-                    for x in 0..width {
-                        let u = (x as f32 + 0.5) / width as f32;
-                        alpha.data[y * width + x] = shape.weight(u, v);
-                    }
-                }
-            }
+            (shape, _) => rows(&mut alpha, &|u, v, value| *value = shape.weight(u, v)),
         }
 
         for (region, subtract) in regions {
-            for index in 0..alpha.data.len() {
-                let (x, y) = (index % width, index / width);
-                let covered = region.sample(
-                    (x as f32 + 0.5) / width as f32,
-                    (y as f32 + 0.5) / height as f32,
-                );
-                let value = &mut alpha.data[index];
-                *value = if *subtract {
-                    *value * (1.0 - covered)
-                } else {
-                    *value + (1.0 - *value) * covered
-                };
-            }
+            rows(&mut alpha, &|u, v, value| {
+                let covered = region.sample(u, v);
+                *value = if *subtract { *value * (1.0 - covered) } else { *value + (1.0 - *value) * covered };
+            });
         }
 
         for stroke in self.strokes.iter().filter(|stroke| stroke.enabled) {
@@ -763,6 +894,10 @@ impl Mask {
         self.basic.is_local_identity() && self.curve.is_identity()
     }
 
+    pub fn covers_nothing(&self) -> bool {
+        !self.visible || self.opacity <= 0.0 || self.is_pending()
+    }
+
     pub fn field(&self, width: usize, height: usize, region: [f32; 4]) -> Vec<f32> {
         self.field_through(width, height, region, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
     }
@@ -773,10 +908,19 @@ impl Mask {
             return field;
         }
 
-        field.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let (first, last) = match self.rows_reached(height, region, map) {
+            Some(rows) => rows,
+            None => (0, height.saturating_sub(1)),
+        };
+        if first > last {
+            return field;
+        }
+
+        field[first * width..(last + 1) * width].par_chunks_mut(width).enumerate().for_each(|(row, cells)| {
+            let y = first + row;
 
             let v = region[1] + (y as f32 + 0.5) / height as f32 * region[3];
-            for (x, cell) in row.iter_mut().enumerate() {
+            for (x, cell) in cells.iter_mut().enumerate() {
                 let u = region[0] + (x as f32 + 0.5) / width as f32 * region[2];
                 *cell = self.weight(map[0] * u + map[1] * v + map[2], map[3] * u + map[4] * v + map[5]);
             }
@@ -784,10 +928,168 @@ impl Mask {
 
         field
     }
+
+    fn rows_reached(&self, height: usize, region: [f32; 4], map: [f32; 6]) -> Option<(usize, usize)> {
+        if self.inverted || !self.visible || height == 0 {
+            return None;
+        }
+
+        let covers = match (&self.map.0, &self.shape) {
+            (Some(alpha), _) if self.wants_pixels() => alpha.covers()?,
+            (_, Shape::Radial { centre, radius, .. }) => [
+                centre[0] - radius[0].abs(),
+                centre[1] - radius[1].abs(),
+                centre[0] + radius[0].abs(),
+                centre[1] + radius[1].abs(),
+            ],
+            _ => return None,
+        };
+
+        let back = inverted_map(map)?;
+        let corners = [
+            [covers[0], covers[1]],
+            [covers[2], covers[1]],
+            [covers[0], covers[3]],
+            [covers[2], covers[3]],
+        ];
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for corner in corners {
+            let v = mapped_point(back, corner)[1];
+            top = top.min(v);
+            bottom = bottom.max(v);
+        }
+
+        if region[3] <= 0.0 {
+            return None;
+        }
+        let row_of = |v: f32| ((v - region[1]) / region[3] * height as f32).floor();
+        let first = row_of(top).max(0.0) as usize;
+        let last = (row_of(bottom).max(0.0) as usize + 1).min(height - 1);
+        Some((first.min(height - 1), last))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_skipped_row_is_a_row_of_noughts() {
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let region = [0.0, 0.0, 1.0, 1.0];
+        let brute = |mask: &Mask, width: usize, height: usize| -> Vec<f32> {
+            (0..width * height)
+                .map(|index| {
+                    let (x, y) = (index % width, index / width);
+                    let u = (x as f32 + 0.5) / width as f32;
+                    let v = (y as f32 + 0.5) / height as f32;
+                    mask.weight(u, v)
+                })
+                .collect()
+        };
+
+        let radial = Mask::new(Shape::Radial { centre: [0.5, 0.8], radius: [0.2, 0.1], feather: 0.5 });
+        assert_eq!(radial.field(40, 40, region), brute(&radial, 40, 40));
+
+        let mut data = vec![0.0f32; 32 * 32];
+        for y in 20..28 {
+            data[y * 32 + 4..y * 32 + 12].fill(1.0);
+        }
+        let mut painted = Mask::new(Shape::Painted);
+        painted.map = Pixels::of(&Alpha::new(32, 32, data));
+        painted.strokes.push(Stroke {
+            points: vec![[0.25, 0.75]],
+            radius: 0.1,
+            feather: 0.5,
+            erase: false,
+            fill: false,
+            enabled: true,
+        });
+        let field = painted.field_through(40, 40, region, identity);
+        assert_eq!(field, brute(&painted, 40, 40));
+        assert!(field.iter().any(|weight| *weight > 0.5), "and it does cover something");
+    }
+
+    #[test]
+    fn carried_into_a_crop() {
+        let map = crate::image::between_frames(
+            1000.0,
+            1000.0,
+            ([0.25, 0.25, 0.5, 0.5], 0.0),
+            ([0.0, 0.0, 1.0, 1.0], 0.0),
+            crate::document::Perspective::default(),
+        );
+        let mut mask = Mask::new(Shape::Painted);
+
+        mask.points.push(RegionPoint { at: [0.5, 0.5], subtract: false, enabled: true });
+        mask.points.push(RegionPoint { at: [0.375, 0.375], subtract: false, enabled: true });
+        mask.strokes.push(Stroke {
+            points: vec![[0.5, 0.5]],
+            radius: 0.1,
+            feather: 0.5,
+            erase: false,
+            fill: false,
+            enabled: true,
+        });
+
+        let mut data = vec![0.0; 64 * 64];
+        for y in 0..32 {
+            data[y * 64..y * 64 + 32].fill(1.0);
+        }
+        mask.map = Pixels::of(&Alpha::new(64, 64, data));
+
+        mask.remap(map, 64, 64);
+
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(near(mask.points[0].at[0], 0.5) && near(mask.points[0].at[1], 0.5), "the middle stays");
+        assert!(near(mask.points[1].at[0], 0.25), "{:?}", mask.points[1].at);
+        assert!(near(mask.strokes[0].radius, 0.2), "{}", mask.strokes[0].radius);
+        let alpha = mask.map.0.as_ref().unwrap().to_alpha();
+        assert!(alpha.data[10 * 64 + 10] > 0.9, "the covered quarter is still covered");
+        assert!(alpha.data[40 * 64 + 40] < 0.1, "and the rest is not");
+    }
+
+    #[test]
+    fn four_turns_come_back() {
+        let alpha = Alpha::new(4, 2, vec![0.0, 0.25, 0.5, 1.0, 0.1, 0.2, 0.3, 0.4]);
+        let mut mask = Mask::new(Shape::Radial { centre: [0.25, 0.75], radius: [0.3, 0.1], feather: 0.5 });
+        mask.points.push(RegionPoint { at: [0.2, 0.9], subtract: false, enabled: true });
+        mask.strokes.push(Stroke {
+            points: vec![[0.1, 0.2], [0.8, 0.4]],
+            radius: 0.05,
+            feather: 0.5,
+            erase: false,
+            fill: false,
+            enabled: true,
+        });
+        mask.map = Pixels::of(&alpha);
+        let before = mask.clone();
+
+        mask.turn();
+        assert_ne!(mask.points[0].at, before.points[0].at, "a turn moves the clicks");
+        let turned = mask.map.0.as_ref().unwrap();
+        assert_eq!((turned.width, turned.height), (2, 4), "and swaps the raster");
+
+        for _ in 0..3 {
+            mask.turn();
+        }
+
+        let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5;
+        assert!(near(mask.points[0].at, before.points[0].at), "{:?}", mask.points[0].at);
+        assert!(near(mask.strokes[0].points[1], before.strokes[0].points[1]));
+        match (&mask.shape, &before.shape) {
+            (Shape::Radial { centre, radius, .. }, Shape::Radial { centre: was, radius: had, .. }) => {
+                assert!(near(*centre, *was) && near(*radius, *had), "{centre:?} {radius:?}");
+            }
+            _ => panic!("a radial stays a radial"),
+        }
+        let back = mask.map.0.as_ref().unwrap();
+        assert_eq!((back.width, back.height), (4, 2));
+
+        for (back, was) in back.to_alpha().data.iter().zip(&alpha.data) {
+            assert!((back - was).abs() < 1e-4, "{back} != {was}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1395,6 +1697,20 @@ mod tests {
 
         mask.basic.tone.exposure = -0.5;
         assert!(!mask.is_idle());
+    }
+
+    #[test]
+    fn a_hidden_or_faded_mask_covers_nothing() {
+        let mut mask = Mask::new(Shape::radial());
+        mask.basic.tone.exposure = 1.0;
+        assert!(!mask.covers_nothing());
+        mask.inverted = true;
+        for (visible, opacity) in [(false, 1.0), (true, 0.0)] {
+            mask.visible = visible;
+            mask.opacity = opacity;
+            assert!(mask.covers_nothing());
+            assert!([(0.5, 0.5), (0.0, 0.0), (0.9, 0.1)].iter().all(|&(u, v)| mask.weight(u, v) == 0.0));
+        }
     }
 
     #[test]

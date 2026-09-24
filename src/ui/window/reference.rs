@@ -121,14 +121,14 @@ pub(super) fn set_reference(state: &App) {
             if key != photo.working_key {
                 photo.inputs = render_inputs(&photo.document);
                 photo.working =
-                    render::to_working_space(&photo.document, &photo.proxy, &photo.inputs);
+                    Arc::new(render::to_working_space(&photo.document, &*photo.proxy, &photo.inputs));
                 photo.working_key = key;
                 photo.draft = None;
             }
             let scale = photo.proxy.width.max(photo.proxy.height) as f32
                 / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
-            let document = render::with_masks_resolved(&photo.document, &photo.working);
-            (render::apply_stack(&document, &photo.working, scale), name)
+            let document = render::with_masks_resolved(&photo.document, &*photo.working);
+            (render::apply_stack(&document, &*photo.working, scale), name)
         })
     };
     let Some((frame, name)) = rendered else {

@@ -77,6 +77,18 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
             }
         }
     ));
+
+    let level = gtk::Button::with_label("Auto");
+    level.add_css_class("flat");
+    level.add_css_class("caption");
+    level.set_tooltip_text(Some("Level the photograph by its horizon and its verticals"));
+    level.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| auto_level(&state)
+    ));
+    if let Some(header) = row.first_child().and_downcast::<gtk::Box>() {
+        header.insert_child_after(&level, header.first_child().as_ref());
+    }
     column.append(&row);
 
     column.append(&section_header("Perspective"));
@@ -106,7 +118,7 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
     }
 
     let auto = gtk::Button::with_label("Auto");
-    auto.set_tooltip_text(Some("Straighten and square up from the lines in the photograph"));
+    auto.set_tooltip_text(Some("Square up converging verticals; Horizontal is Guided's"));
     auto.set_margin_top(4);
     auto.connect_clicked(glib::clone!(
         #[strong] state,
@@ -296,11 +308,23 @@ fn turn_buttons(state: &App) -> gtk::Box {
                     let Some(photo) = open.as_mut() else { return };
                     let turned = photo.document.rotation() + degrees;
                     photo.document.set_rotation(turned);
+
+                    let mut masks = photo.document.masks();
+                    for mask in masks.iter_mut() {
+                        mask.turn();
+                    }
+                    photo.document.set_masks(masks);
+                    photo.view = None;
                 }
+
+                forget_model_frames(&state);
 
                 state.crop.rect.set([0.0, 0.0, 1.0, 1.0]);
                 state.crop.area.queue_draw();
                 commit_crop(&state);
+
+                state.crop.at_open.set(geometry_now(&state));
+                refresh_masks(&state);
             }
         ));
         turns.append(&button);

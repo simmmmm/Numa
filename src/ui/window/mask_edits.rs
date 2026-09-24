@@ -91,7 +91,6 @@ pub(super) fn set_mask_edge(state: &App, index: usize, which: u8, value: f32) {
             return;
         }
         *target = value;
-        photo.view = None;
     }
 
     let reshaped = {
@@ -121,7 +120,6 @@ pub(super) fn set_mask_opacity(state: &App, index: usize, opacity: f32) {
             return;
         }
         mask.opacity = opacity.clamp(0.0, 1.0);
-        photo.view = None;
     }
 
     request_render(state);
@@ -368,6 +366,14 @@ pub(super) fn select_mask_now(state: &App, index: Option<usize>) {
     if selected != state.mask_overlay.brush_owner.get() {
         state.mask_overlay.brush_owner.set(selected);
         state.masks.brush.set(MaskTool::Off);
+
+        let settled = selected_mask(state).is_some_and(|mask| match mask.shape {
+            Shape::Segment { .. } => true,
+            Shape::Painted => !is_empty_painted(&mask),
+            _ => false,
+        });
+        state.masks.looking.set(settled);
+        state.mask_overlay.area.set_can_target(!settled);
     }
 
     refresh_masks(state);

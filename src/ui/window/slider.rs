@@ -58,6 +58,8 @@ thread_local! {
     };
 
     pub(super) static REGISTERED: RefCell<Vec<gtk::Scale>> = const { RefCell::new(Vec::new()) };
+
+    static RELOAD_QUEUED: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(super) fn set_neutral(scale: &gtk::Scale, value: f64) {
@@ -108,14 +110,25 @@ pub(super) fn repaint(scale: &gtk::Scale) {
         return;
     };
     let rule = rule_for(scale, &class, neutral_of(scale).unwrap_or(0.0));
-    let sheet = PAINTERS.with(|painters| {
-        let mut painters = painters.borrow_mut();
-        if let Some(entry) = painters.get_mut(&key) {
+    let changed = PAINTERS.with(|painters| match painters.borrow_mut().get_mut(&key) {
+        Some(entry) if entry.1 != rule => {
             entry.1 = rule;
+            true
         }
-        painters.values().map(|(_, rule)| rule.as_str()).collect::<String>()
+        _ => false,
     });
-    TRACKS.with(|provider| provider.load_from_string(&sheet));
+    if !changed || RELOAD_QUEUED.with(|queued| queued.replace(true)) {
+        return;
+    }
+
+    glib::idle_add_local_full(glib::Priority::HIGH_IDLE, || {
+        RELOAD_QUEUED.with(|queued| queued.set(false));
+        let sheet = PAINTERS.with(|painters| {
+            painters.borrow().values().map(|(_, rule)| rule.as_str()).collect::<String>()
+        });
+        TRACKS.with(|provider| provider.load_from_string(&sheet));
+        glib::ControlFlow::Break
+    });
 }
 
 pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: Readout) -> gtk::Box {

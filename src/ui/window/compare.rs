@@ -70,7 +70,7 @@ pub(super) fn compare_these(state: &App, chosen: Vec<(i64, PathBuf, i64)>) {
         compare.row.append(&column);
         let view = pane.view.clone();
         let open = compare.open.clone();
-        thumbnail::load_thumbnail_while(&path, mtime, LOUPE_EDGE, None, move || open.get(), move |texture| {
+        thumbnail::load_thumbnail_while(&path, mtime, LOUPE_EDGE, None, None, move || open.get(), move |texture| {
             view.set_texture(texture)
         });
         panes.push(pane);

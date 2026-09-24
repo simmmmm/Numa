@@ -31,6 +31,203 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.20.3" date="2026-09-24">
+      <description>
+        <p>
+          The Auto under Perspective corrects converging verticals only, and
+          only when the photograph's lines clearly agree.
+        </p>
+      </description>
+    </release>
+    <release version="0.20.2" date="2026-09-24">
+      <description>
+        <p>
+          Straighten has its own Auto, which levels by the horizon as well as
+          by upright lines and leaves the perspective alone; the Auto under
+          Perspective no longer turns the frame.
+        </p>
+      </description>
+    </release>
+    <release version="0.20.1" date="2026-09-24">
+      <description>
+        <p>
+          Masks open ready to look at, the coverage wash is back and easy to
+          see, Space shows the matte inside a mask, and a right-click removes
+          a point.
+        </p>
+      </description>
+    </release>
+    <release version="0.20.0" date="2026-09-24">
+      <description>
+        <p>
+          Cull mode: the loupe picks with Up and rejects with Down, steps
+          through bursts, shows where the camera focused and asks about closed
+          eyes, blown highlights and slow shutters.
+        </p>
+        <p>
+          A faster editor: photographs render off the main thread, so sliders
+          move smoothly and the newest change always wins; the detail passes
+          are kept between slider ticks; zooming decodes the raw once; masks,
+          Beautify and dehaze do less work; and small exports are developed
+          near their own size.
+        </p>
+        <p>
+          A quieter library: rescans read only files that changed, ratings are
+          saved in one go, thumbnails are made the size they are shown and
+          their cache stays under 2 GB. Preferences are three pages.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.21" date="2026-09-24">
+      <description>
+        <p>
+          With HDR, Clarity or Texture on, a zoomed-in photograph renders only
+          the part on screen, and looks the same as the whole-frame render: the
+          sharp frame after a drag takes half the time, and panning reuses it.
+          The histogram at 1:1 follows a slider once it is let go.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.20" date="2026-09-24">
+      <description>
+        <p>
+          A mask with HDR, Clarity, Texture or Dehaze looks as it did before
+          0.19.10 again, and as it does in the export.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.19" date="2026-09-24">
+      <description>
+        <p>
+          A turned, mirrored or straightened photograph renders only the part
+          on screen when zoomed in, as an upright one always did: the sharp
+          frame after a drag takes a tenth of the time.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.18" date="2026-09-24">
+      <description>
+        <p>
+          Fixes 0.19.17, where the sharp render waited for a release it never
+          heard: a slider now drafts while it is held and sharpens the moment
+          it is let go.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.17" date="2026-09-24">
+      <description>
+        <p>
+          A slider stays smooth for as long as it is held: the sharp render
+          waits for the button to come up rather than starting at every pause.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.16" date="2026-09-24">
+      <description>
+        <p>
+          Any slider stays smooth on a turned or straightened photograph, at
+          any magnification: while the hand moves, the frame is drawn from the
+          proxy and sharpens when it stops.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.15" date="2026-09-24">
+      <description>
+        <p>
+          A lasso or a brush adds what it drew: neither closer look runs again
+          by itself. And dragging a slider on a turned or straightened
+          photograph is smooth at any magnification.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.14" date="2026-09-23">
+      <description>
+        <p>
+          A lasso stroke no longer runs the hair trace over the mask that was
+          just drawn. The closer look at hair is asked for and nothing else
+          starts it.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.13" date="2026-09-23">
+      <description>
+        <p>
+          Measurement only: with NUMA_TIMING the log says what each pass of the
+          stack cost.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.12" date="2026-09-23">
+      <description>
+        <p>
+          Auto no longer freezes the window while it looks at the photograph.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.11" date="2026-09-23">
+      <description>
+        <p>
+          Dragging a slider while zoomed in keeps its own draft of the region
+          on screen, instead of cutting it out of the full-resolution image at
+          every tick.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.10" date="2026-09-23">
+      <description>
+        <p>
+          A mask costs what it covers: both its coverage and its adjustments
+          are worked out over the rows it reaches rather than over the whole
+          photograph.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.9" date="2026-09-23">
+      <description>
+        <p>
+          Masks no longer slow the editor down as they are added: each one is
+          worked out over the rows it covers instead of over the whole frame.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.8" date="2026-09-23">
+      <description>
+        <p>
+          Sliders stay smooth when the photograph is zoomed in: while the hand
+          is moving, the region on screen is rendered at half its edge, and the
+          sharp one follows when it stops.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.7" date="2026-09-23">
+      <description>
+        <p>
+          The models run on the graphics card again. Handed more than one
+          device — a card and a software renderer — the WebGPU provider
+          refused, and everything fell back to the processor.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.6" date="2026-09-23">
+      <description>
+        <p>
+          A mask is carried across a crop, a straighten or a quarter turn
+          instead of being worked out again, so the clicks and strokes that
+          shaped it stay. Look puts the tool down, so the photograph can be
+          zoomed into and panned with a mask open.
+        </p>
+      </description>
+    </release>
+    <release version="0.19.5" date="2026-09-23">
+      <description>
+        <p>
+          Refine is a button in the mask bar, with Edge and Hair to choose
+          from, and the hair pass no longer runs on its own after the edge
+          search. Subject and Background lead the found masks, then Sky and
+          Water. Rating a photograph no longer rebuilds the grid.
+        </p>
+      </description>
+    </release>
     <release version="0.19.4" date="2026-09-22">
       <description>
         <p>

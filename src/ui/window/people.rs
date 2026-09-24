@@ -50,8 +50,9 @@ pub(super) fn fill_people(state: &App, dialog: &adw::Dialog, holder: &adw::Bin, 
         return;
     }
 
-    let known = state.catalog.known_faces().unwrap_or_default();
-    let everyone = state.catalog.people(library.id).unwrap_or_default();
+    let named = state.catalog.named_faces().unwrap_or_default();
+    let known = state.catalog.known_from(&named).unwrap_or_default();
+    let everyone = state.catalog.people_among(library.id, &named, &known).unwrap_or_default();
 
     let names: Vec<Option<String>> = faces
         .iter()

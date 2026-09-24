@@ -104,7 +104,7 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     loupe_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     loupe_keys.connect_key_pressed(glib::clone!(
         #[strong] state,
-        move |_, key, _, _| loupe_key(&state, key)
+        move |_, key, _, modifiers| loupe_key(&state, key, modifiers)
     ));
     window.add_controller(loupe_keys);
 
@@ -336,6 +336,21 @@ fn install_canvas_and_mask_actions(state: &App, window: &adw::ApplicationWindow)
         }
     ));
     window.add_action(&invert);
+
+    for (name, hair) in [("refine-edge", false), ("refine-hair", true)] {
+        let look = gio::SimpleAction::new(name, None);
+        look.connect_activate(glib::clone!(
+            #[strong] state,
+            move |_, _| {
+                let Some(index) = state.mask_overlay.selected_mask.get() else { return };
+                match hair {
+                    true => trace_hair(&state, index),
+                    false => refine_mask_edge(&state, index),
+                }
+            }
+        ));
+        window.add_action(&look);
+    }
 
     let duplicate = gio::SimpleAction::new("duplicate-mask", None);
     duplicate.connect_activate(glib::clone!(

@@ -2,6 +2,51 @@ use rayon::prelude::*;
 
 pub use numa_core::plane::{blur, subsample, upsample, Plane};
 
+pub struct ToneGuide {
+
+    base: Plane,
+
+    bloom: Option<Plane>,
+    pivot: f32,
+
+    settings: [f32; 3],
+}
+
+#[derive(Clone, Copy)]
+pub enum Tone<'a> {
+
+    Own,
+
+    Record(&'a std::cell::RefCell<Option<ToneGuide>>),
+
+    Measure(&'a std::cell::RefCell<Option<ToneGuide>>),
+
+    Guided(&'a ToneGuide, [f32; 4]),
+}
+
+fn sample_region(plane: &Plane, width: usize, height: usize, region: [f32; 4]) -> Plane {
+    let (sw, sh) = (plane.width, plane.height);
+    let mut out = vec![0.0f32; width * height];
+    out.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let v = region[1] + (y as f32 + 0.5) / height as f32 * region[3];
+        let fy = (v * sh as f32 - 0.5).max(0.0);
+        let y0 = (fy as usize).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let ty = fy - y0 as f32;
+        for (x, target) in row.iter_mut().enumerate() {
+            let u = region[0] + (x as f32 + 0.5) / width as f32 * region[2];
+            let fx = (u * sw as f32 - 0.5).max(0.0);
+            let x0 = (fx as usize).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let tx = fx - x0 as f32;
+            let top = plane.data[y0 * sw + x0] * (1.0 - tx) + plane.data[y0 * sw + x1] * tx;
+            let bottom = plane.data[y1 * sw + x0] * (1.0 - tx) + plane.data[y1 * sw + x1] * tx;
+            *target = top * (1.0 - ty) + bottom * ty;
+        }
+    });
+    Plane::new(width, height, out)
+}
+
 const RADIUS_FRACTION: f32 = 1.0 / 28.0;
 
 const EDGE_EPSILON: f32 = 0.04;
@@ -77,10 +122,12 @@ pub fn tone_map(
     compress: f32,
     clarity: f32,
     texture: f32,
+    tone: Tone,
 ) {
     if (compress == 0.0 && clarity == 0.0 && texture == 0.0) || width == 0 || height == 0 {
         return;
     }
+    let settings = [compress, clarity, texture];
 
     let compress = compress.clamp(-1.0, 1.0) * MAX_COMPRESSION;
     let clarity = clarity.clamp(-1.0, 1.0) * MAX_CLARITY;
@@ -95,26 +142,53 @@ pub fn tone_map(
         .collect();
 
     let log_luminance = Plane::new(width, height, luminance);
-    let radius = ((width.max(height) as f32 * RADIUS_FRACTION) as usize).max(1);
 
-    let small = subsample(&log_luminance, SUBSAMPLE);
-    let small_radius = (radius / SUBSAMPLE).max(1);
-    let base_small = guided(&small, small_radius, EDGE_EPSILON);
-    let base = upsample(&base_small, width, height);
+    let handed = match tone {
+        Tone::Guided(guide, region) if guide.settings == settings => Some((guide, region)),
+        _ => None,
+    };
+    let (base, bloom, pivot, frame_long) = match handed {
+        Some((guide, region)) => (
+            sample_region(&guide.base, width, height, region),
+            guide.bloom.as_ref().map(|glow| sample_region(glow, width, height, region)),
+            guide.pivot,
 
-    let bloom = (clarity < 0.0).then(|| {
-        let radius = ((width.max(height) as f32 * BLOOM_FRACTION) as usize).max(1);
-        let small = subsample(&log_luminance, SUBSAMPLE);
-        let spread = blur(&small, (radius / SUBSAMPLE).max(1));
-        upsample(&spread, width, height)
-    });
+            (width as f32 / region[2]).max(height as f32 / region[3]),
+        ),
+        None => {
+            let radius = ((width.max(height) as f32 * RADIUS_FRACTION) as usize).max(1);
+
+            let small = subsample(&log_luminance, SUBSAMPLE);
+            let small_radius = (radius / SUBSAMPLE).max(1);
+            let base_small = guided(&small, small_radius, EDGE_EPSILON);
+            let base = upsample(&base_small, width, height);
+
+            let bloom_small = (clarity < 0.0).then(|| {
+                let radius = ((width.max(height) as f32 * BLOOM_FRACTION) as usize).max(1);
+                blur(&small, (radius / SUBSAMPLE).max(1))
+            });
+            let bloom = bloom_small.as_ref().map(|glow| upsample(glow, width, height));
+
+            let pivot = (base.data.iter().map(|v| *v as f64).sum::<f64>() / base.data.len() as f64) as f32;
+            match tone {
+                Tone::Record(cell) => {
+                    *cell.borrow_mut() = Some(ToneGuide { base: base_small, bloom: bloom_small, pivot, settings });
+                }
+                Tone::Measure(cell) => {
+                    *cell.borrow_mut() = Some(ToneGuide { base: base_small, bloom: bloom_small, pivot, settings });
+                    return;
+                }
+                _ => {}
+            }
+            (base, bloom, pivot, width.max(height) as f32)
+        }
+    };
 
     let mid = (texture != 0.0).then(|| {
-        let radius = ((width.max(height) as f32 * TEXTURE_FRACTION) as usize).max(1);
+        let radius = ((frame_long * TEXTURE_FRACTION) as usize).max(1);
         guided(&log_luminance, radius, EDGE_EPSILON)
     });
 
-    let pivot = (base.data.iter().map(|v| *v as f64).sum::<f64>() / base.data.len() as f64) as f32;
     let base_scale = 1.0 - compress;
 
     let detail_scale = 1.0 + clarity.max(0.0);
@@ -243,7 +317,7 @@ mod tests {
     fn tone_map_at_zero_changes_nothing() {
         let mut data = vec![0.1, 0.3, 0.9, 0.4, 0.2, 0.05, 1.4, 0.8, 0.3, 0.02, 0.02, 0.02];
         let before = data.clone();
-        tone_map(&mut data, 2, 2, 0.0, 0.0, 0.0);
+        tone_map(&mut data, 2, 2, 0.0, 0.0, 0.0, Tone::Own);
         assert_eq!(data, before);
     }
 
@@ -264,7 +338,7 @@ mod tests {
         let before = luma(&data);
 
         let mut mapped = data.clone();
-        tone_map(&mut mapped, width, height, 0.6, 0.0, 0.0);
+        tone_map(&mut mapped, width, height, 0.6, 0.0, 0.0, Tone::Own);
         let after = luma(&mapped);
 
         let at = |v: &[f32], x: usize, y: usize| v[y * width + x];
@@ -319,7 +393,7 @@ mod tests {
         }
 
         let mut boosted = data.clone();
-        tone_map(&mut boosted, width, height, 0.0, 0.5, 0.0);
+        tone_map(&mut boosted, width, height, 0.0, 0.5, 0.0, Tone::Own);
 
         let spread = |d: &[f32]| {
             let values: Vec<f32> = d.chunks_exact(3).map(|p| p[0]).collect();
@@ -366,9 +440,9 @@ mod tests {
         let before = fine_contrast(&make());
 
         let mut with_texture = make();
-        tone_map(&mut with_texture, w, h, 0.0, 0.0, 1.0);
+        tone_map(&mut with_texture, w, h, 0.0, 0.0, 1.0, Tone::Own);
         let mut with_clarity = make();
-        tone_map(&mut with_clarity, w, h, 0.0, 1.0, 0.0);
+        tone_map(&mut with_clarity, w, h, 0.0, 1.0, 0.0, Tone::Own);
 
         let textured = fine_contrast(&with_texture);
         let clarified = fine_contrast(&with_clarity);
@@ -386,9 +460,9 @@ mod tests {
         let base: Vec<f32> = (0..w * h * 3).map(|i| 0.2 + (i % 7) as f32 * 0.004).collect();
 
         let mut two = base.clone();
-        tone_map(&mut two, w, h, 0.4, 0.5, 0.0);
+        tone_map(&mut two, w, h, 0.4, 0.5, 0.0, Tone::Own);
         let mut again = base.clone();
-        tone_map(&mut again, w, h, 0.4, 0.5, 0.0);
+        tone_map(&mut again, w, h, 0.4, 0.5, 0.0, Tone::Own);
         assert_eq!(two, again, "and it is deterministic");
     }
 
@@ -412,7 +486,7 @@ mod tests {
 
         let before = make();
         let mut after = make();
-        tone_map(&mut after, w, h, 0.0, -1.0, 0.0);
+        tone_map(&mut after, w, h, 0.0, -1.0, 0.0, Tone::Own);
 
         let beside = (at(&before, 128, 175), at(&after, 128, 175));
         assert!(beside.1 > beside.0 * 1.5, "no glow: {beside:?}");

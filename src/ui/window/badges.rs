@@ -31,6 +31,7 @@ pub(super) fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
         edited: photo.edited,
         edge: grid_edge(state),
         asked: 0,
+        fitted: 0,
         picture: picture.clone(),
 
         widget: picture.clone().upcast(),

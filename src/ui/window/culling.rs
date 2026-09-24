@@ -2,10 +2,18 @@ use super::*;
 
 pub(super) const FACE_EDGE: u32 = 640;
 
+const EYE_EDGE: u32 = 4800;
+
 pub(super) fn cull_note(photo: &Photo, scale: &cull::Scale) -> String {
     let frame = cull::Frame {
         sharpness: photo.sharpness.unwrap_or_default(),
         blown: photo.blown.unwrap_or_default(),
+
+        brightness: photo.brightness.unwrap_or(0.5),
+        contrast: photo.contrast.unwrap_or(1.0),
+        exposure: photo.exposure.unwrap_or_default(),
+        focal35: photo.focal35.unwrap_or_default(),
+        raw_clipped: photo.raw_clipped,
         ..Default::default()
     };
 
@@ -13,12 +21,25 @@ pub(super) fn cull_note(photo: &Photo, scale: &cull::Scale) -> String {
     if let Some(suggested) = photo.suggested {
         parts.push(format!("~{suggested:.1}★"));
     }
+
+    if let Some(note) = frame.blank_note() {
+        parts.push(note.to_string());
+        return parts.join(" · ");
+    }
     if photo.best_of_burst {
         parts.push("best of burst".to_string());
     }
 
+    if photo.eyes_closed == Some(true) {
+        parts.push("eyes closed?".to_string());
+    }
+
     match (photo.face_sharpness, photo.sharpness) {
         (Some(face), Some(_)) if face < scale.soft => parts.push("soft face".to_string()),
+
+        _ if photo.sharpness.is_some() && scale.is_soft(&frame) && frame.is_slow() => {
+            parts.push("soft · slow shutter".to_string())
+        }
         _ if photo.sharpness.is_some() && scale.is_soft(&frame) => parts.push("soft".to_string()),
         _ => {}
     }
@@ -35,10 +56,45 @@ pub(super) fn cull_detail(photo: &Photo, scale: &cull::Scale) -> String {
 
     let mut lines = vec![
         format!("Sharpness {sharpness:.2} (soft below {:.2} in this library)", scale.soft),
-        format!("Blown {:.1} % (a lot above {:.0} %)", blown * 100.0, cull::BLOWN * 100.0),
+
+        match photo.raw_clipped {
+            Some(raw) => format!(
+                "Blown {:.1} % in the raw, {:.1} % in the camera's JPEG{} (a lot above {:.0} %)",
+                raw * 100.0,
+                blown * 100.0,
+                if blown > cull::BLOWN && raw <= cull::BLOWN { " — the raw holds it" } else { "" },
+                cull::BLOWN * 100.0
+            ),
+            None => format!("Blown {:.1} % (a lot above {:.0} %)", blown * 100.0, cull::BLOWN * 100.0),
+        },
     ];
+    if let Some(dark) = photo.raw_dark.filter(|dark| *dark >= 0.01) {
+        lines.push(format!("{:.0} % of the raw is deep shadow, within 1 % of black", dark * 100.0));
+    }
+    if let Some(contrast) = photo.contrast {
+        lines.push(format!("Spread of tone {contrast:.3} (next to nothing in it below {:.2})", cull::BLANK));
+    }
+
+    if let (Some(exposure), Some(focal35)) = (photo.exposure, photo.focal35) {
+        let shutter = match exposure >= 1.0 {
+            true => format!("{exposure:.1} s"),
+            false => format!("1/{:.0} s", 1.0 / exposure),
+        };
+        let stops = (exposure * focal35).log2();
+        let past = match stops > 0.0 {
+            true => format!("{stops:.1} stops slower than 1/{focal35:.0}"),
+            false => format!("faster than 1/{focal35:.0}"),
+        };
+        lines.push(format!(
+            "{shutter} at {focal35:.0} mm full-frame — {past} (the shutter is named as a reason past {:.0})",
+            cull::HANDHELD.log2()
+        ));
+    }
     match (photo.faces, photo.face_sharpness) {
         (Some(0), _) => lines.push("No faces found".to_string()),
+        (Some(_), _) if photo.eyes_closed == Some(true) => {
+            lines.push("Both eyes of the largest face read as closed — a guess, check it".to_string())
+        }
         (Some(count), Some(face)) => {
             lines.push(format!("{count} face(s), sharpest {face:.2} — this is what is scored"));
         }
@@ -211,14 +267,39 @@ fn measure_photo(
     path: &Path,
 ) -> Result<(cull::Frame, Option<u32>, Option<f32>, Vec<([f32; cull::people::LENGTH], Option<Vec<u8>>)>), String> {
 
-    raw::load_scaled(path, FACE_EDGE).map(|image| {
-        let frame = cull::measure::of(&image);
+    raw::load_scaled(path, EYE_EDGE).map(|full| {
+        let shrink = FACE_EDGE as f32 / full.width().max(full.height()) as f32;
+        let image = match shrink < 1.0 {
+            true => image::imageops::thumbnail(
+                &full,
+                ((full.width() as f32 * shrink).round() as u32).max(1),
+                ((full.height() as f32 * shrink).round() as u32).max(1),
+            ),
+            false => full.clone(),
+        };
+        let mut frame = cull::measure::of(&image);
+
+        if let Some((exposure, focal35)) = raw::shot(path) {
+            frame.exposure = exposure;
+            frame.focal35 = focal35;
+        }
+
+        if let Some((clipped, dark)) = raw::raw_levels(path) {
+            frame.raw_clipped = Some(clipped);
+            frame.raw_dark = Some(dark);
+        }
 
         let found = cull::faces::detect(&image);
         let faces = found.as_ref().map(|faces| faces.len() as u32);
         let sharpest = found
             .as_ref()
             .and_then(|faces| cull::faces::sharpest_face(&image, faces));
+
+        frame.eyes_closed = found
+            .iter()
+            .flatten()
+            .max_by(|a, b| a.width.total_cmp(&b.width))
+            .and_then(|face| cull::eyes::closed(&full, face, full.width() as f32 / image.width() as f32));
 
         let embeddings = found
             .iter()
@@ -255,6 +336,22 @@ fn analysis_summary(total: usize, failed: usize, grouped: Result<(usize, cull::l
     }
 }
 
+pub(super) fn twins<'a>(
+    photos: impl IntoIterator<Item = (i64, &'a Path, Option<i64>)>,
+    is_raw: impl Fn(&Path) -> bool,
+) -> std::collections::HashMap<i64, i64> {
+    let key = |path: &Path, taken: i64| (path.file_stem().map(|stem| stem.to_string_lossy().to_uppercase()), taken);
+    let dated: Vec<(i64, &Path, i64)> =
+        photos.into_iter().filter_map(|(id, path, taken)| Some((id, path, taken?))).collect();
+    let raws: std::collections::HashMap<_, i64> =
+        dated.iter().filter(|(_, path, _)| is_raw(path)).map(|(id, path, taken)| (key(path, *taken), *id)).collect();
+    dated
+        .iter()
+        .filter(|(_, path, _)| !is_raw(path))
+        .filter_map(|(id, path, taken)| Some((*id, *raws.get(&key(path, *taken))?)))
+        .collect()
+}
+
 pub(super) fn regroup_bursts(state: &App, library_id: i64) -> Result<(usize, cull::learn::Outcome), String> {
     let analysed = state.catalog.analysed(library_id)?;
     if analysed.is_empty() {
@@ -264,9 +361,22 @@ pub(super) fn regroup_bursts(state: &App, library_id: i64) -> Result<(usize, cul
     let marks: std::collections::HashMap<i64, Photo> =
         state.catalog.photos(library_id, &Filter::default())?.into_iter().map(|photo| (photo.id, photo)).collect();
 
+    let measured: std::collections::HashSet<i64> = analysed.iter().map(|(id, _, _)| *id).collect();
+    let twin_of: std::collections::HashMap<i64, i64> =
+        twins(marks.values().map(|photo| (photo.id, photo.path.as_path(), photo.taken)), raw::is_raw)
+            .into_iter()
+            .filter(|(_, raw)| measured.contains(raw))
+            .collect();
+    let (twinned, analysed): (Vec<_>, Vec<_>) = analysed.into_iter().partition(|(id, _, _)| twin_of.contains_key(id));
+
     let frames: Vec<cull::Frame> = analysed.iter().map(|(_, frame, _)| *frame).collect();
     let hashes: Vec<u64> = frames.iter().map(|frame| frame.hash).collect();
-    let groups = cull::bursts(&hashes, cull::BURST_TOLERANCE);
+
+    let taken: Vec<i64> = analysed
+        .iter()
+        .map(|(id, _, _)| marks.get(id).map_or(0, |photo| photo.taken.unwrap_or(photo.mtime)))
+        .collect();
+    let groups = cull::bursts(&hashes, &taken, cull::BURST_TOLERANCE);
     let faces: Vec<Option<f32>> = analysed.iter().map(|(_, _, face)| *face).collect();
     let best = cull::best_of_each(&frames, &faces, &groups);
 
@@ -291,12 +401,23 @@ pub(super) fn regroup_bursts(state: &App, library_id: i64) -> Result<(usize, cul
         })
         .collect();
     let (suggested, learned) = cull::learn::score(&samples);
-    let rows: Vec<(i64, usize, bool, f32)> = analysed
+    let mut rows: Vec<(i64, Option<usize>, bool, f32)> = analysed
         .iter()
         .enumerate()
-        .map(|(index, (id, _, _))| (*id, groups[index], best.contains(&index), suggested[index]))
+        .map(|(index, (id, _, _))| (*id, Some(groups[index]), best.contains(&index), suggested[index]))
         .collect();
+    let by_raw: std::collections::HashMap<i64, f32> = rows.iter().map(|(id, _, _, suggested)| (*id, *suggested)).collect();
+    rows.extend(twinned.iter().filter_map(|(id, _, _)| Some((*id, None, false, *by_raw.get(twin_of.get(id)?)?))));
 
     state.catalog.save_bursts(&rows)?;
+
+    let found = cull::echoes(&frames, &groups, &taken);
+    let echoes: Vec<(i64, Option<i64>)> = analysed
+        .iter()
+        .zip(&found)
+        .map(|((id, _, _), echo)| (*id, echo.map(|index| analysed[index].0)))
+        .chain(twinned.iter().map(|(id, _, _)| (*id, None)))
+        .collect();
+    state.catalog.save_echoes(&echoes)?;
     Ok((best.len(), learned))
 }
