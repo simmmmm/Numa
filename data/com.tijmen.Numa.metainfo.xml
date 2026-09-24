@@ -31,6 +31,15 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.20.5" date="2026-09-24">
+      <description>
+        <p>
+          In cull mode a pick no longer flies away: it hops, moves over to be
+          the frame before, and every picked frame in the loupe is framed in
+          the accent colour.
+        </p>
+      </description>
+    </release>
     <release version="0.20.4" date="2026-09-24">
       <description>
         <p>
