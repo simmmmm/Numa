@@ -20,7 +20,6 @@ pub(super) struct State {
     pub(super) point_sliders: Vec<gtk::Scale>,
     pub(super) point_controls: gtk::Box,
     pub(super) point_show: gtk::ToggleButton,
-    pub(super) profile_label: gtk::Label,
     pub(super) mixer_sliders: Vec<gtk::Scale>,
     pub(super) mixer_band: Rc<Cell<usize>>,
 
@@ -52,7 +51,6 @@ impl State {
             .collect(),
             point_controls: gtk::Box::new(gtk::Orientation::Vertical, 0),
             point_show: gtk::ToggleButton::new(),
-            profile_label: gtk::Label::new(None),
             mixer_sliders: (0..3)
             .map(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, -100.0, 100.0, 1.0))
             .collect(),
@@ -283,7 +281,14 @@ pub(super) fn build_colour(
     let colour = page_column();
 
     colour.add_css_class("quiet");
-    let balance_header = section_header("White balance");
+
+    let balance_header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let balance_label = section_header("White balance");
+    balance_label.set_hexpand(true);
+    balance_header.append(&balance_label);
+    let white = white_pipette(state);
+    white.set_valign(gtk::Align::End);
+    balance_header.append(&white);
     global_only(balance_header.as_ref());
     colour.append(&balance_header);
     for (name, scale, readout) in &all[..2] {
@@ -295,16 +300,6 @@ pub(super) fn build_colour(
         global_only(row.as_ref());
         colour.append(&row);
     }
-    let white = white_pipette(state);
-    global_only(white.as_ref());
-    colour.append(&white);
-
-    let profile_header = section_header("Camera profile");
-    global_only(profile_header.as_ref());
-    colour.append(&profile_header);
-    let profile = build_profile_picker(state);
-    global_only(profile.as_ref());
-    colour.append(&profile);
 
     let mask_header = section_header("White balance");
     mask_only(mask_header.as_ref());
@@ -368,17 +363,10 @@ pub(super) fn build_colour(
 
 fn white_pipette(state: &App) -> gtk::ToggleButton {
     let white = state.colour.white_pipette.clone();
-    let inside = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let pipette = gtk::Image::from_icon_name("color-select-symbolic");
-    pipette.set_pixel_size(16);
-    inside.append(&pipette);
-    inside.append(&gtk::Label::new(Some("Pick a neutral")));
-    white.set_child(Some(&inside));
-    white.add_css_class("panel-action");
-    white.set_tooltip_text(Some("Click something in the photograph that should be grey or white"));
-
-    white.set_halign(gtk::Align::End);
-    white.set_margin_top(6);
+    white.set_icon_name("color-select-symbolic");
+    white.add_css_class("flat");
+    white.add_css_class("band-pipette");
+    white.set_tooltip_text(Some("Pick a neutral: click something in the photograph that should be grey or white"));
     white.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
@@ -412,13 +400,13 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
                 return;
             };
 
-            {
+            let automatic = {
                 let mut open = state.open.borrow_mut();
                 let Some(photo) = open.as_mut() else { return };
                 if photo.document.colour_profile == chosen {
                     return;
                 }
-                photo.document.colour_profile = chosen;
+                photo.document.colour_profile = chosen.clone();
 
                 photo.inputs = render_inputs(&photo.document);
                 photo.working = Arc::new(render::to_working_space(&photo.document, &*photo.proxy, &photo.inputs));
@@ -427,20 +415,16 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
 
                 photo.draft = None;
                 photo.view = None;
-            }
+                photo.proxy.rendering.as_ref().map(|profile| profile.name.clone())
+            };
 
+            write_profile_note(&state, chosen, automatic, true);
             request_render(&state);
             schedule_history_push(&state);
         }
     ));
 
     row.append(&state.colour.profile_picker);
-
-    state.colour.profile_label.set_xalign(0.0);
-    state.colour.profile_label.set_wrap(true);
-    state.colour.profile_label.add_css_class("profile-note");
-    row.append(&state.colour.profile_label);
-
     row
 }
 
@@ -477,14 +461,11 @@ pub(super) fn refresh_profile_picker(state: &App) {
     };
 
     let profiles = camera_profiles(state);
-    let source_of = |name: &str| profiles.iter().find(|(n, _)| n == name).map(|(_, source)| *source);
     let mut labels = vec![
         match &automatic {
-            Some(name) => match source_of(name) {
-                Some(source) => format!("Automatic — {name} · {}", source_label(source)),
-                None => format!("Automatic — {name}"),
-            },
-            None => "Automatic — the camera's matrix".to_string(),
+
+            Some(name) => format!("Automatic · {name}"),
+            None => "Automatic · Camera matrix".to_string(),
         },
         "Camera matrix only".to_string(),
     ];
@@ -493,14 +474,17 @@ pub(super) fn refresh_profile_picker(state: &App) {
 
     state.applying.set(true);
     state.colour.profile_picker.set_model(Some(&model));
-    let index = profile_choices(state)
-        .iter()
-        .position(|choice| *choice == chosen)
-        .unwrap_or(0);
-    state.colour.profile_picker.set_selected(index as u32);
+    let index = profile_choices(state).iter().position(|choice| *choice == chosen);
+    state.colour.profile_picker.set_selected(index.unwrap_or(0) as u32);
     state.applying.set(false);
 
-    let showing = chosen.clone().or(automatic);
+    write_profile_note(state, chosen, automatic, index.is_some());
+}
+
+fn write_profile_note(state: &App, chosen: Option<String>, automatic: Option<String>, listed: bool) {
+    let profiles = camera_profiles(state);
+    let source_of = |name: &str| profiles.iter().find(|(n, _)| n == name).map(|(_, source)| *source);
+    let showing = chosen.filter(|_| listed).or(automatic);
     let from = match showing.as_deref() {
         None => "From the colour matrix in the raw file.".to_string(),
         Some(name) if name == render::NO_COLOUR_PROFILE => "From the colour matrix in the raw file.".to_string(),
@@ -510,6 +494,7 @@ pub(super) fn refresh_profile_picker(state: &App) {
             Some(dcp::Source::Yours) | None => "One of your own profiles.".to_string(),
         },
     };
-    let more = dcp::profiles_dir().map(|dir| format!(" More: .dcp files in {}", dir.display())).unwrap_or_default();
-    state.colour.profile_label.set_text(&format!("{from}{more}"));
+
+    let more = dcp::profiles_dir().map(|dir| format!("\nMore: .dcp files in {}", dir.display())).unwrap_or_default();
+    state.colour.profile_picker.set_tooltip_text(Some(&format!("{from}{more}")));
 }

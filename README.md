@@ -282,7 +282,8 @@ light like a diffusion filter rather than blurring.
 **Camera profiles.** Numa reads DNG camera profiles (`.dcp`): forward
 matrices, hue/saturation maps and look tables. The one made for your camera is
 used automatically, matched on the camera model written inside the profile
-rather than on its filename.
+rather than on its filename; the Looks tab, on top, offers every other one
+installed for your camera.
 
 **The base render.** A RAW is developed with a tone curve fitted against the
 camera's own JPEGs, and exposure is matched per image to the camera's
@@ -299,7 +300,7 @@ wide-gamut screen does not oversaturate them.
 ![A tone curve drawn over the photograph's histogram](docs/screenshots/curve.webp)
 
 **Presets.** Save an edit, or part of one, as a preset, and apply it to the
-open photograph or a whole selection. The Presets tab shows each preset as a
+open photograph or a whole selection. The Looks tab shows each preset as a
 thumbnail of the photograph you are working on, and resting on one previews it
 on the canvas. Lightroom Classic `.lrtemplate`, Lightroom `.xmp` and Capture
 One `.costyle` and `.costylepack` presets can be imported; tone, presence,

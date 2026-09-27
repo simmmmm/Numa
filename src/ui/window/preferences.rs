@@ -45,7 +45,7 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
     page.set_title("General");
     page.set_icon_name(Some("emblem-system-symbolic"));
 
-    page.add(&colour_group());
+    page.add(&colour_group(state));
     page.add(&opening_group(dialog));
 
     if let Some(path) = appimage() {
@@ -184,7 +184,7 @@ fn opening_group(dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
     opening
 }
 
-fn colour_group() -> adw::PreferencesGroup {
+fn colour_group(state: &App) -> adw::PreferencesGroup {
     let colour = adw::PreferencesGroup::new();
     colour.set_title("Colour");
     let display = adw::ActionRow::new();
@@ -192,7 +192,51 @@ fn colour_group() -> adw::PreferencesGroup {
     display.set_subtitle(&crate::ui::display::described());
     display.set_subtitle_selectable(true);
     colour.add(&display);
+    colour.add(&automatic_profile_row(state));
     colour
+}
+
+const AUTOMATIC_PROFILE: &str = "automatic-camera-profile";
+const AUTOMATIC_CHOICES: [(dcp::Automatic, &str, &str); 3] = [
+    (dcp::Automatic::Numa, "numa", "Numa's own"),
+    (dcp::Automatic::Standard, "standard", "RawTherapee or Adobe"),
+    (dcp::Automatic::Matrix, "matrix", "Camera matrix"),
+];
+
+pub(super) fn start_automatic_profile(catalog: &Catalog) {
+    let saved = catalog.setting(AUTOMATIC_PROFILE);
+    if let Some((choice, ..)) = AUTOMATIC_CHOICES.iter().find(|(_, name, _)| Some(*name) == saved.as_deref()) {
+        dcp::set_automatic(*choice);
+    }
+}
+
+fn automatic_profile_row(state: &App) -> adw::ComboRow {
+    let row = adw::ComboRow::new();
+    row.set_title("Camera profile");
+
+    row.set_subtitle("What Automatic uses on every photograph");
+    row.set_model(Some(&gtk::StringList::new(&AUTOMATIC_CHOICES.map(|(_, _, label)| label))));
+    let now = AUTOMATIC_CHOICES.iter().position(|(choice, ..)| *choice == dcp::automatic());
+    row.set_selected(now.unwrap_or(0) as u32);
+    row.connect_selected_notify(glib::clone!(
+        #[strong] state,
+        move |row| {
+            let Some((choice, name, _)) = AUTOMATIC_CHOICES.get(row.selected() as usize) else { return };
+            if *choice == dcp::automatic() {
+                return;
+            }
+            dcp::set_automatic(*choice);
+            let _ = state.catalog.set_setting(AUTOMATIC_PROFILE, name);
+
+            prefetch::forget(&state);
+            let on_automatic = state.open.borrow().as_ref().is_some_and(|photo| photo.document.colour_profile.is_none());
+            if let Some(id) = open_id(&state).filter(|_| on_automatic) {
+                open_photo(&state, id);
+            }
+            reload_grid(&state);
+        }
+    ));
+    row
 }
 
 fn show_size(row: &adw::ActionRow, dir: PathBuf, others: Vec<PathBuf>) {

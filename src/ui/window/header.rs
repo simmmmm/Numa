@@ -22,17 +22,30 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     let title = build_header_title(state);
     header.set_title_widget(Some(&title));
 
+    install_header_actions(state, window);
+
+    let (menu_button, main_menu) = build_header_menu();
+
+    let editor_menu = state.editor_page.photo_menu.clone();
+    editor_menu.append_section(None, &main_menu);
+    header.insert_action_group("editor", Some(&state.editor_page.actions));
+    header.pack_end(&menu_button);
+    let end = gtk::Stack::new();
+
+    end.set_hhomogeneous(false);
+    end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("library"));
+    end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("folders"));
+    end.add_named(&state.editor_page.header_end, Some("editor"));
+    header.pack_end(&end);
+
     state.stack.connect_visible_child_name_notify(move |stack| {
         if let Some(name) = stack.visible_child_name() {
             title.set_visible_child_name(&name);
             start.set_visible_child_name(&name);
+            end.set_visible_child_name(&name);
+            menu_button.set_menu_model(Some(if name == "editor" { &editor_menu } else { &main_menu }));
         }
     });
-
-    install_header_actions(state, window);
-
-    let menu_button = build_header_menu();
-    header.pack_end(&menu_button);
 
     header
 }
@@ -239,7 +252,7 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
     window.add_action(&open_path_action);
 }
 
-fn build_header_menu() -> gtk::MenuButton {
+fn build_header_menu() -> (gtk::MenuButton, gio::Menu) {
     let menu = gio::Menu::new();
     menu.append(Some("Open…"), Some("win.open-file"));
     menu.append(Some("Libraries…"), Some("win.libraries"));
@@ -253,7 +266,7 @@ fn build_header_menu() -> gtk::MenuButton {
     menu_button.set_icon_name("open-menu-symbolic");
 
     menu_button.set_tooltip_text(Some("Main Menu"));
-    menu_button
+    (menu_button, menu)
 }
 
 pub fn show_app_about(parent: Option<&gtk::Window>) {

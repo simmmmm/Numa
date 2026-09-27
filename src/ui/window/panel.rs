@@ -58,9 +58,8 @@ pub(super) fn build_adjustment_panel(state: &App) -> gtk::Box {
 
     let presets = state.panel.presets_page.clone();
 
-    presets.add_css_class("adjustment");
     presets.add_css_class("presets-page");
-    pages.add_named(&presets, Some("presets"));
+    pages.add_named(&build_looks(state, &presets), Some("presets"));
 
     pages.set_visible_child_name("light");
 
@@ -118,7 +117,7 @@ pub(super) fn refresh_rail_dots(state: &App) {
 }
 
 pub(super) const PANEL_TABS: [(&str, &str, &str, Option<&str>); 9] = [
-    ("presets", "Presets", "Presets", Some("starred-symbolic")),
+    ("presets", "Looks", "Looks — the camera profile, presets and LUTs", Some("starred-symbolic")),
     ("light", "Light", "Light", Some("display-brightness-symbolic")),
     ("colour", "Colour", "Colour", Some("color-select-symbolic")),
     ("effects", "Effects", "Presence, vignette and grain", None),
@@ -138,6 +137,58 @@ pub(super) fn page_column() -> gtk::Box {
     column
 }
 
+fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
+    let looks = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+    looks.add_css_class("adjustment");
+
+    let top = page_column();
+    top.set_margin_bottom(0);
+    top.append(&section_header("Camera profile"));
+    top.append(&build_profile_picker(state));
+
+    let choice = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    choice.add_css_class("linked");
+    choice.add_css_class("aspect-ratios");
+    choice.set_homogeneous(true);
+    choice.set_margin_top(8);
+    let kinds = gtk::Stack::new();
+    kinds.set_vexpand(true);
+    kinds.add_named(presets, Some("presets"));
+    let luts = page_column();
+    luts.append(&lut::build(state));
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_child(Some(&luts));
+    kinds.add_named(&scroller, Some("luts"));
+    let first = &state.panel.looks_first;
+    for (label, name) in [("Presets", "presets"), ("LUTs", "luts")] {
+        let button = match name {
+            "presets" => first.clone(),
+            _ => gtk::ToggleButton::new(),
+        };
+        button.set_label(label);
+        if name != "presets" {
+            button.set_group(Some(first));
+        }
+        button.connect_toggled(glib::clone!(
+            #[weak] kinds,
+            move |button| {
+                if button.is_active() {
+                    kinds.set_visible_child_name(name);
+                }
+            }
+        ));
+        choice.append(&button);
+    }
+    first.set_active(true);
+    top.append(&choice);
+
+    looks.append(&top);
+    looks.append(&kinds);
+    looks
+}
+
 pub(super) fn wrap_page(column: &gtk::Box) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -151,6 +202,7 @@ pub(super) fn show_panel_tab(state: &App, name: &str) {
     let was_cropping = is_cropping(state);
     if name == "presets" {
         fill_presets_page(state);
+        state.panel.looks_first.set_active(true);
     }
 
     match name {
@@ -284,6 +336,8 @@ pub(super) struct State {
 
     pub(super) presets_page: gtk::Box,
 
+    pub(super) looks_first: gtk::ToggleButton,
+
     pub(super) history_list: gtk::ListBox,
 }
 
@@ -295,6 +349,7 @@ impl State {
             tabs: Rc::new(RefCell::new(Vec::new())),
             scoped: Rc::new(RefCell::new(Vec::new())),
             presets_page: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            looks_first: gtk::ToggleButton::new(),
             history_list: gtk::ListBox::new(),
         }
     }

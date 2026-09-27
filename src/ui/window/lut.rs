@@ -2,43 +2,46 @@ use super::*;
 
 thread_local! {
 
-    static CONTROLS: RefCell<Option<(gtk::DropDown, gtk::Scale)>> = const { RefCell::new(None) };
+    static CONTROLS: RefCell<Option<(gtk::ListBox, gtk::Box, gtk::Label, gtk::Scale)>> = const { RefCell::new(None) };
+
+    static SHOWN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 fn names() -> Vec<String> {
     std::iter::once("None".to_string()).chain(numa::io::luts::list()).collect()
 }
 
-pub(super) fn build(state: &App, global_only: &dyn Fn(&gtk::Widget)) -> gtk::Box {
+pub(super) fn build(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let header = section_header("LUT");
-    column.append(&header);
 
-    let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    line.set_margin_top(4);
-    line.set_margin_bottom(4);
-    let picker = gtk::DropDown::from_strings(&[]);
-    picker.set_hexpand(true);
-    picker.set_tooltip_text(Some("A look from a .cube or .3dl file, over the finished photograph"));
-    picker.update_property(&[gtk::accessible::Property::Label("LUT")]);
-    let import = gtk::Button::with_label("Import…");
-    import.set_tooltip_text(Some("Add .cube or .3dl files to Numa's LUTs"));
-    line.append(&picker);
-    line.append(&import);
-    column.append(&line);
-
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("strength-card");
+    let name = section_header("");
+    name.set_margin_top(0);
+    card.append(&name);
     let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
     amount.set_value(100.0);
     set_neutral(&amount, 100.0);
-    let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
-    row.set_visible(false);
-    column.append(&row);
+    card.append(&slider_row(state, "Amount", &amount, Readout::Positive(0)));
+    card.set_visible(false);
+    column.append(&card);
 
-    global_only(column.as_ref());
+    let list = gtk::ListBox::new();
+    list.add_css_class("navigation-sidebar");
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    list.update_property(&[gtk::accessible::Property::Label("LUT")]);
+    list.set_tooltip_text(Some("A look from a .cube or .3dl file, over the finished photograph"));
+    column.append(&list);
 
-    picker.connect_selected_notify(glib::clone!(
+    let import = gtk::Button::with_label("Import…");
+    import.set_tooltip_text(Some("Add .cube or .3dl files to Numa's LUTs"));
+    import.set_halign(gtk::Align::Start);
+    import.set_margin_top(6);
+    column.append(&import);
+
+    list.connect_row_selected(glib::clone!(
         #[strong] state,
-        move |_| commit(&state)
+        move |_, _| commit(&state)
     ));
     amount.connect_value_changed(glib::clone!(
         #[strong] state,
@@ -48,49 +51,54 @@ pub(super) fn build(state: &App, global_only: &dyn Fn(&gtk::Widget)) -> gtk::Box
         #[strong] state,
         move |button| choose_files(&state, button)
     ));
-    CONTROLS.with_borrow_mut(|controls| *controls = Some((picker, amount)));
+    CONTROLS.with_borrow_mut(|controls| *controls = Some((list, card, name, amount)));
     write(state);
     column
 }
 
 pub(super) fn write(state: &App) {
-    let Some((picker, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
+    let Some((list, card, name, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
     let lut = state.open.borrow().as_ref().and_then(|photo| photo.document.lut.clone());
     let was = state.applying.replace(true);
-    let mut list = names();
+    let mut shown = names();
 
     let position = match &lut {
-        Some(choice) => list.iter().position(|name| *name == choice.name).unwrap_or_else(|| {
-            list.push(choice.name.clone());
-            list.len() - 1
+        Some(choice) => shown.iter().position(|each| *each == choice.name).unwrap_or_else(|| {
+            shown.push(choice.name.clone());
+            shown.len() - 1
         }),
         None => 0,
     };
-    let strings: Vec<&str> = list.iter().map(String::as_str).collect();
-    picker.set_model(Some(&gtk::StringList::new(&strings)));
-    picker.set_selected(position as u32);
+    list.remove_all();
+    for each in &shown {
+        let label = gtk::Label::new(Some(each));
+        label.set_xalign(0.0);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        list.append(&label);
+    }
+    list.select_row(list.row_at_index(position as i32).as_ref());
+    SHOWN.with_borrow_mut(|names| *names = shown);
     amount.set_value(lut.as_ref().map_or(100.0, |choice| choice.amount as f64));
-    show_amount(&amount, lut.is_some());
+    show_card(&card, &name, lut.as_ref().map(|choice| choice.name.as_str()));
     state.applying.set(was);
 }
 
-fn show_amount(amount: &gtk::Scale, on: bool) {
-    if let Some(row) = amount.parent() {
-        row.set_visible(on);
-    }
+fn show_card(card: &gtk::Box, name: &gtk::Label, chosen: Option<&str>) {
+    card.set_visible(chosen.is_some());
+    name.set_text(&chosen.unwrap_or_default().to_uppercase());
 }
 
 fn commit(state: &App) {
     if state.applying.get() {
         return;
     }
-    let Some((picker, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
-    let chosen = picker
-        .selected_item()
-        .and_downcast::<gtk::StringObject>()
-        .map(|item| item.string().to_string())
-        .filter(|_| picker.selected() > 0);
-    show_amount(&amount, chosen.is_some());
+    let Some((list, card, name, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
+    let chosen = list
+        .selected_row()
+        .map(|row| row.index())
+        .filter(|index| *index > 0)
+        .and_then(|index| SHOWN.with_borrow(|names| names.get(index as usize).cloned()));
+    show_card(&card, &name, chosen.as_deref());
     {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
@@ -129,9 +137,9 @@ fn choose_files(state: &App, button: &gtk::Button) {
         }
         write(&state);
         let Some(name) = last else { return };
-        if let Some((picker, _)) = CONTROLS.with_borrow(|controls| controls.clone()) {
-            if let Some(position) = names().iter().position(|each| *each == name) {
-                picker.set_selected(position as u32);
+        if let Some((list, ..)) = CONTROLS.with_borrow(|controls| controls.clone()) {
+            if let Some(position) = SHOWN.with_borrow(|names| names.iter().position(|each| *each == name)) {
+                list.select_row(list.row_at_index(position as i32).as_ref());
             }
         }
     });

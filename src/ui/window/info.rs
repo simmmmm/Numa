@@ -42,44 +42,52 @@ pub(super) fn build_histogram(state: &App) -> gtk::Box {
         stacked.add_overlay(button);
     }
 
+    install_scope_menu(state, &area);
     column.append(&stacked);
-    column.append(&scope_switch(state));
     column
 }
 
 const SCOPE_SETTING: &str = "scope";
 
-fn scope_switch(state: &App) -> gtk::Box {
+fn install_scope_menu(state: &App, area: &gtk::DrawingArea) {
     let saved = state.catalog.setting(SCOPE_SETTING).map(|name| render::scope::Kind::from_name(&name)).unwrap_or_default();
     state.info.scope_kind.set(saved);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    row.add_css_class("linked");
-    row.add_css_class("scope-switch");
-    let mut first: Option<gtk::ToggleButton> = None;
-    for kind in render::scope::Kind::ALL {
-        let button = gtk::ToggleButton::with_label(kind.name());
-        button.set_hexpand(true);
-        button.add_css_class("flat");
-        button.set_active(kind == saved);
-        match &first {
-            Some(first) => button.set_group(Some(first)),
-            None => first = Some(button.clone()),
+
+    let action = gio::SimpleAction::new_stateful("kind", Some(glib::VariantTy::STRING), &saved.name().to_variant());
+    action.connect_activate(glib::clone!(
+        #[strong] state,
+        move |action, name| {
+            let Some(name) = name.and_then(|name| name.str()) else { return };
+            let kind = render::scope::Kind::from_name(name);
+            action.set_state(&kind.name().to_variant());
+            state.info.scope_kind.set(kind);
+            let _ = state.catalog.set_setting(SCOPE_SETTING, kind.name());
+            state.info.histogram_area.queue_draw();
+            request_render(&state);
         }
-        button.connect_toggled(glib::clone!(
-            #[strong] state,
-            move |button| {
-                if !button.is_active() {
-                    return;
-                }
-                state.info.scope_kind.set(kind);
-                let _ = state.catalog.set_setting(SCOPE_SETTING, kind.name());
-                state.info.histogram_area.queue_draw();
-                request_render(&state);
-            }
-        ));
-        row.append(&button);
+    ));
+    let group = gio::SimpleActionGroup::new();
+    group.add_action(&action);
+    area.insert_action_group("scope", Some(&group));
+
+    let menu = gio::Menu::new();
+    for kind in render::scope::Kind::ALL {
+        menu.append(Some(kind.name()), Some(&format!("scope.kind::{}", kind.name())));
     }
-    row
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(area);
+    popover.set_has_arrow(false);
+    popover.set_halign(gtk::Align::Start);
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(glib::clone!(
+        #[weak] popover,
+        move |_, _, x, y| {
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        }
+    ));
+    area.add_controller(click);
 }
 
 fn draw_scope(context: &gtk::cairo::Context, width: f64, height: f64, scope: &render::scope::Scope) {
@@ -271,46 +279,61 @@ fn append_photo_groups(state: &App, photo: &OpenPhoto) {
         state.info.page.append(&people);
     }
 
+    let mut body: Vec<(&str, String)> = Vec::new();
+    let mut shot: Vec<(&str, String)> = Vec::new();
     if let Some(summary) = &photo.summary {
-        let body = adw::PreferencesGroup::new();
-        body.set_title("Camera");
         if let Some(camera) = &summary.camera {
-            body.add(&fact_row("Body", camera));
+            body.push(("Body", camera.clone()));
         }
         if let Some(lens) = &summary.lens {
-            body.add(&fact_row("Lens", lens));
+            body.push(("Lens", lens.clone()));
         }
         if let Some(mode) = &summary.film_mode {
 
-            body.add(&fact_row("Film mode", mode));
+            body.push(("Film mode", mode.clone()));
         }
-        state.info.page.append(&body);
 
-        let shot = adw::PreferencesGroup::new();
-        shot.set_title("Exposure");
         if let Some(focal) = summary.focal_length {
-            shot.add(&fact_row("Focal length", &format!("{focal:.0} mm")));
+            shot.push(("Focal length", format!("{focal:.0} mm")));
         }
         if let Some(aperture) = summary.aperture {
-            shot.add(&fact_row("Aperture", &format!("f/{aperture:.1}")));
+            shot.push(("Aperture", format!("f/{aperture:.1}")));
         }
         if let Some(shutter) = summary.shutter_text() {
-            shot.add(&fact_row("Shutter", &shutter));
+            shot.push(("Shutter", shutter));
         }
         if let Some(iso) = summary.iso {
-            shot.add(&fact_row("ISO", &iso.to_string()));
+            shot.push(("ISO", iso.to_string()));
         }
         match summary.exposure_bias {
-            Some(bias) if bias != 0.0 => {
-                shot.add(&fact_row("Compensation", &format!("{bias:+.1} EV")))
-            }
+            Some(bias) if bias != 0.0 => shot.push(("Compensation", format!("{bias:+.1} EV"))),
             _ => {}
         }
         if let Some(taken) = &summary.taken {
-            shot.add(&fact_row("Taken", taken));
+            shot.push(("Taken", taken.clone()));
         }
-        state.info.page.append(&shot);
+    }
 
+    if body.is_empty() && shot.is_empty() {
+        let empty = adw::StatusPage::new();
+        empty.set_title("No Camera Data");
+        empty.set_description(Some("This file does not say which camera took it, or how."));
+        empty.add_css_class("compact");
+        state.info.page.append(&empty);
+    }
+    for (title, facts) in [("Camera", body), ("Exposure", shot)] {
+        if facts.is_empty() {
+            continue;
+        }
+        let group = adw::PreferencesGroup::new();
+        group.set_title(title);
+        for (name, value) in facts {
+            group.add(&fact_row(name, &value));
+        }
+        state.info.page.append(&group);
+    }
+
+    if let Some(summary) = &photo.summary {
         let frame = adw::PreferencesGroup::new();
         frame.set_title("Frame");
         frame.add(&fact_row(
@@ -393,8 +416,6 @@ pub(super) struct State {
     pub(super) render_info: gtk::Label,
 
     pub(super) rendering: gtk::Expander,
-
-    pub(super) button: gtk::MenuButton,
     pub(super) histogram_area: gtk::DrawingArea,
     pub(super) histogram: Rc<RefCell<Option<render::histogram::Histogram>>>,
 
@@ -410,7 +431,6 @@ impl State {
             page: gtk::Box::new(gtk::Orientation::Vertical, 18),
             render_info: gtk::Label::new(None),
             rendering: gtk::Expander::new(None),
-            button: gtk::MenuButton::new(),
             histogram_area: gtk::DrawingArea::new(),
             histogram: Rc::new(RefCell::new(None)),
             scope: Rc::new(RefCell::new(None)),

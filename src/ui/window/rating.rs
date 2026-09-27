@@ -38,7 +38,7 @@ pub(super) fn rate_open_photo(state: &App, action: Action) {
         badge.set_text(&strip_badge_text(rating, flag));
         badge.set_visible(!badge.text().is_empty());
     }
-    write_rating_button(state, rating, flag);
+    show_rating(state, rating, flag);
 
     let filter = state.libraries.filter.borrow();
     if filter.min_rating > 0 || filter.flag.is_some() {
@@ -54,25 +54,17 @@ pub(super) fn rate_here(state: &App, action: Action) {
     }
 }
 
-pub(super) fn write_rating_button(state: &App, rating: u8, flag: Flag) {
+pub(super) fn show_rating(state: &App, rating: u8, flag: Flag) {
 
-    let label = match (rating, flag) {
-        (0, Flag::None) => "\u{2606}".to_string(),
-        (0, Flag::Picked) => "\u{2606} \u{2691}".to_string(),
-        (0, Flag::Rejected) => "\u{2606} \u{2715}".to_string(),
+    let said = match (rating, flag) {
+        (0, Flag::None) => String::new(),
+        (0, Flag::Picked) => "\u{2691}".to_string(),
+        (0, Flag::Rejected) => "\u{2715}".to_string(),
         (n, Flag::Picked) => format!("\u{2605} {n} \u{2691}"),
         (n, Flag::Rejected) => format!("\u{2605} {n} \u{2715}"),
         (n, Flag::None) => format!("\u{2605} {n}"),
     };
-    state.editor_page.rating_button.set_label(&label);
-
-    state.editor_page.rating_button.remove_css_class("rated");
-    state.editor_page.rating_button.remove_css_class("rejected");
-    if flag == Flag::Rejected {
-        state.editor_page.rating_button.add_css_class("rejected");
-    } else if rating > 0 || flag == Flag::Picked {
-        state.editor_page.rating_button.add_css_class("rated");
-    }
+    write_rating_item(state, &said);
 }
 
 pub(super) fn name_icon_buttons(root: &gtk::Widget) {
@@ -215,12 +207,7 @@ fn editor_key(
         }
 
         if matches!(key.to_unicode(), Some('i' | 'I')) {
-            let info = &state.info.button;
-            if info.is_active() {
-                info.popdown();
-            } else {
-                info.popup();
-            }
+            toggle_info(&state);
             return glib::Propagation::Stop;
         }
     }

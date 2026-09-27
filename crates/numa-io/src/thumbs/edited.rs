@@ -28,11 +28,7 @@ pub(super) fn render(path: &Path, max_edge: u32, edits: &str) -> Result<RgbImage
 
 fn inputs(document: &Document) -> numa_render::RenderInputs {
     numa_render::RenderInputs {
-        profile: document
-            .colour_profile
-            .as_deref()
-            .filter(|name| *name != numa_render::NO_COLOUR_PROFILE)
-            .and_then(crate::dcp::by_name),
+        profile: crate::inputs::chosen_profile(document),
         denoised: None,
         sharpened: None,
     }

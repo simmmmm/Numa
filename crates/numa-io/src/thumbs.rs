@@ -26,6 +26,8 @@ fn key(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> String {
     if let Some(edits) = edits {
         text.push('\0');
         text.push_str(edits);
+
+        text.push_str(&format!("\0{:?}", crate::dcp::automatic()));
     }
     let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3));
     format!("{hash:016x}.jpg")

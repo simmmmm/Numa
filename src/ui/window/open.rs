@@ -133,7 +133,7 @@ pub(super) fn step_photo(state: &App, forward: bool) {
 }
 
 pub(super) fn write_panel_for(state: &App, rating: u8, flag: Flag) {
-    write_rating_button(state, rating, flag);
+    show_rating(state, rating, flag);
     write_mixer(state);
     write_point_colours(state);
     write_grading(state);
