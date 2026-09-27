@@ -310,3 +310,12 @@ fn the_profile_picker_is_written_once_the_photograph_is_open() {
     let rest = &source[source.find("pub(super) fn write_rest_of_panel").unwrap()..];
     assert!(rest[..rest.find("\n}\n").unwrap()].contains("refresh_profile_picker(state)"));
 }
+
+#[test]
+fn picking_a_profile_rewrites_its_note() {
+    let source = include_str!("colour.rs");
+    let picker = &source[source.find("pub(super) fn build_profile_picker").unwrap()..];
+    let picker = &picker[..picker.find("\n}\n").unwrap()];
+    assert!(picker.contains("write_profile_note(&state"));
+    assert!(!picker.contains("refresh_profile_picker("));
+}

@@ -74,24 +74,8 @@ pub(super) fn build_reference_pane(state: &App) -> gtk::Box {
     pane
 }
 
-pub(super) fn build_reference_picker(state: &App) -> gtk::Box {
-    let sources = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    sources.add_css_class("linked");
-    sources.set_margin_end(8);
-
-    let reference = state.reference.button.clone();
-    reference.set_label("Reference");
-    reference.set_tooltip_text(Some("Keep this frame beside the next ones, to match them to it"));
-    sources.append(&reference);
-
-    let camera = state.reference.camera_button.clone();
-    camera.set_label("Camera");
-    camera.set_tooltip_text(Some(
-        "The camera's own rendering of this frame beside yours, at the same zoom",
-    ));
-    sources.append(&camera);
-
-    for (button, show) in [(reference, set_reference as fn(&App)), (camera, show_camera)] {
+pub(super) fn wire_reference_toggles(state: &App) {
+    for (button, show) in [(&state.reference.button, set_reference as fn(&App)), (&state.reference.camera_button, show_camera)] {
         button.connect_toggled(glib::clone!(
             #[strong] state,
             move |button| match (state.reference.switching.get(), button.is_active()) {
@@ -101,8 +85,6 @@ pub(super) fn build_reference_picker(state: &App) -> gtk::Box {
             }
         ));
     }
-
-    sources
 }
 
 pub(super) fn set_reference(state: &App) {

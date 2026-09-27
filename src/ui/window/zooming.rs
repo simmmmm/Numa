@@ -196,6 +196,8 @@ pub(super) fn write_zoom_label(state: &App) {
 
     let note = camera_note(state);
     let zoom = state.zooming.level.get();
+
+    state.zooming.label.set_visible(zoom != FIT_ZOOM || !note.is_empty());
     if zoom == FIT_ZOOM {
         let fit = format!("Fit {:.0}%", effective_zoom(state) * 100.0);
         state.zooming.label.set_text(&(fit + &note));

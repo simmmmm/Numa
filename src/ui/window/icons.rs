@@ -207,6 +207,16 @@ pub(super) fn build_rail(state: &App) -> gtk::Box {
         ));
         state.panel.tabs.borrow_mut().push((name, tab.clone()));
         tabs.append(&tab);
+
+        if matches!(name, "presets" | "detail") {
+            let line = gtk::Separator::new(gtk::Orientation::Horizontal);
+            line.add_css_class("rail-rule");
+
+            if let Some((_, looks)) = state.panel.tabs.borrow().first() {
+                looks.bind_property("visible", &line, "visible").sync_create().build();
+            }
+            tabs.append(&line);
+        }
     }
 
     tabs

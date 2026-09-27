@@ -134,15 +134,16 @@ pub(super) fn build_guides_overlay(state: &App) -> gtk::DrawingArea {
 }
 
 pub(super) fn cycle_guides(state: &App) {
-    let next = (state.overlays.guides.get() + 1) % 3;
+    set_guides(state, (state.overlays.guides.get() + 1) % 3);
+}
+
+pub(super) fn set_guides(state: &App, next: u8) {
     state.overlays.guides.set(next);
     state.overlays.guides_area.set_visible(next != 0);
     state.overlays.guides_area.queue_draw();
-    state.overlays.guides_button.set_tooltip_text(Some(match next {
-        1 => "Guides: thirds (G)",
-        2 => "Guides: grid (G)",
-        _ => "Guides: none (G)",
-    }));
+    if let Some(action) = state.editor_page.actions.lookup_action("guides").and_downcast::<gio::SimpleAction>() {
+        action.set_state(&next.to_variant());
+    }
 }
 
 pub(super) fn build_crop_overlay(state: &App) -> gtk::DrawingArea {
@@ -573,7 +574,6 @@ pub(super) struct State {
 
     pub(super) guides: Rc<Cell<u8>>,
     pub(super) guides_area: gtk::DrawingArea,
-    pub(super) guides_button: gtk::Button,
 }
 
 impl State {
@@ -584,7 +584,6 @@ impl State {
             face_names: Rc::new(RefCell::new(Vec::new())),
             guides: Rc::new(Cell::new(0)),
             guides_area: gtk::DrawingArea::new(),
-            guides_button: gtk::Button::new(),
         }
     }
 }

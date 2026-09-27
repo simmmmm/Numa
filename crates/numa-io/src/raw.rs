@@ -1270,7 +1270,7 @@ fn find_rendering(raw: &rawler::RawImage) -> Option<Arc<DngProfile>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<DngProfile>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    let key = format!("{}|{}", raw.clean_make, raw.clean_model);
+    let key = format!("{}|{}|{:?}", raw.clean_make, raw.clean_model, dcp::automatic());
     let mut cache = cache.lock().ok()?;
 
     cache
@@ -1728,7 +1728,57 @@ impl Summary {
 }
 
 pub fn summary(path: &Path) -> Option<Summary> {
-    std::panic::catch_unwind(|| read_summary(path)).ok().flatten()
+    std::panic::catch_unwind(|| match is_raw(path) {
+        true => read_summary(path),
+        false => read_container_summary(path),
+    })
+    .ok()
+    .flatten()
+}
+
+fn read_container_summary(path: &Path) -> Option<Summary> {
+    use ::exif::{In, Tag, Value};
+
+    let exif = std::fs::File::open(path)
+        .ok()
+        .and_then(|file| ::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok());
+    let field = |tag| exif.as_ref()?.get_field(tag, In::PRIMARY);
+    let text = |tag| match &field(tag)?.value {
+        Value::Ascii(parts) => Some(String::from_utf8_lossy(parts.first()?).trim().to_string()).filter(|t| !t.is_empty()),
+        _ => None,
+    };
+    let ratio = |tag| match &field(tag)?.value {
+        Value::Rational(values) => values.first().filter(|v| v.denom != 0).map(|v| v.to_f32()),
+        Value::SRational(values) => values.first().filter(|v| v.denom != 0).map(|v| v.to_f32()),
+        _ => None,
+    };
+    let number = |tag| field(tag)?.value.get_uint(0);
+
+    let sensor = image::image_dimensions(path)
+        .ok()
+        .or_else(|| Some((number(Tag::PixelXDimension)?, number(Tag::PixelYDimension)?)))?;
+
+    let camera = match (text(Tag::Make), text(Tag::Model)) {
+        (Some(make), Some(model)) => {
+            let brand = make.split_whitespace().next().unwrap_or_default().to_lowercase();
+            Some(if model.to_lowercase().contains(&brand) { model } else { format!("{make} {model}") })
+        }
+        (make, model) => make.or(model),
+    };
+
+    Some(Summary {
+        camera,
+        lens: text(Tag::LensModel),
+        focal_length: ratio(Tag::FocalLength),
+        aperture: ratio(Tag::FNumber),
+        shutter: ratio(Tag::ExposureTime),
+        iso: number(Tag::PhotographicSensitivity),
+        exposure_bias: ratio(Tag::ExposureBiasValue),
+        taken: text(Tag::DateTimeOriginal),
+        sensor,
+        file_size: std::fs::metadata(path).ok().map(|meta| meta.len()),
+        ..Summary::default()
+    })
 }
 
 fn read_summary(path: &Path) -> Option<Summary> {

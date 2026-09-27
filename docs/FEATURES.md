@@ -1567,13 +1567,30 @@ dependency at all.
   publiceer ze niet los", 27 September): inside the apps only — Flatpak and
   AppImage in `share/numa/profiles/numa`, Apple in the bundle's
   `NumaProfiles/` — from `data/private-profiles`, which the public copy
-  leaves out; no download. Offered, never automatic: Automatic stays the matrix or the
-  RawTherapee profile it was. The Colour tab's Camera profile picker is back
-  for them, every entry saying where it comes from (Numa, RawTherapee,
+  leaves out; no download. Offered, and since RENDER-016 Automatic as well.
+  The Camera profile picker (on Looks since
+  UX-023) is back for them, every entry saying where it comes from (Numa, RawTherapee,
   yours, the camera's matrix).
   Real camera profiles only ("echte profielen"): a Fujifilm film simulation
   — Adobe's "Camera CLASSIC CHROME", RENDER-012's "Numa X-T5 Eterna" — is
   neither listed nor automatic (`dcp::is_film_simulation`).
+- ✅ **RENDER-016**: Automatic takes Numa's own profile, and what Automatic
+  means is one choice for the whole library. Picking a profile photograph by
+  photograph was the only way to Numa's own, and pasting Colour onto a
+  selection to get it there took the mixer, the grade and the LUT along
+  ("is het gek dat je niet alle colour profiles in bulk meteen kunt
+  aanpassen voor een hele library?", the photographer, 27 September).
+  Preferences › General › Colour › Camera profile: Numa's own (the default),
+  RawTherapee or Adobe (Adobe Standard first), or Camera matrix; a camera without
+  the one chosen gets the next in that list (`dcp::Automatic`). A photograph
+  given a profile of its own keeps it. The choice is part of the decode
+  cache's key and of an edited thumbnail's, so changing it re-renders what
+  was made under the old one; the open photograph is opened again.
+  With it: a profile is only used on the camera it was made for
+  (`inputs::chosen_profile`). Pasted or preset from another body — "Numa
+  X-T5" onto an A7R III — it had coloured that sensor with the X-T5's
+  correction; now the photograph falls back to Automatic, and the picker
+  says so.
 
 ### OPTICS — Lens corrections
 
@@ -2403,8 +2420,8 @@ dependency at all.
 - ❌ **FILTER-008**: ~~Lens blur with a depth map.~~ *Dropped: a faked blur is
   not something the photographer wants.*
 - ✅ **FILTER-009**: LUTs — `.cube` (1D and 3D, up to 65, `DOMAIN_MIN/MAX`)
-  and `.3dl`, imported into the data folder's `luts/` and chosen in a LUT
-  section at the foot of Effects, with an Amount 0–100. Kept apart from the
+  and `.3dl`, imported into the data folder's `luts/` and chosen from a list
+  on the Looks tab (Effects' foot until UX-023), with an Amount 0–100. Kept apart from the
   camera profile, as the design principles require: a profile is how the raw
   is rendered, a LUT is a look over the rendered photograph. Applied where a
   LUT made for an sRGB / Rec.709 screen expects to be — on the display values
@@ -4405,7 +4422,8 @@ dependency at all.
   the list and rendered twice. Once each now. If it still crosses the line the
   log names the function, which is what the next round needs.
 - ✅ **UX-022**: Waveform and RGB parade, in the histogram's place, chosen
-  under it — Histogram, Waveform or Parade — and remembered. A histogram says
+  with a right click on it (a tap on the iPad) — Histogram, Waveform or
+  Parade — and remembered. A histogram says
   how much of the photograph is at each level; a waveform keeps where: across
   is the frame's own columns, up is 0–100 IRE, brightness is how many pixels
   of that column sit there. The parade is the same per channel, red, green and
@@ -4414,6 +4432,30 @@ dependency at all.
   worker, and handed to every client as a small picture to stretch (360×128,
   every other row sampled). Linux under the histogram, the iPad's panel and
   the iPhone's Light as chips under theirs; Modern has no histogram, so none.
+- ✅ **UX-023**: The editor, quieter, and a Looks tab. The photographer, 27
+  September, over a screenshot of Colour: "er gebeurt teveel". One bar instead
+  of two: the header carries the crumbs, Undo, Redo, Before, Export and the
+  main menu, and the fifteen-control row under it is gone. What it held is the
+  photograph's section at the top of that menu, each with its key beside it —
+  Copy Settings, Rating (which says the rating), Zoom, Guides, Keep as
+  Reference, Compare with Camera, History, Photo Info — so the menu teaches
+  the keys the row of icons never did. The zoom is a badge at the top centre
+  of the photograph, shown while it says something (zoomed, soft, still
+  loading), not at Fit.
+
+  The Presets tab is **Looks**, the iPhone's word, on every client: the
+  camera profile on top and always in sight, then one choice, **Presets |
+  LUTs**, which always opens on Presets — "als luts populairder blijkt ruilen
+  we die om". How the raw becomes a picture and a look over it are the two
+  questions before any slider moves, and the photographer who never opens
+  another tab now meets both. The profile is still not a look (film
+  simulations stay out of its list) and the LUT is still applied last in the
+  pipeline; they only sit together. Colour opens on White balance with its
+  pipette as an icon at the end of the label, like the mixer's; the profile's
+  source and folder are its tooltip. Effects ends at Grain. Two hairlines in
+  the rail group the nine: Looks, the adjustments, the tools. On the iPhone
+  the profile is on top of Looks too, shown only for a photograph that did
+  not come from an iPhone, and there are no LUTs there.
 
 ---
 

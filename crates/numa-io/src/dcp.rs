@@ -301,7 +301,43 @@ fn normalise(text: &str) -> String {
 }
 
 pub fn find(make: &str, model: &str) -> Option<DngProfile> {
-    ranked(make, model).into_iter().find_map(|(rank, profile, _)| rank.map(|_| profile))
+    choose(&ranked(make, model), automatic()).cloned()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Automatic {
+
+    #[default]
+    Numa,
+
+    Standard,
+
+    Matrix,
+}
+
+static AUTOMATIC: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(Automatic::Numa as u8);
+
+pub fn set_automatic(choice: Automatic) {
+    AUTOMATIC.store(choice as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn automatic() -> Automatic {
+    match AUTOMATIC.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Automatic::Standard,
+        2 => Automatic::Matrix,
+        _ => Automatic::Numa,
+    }
+}
+
+fn choose(ranked: &[(Option<u8>, DngProfile, Source)], automatic: Automatic) -> Option<&DngProfile> {
+    let standard = || ranked.iter().find(|(rank, ..)| rank.is_some());
+    let numa = || ranked.iter().find(|(.., source)| *source == Source::Numa);
+    match automatic {
+        Automatic::Numa => numa().or_else(standard),
+        Automatic::Standard => standard(),
+        Automatic::Matrix => None,
+    }
+    .map(|(_, profile, _)| profile)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -586,14 +622,44 @@ mod tests {
     }
 
     #[test]
-    fn numas_own_are_offered_as_numas_and_never_automatic() {
+    fn numas_own_are_offered_as_numas_and_automatic_by_default() {
         if numa_profiles_dir().is_none() {
             eprintln!("no private profiles in this tree; skipping");
             return;
         }
         let names = names_for_camera("Canon", "Canon EOS R5");
         assert!(names.contains(&("Numa EOS R5".to_string(), Source::Numa)), "{names:?}");
-        assert_ne!(find("Canon", "Canon EOS R5").map(|profile| profile.name).as_deref(), Some("Numa EOS R5"));
+        let ranked = ranked("Canon", "Canon EOS R5");
+        let name = |automatic| choose(&ranked, automatic).map(|profile| profile.name.as_str());
+        assert_eq!(name(Automatic::default()), Some("Numa EOS R5"));
+        assert_ne!(name(Automatic::Standard), Some("Numa EOS R5"));
+        assert_eq!(name(Automatic::Matrix), None);
+    }
+
+    #[test]
+    fn automatic_falls_back_to_the_standard_profile() {
+        let profile = |name: &str| DngProfile {
+            name: name.into(),
+            camera: None,
+            color_matrix: [None, None],
+            forward_matrix: [None, None],
+            illuminant: [None, None],
+            hue_sat_map: None,
+            look_table: None,
+            tone_curve: None,
+        };
+        let rawtherapee = (Some(1), profile("FUJIFILM X-T4"), Source::RawTherapee);
+        let look = (None, profile("My portrait profile"), Source::Yours);
+        let numa = (None, profile("Numa X-T4"), Source::Numa);
+        let name = |ranked: &[_], automatic| choose(ranked, automatic).map(|profile| profile.name.clone());
+
+        let both = [rawtherapee.clone(), look.clone(), numa];
+        assert_eq!(name(&both, Automatic::Numa).as_deref(), Some("Numa X-T4"));
+        assert_eq!(name(&both, Automatic::Standard).as_deref(), Some("FUJIFILM X-T4"));
+        assert_eq!(name(&both, Automatic::Matrix), None);
+
+        assert_eq!(name(&[rawtherapee, look.clone()], Automatic::Numa).as_deref(), Some("FUJIFILM X-T4"));
+        assert_eq!(name(&[look], Automatic::Numa), None, "a look is chosen, never assumed");
     }
 
     #[test]
@@ -604,7 +670,7 @@ mod tests {
         }
 
         let exact = find("FUJIFILM", "X-T4").expect("X-T4 ships with RawTherapee");
-        assert_eq!(exact.camera.as_deref(), Some("FUJIFILM X-T4"));
+        assert!(exact.camera.as_deref().is_some_and(|camera| camera.eq_ignore_ascii_case("FUJIFILM X-T4")), "{:?}", exact.camera);
 
         for (make, model) in [("FUJIFILM", "X-T50"), ("FUJIFILM", "X-T400")] {
             if let Some(found) = find(make, model) {

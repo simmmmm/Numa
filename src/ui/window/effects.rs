@@ -30,6 +30,5 @@ pub(super) fn build_effects(
         }
     }
 
-    effects.append(&lut::build(state, global_only));
     effects
 }

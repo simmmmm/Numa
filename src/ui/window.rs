@@ -309,6 +309,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let Some(catalog) = open_catalog_or_explain(app, &window) else { return window };
 
     downloads::start_gpu(&catalog);
+    start_automatic_profile(&catalog);
 
     let canvas = gtk::Picture::new();
     canvas.set_can_shrink(true);

@@ -31,6 +31,18 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.28.0" date="2026-09-28">
+      <description>
+        <p>
+          A calmer editor: one bar at the top, the photograph's sections in its
+          menu, and a Looks tab with the camera profile above the presets.
+          Automatic now takes Numa's own camera profile where there is one, and
+          Preferences says what Automatic means. JPEG and HEIF files show their
+          EXIF, and the graph switches between Histogram, Waveform and Parade
+          from a right click.
+        </p>
+      </description>
+    </release>
     <release version="0.27.0" date="2026-09-27">
       <description>
         <p>
