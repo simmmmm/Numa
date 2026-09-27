@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "numa"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "byteorder",
  "dirs",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "numa-core"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "dirs",
  "image",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "numa-cull"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "image",
  "log",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "numa-infer"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "image",
  "log",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "numa-io"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "avif-serialize",
  "byteorder",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "numa-render"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "image",
  "log",

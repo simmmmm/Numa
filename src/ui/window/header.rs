@@ -291,6 +291,7 @@ pub(super) fn show_about(parent: Option<&gtk::Window>, state: Option<&App>) {
     about.set_debug_info(&debug_info(state));
     about.set_debug_info_filename("numa-debug-info.txt");
     about.set_issue_url("https://github.com/simmmmm/Numa/issues/new");
+    about.set_support_url("https://numa.photo/support");
 
     about.present(parent);
 }
