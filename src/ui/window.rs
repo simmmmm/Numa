@@ -101,6 +101,7 @@ mod geometry;
 mod overlays;
 mod info;
 mod open;
+mod prefetch;
 use masks::*;
 use colour::*;
 use effects::*;

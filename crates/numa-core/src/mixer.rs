@@ -95,6 +95,8 @@ impl Mixer {
             val_divisions: 1,
             entries,
             second: None,
+
+            scene_referred: true,
         }
     }
 }

@@ -10,6 +10,8 @@ use numa_core::profile::{DngProfile, HsvTable, Matrix3, ValueEncoding};
 const DCP_MAGIC: u16 = 0x4352;
 const TIFF_MAGIC: u16 = 42;
 
+const SCENE_SIGNATURE: &str = "numa.photo scene-referred";
+
 fn matrix(entry: Option<&Entry>) -> Option<Matrix3> {
     let entry = entry?;
     if entry.count() < 9 {
@@ -64,6 +66,7 @@ fn table(
         val_divisions: dims.value.force_usize(2),
         entries: Vec::new(),
         second: None,
+        scene_referred: false,
     };
 
     if table.hue_divisions == 0 || table.sat_divisions == 0 || table.val_divisions == 0 {
@@ -116,6 +119,13 @@ pub fn read(path: &Path) -> Result<DngProfile, String> {
             })
             .collect::<Vec<_>>()
     });
+
+    let scene_referred = get(DngTag::ProfileCalibrationSignature)
+        .and_then(|entry| entry.value.as_string().cloned())
+        .is_some_and(|signature| signature == SCENE_SIGNATURE);
+    let table = |dims, first, second, encoding| {
+        table(dims, first, second, encoding).map(|table| HsvTable { scene_referred, ..table })
+    };
 
     let profile = DngProfile {
         camera: get(DngTag::UniqueCameraModel).and_then(|entry| entry.value.as_string().cloned()),
@@ -199,6 +209,9 @@ pub fn write(path: &Path, profile: &DngProfile) -> std::io::Result<()> {
         push(DngTag::UniqueCameraModel, ASCII, ascii(camera));
     }
     push(DngTag::ProfileName, ASCII, ascii(&profile.name));
+    if profile.hue_sat_map.iter().chain(&profile.look_table).any(|table| table.scene_referred) {
+        push(DngTag::ProfileCalibrationSignature, ASCII, ascii(SCENE_SIGNATURE));
+    }
     let calibrations = [
         (DngTag::ColorMatrix1, DngTag::ForwardMatrix1, DngTag::CalibrationIlluminant1),
         (DngTag::ColorMatrix2, DngTag::ForwardMatrix2, DngTag::CalibrationIlluminant2),
@@ -336,6 +349,16 @@ fn make_first_word(make: &str) -> &str {
 }
 
 fn ranked(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<(Option<u8>, DngProfile, Source)>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else { return scan(make, model) };
+    cache.entry(format!("{make}|{model}")).or_insert_with(|| scan(make, model)).clone()
+}
+
+fn scan(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
     let own = profiles_dir();
     let numa = numa_profiles_dir();
     let wanted = normalise(model);
@@ -613,6 +636,7 @@ mod tests {
                 val_divisions: 2,
                 entries: entries.clone(),
                 second: None,
+                scene_referred: true,
             }),
             look_table: None,
             tone_curve: None,
@@ -635,6 +659,7 @@ mod tests {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
         let map = back.hue_sat_map.unwrap();
+        assert!(map.scene_referred, "Numa's own fit has to come back as Numa's");
         assert_eq!((map.hue_divisions, map.sat_divisions, map.val_divisions), (4, 3, 2));
         assert_eq!(map.value_encoding, ValueEncoding::Srgb);
         assert_eq!(map.entries, entries);

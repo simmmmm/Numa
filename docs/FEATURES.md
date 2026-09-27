@@ -1350,6 +1350,9 @@ dependency at all.
   lists every profile installed for the body, plus "none", which is the colour
   matrix on its own. The list is the same scan the automatic match uses, so it
   can never offer something the renderer would refuse.
+  A table's value axis is read with sensor white at 1.0, as the DNG spec and
+  RawTherapee have it; Numa's own fitted tables carry a signature and keep
+  Numa's scale. Before, RawTherapee's A6000 look turned blue skies cyan.
 
   ❌ *The dropdown leaves the panel in PANEL_PLAN P1. Automatic is right on
   every frame the photographer has, and "none" is a diagnostic — FT-012 used
@@ -1384,6 +1387,8 @@ dependency at all.
 - ❌ **RENDER-007**: ~~Classic Negative, Nostalgic Neg and Bleach Bypass as
   cube LUTs.~~ *Withdrawn with RENDER-006.*
 - ✅ **RENDER-008**: Per-image exposure matched to the camera's own rendering.
+  27 September: measured after the white balance, not before — every make
+  had landed 0.07-0.32 EV above its camera. The corpus test holds each to 0.15.
 - ✅ **RENDER-012**: Fujifilm X-T5 profiles fitted here, against the camera's
   own JPEGs. `tests/camera_profile_fit.rs` takes X-T5 frames of one film
   simulation at Color 0, pairs Numa's matrix-only rendering with the embedded
@@ -4067,6 +4072,18 @@ dependency at all.
   541, and the screenshots differ in one pixel of 1.3 million by more than 1 %
   (`NUMA_WHOLE_FRAME=1` renders the old way, to compare). Dehaze, and a mask
   carrying any of the four, still render the whole frame.
+
+- ✅ **PERF-020**: Switching photographs. The photograph after this one, in
+  the direction the photographer is stepping, is decoded as soon as this one
+  is on screen, so a step is the colour stage and one render: 37–60 ms to the
+  sharp frame, where it was 0.45 s for a 24 MP frame and 1.3 s for a 50 MP
+  one. A jump to a photograph that was not decoded ahead shows its cached
+  thumbnail within 13 ms and its sharp frame 25–30 % sooner than before —
+  the decode lost rawler's copies of the frame, decodes the camera's JPEG
+  beside the raw, and the first frame is no longer a draft followed 140 ms
+  later by the real one. Same pixels, hash for hash. `NUMA_TIMING=1` prints
+  every stage of an opening with the cores it used (`docs/ENGINEERING.md`,
+  "Switching photographs, measured").
 
 - ✅ **START-010**: The editor is not built while nobody is looking at it. It
   is 60 ms of widgets, and it was assembled before the window was shown on a

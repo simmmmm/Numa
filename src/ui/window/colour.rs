@@ -295,32 +295,7 @@ pub(super) fn build_colour(
         global_only(row.as_ref());
         colour.append(&row);
     }
-
-    let white = state.colour.white_pipette.clone();
-    let inside = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let pipette = gtk::Image::from_icon_name("color-select-symbolic");
-    pipette.set_pixel_size(16);
-    inside.append(&pipette);
-    inside.append(&gtk::Label::new(Some("Pick a neutral")));
-    white.set_child(Some(&inside));
-    white.add_css_class("panel-action");
-    white.set_tooltip_text(Some("Click something in the photograph that should be grey or white"));
-
-    white.set_halign(gtk::Align::End);
-    white.set_margin_top(6);
-    white.connect_toggled(glib::clone!(
-        #[strong] state,
-        move |button| {
-            if state.applying.get() {
-                return;
-            }
-            state.colour.picking_white.set(button.is_active());
-            if button.is_active() {
-                disarm_pipettes(&state, "white");
-            }
-            arm_band_pipette(&state);
-        }
-    ));
+    let white = white_pipette(state);
     global_only(white.as_ref());
     colour.append(&white);
 
@@ -389,6 +364,35 @@ pub(super) fn build_colour(
     colour.append(&point);
 
     colour
+}
+
+fn white_pipette(state: &App) -> gtk::ToggleButton {
+    let white = state.colour.white_pipette.clone();
+    let inside = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let pipette = gtk::Image::from_icon_name("color-select-symbolic");
+    pipette.set_pixel_size(16);
+    inside.append(&pipette);
+    inside.append(&gtk::Label::new(Some("Pick a neutral")));
+    white.set_child(Some(&inside));
+    white.add_css_class("panel-action");
+    white.set_tooltip_text(Some("Click something in the photograph that should be grey or white"));
+
+    white.set_halign(gtk::Align::End);
+    white.set_margin_top(6);
+    white.connect_toggled(glib::clone!(
+        #[strong] state,
+        move |button| {
+            if state.applying.get() {
+                return;
+            }
+            state.colour.picking_white.set(button.is_active());
+            if button.is_active() {
+                disarm_pipettes(&state, "white");
+            }
+            arm_band_pipette(&state);
+        }
+    ));
+    white
 }
 
 pub(super) fn build_profile_picker(state: &App) -> gtk::Box {

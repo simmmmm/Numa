@@ -235,7 +235,7 @@ pub(super) fn compare_key(state: &App, key: gtk::gdk::Key) -> glib::Propagation 
         _ => None,
     };
     if let (Some(action), Some(id)) = (action, under) {
-        apply_to_ids(state, &[id], action);
+        apply_to_ids(state, &[id], toggled(state, &[id], action));
         refresh_compare(state);
         return glib::Propagation::Stop;
     }

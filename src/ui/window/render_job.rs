@@ -316,6 +316,22 @@ fn finish(state: &App, done: Done) {
 
     *state.info.scope.borrow_mut() = done.scope;
     present(state, done.rendered, done.placement, done.backdrop, done.histogram, done.wants_full, done.have_full);
+    first_frames(state, done.drafting);
+    prefetch::on_screen(state, done.generation);
+}
+
+fn first_frames(state: &App, drafting: bool) {
+    let Some((asked, said)) = state.render.opened_at.get() else { return };
+    let ms = asked.elapsed().as_secs_f32() * 1000.0;
+    if !said {
+        log::info!("first frame {ms:.0} ms after the photograph was asked for");
+    }
+    if drafting {
+        state.render.opened_at.set(Some((asked, true)));
+        return;
+    }
+    log::info!("sharp frame {ms:.0} ms after the photograph was asked for");
+    state.render.opened_at.set(None);
 }
 
 fn tone_guide(

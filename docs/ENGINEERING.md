@@ -148,6 +148,27 @@ profile now gets the bare matrix, which is what every converter does in the same
 situation. Copying a neighbouring body's profile in under your own camera's name
 still works, and needs no code.
 
+**A table's value axis is read at sensor white.** A table with more than one
+value row is indexed by brightness, and the DNG convention — Adobe's, and
+RawTherapee's, whose profiles are fitted in RawTherapee — has sensor white at
+1.0. Numa's frame has middle grey at 0.18 and sensor white two or three stops
+up, so a look table was handed values two to five times what it was made for
+and read its top rows for anything bright. RawTherapee's A6000 profile carries
+a 90×30×30 look; on a blue sky it took red to nothing:
+
+| DSC08326's sky, linear sRGB | R | G | B |
+|---|---|---|---|
+| RawTherapee, same profile | 0.137 | 0.257 | 0.513 |
+| Numa, before | 0.006 | 0.274 | 0.742 |
+| Numa, at sensor white | 0.136 | 0.258 | 0.508 |
+
+Matrix and hue/sat map already agreed with RawTherapee to the third decimal;
+only the look was off, because only it has value rows. `Rendering` divides by
+the frame's `clip` for the lookup and nothing else. The tables Numa fits itself
+(`RENDER-012`) learned the frame as Numa holds it, so they say so:
+`ProfileCalibrationSignature` reads `numa.photo scene-referred`, `dcp::write`
+puts it there, and those are looked up as before.
+
 **Automatic takes the standard profile, never a look** (`RENDER-013`). With
 several folders searched, one body can have a dozen matches — Adobe Standard,
 Camera Velvia, an infrared profile — and taking whichever the folder listed
@@ -602,6 +623,19 @@ which is why `core::tone` owns both directions.
 |---|---|---|---|
 | Midtones | 102.5 | 47.8 | 116.5 |
 | Mean RGB error | — | 44.6 | 17.8 |
+
+**27 September: the match read the frame before its white balance.** The raw's
+median was taken as Rec. 709 luminance of camera RGB, where red and blue sit a
+stop or so under green until the multipliers are applied, so it read low and
+the lift came out high. Every frame of every make landed above the camera it
+was matching — a photographer's A6000 church as a cyan sky nobody had asked for.
+It is now measured through the as-shot matrix, which is what the render does to
+those pixels, and the corpus test holds each make to within 0.15 EV:
+
+| 18 frames, 8 makes | Before | After |
+|---|---|---|
+| Midtones against the camera's JPEG, mean | +0.21 EV | −0.02 EV |
+| Furthest out | +0.32 EV (A6000, K-70) | −0.11 EV (DC-G9) |
 
 The bright frame the baseline was originally fitted against stays where it was,
 so this is a refinement rather than a replacement: `BASELINE_EV` still stands in
@@ -2643,3 +2677,111 @@ person and animal classes, named "Subject", or "Background" inside out — which
 nothing else is. Auto's subject lift, which was the same `Segment` named
 "Subject", is the same shape now, and still only where a person or animal was
 named.
+
+## Switching photographs, measured — 27 September
+
+The photographer: switching to another photograph takes about half a second,
+a second with a lens profile, and should feel instant. Measured on ten frames
+(5D Mark III, R5, 5DS, A6000, A7R III, Z 6, Z 7, two E-M1 II with the 12-40,
+X-T5), release build under Xvfb, each run on a quiet machine, before and after
+back to back, two passes, medians. `NUMA_TIMING=1` now prints a line per decode
+with every stage and how many cores it kept busy (PERF-020), one for the main
+thread's part of an opening, and when the first and the first sharp frame went
+up after the photograph was asked for.
+
+**Where the time went** (cold opening, ms, before → after):
+
+| stage | cores | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| read | 1 | 25 | 21 | 21 | 25 | 22 | 24 | 21 | 28 | 26 |
+| rawler decode | 1–1.5 (CR3 4, ARW/RAF 10) | 100 | 190 | 240 | 8 | 13 | 88 | 169 | 140 | 130 |
+| camera profile (first of a body) | 1 | 54 | 53 | 55 | 56 | 54 | 55 | 53 | 56 | 54 |
+| demosaic (incl. black/white) | 11 | 109 → 74 | 254 → 151 | 275 → 191 | 123 → 82 | 238 → 158 | 119 → 82 | 250 → 161 | 107 → 68 | 668 |
+| flatten + baseline | 1 → 14 | 29 → 8 | 84 → 21 | 84 → 24 | 43 → 9 | 81 → 20 | 36 → 10 | 74 → 21 | 36 → 7 | 74 → 17 |
+| lens lookup (first in a session) | 1 | 24 | 25 | 26 | 26 | 35 | 27 | 29 | 30 | — |
+| vignetting | 15 | 10 | 21 | 24 | 11 | 19 | 11 | 22 | 9 | 19 |
+| geometry (distortion + TCA) | 15 | 75 | 153 | 172 | 83 | 149 | 82 | 165 | 70 | 139 |
+| false colour | 15 | — | — | — | — | — | — | — | — | 147 |
+| exposure match | 1 → 10 | 63 → 12 | 130 → 26 | 151 → 29 | 32 → 13 | 49 → 24 | 64 → 13 | 130 → 27 | — | 86 → 23 |
+| downscale to the proxy | 14 | 12 | 24 | 27 | 13 | 23 | 14 | 26 | 11 | 27 |
+| colour stage (main thread) | 1 | 3 | 11 | 3 | 24 | 25 | 11 | 12 | 28 | 4 |
+| panel (main thread) | 1 | 58 → 3 | 56 → 3 | 54 → 3 | 55 → 3 | 54 → 3 | 57 → 3 | 56 → 3 | 58 → 3 | 55 → 3 |
+| first render, draft then sharp | 16 | +141 → 0 | +149 → 0 | +146 → 0 | +138 → 0 | +143 → 0 | +143 → 0 | +147 → 0 | +140 → 0 | +144 → 0 |
+
+The texture upload is under 20 ms from the render being handed over to the
+frame being painted (cairo under Xvfb), and the catalog read is under 1 ms.
+Nothing in the pixel pipeline runs on the GPU; the models are the only thing
+that does.
+
+**What was wrong.** The critical path was the decode, and inside it two kinds
+of waste. *Copies:* rawler's `develop_intermediate` borrows the frame, so it
+cloned the whole mosaic, copied the scaled mosaic again to demosaic it and
+gathered the crop into a third buffer on one thread, and `into_flatten` copied
+the result once more, serially — a third of the demosaic and three quarters of
+the "baseline" line. *Waiting:* the camera's JPEG, which the exposure match
+needs one number from, was decoded on one core after the raw pipeline had
+finished, and its median was a sort of a million samples. Then two things in
+front of the first frame that were not the decode at all: the profile
+picker's scan of every installed `.dcp` (80 MB) on the main thread, repeating
+the decode's own scan; and the first render always being the half-size draft,
+because the panel's writers asked for renders of their own and the last
+request fell inside the settle time that tells a drag from a click — the
+sharp frame followed 140 ms later on every photograph.
+
+**What changed**, each kept to float-for-float the same output — the decode,
+the proxy and the default render hash identically on all ten frames before and
+after, and a screenshot of a frame reached through the new path differs from
+the old one in 0 pixels:
+
+- `ppg_develop` runs rawler's own steps for a Bayer frame without the copies,
+  and `flat` reinterprets the pixels in place;
+- the camera's JPEG is decoded on a scoped thread beside the raw, and the
+  median is selected rather than sorted;
+- the `.dcp` scan is made once per body and shared;
+- an opening starts a fresh run of render requests, so its first frame is the
+  sharp one;
+- the next photograph in the direction of travel is decoded as soon as this
+  one is on screen (`prefetch`), and a photograph that was not gets its cached
+  thumbnail on the canvas while it decodes.
+
+**Where it stands** (first frame / sharp frame after the photograph was asked
+for, ms):
+
+| | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|
+| step, before | — | 1015 / 1161 | 1175 / 1321 | 463 / 605 | 763 / 907 | 555 / 698 | 990 / 1135 | 546 / 695 | 1413 / 1554 |
+| step, after (decoded ahead) | — | 43 | 37 | 56 | 55 | 45 | 44 | 60 | 37 |
+| jump, before | 600 / 741 | 1050 / 1199 | 1173 / 1319 | 541 / 679 | 821 / 964 | 629 / 772 | 1053 / 1200 | 616 / 756 | 1451 / 1595 |
+| jump, after | 13 / 427 | 13 / 741 | 13 / 917 | 13 / 389 | 13 / 598 | 13 / 462 | 13 / 750 | 13 / 502 | 13 / 1302 |
+
+A jump's 13 ms is the cached thumbnail; its second number is the sharp frame.
+The lens does not double the time: lookup, falloff and geometry are 110–120 ms on
+a 24 MP frame and 200–215 on a 45 MP one — a quarter of the decode. The doubling
+the photographer saw is a 45 MP body against a 24 MP one.
+
+**What it costs.** A photograph opened and not stepped on from pays one decode
+it did not need, in the background — 0.4 to 1.3 s of every core, once. If the
+photographer jumps elsewhere while it runs, two decodes overlap: about a
+gigabyte more at the peak on a 45 MP frame. The thumbnail standing in is the
+camera's picture for an untouched frame, before lens correction, so the swap
+to the render is a small shift in framing and colour, as in Lightroom.
+
+**What is left.** On a jump, the decode itself: rawler's CR2, NEF and ORF
+decoders are one thread (90–250 ms), and the X-T5's Markesteijn is 680 ms on
+eleven cores. The camera-profile scan is still 54 ms the first time a body is
+seen in a session, and the lens database 25 ms the first time anything is. On
+a step, the colour stage (3–28 ms) still runs on the main thread; it could be
+made ahead too, with the neighbour's stored document.
+
+**The GPU**, written up rather than started. What a GPU could take is
+everything after the decoder: demosaic, baseline, falloff, geometry, false
+colour, downscale — 450 of the 5DS's 917 ms and 1 010 of the X-T5's 1 302,
+all memory-bound passes over a frame that a mid-range card does in 3–5 ms
+each. Uploading a 50 MP mosaic is about 100 MB. Expected: a jump to a 5DS
+frame at about 500 ms, an X-T5 at about 320, and a 1:1 full-resolution decode
+faster by the same amount. Against that: stepping is already under 60 ms,
+which the GPU does not improve; a shader cannot be float-for-float the CPU's
+answer, so every stage needs a tolerance and a reference comparison instead of
+a hash; and the laptop this is for has to be measured first — the rule of the
+sliders' evening. Worth it for the jump and for 1:1 once the decoder's own
+single thread is looked at, not before.

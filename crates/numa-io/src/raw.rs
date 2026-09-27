@@ -338,6 +338,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_exposure_match_lifts_the_median_to_the_cameras() {
+        let grey = |value: f32| LinearImage::new(4, 4, vec![value; 48]);
+        let factor = match_camera_exposure(0.18, &grey(0.09), None).unwrap();
+        assert!((factor - 2.0).abs() < 1e-5, "{factor}");
+        assert_eq!(match_camera_exposure(0.18, &grey(0.0001), None), Some(2.5f32.exp2()));
+        assert_eq!(match_camera_exposure(0.18, &grey(0.0), None), None);
+    }
+
+    #[test]
+    fn the_median_is_the_middle_of_the_sorted_samples() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut values: Vec<f32> = (0..10_001)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state % 1000) as f32 / 7.0
+            })
+            .collect();
+        let mut sorted = values.clone();
+        sorted.sort_by(f32::total_cmp);
+        assert_eq!(median(&mut values), sorted[sorted.len() / 2]);
+    }
+
+    #[test]
+    fn the_bayer_develop_without_copies_is_rawlers() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/Olympus/E-M1MarkII.ORF");
+        if !path.is_file() {
+            println!("skipped: run dev/fetch-corpus.sh");
+            return;
+        }
+        let source = rawler::rawsource::RawSource::new(&path).unwrap();
+        let decoder = rawler::get_decoder(&source).unwrap();
+        let raw = decoder.raw_image(&source, &RawDecodeParams::default(), false).unwrap();
+
+        let steps: Vec<ProcessingStep> = RawDevelop::default()
+            .steps
+            .into_iter()
+            .filter(|step| !matches!(step, ProcessingStep::SRgb | ProcessingStep::Calibrate | ProcessingStep::WhiteBalance))
+            .collect();
+        let Intermediate::ThreeColor(rawlers) = RawDevelop::new_with(&steps).develop_intermediate(&raw).unwrap() else {
+            panic!("a Bayer frame develops to three colours");
+        };
+        let ours = ppg_develop(raw).unwrap().ok().expect("a Bayer frame is ours to develop");
+
+        assert_eq!(ours.dim(), rawlers.dim());
+        assert!(flat(ours) == rawlers.into_flatten(), "the floats differ");
+    }
+
+    #[test]
     fn the_median_network_agrees_with_a_sort() {
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = || {
@@ -702,15 +752,81 @@ fn dump_without_rendering() -> bool {
     false
 }
 
+pub struct Laps {
+    at: Option<(std::time::Instant, f32)>,
+    parts: Vec<(&'static str, f32, f32)>,
+}
+
+impl Laps {
+    pub fn start() -> Self {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let on = *ON.get_or_init(|| std::env::var_os("NUMA_TIMING").is_some());
+        Self { at: on.then(|| (std::time::Instant::now(), cpu_ms())), parts: Vec::new() }
+    }
+
+    pub fn lap(&mut self, name: &'static str) {
+        if let Some((at, cpu)) = self.at.as_mut() {
+            let now = cpu_ms();
+            self.parts.push((name, at.elapsed().as_secs_f32() * 1000.0, now - *cpu));
+            (*at, *cpu) = (std::time::Instant::now(), now);
+        }
+    }
+
+    pub fn report(&self, what: &str, path: &Path) {
+        if self.at.is_none() {
+            return;
+        }
+        let total: f32 = self.parts.iter().map(|(_, ms, _)| ms).sum();
+        let parts: Vec<String> = self
+            .parts
+            .iter()
+            .map(|(name, ms, cpu)| match *ms >= 5.0 {
+                true => format!("{name} {ms:.0} ×{:.1}", cpu / ms),
+                false => format!("{name} {ms:.0}"),
+            })
+            .collect();
+        log::info!(
+            "{what} {} in {total:.0} ms: {}",
+            path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default(),
+            parts.join(", ")
+        );
+    }
+}
+
+fn cpu_ms() -> f32 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    let usage = unsafe { usage.assume_init() };
+    let ms = |time: libc::timeval| time.tv_sec as f32 * 1000.0 + time.tv_usec as f32 / 1000.0;
+    ms(usage.ru_utime) + ms(usage.ru_stime)
+}
+
 fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f32>), String> {
+    std::thread::scope(|scope| {
+        let midtone = scope.spawn(|| camera_midtone(path));
+        decode_beside(path, demosaic, || midtone.join().ok().flatten())
+    })
+}
+
+fn decode_beside(
+    path: &Path,
+    demosaic: Demosaic,
+    camera_midtone: impl FnOnce() -> Option<f32>,
+) -> Result<(LinearImage, Option<f32>), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
+    let mut laps = Laps::start();
 
     let (developed, profile, rendering, flips, film_mode, exposure, markesteijn) = {
         let source = rawler::rawsource::RawSource::new(path).map_err(|e| fail(e.to_string()))?;
         let decoder = rawler::get_decoder(&source).map_err(|e| fail(e.to_string()))?;
+        laps.lap("read");
         let raw = decoder
             .raw_image(&source, &RawDecodeParams::default(), false)
             .map_err(|e| fail(e.to_string()))?;
+        laps.lap("decode");
 
         let mut profile = camera_profile(&raw);
 
@@ -720,6 +836,7 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
             }
         }
         let rendering = find_rendering(&raw).filter(|_| !dump_without_rendering());
+        laps.lap("profile");
 
         let metadata = decoder.raw_metadata(&source, &RawDecodeParams::default()).ok();
 
@@ -733,6 +850,7 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
         let exposure = metadata
             .as_ref()
             .and_then(|meta| relative_exposure(&meta.exif));
+        laps.lap("metadata");
 
         let demosaiced = match demosaic {
             Demosaic::Best => markesteijn_demosaic(&raw, path),
@@ -740,9 +858,18 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
         };
 
         let markesteijn_ran = demosaiced.is_some();
-        let developed = match demosaiced {
-            Some(pixels) => pixels,
-            None => {
+
+        let (demosaiced, raw) = match demosaiced {
+            Some(pixels) => (Some(pixels), None),
+            None => match ppg_develop(raw).map_err(fail)? {
+                Ok(pixels) => (Some(pixels), None),
+                Err(raw) => (None, Some(raw)),
+            },
+        };
+        let developed = match (demosaiced, raw) {
+            (Some(pixels), _) => pixels,
+            (None, None) => unreachable!("a frame is either developed or handed back"),
+            (None, Some(raw)) => {
                 let steps: Vec<ProcessingStep> = RawDevelop::default()
                     .steps
                     .into_iter()
@@ -766,22 +893,26 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
             }
         };
 
+        laps.lap("demosaic");
         (developed, profile, rendering, flips, film_mode, exposure, markesteijn_ran)
     };
+    laps.lap("free raw");
 
     let dim = developed.dim();
     let baseline = 2.0f32.powf(BASELINE_EV);
 
-    let mut scaled = developed.into_flatten();
+    let mut scaled = flat(developed);
     scaled.par_iter_mut().for_each(|v| *v *= baseline);
     let image = LinearImage::new(dim.w as u32, dim.h as u32, scaled);
+    laps.lap("baseline");
 
-    let mut image = undo_the_lens(image, path, markesteijn, baseline);
+    let mut image = undo_the_lens(image, path, markesteijn, baseline, &mut laps);
 
-    let factor = match_camera_exposure(path, &image).unwrap_or(1.0);
+    let factor = camera_midtone().and_then(|wanted| match_camera_exposure(wanted, &image, profile.as_ref())).unwrap_or(1.0);
     if factor != 1.0 {
         image.data.par_iter_mut().for_each(|value| *value *= factor);
     }
+    laps.lap("exposure match");
 
     let image = image.with_clip(baseline * factor);
 
@@ -789,6 +920,8 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
         .into_oriented(flips.0, flips.1, flips.2)
         .with_rendering(rendering)
         .with_film_mode(film_mode);
+    laps.lap("orient");
+    laps.report("decode", path);
     Ok((
         match profile {
             Some(profile) => image.with_profile(profile),
@@ -796,6 +929,52 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
         },
         exposure,
     ))
+}
+
+fn flat(pixels: rawler::pixarray::Color2D<f32, 3>) -> Vec<f32> {
+    let mut rgb = std::mem::ManuallyDrop::new(pixels.into_inner());
+    let (at, length, capacity) = (rgb.as_mut_ptr(), rgb.len(), rgb.capacity());
+
+    unsafe { Vec::from_raw_parts(at.cast::<f32>(), length * 3, capacity * 3) }
+}
+
+fn ppg_develop(
+    mut raw: rawler::RawImage,
+) -> Result<Result<rawler::pixarray::Color2D<f32, 3>, rawler::RawImage>, String> {
+    use rawler::imgop::sensor::bayer::ppg::PPGDemosaic;
+    use rawler::imgop::sensor::{Demosaic as _, SensorType};
+    use rawler::pixarray::PixF32;
+    use rawler::rawimage::{RawImageData, RawPhotometricInterpretation};
+
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else {
+        return Ok(Err(raw));
+    };
+    if config.sensor != SensorType::Bayer || !config.cfa.is_rgb() || raw.fuji_rotation_width.is_some() || raw.cpp != 1 {
+        return Ok(Err(raw));
+    }
+    let config = config.clone();
+
+    raw.apply_scaling().map_err(|err| err.to_string())?;
+    let (width, height) = (raw.width, raw.height);
+    let (active_area, crop_area) = (raw.active_area, raw.crop_area);
+    let floats = match std::mem::replace(&mut raw.data, RawImageData::Integer(Vec::new())) {
+        RawImageData::Float(floats) => floats,
+        RawImageData::Integer(_) => return Err("the mosaic was not scaled".to_string()),
+    };
+    drop(raw);
+
+    let pixels = PixF32::new_with(floats, width, height);
+    let roi = active_area.unwrap_or_else(|| pixels.rect());
+    let rgb = PPGDemosaic::new().demosaic(&pixels, &config.cfa, &config.colors, roi);
+    drop(pixels);
+
+    Ok(Ok(match crop_area.or(active_area) {
+        Some(crop) => {
+            let crop = active_area.map_or(crop, |active| crop.adapt(&active));
+            if crop.d == rgb.dim() { rgb } else { cropped_in_place(rgb, crop) }
+        }
+        None => rgb,
+    }))
 }
 
 fn markesteijn_demosaic(
@@ -874,18 +1053,23 @@ fn undo_the_lens(
     path: &Path,
     markesteijn: bool,
     baseline: f32,
+    laps: &mut Laps,
 ) -> LinearImage {
     let lens = lens_profile(path);
+    laps.lap("lens lookup");
     if let Some(profile) = &lens {
         if !dump_without_vignetting() {
             correct_vignetting(&mut image, profile);
+            laps.lap("vignetting");
         }
     }
     let mut image = match &lens {
         Some(profile) if profile.bends_anything() => {
 
             let straight = correct_geometry(&image, profile);
+            laps.lap("geometry");
             drop(image);
+            laps.lap("free bent");
             straight
         }
         _ => image,
@@ -894,6 +1078,7 @@ fn undo_the_lens(
     if markesteijn {
         let (w, h) = (image.width as usize, image.height as usize);
         suppress_false_colour(&mut image.data, w, h, BLACK_FLOOR * baseline);
+        laps.lap("false colour");
     }
     image
 }
@@ -1450,39 +1635,21 @@ fn find_film_mode_tag(bytes: &[u8]) -> Option<u16> {
     makernote_tag(bytes, 0x1401).and_then(|values| values.first().map(|v| *v as u16))
 }
 
-fn match_camera_exposure(path: &Path, image: &LinearImage) -> Option<f32> {
+fn match_camera_exposure(wanted: f32, image: &LinearImage, profile: Option<&CameraProfile>) -> Option<f32> {
 
     const LIMIT_EV: f32 = 2.5;
 
-    let preview = embedded_preview(path).ok()??.into_rgb8();
-    if preview.width() < 16 || preview.height() < 16 {
-        return None;
-    }
-
-    let mut rendered: Vec<f32> = preview
-        .pixels()
-        .step_by(37)
-        .map(|p| {
-            (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
-        })
-        .collect();
+    let to_srgb = profile.map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |p| p.transform(None));
+    let luma = [0, 1, 2].map(|c| 0.2126 * to_srgb[0][c] + 0.7152 * to_srgb[1][c] + 0.0722 * to_srgb[2][c]);
     let mut scene: Vec<f32> = image
         .data
         .chunks_exact(3)
         .step_by(37)
-        .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+        .map(|p| luma[0] * p[0] + luma[1] * p[1] + luma[2] * p[2])
         .collect();
-
-    if rendered.is_empty() || scene.is_empty() {
+    if scene.is_empty() {
         return None;
     }
-
-    let median = |values: &mut Vec<f32>| {
-        values.sort_by(f32::total_cmp);
-        values[values.len() / 2]
-    };
-
-    let wanted = numa_core::tone::scene_value_for(median(&mut rendered));
     let have = median(&mut scene);
 
     if !(have > 1e-6) || !wanted.is_finite() {
@@ -1496,6 +1663,30 @@ fn match_camera_exposure(path: &Path, image: &LinearImage) -> Option<f32> {
     }
 
     Some(stops.clamp(-LIMIT_EV, LIMIT_EV).exp2())
+}
+
+fn median(values: &mut [f32]) -> f32 {
+    let middle = values.len() / 2;
+    *values.select_nth_unstable_by(middle, f32::total_cmp).1
+}
+
+fn camera_midtone(path: &Path) -> Option<f32> {
+
+    let preview = embedded_preview(path).ok()??.into_rgb8();
+    if preview.width() < 16 || preview.height() < 16 {
+        return None;
+    }
+    let mut rendered: Vec<f32> = preview
+        .pixels()
+        .step_by(37)
+        .map(|p| {
+            (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
+        })
+        .collect();
+    if rendered.is_empty() {
+        return None;
+    }
+    Some(numa_core::tone::scene_value_for(median(&mut rendered)))
 }
 
 #[derive(Debug, Clone, Default)]

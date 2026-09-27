@@ -31,6 +31,16 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.27.0" date="2026-09-27">
+      <description>
+        <p>
+          A new tone curve, read off the JPEGs of 349 cameras: lighter shadows,
+          a gentler rise above middle grey, and whites that reach white. Colour
+          comes nearer the camera's own rendering too. Numa's own camera
+          profiles are refitted on it, with a new one for the Fujifilm X-T5.
+        </p>
+      </description>
+    </release>
     <release version="0.26.2" date="2026-09-27">
       <description>
         <p>

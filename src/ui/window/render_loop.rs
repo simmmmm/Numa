@@ -399,6 +399,10 @@ pub(super) struct State {
 
     pub(super) planned: Rc<Cell<u64>>,
     pub(super) presented: Rc<Cell<u64>>,
+
+    pub(super) opened_at: Rc<Cell<Option<(std::time::Instant, bool)>>>,
+
+    pub(super) prefetch: super::prefetch::State,
 }
 
 impl State {
@@ -423,6 +427,8 @@ impl State {
             again: Rc::default(),
             planned: Rc::default(),
             presented: Rc::default(),
+            opened_at: Rc::default(),
+            prefetch: Default::default(),
         }
     }
 }
