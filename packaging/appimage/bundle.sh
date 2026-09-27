@@ -24,10 +24,18 @@ fi
 printf 'X-AppImage-Version=%s\n' "$VERSION" \
     >> "$APPDIR/usr/share/applications/com.tijmen.Numa.desktop"
 echo "building version $VERSION"
-install -Dm0644 data/icons/hicolor/256x256/apps/com.tijmen.Numa.png \
-        "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png"
-install -Dm0644 data/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png \
-        "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png"
+for size in 32 48 64 128 256; do
+    for name in com.tijmen.Numa com.tijmen.Numa-dark; do
+        install -Dm0644 data/icons/hicolor/${size}x${size}/apps/$name.png \
+                "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/$name.png"
+    done
+done
+install -Dm644 data/com.tijmen.Numa.metainfo.xml \
+        "$APPDIR/usr/share/metainfo/com.tijmen.Numa.metainfo.xml"
+install -Dm644 -t "$APPDIR/usr/share/numa/lensfun" data/lensfun/*
+if [[ -d data/private-profiles ]]; then
+    install -Dm644 -t "$APPDIR/usr/share/numa/profiles/numa" data/private-profiles/*
+fi
 install -Dm644 -t "$APPDIR/usr/share/icons/hicolor/scalable/actions" \
         data/icons/hicolor/scalable/actions/*.svg
 
@@ -61,24 +69,7 @@ install -m 0644 /opt/profiles/rt/rtdata/dcpprofiles/*.dcp "$PROFILES/"
 install -m 0644 /opt/profiles/rt/LICENSE "$PROFILES/LICENSE.GPL-3.0.txt"
 echo "bundled $(ls "$PROFILES"/*.dcp | wc -l) camera profiles"
 
-cat > "$PROFILES/README.txt" <<'NOTICE'
-DNG camera profiles from RawTherapee
-https://github.com/Beep6581/RawTherapee  (rtdata/dcpprofiles, tag 5.11)
-
-RawTherapee is free software released under the GNU General Public License
-version 3, reproduced here as LICENSE.GPL-3.0.txt. These profiles are part of
-that distribution and are included under the same terms. Most were made by
-Maciej Dworak; individual profiles name their author in the DNG
-ProfileCopyright tag.
-
-Numa reads these at runtime and never modifies them. It also looks in
-/usr/share/rawtherapee/dcpprofiles and ~/.local/share/numa/profiles, so
-a profile installed on the machine is found without being copied.
-
-There is no profile here for the Fujifilm X-T5. RawTherapee does not ship one,
-and the Adobe Standard profile for that body is Adobe's and cannot be
-redistributed. Put your own in ~/.local/share/numa/profiles.
-NOTICE
+install -m 0644 packaging/flatpak/profiles-README.txt "$PROFILES/README.txt"
 
 mkdir -p "$APPDIR/usr/share/glib-2.0/schemas"
 for schemas in /usr/local/share/glib-2.0/schemas /usr/share/glib-2.0/schemas; do
