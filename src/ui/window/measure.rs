@@ -66,6 +66,31 @@ pub(super) fn report_panel(state: &App) {
                             toggle_one_to_one(&state, x, y);
                         }
                     }
+
+                    if let Ok(ticks) = std::env::var("NUMA_DRAG") {
+                        let ticks = ticks.parse::<usize>().unwrap_or(60);
+                        let gaps = Rc::new(RefCell::new(Vec::with_capacity(ticks)));
+                        let last = Cell::new(std::time::Instant::now());
+                        glib::timeout_add_local(
+                            std::time::Duration::from_millis(16),
+                            glib::clone!(
+                                #[strong] state,
+                                move || {
+                                    let mut gaps = gaps.borrow_mut();
+                                    gaps.push(last.replace(std::time::Instant::now()).elapsed().as_secs_f64() * 1000.0);
+                                    let exposure = (gaps.len() % 20) as f64 * 0.1 - 1.0;
+                                    state.sliders.tone.exposure.set_value(exposure);
+                                    if gaps.len() < ticks {
+                                        return glib::ControlFlow::Continue;
+                                    }
+                                    gaps.sort_by(f64::total_cmp);
+                                    println!("DRAG {ticks} ticks, 16 ms apart: median {:.1} ms, worst {:.1} ms", gaps[ticks / 2], gaps[ticks - 1]);
+                                    glib::timeout_add_local_once(std::time::Duration::from_millis(500), || std::process::exit(0));
+                                    glib::ControlFlow::Break
+                                }
+                            ),
+                        );
+                    }
                     if let Ok(name) = std::env::var("NUMA_PRESET") {
                         preview_preset(&state, &name);
                     }

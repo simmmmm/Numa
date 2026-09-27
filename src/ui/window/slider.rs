@@ -39,27 +39,36 @@ thread_local! {
 
     pub(super) static NEUTRALS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 
-    pub(super) static PAINTERS: RefCell<HashMap<usize, (String, String)>> =
-        RefCell::new(HashMap::new());
+    pub(super) static PAINTERS: RefCell<HashMap<usize, Painter>> = RefCell::new(HashMap::new());
 
     pub(super) static ROWS: RefCell<Vec<(gtk::Scale, gtk::Label, Readout)>> =
         const { RefCell::new(Vec::new()) };
 
-    pub(super) static TRACKS: gtk::CssProvider = {
-        let provider = gtk::CssProvider::new();
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
-        provider
-    };
-
     pub(super) static REGISTERED: RefCell<Vec<gtk::Scale>> = const { RefCell::new(Vec::new()) };
+}
 
-    static RELOAD_QUEUED: Cell<bool> = const { Cell::new(false) };
+pub(super) struct Painter {
+    rule: (String, String),
+    fill: gtk::CssProvider,
+    tick: gtk::CssProvider,
+}
+
+impl Painter {
+    #[allow(deprecated)]
+    fn on(scale: &gtk::Scale) -> Painter {
+        let (fill, tick) = (gtk::CssProvider::new(), gtk::CssProvider::new());
+
+        let priority = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1;
+        scale.style_context().add_provider(&tick, priority);
+        let mut child = scale.first_child();
+        while let Some(widget) = child {
+            if widget.css_name() == "trough" {
+                widget.style_context().add_provider(&fill, priority);
+            }
+            child = widget.next_sibling();
+        }
+        Painter { rule: Default::default(), fill, tick }
+    }
 }
 
 pub(super) fn set_neutral(scale: &gtk::Scale, value: f64) {
@@ -71,7 +80,7 @@ pub(super) fn neutral_of(scale: &gtk::Scale) -> Option<f64> {
     NEUTRALS.with(|neutrals| neutrals.borrow().get(&(scale.as_ptr() as usize)).copied())
 }
 
-fn rule_for(scale: &gtk::Scale, class: &str, neutral: f64) -> String {
+fn rule_for(scale: &gtk::Scale, neutral: f64) -> (String, String) {
     let adjustment = scale.adjustment();
     let (low, high) = (adjustment.lower(), adjustment.upper());
     let span = (high - low).max(f64::EPSILON);
@@ -84,18 +93,18 @@ fn rule_for(scale: &gtk::Scale, class: &str, neutral: f64) -> String {
         false => "@accent_bg_color",
     };
 
-    let mut rules = String::new();
+    let mut rules = (String::new(), String::new());
     if !scale.has_css_class("mixer-track") && !scale.has_css_class("hue-slider") {
-        rules = format!(
-        "scale.{class} trough {{ background-image: linear-gradient(to right, \
+        rules.0 = format!(
+        "trough {{ background-image: linear-gradient(to right, \
          transparent {from:.3}%, {fill} {from:.3}%, {fill} {to:.3}%, \
          transparent {to:.3}%); }}\n"
         );
     }
     if low < 0.0 && high > 0.0 {
         let zero = at(0.0);
-        rules += &format!(
-            "scale.{class} {{ background-image: linear-gradient(rgba(255,255,255,0.32), \
+        rules.1 = format!(
+            "scale {{ background-image: linear-gradient(rgba(255,255,255,0.32), \
              rgba(255,255,255,0.32)); background-size: 1px 8px; \
              background-position: {zero:.3}% center; background-repeat: no-repeat; }}\n"
         );
@@ -105,29 +114,17 @@ fn rule_for(scale: &gtk::Scale, class: &str, neutral: f64) -> String {
 
 pub(super) fn repaint(scale: &gtk::Scale) {
     let key = scale.as_ptr() as usize;
-    let Some(class) = PAINTERS.with(|painters| painters.borrow().get(&key).map(|(class, _)| class.clone()))
-    else {
-        return;
-    };
-    let rule = rule_for(scale, &class, neutral_of(scale).unwrap_or(0.0));
-    let changed = PAINTERS.with(|painters| match painters.borrow_mut().get_mut(&key) {
-        Some(entry) if entry.1 != rule => {
-            entry.1 = rule;
-            true
+    let rule = rule_for(scale, neutral_of(scale).unwrap_or(0.0));
+    PAINTERS.with(|painters| {
+        let mut painters = painters.borrow_mut();
+        let Some(painter) = painters.get_mut(&key) else { return };
+        if painter.rule.0 != rule.0 {
+            painter.fill.load_from_string(&rule.0);
         }
-        _ => false,
-    });
-    if !changed || RELOAD_QUEUED.with(|queued| queued.replace(true)) {
-        return;
-    }
-
-    glib::idle_add_local_full(glib::Priority::HIGH_IDLE, || {
-        RELOAD_QUEUED.with(|queued| queued.set(false));
-        let sheet = PAINTERS.with(|painters| {
-            painters.borrow().values().map(|(_, rule)| rule.as_str()).collect::<String>()
-        });
-        TRACKS.with(|provider| provider.load_from_string(&sheet));
-        glib::ControlFlow::Break
+        if painter.rule.1 != rule.1 {
+            painter.tick.load_from_string(&rule.1);
+        }
+        painter.rule = rule;
     });
 }
 
@@ -163,11 +160,7 @@ pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: R
 
     scale.set_has_origin(false);
 
-    let class = REGISTERED.with(|registered| format!("track-{}", registered.borrow().len()));
-    scale.add_css_class(&class);
-    PAINTERS.with(|painters| {
-        painters.borrow_mut().insert(scale.as_ptr() as usize, (class, String::new()))
-    });
+    PAINTERS.with(|painters| painters.borrow_mut().insert(scale.as_ptr() as usize, Painter::on(scale)));
 
     repaint(scale);
 
