@@ -603,7 +603,7 @@ fn asks_a_model(document: &Document) -> bool {
     document.ai_denoise > 0.0
         || document.ai_sharpen > 0.0
         || document.masks().iter().any(|mask| {
-            matches!(mask.shape, Shape::Segment { .. }) || !mask.points.is_empty() || mask.matte || mask.fine
+            mask.shape.is_found() || !mask.points.is_empty() || mask.matte || mask.fine
         })
 }
 

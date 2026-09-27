@@ -39,6 +39,9 @@ pub(super) fn sync_document(state: &App) {
             mask.basic = state.sliders.read();
             mask.basic.balance.temperature = state.colour.mask_temperature.value() as f32;
             mask.basic.balance.tint = -(state.colour.mask_tint.value() as f32);
+
+            mask.colour.hue = state.colour.mask_hue.value() as f32;
+            mask.colour.saturation = state.colour.mask_colour_strength.value() as f32;
             photo.document.set_masks(masks);
             return;
         }
@@ -290,9 +293,12 @@ pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance)
     write_grading(state);
     write_perspective(state);
     ai_denoise::write(state);
+    lut::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);
+
+    fill_segment_masks(state);
     refresh_masks(state);
     select_mask(state, None);
     refresh_profile_picker(state);
@@ -301,6 +307,8 @@ pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance)
 
     sync_document(state);
     request_render(state);
+
+    schedule_save(state);
 
     refresh_history(state);
 }

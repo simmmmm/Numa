@@ -15,6 +15,10 @@ fn main() -> glib::ExitCode {
 
     numa::io::adopt_former_name();
 
+    if let Err(err) = numa::io::presets::seed_looks(&numa::io::presets::dir()) {
+        log::warn!("the looks could not be put in the presets folder: {err}");
+    }
+
     #[cfg(debug_assertions)]
     glib::log_set_default_handler(|domain, level, message| {
 

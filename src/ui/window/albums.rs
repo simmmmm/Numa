@@ -48,12 +48,12 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
             ask.set_response_appearance("create", adw::ResponseAppearance::Suggested);
             ask.set_default_response(Some("create"));
             ask.set_close_response("cancel");
-            let state = state.clone();
+            let (state, name) = (state.clone(), entry.clone());
             ask.connect_response(None, move |_, response| {
                 if response != "create" {
                     return;
                 }
-                match state.catalog.create_album(&entry.text()) {
+                match state.catalog.create_album(&name.text()) {
                     Ok(key) => {
                         refresh_picker(&state);
                         add_selection_to_album(&state, &key);
@@ -62,6 +62,8 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
                 }
             });
             ask.present(Some(&window));
+
+            entry.grab_focus();
         }
     ));
     window.add_action(&new);
@@ -146,6 +148,10 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
             #[weak] dialog,
             #[weak] window,
             move |_| {
+
+                let name = state.catalog.albums().ok()
+                    .and_then(|albums| albums.into_iter().find(|(k, _)| *k == key).map(|(_, name)| name))
+                    .unwrap_or_else(|| name.clone());
                 let confirm = adw::AlertDialog::new(
                     Some(&format!("Delete {name}?")),
                     Some("The photographs stay where they are, with their ratings and edits; only the album goes."),

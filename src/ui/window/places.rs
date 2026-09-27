@@ -132,7 +132,19 @@ fn read_all(state: &App) {
                     .collect()
             }
         };
-        rows.insert(key(place), Rc::new(assemble(&glances)));
+
+        let row = match place {
+            Place::Library(library) if glances.is_empty() && !library.path.exists() => {
+                Row { subtitle: "Not connected".to_string(), covers: Vec::new() }
+            }
+
+            Place::Library(library) if !library.path.exists() => {
+                let row = assemble(&glances);
+                Row { subtitle: format!("Not connected · {}", row.subtitle), ..row }
+            }
+            _ => assemble(&glances),
+        };
+        rows.insert(key(place), Rc::new(row));
     }
 
     log::debug!("picker read {} rows in {:.1} ms", rows.len(), started.elapsed().as_secs_f64() * 1000.0);

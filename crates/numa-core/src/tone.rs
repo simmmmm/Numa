@@ -23,6 +23,20 @@ pub fn scene_value_for(display: f32) -> f32 {
 
 use std::ops::Neg;
 
+pub fn shown(value: f32, display_referred: bool) -> f32 {
+    match display_referred {
+        true => crate::space::ColourSpace::Srgb.encode(value),
+        false => curve(value),
+    }
+}
+
+pub fn scene_for(display: f32, display_referred: bool) -> f32 {
+    match display_referred {
+        true => crate::space::ColourSpace::Srgb.decode(display),
+        false => scene_value_for(display),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

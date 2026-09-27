@@ -33,8 +33,8 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
         move || {
             let low_first = matches!(sort_at(sort.selected()), Sort::Captured | Sort::Name) != direction.is_active();
             direction.set_icon_name(match low_first {
-                true => "numa-arrow-up-symbolic",
-                false => "numa-arrow-down-symbolic",
+                true => "view-sort-ascending-symbolic",
+                false => "view-sort-descending-symbolic",
             });
         }
     );
@@ -323,7 +323,7 @@ fn build_sort_picker(state: &App) -> gtk::DropDown {
 
 pub(super) fn build_sort_direction(state: &App) -> gtk::ToggleButton {
     let arrow = gtk::ToggleButton::new();
-    arrow.set_icon_name("numa-arrow-down-symbolic");
+    arrow.set_icon_name("view-sort-descending-symbolic");
     arrow.set_tooltip_text(Some("Reverse the order"));
     arrow.connect_toggled(glib::clone!(
         #[strong] state,

@@ -4,7 +4,7 @@ pub(super) const UPDATE_CHECK: &str = "check-for-updates";
 pub(super) const UPDATE_CHECKED_AT: &str = "updates-checked-at";
 
 pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow) {
-    if state.libraries.current.borrow().is_none() {
+    if !checks_itself() || state.libraries.current.borrow().is_none() {
         return;
     }
     match state.catalog.setting(UPDATE_CHECK).as_deref() {
@@ -22,6 +22,8 @@ pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow
             alert.add_response("no", "No");
             alert.add_response("yes", "Check Daily");
             alert.set_response_appearance("yes", adw::ResponseAppearance::Suggested);
+
+            alert.set_close_response("no");
             let (state, parent) = (state.clone(), window.clone());
             alert.connect_response(None, move |_, response| {
                 let _ = state.catalog.set_setting(UPDATE_CHECK, response);
@@ -32,6 +34,10 @@ pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow
             alert.present(Some(window));
         }
     }
+}
+
+pub(super) fn checks_itself() -> bool {
+    numa::io::update::checks_itself(std::env::var_os("FLATPAK_ID").as_deref())
 }
 
 pub(super) fn check_for_update(state: &App, window: &adw::ApplicationWindow) {

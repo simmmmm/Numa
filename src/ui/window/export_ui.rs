@@ -91,6 +91,9 @@ pub(super) fn export_selected_now(state: &App) {
 }
 
 pub(super) fn export_selection(state: &App, parent: &impl IsA<gtk::Widget>) {
+    if refused_offline(state, selected_ids(state), "exporting") {
+        return;
+    }
     let jobs = selected_jobs(state);
     if jobs.is_empty() {
         state.toast("Select photos to export");

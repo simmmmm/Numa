@@ -1,87 +1,6 @@
 use super::*;
 
-type ModelFile = (&'static str, &'static str, u64, &'static str);
-
-const MODELS: [(&str, &str, &[ModelFile]); 13] = [
-    ("EfficientViT-Seg B2", "Sky, greenery and the other found masks · Apache-2.0 · 61 MB", &[(
-        "efficientvit_seg_b2_ade20k_1024.onnx",
-        "https://github.com/simmmmm/Numa/releases/download/models/efficientvit_seg_b2_ade20k_1024.onnx",
-        61_277_554, "39f11050777fe5562292ca2bfbac344515da28128d4330c6d8c514ca5d5e6efa",
-    )]),
-    ("SlimSAM", "Click to select · Apache-2.0 · 40 MB", &[
-        ("sam_encoder.onnx", "https://huggingface.co/Xenova/slimsam-77-uniform/resolve/main/onnx/vision_encoder.onnx", 23_276_014, "9f8433273a6750b587779baa0cf5508111001bf7e7acfcf585d370139fd366d0"),
-        ("sam_decoder.onnx", "https://huggingface.co/Xenova/slimsam-77-uniform/resolve/main/onnx/prompt_encoder_mask_decoder.onnx", 16_557_892, "f4514391764fbd56e08e119060d874ecd7d52994bfb1968af159e12d4943b5bb"),
-    ]),
-    ("IS-Net", "Subject edges and Refine edge · Apache-2.0 · 179 MB", &[(
-        "isnet.onnx",
-        "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
-        178_648_008, "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a",
-    )]),
-
-    ("ViTMatte-S", "Hair and fur in Refine edge · Apache-2.0 · 104 MB", &[(
-        "vitmatte_small.onnx",
-        "https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/main/onnx/model.onnx",
-        103_885_865, "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
-    )]),
-    ("YuNet", "Finding faces · MIT · 0.2 MB", &[(
-        "face_detection_yunet_2023mar.onnx",
-        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
-        232_589, "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-    )]),
-    ("SFace", "Recognising people · Apache-2.0 · 39 MB", &[(
-        "face_recognition_sface_2021dec.onnx",
-        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
-        38_696_353, "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
-    )]),
-
-    ("Open-closed eye", "Eyes closed, in culling · Apache-2.0 · 0.05 MB", &[(
-        "open_closed_eye.onnx",
-        "https://storage.openvinotoolkit.org/repositories/open_model_zoo/public/2022.1/open-closed-eye-0001/open_closed_eye.onnx",
-        46_164, "4daa100034482525a26c9afb9297c16580a531189e66e3d2b2ac7d32becfd593",
-    )]),
-    ("PP-ResNet50", "Naming the animal in a subject mask · Apache-2.0 · 103 MB", &[(
-        "image_classification_ppresnet50_2022jan.onnx",
-        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/image_classification_ppresnet/image_classification_ppresnet50_2022jan.onnx",
-        102_567_035, "ad5486b0de6c2171ea4d28c734c2fb7c5f64fcdbd97180a0ef515cf4b766a405",
-    )]),
-
-    ("LaMa", "Remove: what is under a spot, filled from around it · Apache-2.0 · 208 MB", &[(
-        "lama_fp32.onnx",
-        "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
-        208_044_816, "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
-    )]),
-
-    ("YOLOX-s", "Remove people: finding the passers-by · Apache-2.0 · 36 MB", &[(
-        "yolox_s.onnx",
-        "https://huggingface.co/Heliosoph/yolox-onnx/resolve/main/yolox_s.onnx",
-        35_858_002, "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
-    )]),
-
-    ("Restormer", "AI sharpen: undoing a hand that moved · MIT · 107 MB", &[(
-        "restormer_motion_deblurring.onnx",
-        "https://github.com/simmmmm/Numa/releases/download/models/restormer_motion_deblurring.onnx",
-        107_114_300, "cbaeb199a2a1f2b3d2008cef37cbe411ff9e388bb0700065ff8af25de1545001",
-    )]),
-
-    ("RealPLKSR", "Super Resolution: export at twice the size · MIT · 30 MB", &[(
-        "realplksr_x2.onnx",
-        "https://huggingface.co/darktable-org/upscale-realplksr-onnx/resolve/main/onnx/model_x2.onnx",
-        29_627_920, "d7abb65092f3808d3aa255ffdab42b1d672883915d90adbdd321204168b9f293",
-    )]),
-
-    ("SCUNet", "AI denoise · Apache-2.0 · 77 MB", &[
-        ("scunet_color_real_psnr.onnx", "https://huggingface.co/Heliosoph/scunet-onnx/resolve/main/scunet_color_real_psnr.onnx", 3_798_678, "231be201ab413dbc999d7951caa9844846b93a12a40a41e037d6b5888ed4e88c"),
-        ("scunet_color_real_psnr.onnx.data", "https://huggingface.co/Heliosoph/scunet-onnx/resolve/main/scunet_color_real_psnr.onnx.data", 73_138_176, "98825ea1210b641c71e5f052f582c70c49fd44b35387ebe2c034268c17df3feb"),
-    ]),
-];
-
-const MIRROR: &str = "https://github.com/simmmmm/Numa/releases/download/models";
-
-const PROFILES_ARCHIVE: ModelFile = (
-    "rawtherapee-dcpprofiles-5.13.tar.gz",
-    "https://github.com/simmmmm/Numa/releases/download/models/rawtherapee-dcpprofiles-5.13.tar.gz",
-    67_267_725, "482c0f664fea223028be5291a6ad1577e58d555e49f185f19f4ffacedb8f5c50",
-);
+use numa::io::models::{ModelFile, MIRROR, MODELS, PROFILES as PROFILES_ARCHIVE};
 
 const GPU_PLUGIN_WHEEL: [ModelFile; 2] = [(
     "onnxruntime_ep_webgpu-0.3.0-py3-none-manylinux_2_28_x86_64.whl",
@@ -142,7 +61,8 @@ fn unpack_wheel(wheel: &Path, dir: &Path) -> Result<(), String> {
 
 fn profiles_available() -> bool {
     let own = dcp::profiles_dir();
-    dcp::search_paths().into_iter().filter(|dir| Some(dir) != own.as_ref()).any(|dir| {
+    let numa = dcp::numa_profiles_dir();
+    dcp::search_paths().into_iter().filter(|dir| Some(dir) != own.as_ref() && Some(dir) != numa.as_ref()).any(|dir| {
         std::fs::read_dir(dir).is_ok_and(|entries| {
             entries.flatten().any(|entry| entry.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dcp")))
         })
@@ -201,7 +121,7 @@ pub(super) fn offer_additional_files(state: &App, window: &adw::ApplicationWindo
     let mut rows = vec![
         ("weather-few-clouds-symbolic", "Masks that find things for you", "The sky, greenery, buildings, water, people", files_of(&["EfficientViT-Seg B2"])),
         ("input-mouse-symbolic", "Select anything with a click", "Including things no preset has a name for", files_of(&["SlimSAM"])),
-        ("edit-cut-symbolic", "Clean edges", "Hair, fur and feathers in a subject mask", files_of(&["IS-Net", "ViTMatte-S"])),
+        ("edit-cut-symbolic", "Clean edges", "Hair, fur and feathers in a subject mask", files_of(&["BiRefNet", "ViTMatte-S"])),
         ("system-users-symbolic", "Faces and people", "Face retouching, browsing by person, and closed eyes in culling", files_of(&["YuNet", "SFace", "Open-closed eye"])),
         ("emoji-nature-symbolic", "Animals by name", "A subject mask that says Bird or Dog", files_of(&["PP-ResNet50"])),
         ("image-x-generic-symbolic", "AI denoise", "Clean high-ISO photographs, kept once worked out", files_of(&["SCUNet"])),
@@ -628,6 +548,7 @@ pub(super) fn profiles_group(
     );
     profiles.add(&download);
     let own = dcp::profiles_dir();
+    let numa_dir = dcp::numa_profiles_dir();
     for dir in dcp::search_paths() {
         let count = std::fs::read_dir(&dir)
             .map(|entries| {
@@ -642,7 +563,13 @@ pub(super) fn profiles_group(
         if !yours && count == 0 {
             continue;
         }
-        let title = if yours { "Your profiles" } else { "Found profiles" };
+        let title = if yours {
+            "Your profiles"
+        } else if Some(&dir) == numa_dir.as_ref() {
+            "Numa's own profiles"
+        } else {
+            "RawTherapee's profiles"
+        };
         let row = folder_row(title, dir);
         let label = gtk::Label::new(Some(&match count {
             1 => "1 profile".to_string(),

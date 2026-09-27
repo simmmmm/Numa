@@ -39,8 +39,6 @@ pub struct Auto {
     pub subject: Option<Basic>,
 }
 
-pub const SUBJECT_MASK: &str = "Subject";
-
 impl Auto {
 
     pub fn apply(&self, document: &mut Document) -> Option<usize> {
@@ -55,11 +53,10 @@ impl Auto {
 
         let lift = self.subject?;
         let mut masks = document.masks();
-        masks.retain(|mask| mask.name.as_deref() != Some(SUBJECT_MASK));
-        let mut mask = Mask::new(Shape::Segment { classes: super::segment::MATTEABLE.to_vec() });
+        masks.retain(|mask| !(mask.shape == Shape::Subject && !mask.inverted && mask.name.is_none()));
+        let mut mask = Mask::new(Shape::Subject);
         mask.set_matte(true);
         mask.basic = lift;
-        mask.name = Some(SUBJECT_MASK.to_string());
         masks.push(mask);
         document.set_masks(masks);
         Some(document.masks().len() - 1)
@@ -77,13 +74,17 @@ pub fn subject_mask(
         return None;
     }
 
-    let mut mask = Mask::new(Shape::Segment { classes });
+    let mut mask = Mask::new(Shape::Subject);
     mask.matte = true;
     crate::resolve_mask(&mut mask, Some(found), None, Some(frame), width, height);
     Some(mask)
 }
 
 pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
+
+    let finished = image.display_referred;
+    let shown = |value: f32| tone::shown(value, finished);
+    let scene = |display: f32| tone::scene_for(display, finished);
     let mut basic = Basic::default();
     let Some(sorted) = luminances(image, None) else {
         return Auto { basic, subject: None };
@@ -96,10 +97,11 @@ pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
         sorted[index.min(sorted.len() - 1)].max(1e-6)
     };
 
-    let brightest = tone::curve(at(HIGH));
+    let brightest = shown(at(HIGH));
     let wanted = match brightest {
-        above if above > BLOWN => Some(tone::scene_value_for(WHITE_POINT)),
-        below if below < DIM => Some(tone::scene_value_for(WHITE_POINT)),
+
+        above if above > BLOWN && !finished => Some(scene(WHITE_POINT)),
+        below if below < DIM => Some(scene(WHITE_POINT)),
         _ => None,
     };
     basic.tone.exposure = wanted
@@ -107,10 +109,15 @@ pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
         .unwrap_or(0.0);
     let gain = 2.0f32.powf(basic.tone.exposure);
 
-    basic.tone.whites = solve(|amount| display_at(at(HIGH) * gain, 0.0, amount), WHITE_POINT);
-    basic.tone.blacks = solve(|amount| display_at(at(LOW) * gain, amount, 0.0), BLACK_POINT);
+    basic.tone.whites = solve(|amount| display_at(at(HIGH) * gain, 0.0, amount, finished), WHITE_POINT);
+    basic.tone.blacks = solve(|amount| display_at(at(LOW) * gain, amount, 0.0, finished), BLACK_POINT);
 
-    let highest = display_at(at(HIGH) * gain, basic.tone.blacks, basic.tone.whites);
+    if finished {
+        basic.tone.whites = basic.tone.whites.max(0.0);
+        basic.tone.blacks = basic.tone.blacks.min(0.0);
+    }
+
+    let highest = display_at(at(HIGH) * gain, basic.tone.blacks, basic.tone.whites, finished);
     if highest > WHITE_POINT + 0.005 {
         basic.tone.highlights = solve(
             |amount| {
@@ -119,7 +126,7 @@ pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
                     b.tone.highlights = amount;
                     b.tone.whites = basic.tone.whites;
                 });
-                tone::curve(lit * ToneCurve::new(&asked).gain(lit))
+                shown(lit * ToneCurve::new(&asked).gain(lit))
             },
             WHITE_POINT,
         )
@@ -128,8 +135,8 @@ pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
 
     let subject = inside.and_then(|values| {
         let middle = values[values.len() / 2].max(1e-6) * gain;
-        let short = (tone::scene_value_for(SUBJECT_TARGET) / middle).log2();
-        let worth_it = tone::curve(middle) < SUBJECT_LOW && short >= LEAST_SUBJECT_EXPOSURE;
+        let short = (scene(SUBJECT_TARGET) / middle).log2();
+        let worth_it = shown(middle) < SUBJECT_LOW && short >= LEAST_SUBJECT_EXPOSURE;
         worth_it.then(|| Basic::with(|b| b.tone.exposure = short.min(MOST_SUBJECT_EXPOSURE)))
     });
 
@@ -169,12 +176,12 @@ fn colourfulness(image: &LinearImage) -> f32 {
     values[values.len() / 2]
 }
 
-fn display_at(lit: f32, blacks: f32, whites: f32) -> f32 {
+fn display_at(lit: f32, blacks: f32, whites: f32, finished: bool) -> f32 {
     let asked = Basic::with(|b| {
         b.tone.blacks = blacks;
         b.tone.whites = whites;
     });
-    tone::curve(lit * ToneCurve::new(&asked).gain(lit))
+    tone::shown(lit * ToneCurve::new(&asked).gain(lit), finished)
 }
 
 fn solve(measure: impl Fn(f32) -> f32, wanted: f32) -> f32 {
@@ -616,7 +623,7 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
             crate::resolve_mask(mask, found.as_ref(), None, Some(before), rw, rh)
         };
 
-        let mut probe = Mask::new(Shape::Segment { classes: crate::segment::MATTEABLE.to_vec() });
+        let mut probe = Mask::new(Shape::Subject);
         probe.matte = true;
         resolve(&mut probe);
         let subject = probe.map.0.as_deref().map(|kept| kept.to_alpha());
@@ -787,14 +794,14 @@ p50 {:.0} -> {:.0}   p99 {:.0} -> {:.0}",
     #[test]
     fn an_endpoint_that_cannot_reach_its_target_stays_put() {
 
-        let unreachable = solve(|amount| display_at(0.0004, amount, 0.0), 0.5);
+        let unreachable = solve(|amount| display_at(0.0004, amount, 0.0, false), 0.5);
         assert_eq!(unreachable, 0.0, "a target it cannot reach is not an answer");
 
-        let resting = display_at(0.9, 0.0, 0.0);
-        assert_eq!(solve(|amount| display_at(0.9, 0.0, amount), resting), 0.0);
+        let resting = display_at(0.9, 0.0, 0.0, false);
+        assert_eq!(solve(|amount| display_at(0.9, 0.0, amount, false), resting), 0.0);
 
-        let wanted = display_at(0.9, 0.0, 40.0);
-        let found = solve(|amount| display_at(0.9, 0.0, amount), wanted);
+        let wanted = display_at(0.9, 0.0, 40.0, false);
+        let found = solve(|amount| display_at(0.9, 0.0, amount, false), wanted);
         assert!((found - 40.0).abs() < 1.0, "solved to {found}, wanted 40");
     }
 

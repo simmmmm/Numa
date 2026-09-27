@@ -201,7 +201,7 @@ pub(super) fn name_selected_mask(state: &App) {
             ));
             state.editor_page.mask_crumb_label.set_text(&name);
             state.editor_page.banner_label.set_markup(&format!(
-                "These four tabs edit <b>{}</b>",
+                "These tabs edit <b>{}</b>",
                 glib::markup_escape_text(&name)
             ));
         }
@@ -459,7 +459,7 @@ pub(super) fn ensure_embedding(state: &App) {
 
         if !waiting.is_empty() {
             for index in waiting {
-                rebuild_mask_map(&state, index);
+                refill_mask_map(&state, index);
             }
             refresh_masks(&state);
             request_render(&state);

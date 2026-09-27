@@ -9,6 +9,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use numa_core::document::Document;
 use numa_cull::people;
 use crate::raw;
+pub use crate::copy::{copy_into, Copied};
+pub(crate) use crate::copy::copy_whole;
 
 pub type Measured = (i64, numa_cull::Frame, Option<u32>, Option<f32>, Vec<([f32; people::LENGTH], Option<Vec<u8>>)>);
 
@@ -609,20 +611,41 @@ pub struct Catalog {
     home_path: Option<PathBuf>,
 
     opened: RefCell<HashMap<i64, Rc<OpenLibrary>>>,
+
+    came_back: RefCell<HashMap<i64, usize>>,
 }
 
 struct OpenLibrary {
     conn: Connection,
     root: PathBuf,
+
+    offline: bool,
 }
 
 impl OpenLibrary {
+
+    fn connected(&self) -> Result<(), String> {
+        match self.offline {
+            true => Err(format!("{} is not connected", self.root.display())),
+            false => Ok(()),
+        }
+    }
+
     fn absolute(&self, stored: &str) -> PathBuf {
         self.root.join(stored)
     }
 
     fn relative(&self, path: &Path) -> String {
         path.strip_prefix(&self.root).unwrap_or(path).to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for Catalog {
+    fn drop(&mut self) {
+        let online: Vec<i64> = self.opened.borrow().iter().filter(|(_, open)| !open.offline).map(|(id, _)| *id).collect();
+        for library_id in online {
+            self.keep_for_offline(library_id);
+        }
     }
 }
 
@@ -657,7 +680,7 @@ impl Catalog {
         }
         home.execute_batch(HOME_SCHEMA).map_err(text)?;
 
-        let catalog = Self { home, home_path, opened: RefCell::new(HashMap::new()) };
+        let catalog = Self { home, home_path, opened: RefCell::new(HashMap::new()), came_back: RefCell::new(HashMap::new()) };
         if legacy {
             catalog.split_legacy()?;
         }
@@ -674,7 +697,9 @@ impl Catalog {
             .map_err(|_| format!("no library {library_id}"))?;
         let root = PathBuf::from(root);
         if !root.is_dir() {
-            return Err(format!("{} is not there — is the drive connected?", root.display()));
+            let open = Rc::new(self.open_offline(library_id, root)?);
+            self.opened.borrow_mut().insert(library_id, open.clone());
+            return Ok(open);
         }
 
         let dir = root.join(LIBRARY_DIR);
@@ -757,9 +782,184 @@ impl Catalog {
         }
         back_up_weekly(&conn, &dir);
 
-        let open = Rc::new(OpenLibrary { conn, root });
+        let open = Rc::new(OpenLibrary { conn, root, offline: false });
         self.opened.borrow_mut().insert(library_id, open.clone());
+        if let Some(merged) = self.merge_offline_marks(library_id, &open.conn) {
+            self.came_back.borrow_mut().insert(library_id, merged);
+        }
+
+        let stale = |list: &PathBuf| {
+            std::fs::metadata(list)
+                .and_then(|meta| meta.modified())
+                .map_or(true, |at| at.elapsed().map_or(true, |age| age > std::time::Duration::from_secs(24 * 3600)))
+        };
+        if self.offline_file(library_id, "db").is_some_and(|list| stale(&list)) {
+            self.keep_for_offline(library_id);
+        }
         Ok(open)
+    }
+
+    fn offline_file(&self, library_id: i64, suffix: &str) -> Option<PathBuf> {
+        let dir = self.home_path.as_ref()?.parent()?.join("offline");
+        Some(dir.join(match suffix {
+            "db" => format!("{library_id}.db"),
+            other => format!("{library_id}-{other}.db"),
+        }))
+    }
+
+    pub fn keep_for_offline(&self, library_id: i64) {
+        let Some(list) = self.offline_file(library_id, "db") else { return };
+        let Ok(open) = self.library(library_id) else { return };
+
+        if open.offline || !open.root.is_dir() {
+            return;
+        }
+        let written = (|| -> rusqlite::Result<()> {
+            let _ = std::fs::create_dir_all(list.parent().unwrap_or(Path::new(".")));
+            let partial = list.with_extension("db-new");
+            let _ = std::fs::remove_file(&partial);
+            let out = Connection::open(&partial)?;
+            out.execute_batch(
+                "CREATE TABLE photos (id INTEGER PRIMARY KEY, path TEXT NOT NULL, mtime INTEGER NOT NULL, \
+                                      taken INTEGER, thumb TEXT);",
+            )?;
+            let tx = out.unchecked_transaction()?;
+            {
+                let mut read = open.conn.prepare("SELECT id, path, mtime, taken, edits FROM photos")?;
+                let mut write = tx.prepare("INSERT INTO photos VALUES (?1, ?2, ?3, ?4, ?5)")?;
+                let mut rows = read.query([])?;
+                while let Some(row) = rows.next()? {
+                    let (id, path, mtime, taken, edits): (i64, String, i64, Option<i64>, Option<String>) =
+                        (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
+                    let thumb = crate::thumbs::largest_cached(&open.absolute(&path), mtime, edits.as_deref())
+                        .and_then(|file| Some(file.file_name()?.to_string_lossy().into_owned()));
+                    write.execute(params![id, path, mtime, taken, thumb])?;
+                }
+            }
+            tx.commit()?;
+            drop(out);
+            Ok(())
+        })()
+        .map_err(text)
+        .and_then(|()| std::fs::rename(list.with_extension("db-new"), &list).map_err(text));
+        if let Err(err) = written {
+            log::warn!("could not keep {} for when its drive is away: {err}", open.root.display());
+        }
+    }
+
+    fn open_offline(&self, library_id: i64, root: PathBuf) -> Result<OpenLibrary, String> {
+        let missing = || format!("{} is not there — is the drive connected?", root.display());
+        let list = self.offline_file(library_id, "db").filter(|list| list.is_file()).ok_or_else(missing)?;
+        let conn = Connection::open_in_memory().map_err(text)?;
+        conn.execute_batch(LIBRARY_SCHEMA).map_err(text)?;
+        conn.execute("ATTACH ?1 AS list", params![list.to_string_lossy()]).map_err(text)?;
+        conn.execute_batch("INSERT INTO photos (id, path, mtime, taken) SELECT id, path, mtime, taken FROM list.photos;")
+            .map_err(text)?;
+        {
+            let cache = crate::thumbs::cache_dir();
+            let mut stmt = conn.prepare("SELECT path, thumb FROM list.photos WHERE thumb IS NOT NULL").map_err(text)?;
+            let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(text)?;
+            for (path, thumb) in rows.flatten() {
+                crate::thumbs::stand_in(root.join(path), cache.join(thumb));
+            }
+        }
+        conn.execute_batch("DETACH list;").map_err(text)?;
+        if let Some(marks) = self.offline_file(library_id, "marks").filter(|marks| marks.is_file()) {
+            conn.execute("ATTACH ?1 AS marks", params![marks.to_string_lossy()]).map_err(text)?;
+            conn.execute_batch(
+                "UPDATE photos SET rating = (SELECT value FROM marks.marks m WHERE m.photo_id = photos.id AND kind = 'rating') \
+                   WHERE id IN (SELECT photo_id FROM marks.marks WHERE kind = 'rating'); \
+                 UPDATE photos SET flag = (SELECT value FROM marks.marks m WHERE m.photo_id = photos.id AND kind = 'flag') \
+                   WHERE id IN (SELECT photo_id FROM marks.marks WHERE kind = 'flag'); \
+                 DETACH marks;",
+            )
+            .map_err(text)?;
+        }
+        Ok(OpenLibrary { conn, root, offline: true })
+    }
+
+    fn merge_offline_marks(&self, library_id: i64, conn: &Connection) -> Option<usize> {
+        let marks = self.offline_file(library_id, "marks").filter(|marks| marks.is_file())?;
+        let merged = (|| -> rusqlite::Result<usize> {
+            conn.execute("ATTACH ?1 AS marks", params![marks.to_string_lossy()])?;
+            let tx = conn.unchecked_transaction()?;
+            let merged = tx.execute(
+                "UPDATE photos SET rating = (SELECT value FROM marks.marks m WHERE m.photo_id = photos.id AND kind = 'rating') \
+                 WHERE id IN (SELECT m.photo_id FROM marks.marks m WHERE kind = 'rating' AND m.at >= \
+                              COALESCE((SELECT MAX(d.at) FROM decisions d WHERE d.photo_id = m.photo_id), 0))",
+                [],
+            )? + tx.execute(
+                "UPDATE photos SET flag = (SELECT value FROM marks.marks m WHERE m.photo_id = photos.id AND kind = 'flag') \
+                 WHERE id IN (SELECT m.photo_id FROM marks.marks m WHERE kind = 'flag' AND m.at >= \
+                              COALESCE((SELECT MAX(d.at) FROM decisions d WHERE d.photo_id = m.photo_id), 0))",
+                [],
+            )?;
+            tx.commit()?;
+            conn.execute_batch("DETACH marks;")?;
+            Ok(merged)
+        })();
+        match merged {
+            Ok(merged) => {
+                let _ = std::fs::remove_file(&marks);
+                Some(merged)
+            }
+
+            Err(err) => {
+                log::warn!("could not bring in the marks from while {library_id} was away: {err}");
+                let _ = conn.execute_batch("DETACH marks;");
+                None
+            }
+        }
+    }
+
+    pub fn is_offline(&self, library_id: i64) -> bool {
+        self.library(library_id).is_ok_and(|open| open.offline)
+    }
+
+    pub fn reconnect(&self, library_id: i64) -> Option<usize> {
+        let cached = self.opened.borrow().get(&library_id).cloned();
+        let mut was_offline = false;
+        if let Some(open) = cached {
+            match (open.offline, open.root.is_dir()) {
+                (true, true) => {
+                    was_offline = true;
+                    crate::thumbs::forget_stand_ins(&open.root);
+                    self.opened.borrow_mut().remove(&library_id);
+                }
+                (false, false) => {
+                    self.opened.borrow_mut().remove(&library_id);
+                }
+                _ => {}
+            }
+        }
+        let open = self.library(library_id).ok()?;
+        if open.offline {
+            return None;
+        }
+        let merged = self.came_back.borrow_mut().remove(&library_id);
+        if was_offline || merged.is_some() {
+            self.keep_for_offline(library_id);
+        }
+        merged.or(was_offline.then_some(0))
+    }
+
+    fn note_offline_marks(&self, library_id: i64, rows: &[i64], kind: &str, value: i64) -> Result<(), String> {
+        let path = self.offline_file(library_id, "marks").ok_or("no place to keep marks")?;
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64);
+        let conn = Connection::open(&path).map_err(text)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS marks (photo_id INTEGER NOT NULL, kind TEXT NOT NULL, \
+                                               value INTEGER NOT NULL, at INTEGER NOT NULL, \
+                                               PRIMARY KEY (photo_id, kind));",
+        )
+        .map_err(text)?;
+        let tx = conn.unchecked_transaction().map_err(text)?;
+        for row in rows {
+            tx.execute("INSERT OR REPLACE INTO marks VALUES (?1, ?2, ?3, ?4)", params![row, kind, value, now])
+                .map_err(text)?;
+        }
+        tx.commit().map_err(text)
     }
 
     fn photo(&self, photo_id: i64) -> Result<(Rc<OpenLibrary>, i64), String> {
@@ -767,7 +967,7 @@ impl Catalog {
         Ok((self.library(library_id)?, local))
     }
 
-    fn update_each(&self, photo_ids: &[i64], sql: &str, value: impl rusqlite::ToSql) -> Result<(), String> {
+    fn update_each(&self, photo_ids: &[i64], sql: &str, value: impl rusqlite::ToSql, mark: Option<(&str, i64)>) -> Result<(), String> {
         let mut by_library: Vec<(i64, Vec<i64>)> = Vec::new();
         for &id in photo_ids {
             let (library_id, local) = split_id(id);
@@ -778,6 +978,10 @@ impl Catalog {
         }
         for (library_id, rows) in by_library {
             let open = self.library(library_id)?;
+            match mark {
+                Some((kind, value)) if open.offline => self.note_offline_marks(library_id, &rows, kind, value)?,
+                _ => open.connected()?,
+            }
             let tx = open.conn.unchecked_transaction().map_err(text)?;
             {
                 let mut stmt = tx.prepare_cached(sql).map_err(text)?;
@@ -801,7 +1005,8 @@ impl Catalog {
         }
 
         for library in self.libraries()? {
-            let Ok(open) = self.library(library.id) else { continue };
+
+            let Some(open) = self.library(library.id).ok().filter(|open| !open.offline) else { continue };
             let already: i64 = open
                 .conn
                 .query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))
@@ -998,6 +1203,7 @@ impl Catalog {
         }
         for (library_id, rows) in by_library {
             let open = self.library(library_id)?;
+            open.connected()?;
             let tx = open.conn.unchecked_transaction().map_err(text)?;
             for (photo_id, frame, faces, face_sharpness, embeddings) in rows {
                 let local = split_id(*photo_id).1;
@@ -1139,6 +1345,7 @@ impl Catalog {
 
     pub fn set_portrait(&self, face_id: i64, portrait: &[u8]) -> Result<(), String> {
         let (open, local) = self.photo(face_id)?;
+        open.connected()?;
         open.conn
             .execute("UPDATE faces SET portrait = ?1 WHERE rowid = ?2", params![portrait, local])
             .map_err(text)?;
@@ -1185,6 +1392,7 @@ impl Catalog {
         face_sharpness: Option<f32>,
     ) -> Result<(), String> {
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         write_analysis(&open.conn, local, version, frame, faces, face_sharpness)
     }
 
@@ -1250,6 +1458,7 @@ impl Catalog {
         }
         for (library_id, rows) in by_library {
             let open = self.library(library_id)?;
+            open.connected()?;
             let tx = open.conn.unchecked_transaction().map_err(text)?;
             for (photo_id, burst, best, suggested) in rows {
                 tx.execute(
@@ -1270,6 +1479,7 @@ impl Catalog {
         }
         for (library_id, rows) in by_library {
             let open = self.library(library_id)?;
+            open.connected()?;
             let tx = open.conn.unchecked_transaction().map_err(text)?;
             for (photo_id, echo) in rows {
                 tx.execute(
@@ -1285,6 +1495,7 @@ impl Catalog {
 
     pub fn remove_photo(&self, photo_id: i64) -> Result<(), String> {
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         open.conn.execute("DELETE FROM photos WHERE id = ?1", params![local]).map_err(text)?;
         Ok(())
     }
@@ -1361,6 +1572,7 @@ impl Catalog {
         libraries.dedup();
         for library_id in libraries {
             let open = self.library(library_id)?;
+            open.connected()?;
             let tx = open.conn.unchecked_transaction().map_err(text)?;
             for (photo_id, embedding) in faces.iter().filter(|(photo_id, _)| split_id(*photo_id).0 == library_id) {
                 tx.prepare_cached("INSERT INTO ignored_faces (photo_id, embedding) VALUES (?1, ?2)")
@@ -1387,6 +1599,7 @@ impl Catalog {
     pub fn name_face(&self, photo_id: i64, embedding: &[f32; people::LENGTH], name: &str) -> Result<(), String> {
         const SAME_FACE: f32 = 0.8;
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         let tx = open.conn.unchecked_transaction().map_err(text)?;
 
         let earlier: Vec<(i64, Vec<u8>)> = tx
@@ -1569,6 +1782,12 @@ impl Catalog {
 
     pub fn remove_library(&self, id: i64) -> Result<(), String> {
         self.opened.borrow_mut().remove(&id);
+
+        for suffix in ["db", "marks"] {
+            if let Some(file) = self.offline_file(id, suffix) {
+                let _ = std::fs::remove_file(file);
+            }
+        }
         self.home.execute("DELETE FROM libraries WHERE id = ?1", params![id]).map_err(text)?;
         Ok(())
     }
@@ -1580,6 +1799,7 @@ impl Catalog {
 
     pub fn known_files(&self, library: &Library) -> Result<Known, String> {
         let open = self.library(library.id)?;
+        open.connected()?;
         let mut stmt = open.conn.prepare("SELECT path, mtime, taken FROM photos").map_err(text)?;
         let rows = stmt
             .query_map([], |row| {
@@ -1591,10 +1811,12 @@ impl Catalog {
 
     pub fn apply_scan(&self, library: &Library, found: &Scan) -> Result<Changes, String> {
         let open = self.library(library.id)?;
+        open.connected()?;
 
         let tx = open.conn.unchecked_transaction().map_err(text)?;
         let mut changes = Changes::default();
         let mut seen = std::collections::HashSet::new();
+        let mut added: Vec<(i64, String, i64)> = Vec::new();
         let complete = found.complete;
 
         for (path, mtime, taken) in &found.files {
@@ -1608,6 +1830,7 @@ impl Catalog {
 
             if inserted == 1 {
                 changes.added += 1;
+                added.push((tx.last_insert_rowid(), relative.clone(), mtime));
             } else {
                 changes.updated += tx
                     .prepare_cached(
@@ -1622,20 +1845,41 @@ impl Catalog {
         }
 
         if complete && !seen.is_empty() {
-            let stale: Vec<i64> = {
-                let mut stmt = tx.prepare("SELECT id, path FROM photos").map_err(text)?;
+            let stale: Vec<(i64, String, i64)> = {
+                let mut stmt = tx.prepare("SELECT id, path, mtime FROM photos").map_err(text)?;
                 let rows = stmt
-                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))
                     .map_err(text)?;
-                rows.flatten().filter(|(_, path)| !seen.contains(path)).map(|(id, _)| id).collect()
+                rows.flatten().filter(|(_, path, _)| !seen.contains(path)).collect()
             };
 
-            for id in stale {
-                changes.removed += tx.execute("DELETE FROM photos WHERE id = ?1", params![id]).map_err(text)?;
+            let key = |path: &str, mtime: i64| (Path::new(path).file_name().map(|n| n.to_owned()), mtime);
+            let only = |rows: &[(i64, String, i64)], k: &(Option<std::ffi::OsString>, i64)| {
+                let mut matching = rows.iter().filter(|(_, path, mtime)| key(path, *mtime) == *k);
+                matching.next().filter(|_| matching.next().is_none()).cloned()
+            };
+            for (id, path, mtime) in &stale {
+                let k = key(path, *mtime);
+                match only(&added, &k).filter(|_| only(&stale, &k).is_some()) {
+                    Some((new_id, new_path, _)) => {
+                        tx.execute("DELETE FROM photos WHERE id = ?1", params![new_id]).map_err(text)?;
+                        tx.execute("UPDATE photos SET path = ?1 WHERE id = ?2", params![new_path, id])
+                            .map_err(text)?;
+                        changes.added -= 1;
+                        changes.updated += 1;
+                    }
+                    None => {
+                        changes.removed +=
+                            tx.execute("DELETE FROM photos WHERE id = ?1", params![id]).map_err(text)?;
+                    }
+                }
             }
         }
 
         tx.commit().map_err(text)?;
+        if changes.any() {
+            self.keep_for_offline(library.id);
+        }
         Ok(changes)
     }
 
@@ -1704,7 +1948,7 @@ impl Catalog {
         } else {
             "DELETE FROM album_photos WHERE album = ?1 AND photo_id = ?2"
         };
-        self.update_each(photo_ids, sql, key)
+        self.update_each(photo_ids, sql, key, None)
     }
 
     pub fn photos(&self, library_id: i64, filter: &Filter) -> Result<Vec<Photo>, String> {
@@ -1838,6 +2082,7 @@ impl Catalog {
 
     pub fn set_cull_target(&self, library_id: i64, target: Option<u32>) -> Result<(), String> {
         let open = self.library(library_id)?;
+        open.connected()?;
         match target {
             Some(target) => open.conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('cull_target', ?1) \
@@ -1855,11 +2100,11 @@ impl Catalog {
     }
 
     pub fn set_ratings(&self, photo_ids: &[i64], rating: u8) -> Result<(), String> {
-        self.update_each(photo_ids, "UPDATE photos SET rating = ?1 WHERE id = ?2", rating.min(5))
+        self.update_each(photo_ids, "UPDATE photos SET rating = ?1 WHERE id = ?2", rating.min(5), Some(("rating", rating.min(5) as i64)))
     }
 
     pub fn set_flags(&self, photo_ids: &[i64], flag: Flag) -> Result<(), String> {
-        self.update_each(photo_ids, "UPDATE photos SET flag = ?1 WHERE id = ?2", flag.to_i64())
+        self.update_each(photo_ids, "UPDATE photos SET flag = ?1 WHERE id = ?2", flag.to_i64(), Some(("flag", flag.to_i64())))
     }
 
     pub fn edits_json(&self, photo_id: i64) -> Result<Option<String>, String> {
@@ -1900,6 +2145,7 @@ impl Catalog {
 
     pub fn save_history(&self, photo_id: i64, states: &[Document], position: usize) -> Result<(), String> {
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         let json = serde_json::to_string(states).map_err(text)?;
         open.conn
             .execute(
@@ -1926,6 +2172,7 @@ impl Catalog {
         let json = serde_json::to_string(document).map_err(text)?;
         let created = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         open.conn
             .execute(
                 "INSERT INTO snapshots (photo_id, name, created, edits) VALUES (?1, ?2, ?3, ?4)",
@@ -1951,6 +2198,7 @@ impl Catalog {
     pub fn rename_snapshot(&self, photo_id: i64, from: &str, to: &str) -> Result<(), String> {
         let to = snapshot_name(to)?;
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         open.conn
             .execute("UPDATE snapshots SET name = ?1 WHERE photo_id = ?2 AND name = ?3", params![to, local, from])
             .map_err(|err| taken(err, to))?;
@@ -1959,6 +2207,7 @@ impl Catalog {
 
     pub fn delete_snapshot(&self, photo_id: i64, name: &str) -> Result<(), String> {
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         open.conn
             .execute("DELETE FROM snapshots WHERE photo_id = ?1 AND name = ?2", params![local, name])
             .map_err(text)?;
@@ -1971,6 +2220,7 @@ impl Catalog {
             false => Some(serde_json::to_string(document).map_err(text)?),
         };
         let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
         open.conn.execute("UPDATE photos SET edits = ?1 WHERE id = ?2", params![json, local]).map_err(text)?;
         Ok(())
     }
@@ -2164,68 +2414,6 @@ fn mtime_secs(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Copied {
-    pub photos: usize,
-
-    pub existing: Vec<String>,
-    pub failed: Vec<String>,
-}
-
-pub fn copy_into(dropped: &[PathBuf], folder: &Path) -> Copied {
-    let mut copied = Copied::default();
-    let mut pending: Vec<(PathBuf, PathBuf)> =
-        dropped.iter().filter_map(|from| Some((from.clone(), folder.join(from.file_name()?)))).collect();
-
-    while let Some((from, to)) = pending.pop() {
-        let name = || to.strip_prefix(folder).unwrap_or(&to).display().to_string();
-        if from.is_dir() {
-
-            if folder.starts_with(&from) || from.file_name().is_some_and(|name| name == LIBRARY_DIR) {
-                continue;
-            }
-            let Ok(entries) = std::fs::read_dir(&from) else {
-                copied.failed.push(name());
-                continue;
-            };
-            pending.extend(entries.flatten().map(|entry| (entry.path(), to.join(entry.file_name()))));
-        } else if raw::is_supported(&from) {
-            if to.exists() {
-                if from != to {
-                    copied.existing.push(name());
-                }
-                continue;
-            }
-            match copy_whole(&from, &to) {
-                Ok(()) => copied.photos += 1,
-                Err(err) => {
-                    log::warn!("{}: {err}", from.display());
-                    copied.failed.push(name());
-                }
-            }
-        }
-    }
-    copied
-}
-
-pub(crate) fn copy_whole(from: &Path, to: &Path) -> std::io::Result<()> {
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut part = to.as_os_str().to_owned();
-    part.push(".part");
-    let part = PathBuf::from(part);
-    let result = std::fs::copy(from, &part).and_then(|_| {
-        let modified = std::fs::metadata(from)?.modified()?;
-        std::fs::File::options().write(true).open(&part)?.set_modified(modified)?;
-        std::fs::rename(&part, to)
-    });
-    if result.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    result
-}
-
 fn walk_images(root: &Path) -> (Vec<PathBuf>, bool) {
     let mut found = Vec::new();
     let mut complete = true;
@@ -2298,6 +2486,66 @@ mod tests {
         assert!(refused.unwrap_err().contains("cannot create"));
         assert!(catalog.libraries().unwrap().is_empty());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_library_away_is_shown_from_home_and_its_marks_follow_it_back() {
+        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        let home = temp_dir("offline-home").join("catalog.db");
+        let root = temp_dir("offline-library");
+        let away = std::env::temp_dir().join("numa-test-offline-library-away");
+        let _ = std::fs::remove_dir_all(&away);
+        for name in ["a.RAF", "b.RAF"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let catalog = Catalog::open(&home).unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let id = |name: &str| photos.iter().find(|photo| photo.path.ends_with(name)).unwrap().id;
+        let a = photos.iter().find(|photo| photo.path.ends_with("a.RAF")).unwrap().clone();
+        catalog.set_rating(id("a.RAF"), 2).unwrap();
+        crate::thumbs::store(&a.path, a.mtime, 1920, None, &image::RgbImage::new(4, 3));
+        assert!(!catalog.is_offline(library.id));
+        drop(catalog);
+
+        std::fs::rename(&root, &away).unwrap();
+        let catalog = Catalog::open(&home).unwrap();
+        assert!(catalog.is_offline(library.id));
+        let shown = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert_eq!(shown.len(), 2, "the photographs are still there to look at");
+        assert!(shown.iter().all(|photo| photo.rating == 0), "the catalog's marks stay on the drive");
+        assert!(crate::thumbs::cached(&a.path, a.mtime, 640, None).is_some(), "the cached thumbnail stands in");
+
+        catalog.set_rating(id("a.RAF"), 4).unwrap();
+        catalog.set_flag(id("b.RAF"), Flag::Picked).unwrap();
+        assert!(catalog.save_edits(id("a.RAF"), &Document::new("a".into())).is_err(), "no edits without the file");
+        assert!(catalog.apply_scan(&library, &Scan::default()).is_err(), "and no rescan");
+        let marks = home.parent().unwrap().join("offline").join(format!("{}-marks.db", library.id));
+        assert!(marks.exists(), "the marks are kept at home");
+        drop(catalog);
+        let catalog = Catalog::open(&home).unwrap();
+        let shown = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert_eq!(shown.iter().find(|photo| photo.id == id("a.RAF")).unwrap().rating, 4, "and outlive a restart");
+        assert!(!root.exists(), "nothing is created where an unplugged drive would be");
+
+        Connection::open(away.join(LIBRARY_DIR).join("catalog.db"))
+            .unwrap()
+            .execute("INSERT INTO decisions (photo_id, at, action) VALUES (?1, 4102444800, 'reject')", params![split_id(id("b.RAF")).1])
+            .unwrap();
+        std::fs::rename(&away, &root).unwrap();
+        assert_eq!(catalog.reconnect(library.id), Some(1), "one mark in; the later decision stands");
+        assert_eq!(catalog.reconnect(library.id), None, "said once");
+        assert!(!catalog.is_offline(library.id));
+        assert!(!marks.exists(), "the temporary marks are gone");
+        let back = catalog.photos(library.id, &Filter::default()).unwrap();
+        let of = |name: &str| back.iter().find(|photo| photo.path.ends_with(name)).unwrap().clone();
+        assert_eq!(of("a.RAF").rating, 4);
+        assert_eq!(of("b.RAF").flag, Flag::None);
+        drop(catalog);
+        for dir in [root, home.parent().unwrap().to_path_buf()] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -3220,6 +3468,45 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
             1,
             "an unreadable library must not empty the catalog"
         );
+    }
+
+    #[test]
+    fn a_folder_moved_inside_a_library_keeps_its_work() {
+        let root = temp_dir("moved-inside");
+        std::fs::create_dir_all(root.join("day1")).unwrap();
+        for name in ["a.RAF", "b.RAF"] {
+            std::fs::write(root.join("day1").join(name), b"x").unwrap();
+        }
+        std::fs::write(root.join("c.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let a = photos.iter().find(|p| p.path.ends_with("day1/a.RAF")).unwrap().id;
+        catalog.set_rating(a, 4).unwrap();
+        let mut edited = Document::new(String::new());
+        edited.set_basic(Basic::with(|b| b.tone.exposure = 0.5));
+        catalog.save_edits(a, &edited).unwrap();
+        let c = photos.iter().find(|p| p.path.ends_with("c.RAF")).unwrap().id;
+
+        std::fs::rename(root.join("day1"), root.join("Day one")).unwrap();
+
+        std::fs::remove_file(root.join("c.RAF")).unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("other").join("c.RAF"), b"y").unwrap();
+        let later = UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000);
+        std::fs::File::options().write(true).open(root.join("other").join("c.RAF")).unwrap().set_modified(later).unwrap();
+
+        let changes = catalog.apply_scan(&library, &scan(&root, &Known::new())).unwrap();
+        assert_eq!(changes, Changes { added: 1, updated: 2, removed: 1 });
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let moved = photos.iter().find(|p| p.id == a).expect("the same row, at its new path");
+        assert!(moved.path.ends_with("Day one/a.RAF"));
+        assert_eq!(moved.rating, 4);
+        assert!(catalog.load_edits(a).unwrap().is_some(), "its edits came along");
+        assert!(photos.iter().all(|p| p.id != c), "c.RAF went, and a different c.RAF is new");
+        assert_eq!(photos.len(), 3);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

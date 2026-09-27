@@ -139,7 +139,8 @@ pub(super) fn choose_place(state: &App, place: Place) {
             }
         }
     };
-    if unchanged {
+
+    if unchanged && !state.grid.stale.replace(false) {
         return;
     }
 

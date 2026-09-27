@@ -69,8 +69,11 @@ pub fn save(photo: &Path, denoised: &Denoised) -> Result<(), String> {
 }
 
 fn write_at(path: &Path, denoised: &Denoised) -> Result<(), String> {
-    std::fs::create_dir_all(dir()).map_err(|err| err.to_string())?;
-    let part = path.with_extension("part");
+    std::fs::create_dir_all(path.parent().map(Path::to_path_buf).unwrap_or_else(dir)).map_err(|err| err.to_string())?;
+
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = path.with_extension(format!("{}-{n}.part", std::process::id()));
     let file = std::fs::File::create(&part).map_err(|err| err.to_string())?;
     encode(denoised, std::io::BufWriter::new(file))?;
     std::fs::rename(&part, &path).map_err(|err| err.to_string())
@@ -86,6 +89,24 @@ pub fn encode(denoised: &Denoised, writer: impl std::io::Write) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_writers_at_once_leave_a_whole_frame() {
+        let folder = std::env::temp_dir().join(format!("numa-denoised-{}", std::process::id()));
+        let path = folder.join("frame.png");
+        let frames: Vec<Denoised> = (0..2u16).map(|v| Denoised::from_pixel(512, 512, image::Rgb([v * 30000; 3]))).collect();
+        std::thread::scope(|scope| {
+            for frame in &frames {
+                for _ in 0..4 {
+                    scope.spawn(|| write_at(&path, frame).unwrap());
+                }
+            }
+        });
+        let read = image::open(&path).unwrap().into_rgb16();
+        assert!(frames.iter().any(|frame| *frame == read), "a frame that is one of the two");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1, "no .part left behind");
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn the_key_follows_the_file() {

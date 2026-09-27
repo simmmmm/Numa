@@ -59,6 +59,12 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
                 rescan_everywhere(&state);
                 return;
             }
+
+            follow_drive(&state);
+            if state.catalog.is_offline(library.id) {
+                state.toast(&format!("{} is not connected — a rescan waits until it is back", library.label()));
+                return;
+            }
             sync_in_background(&state, vec![library], |state, added| {
                 reload_grid(state);
                 state.toast(&format!("Rescanned: {added} new photo(s)"));
@@ -245,6 +251,8 @@ fn build_header_menu() -> gtk::MenuButton {
     let menu_button = gtk::MenuButton::new();
     menu_button.set_menu_model(Some(&menu));
     menu_button.set_icon_name("open-menu-symbolic");
+
+    menu_button.set_tooltip_text(Some("Main Menu"));
     menu_button
 }
 
@@ -266,18 +274,114 @@ pub(super) fn show_about(parent: Option<&gtk::Window>, state: Option<&App>) {
     about.set_developers(&["Tijmen"]);
     about.set_version(env!("CARGO_PKG_VERSION"));
 
-    about.add_legal_section(
-        "Camera profiles",
-        Some("RawTherapee's DCP profiles, most by Maciej Dworak"),
-        gtk::License::Gpl30,
-        None,
-    );
+    add_legal_sections(&about);
+
+    about.add_link("Third-Party Licences", LICENCES_LINK);
+    about.add_link("Model Licences", MODELS_LINK);
+    about.connect_activate_link(|about, link| {
+        let (title, text) = match link {
+            LICENCES_LINK => ("Third-Party Licences", include_str!("../../../data/THIRD_PARTY_LICENSES.txt")),
+            MODELS_LINK => ("Model Licences", include_str!("../../../data/MODELS-LICENSES.txt")),
+            _ => return false,
+        };
+        show_text(about, title, text);
+        true
+    });
 
     about.set_debug_info(&debug_info(state));
     about.set_debug_info_filename("numa-debug-info.txt");
     about.set_issue_url("https://github.com/simmmmm/Numa/issues/new");
 
     about.present(parent);
+}
+
+const LICENCES_LINK: &str = "numa:third-party-licences";
+const MODELS_LINK: &str = "numa:model-licences";
+
+fn show_text(over: &adw::AboutDialog, title: &str, text: &str) {
+    let view = gtk::TextView::new();
+    view.set_editable(false);
+    view.set_monospace(true);
+    view.set_wrap_mode(gtk::WrapMode::WordChar);
+    view.set_left_margin(12);
+    view.set_right_margin(12);
+    view.set_top_margin(12);
+    view.set_bottom_margin(12);
+    view.buffer().set_text(text);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_child(Some(&view));
+    let bar = adw::ToolbarView::new();
+    bar.add_top_bar(&adw::HeaderBar::new());
+    bar.set_content(Some(&scroll));
+    let dialog = adw::Dialog::new();
+    dialog.set_title(title);
+    dialog.set_content_width(720);
+    dialog.set_content_height(640);
+    dialog.set_child(Some(&bar));
+    dialog.present(Some(over));
+}
+
+fn add_legal_sections(about: &adw::AboutDialog) {
+    about.set_copyright("© 2026 Tijmen");
+    about.set_license(
+        "PolyForm Noncommercial License 1.0.0: free for any noncommercial purpose. \
+         <a href=\"https://polyformproject.org/licenses/noncommercial/1.0.0\">Read the licence</a>",
+    );
+
+    about.add_legal_section(
+        "rawler",
+        Some("Daniel Vogelbacher, Pedro Côrte-Real and the dnglab contributors"),
+        gtk::License::Lgpl21Only,
+        None,
+    );
+    about.add_legal_section(
+        "LensFun lens database",
+        Some("The LensFun community"),
+        gtk::License::Custom,
+        Some(
+            "Creative Commons Attribution-ShareAlike 3.0. \
+             <a href=\"https://creativecommons.org/licenses/by-sa/3.0/\">Read the licence</a>",
+        ),
+    );
+
+    about.add_legal_section("lenscorrect-ofx (MODELS.md)", Some("Murtaza Tunio"), gtk::License::MitX11, None);
+    about.add_legal_section("ONNX Runtime", Some("Microsoft Corporation"), gtk::License::MitX11, None);
+    about.add_legal_section("ort", Some("pyke.io"), gtk::License::MitX11, None);
+
+    about.add_legal_section(
+        "option-ext",
+        Some("Simon Ochsenreither"),
+        gtk::License::Custom,
+        Some("Mozilla Public License 2.0; its source is at <a href=\"https://github.com/soc/option-ext\">github.com/soc/option-ext</a>. <a href=\"https://mozilla.org/MPL/2.0/\">Read the licence</a>"),
+    );
+    about.add_legal_section(
+        "webpki-root-certs",
+        Some("The rustls project, from Mozilla's root certificates"),
+        gtk::License::Custom,
+        Some("Community Data License Agreement – Permissive 2.0. <a href=\"https://cdla.dev/permissive-2-0/\">Read the licence</a>"),
+    );
+    about.add_legal_section(
+        "ONNX Runtime WebGPU plugin",
+        Some("Microsoft Corporation · downloaded separately, with its third-party notices"),
+        gtk::License::MitX11,
+        None,
+    );
+
+    about.add_legal_section(
+        "Camera profiles",
+        Some("RawTherapee's DCP profiles, most by Maciej Dworak · downloaded separately"),
+        gtk::License::Gpl30,
+        None,
+    );
+
+    for (name, description, _) in numa::io::models::MODELS {
+        let author = numa::io::models::AUTHORS.iter().find(|(model, _)| *model == name).map_or("", |(_, author)| author);
+        let licence = match numa::io::models::licence(description) {
+            "MIT" => gtk::License::MitX11,
+            _ => gtk::License::Apache20,
+        };
+        about.add_legal_section(&format!("{name} model"), Some(&format!("{author} · downloaded separately")), licence, None);
+    }
 }
 
 pub(super) fn debug_info(state: Option<&App>) -> String {
@@ -296,7 +400,7 @@ pub(super) fn debug_info(state: Option<&App>) -> String {
     for (name, installed) in [
         ("Found masks (EfficientViT)", numa::render::segment::is_installed()),
         ("Click to select (SlimSAM)", numa::render::sam::is_installed()),
-        ("Clean edges (IS-Net)", numa::render::matte::is_installed()),
+        ("Clean edges (BiRefNet)", numa::render::matte::is_installed()),
         ("Faces (YuNet)", numa::cull::faces::is_installed()),
         ("People (SFace)", numa::cull::people::is_installed()),
         ("Animals (PP-ResNet50)", numa::render::classify::is_installed()),

@@ -7,6 +7,7 @@ pub mod effects;
 pub mod align;
 pub mod beautify;
 pub mod bracket;
+pub mod closed_form;
 pub mod classify;
 pub mod histogram;
 pub mod local;
@@ -16,6 +17,7 @@ pub mod range;
 pub mod remove;
 pub mod retouch;
 pub mod sam;
+pub mod scope;
 pub mod segment;
 
 use image::RgbImage;
@@ -79,7 +81,17 @@ pub fn to_working_space<'a>(
     let balance = document.white_balance;
 
     let Some(profile) = source.profile.clone() else {
-        return source.into_owned();
+
+        let mut image = source.into_owned();
+        if let Some(matrix) = ColourSpace::Srgb.convert_to(document.working_space) {
+            image.data.par_chunks_exact_mut(3).for_each(|pixel| {
+                let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
+                for (channel, row) in pixel.iter_mut().zip(matrix.iter()) {
+                    *channel = (row[0] * r + row[1] * g + row[2] * b).max(0.0);
+                }
+            });
+        }
+        return image;
     };
 
     let mut data = match &mut source {
@@ -208,49 +220,49 @@ pub fn resolve_mask(
     if let Shape::ColourRange { hue, spread, saturation, picked } = mask.shape {
         let Some(frame) = frame else { return };
 
-        let ranged = match picked {
+        let mut ranged = match picked {
             true => range::colour(frame, hue, spread, saturation, width, height),
             false => Alpha::new(width, height, vec![0.0; width * height]),
         };
+        if !cut_out(mask, &mut ranged, found) {
+            return;
+        }
         mask.unshaped = Pixels::of(&ranged);
         mask.reshape_edge(width, height);
         return;
     }
     if let Shape::LuminanceRange { low, high, softness, picked } = mask.shape {
         let Some(frame) = frame else { return };
-        let ranged = match picked {
+        let mut ranged = match picked {
             true => range::luminance(frame, low, high, softness, width, height),
             false => Alpha::new(width, height, vec![0.0; width * height]),
         };
+        if !cut_out(mask, &mut ranged, found) {
+            return;
+        }
         mask.unshaped = Pixels::of(&ranged);
         mask.reshape_edge(width, height);
+        return;
+    }
+
+    if !mask.minus.is_empty() && mask.cut.0.is_none() && found.is_none() {
         return;
     }
 
     let mut matted = false;
     let base = match (&mask.shape, found) {
         (Shape::Segment { classes }, Some(segmentation)) => {
-
-            let live: Vec<u16> =
-                classes.iter().copied().filter(|class| !mask.muted.contains(class)).collect();
-            let named = segmentation.alpha(&live);
-
-            let empty = !segment::named_something(&named);
-            let matteable = live.iter().any(|class| segment::MATTEABLE.contains(class));
-            match empty && matteable {
-                true => match matte::subject(segmentation.photo(), width, height) {
-                    Some(subject) => {
-
-                        matted = true;
-                        Some(subject)
-                    }
-                    None => Some(named),
-                },
-                false => Some(named),
-            }
+            let (named, from_matte) = named_or_matted(mask, classes, segmentation, width, height);
+            matted = from_matte;
+            Some(named)
+        }
+        (Shape::Subject, Some(segmentation)) => {
+            let (subject, from_matte) = the_subject(segmentation, width, height);
+            matted = from_matte;
+            Some(subject)
         }
 
-        (Shape::Segment { .. }, None) => return,
+        (Shape::Segment { .. } | Shape::Subject, None) => return,
         _ => None,
     };
 
@@ -274,12 +286,80 @@ pub fn resolve_mask(
     let alpha = mask.rasterise(base.as_ref(), &regions, width, height);
 
     let photo = found.map(segment::Segmentation::photo).filter(|_| !matted);
-    let (alpha, from_matte) = search_edge(mask, alpha, named, |coarse| matte::refine(photo?, coarse));
+    let (mut alpha, from_matte) = search_edge(mask, alpha, named, |coarse| matte::refine(photo?, coarse));
+    cut_out(mask, &mut alpha, found);
 
     mask.matted = from_matte || matted;
 
     mask.unshaped = Pixels::of(&alpha);
     mask.reshape_edge(width, height);
+}
+
+fn named_or_matted(
+    mask: &Mask,
+    classes: &[u16],
+    segmentation: &segment::Segmentation,
+    width: usize,
+    height: usize,
+) -> (Alpha, bool) {
+
+    let live: Vec<u16> =
+        classes.iter().copied().filter(|class| !mask.muted.contains(class)).collect();
+    let named = segmentation.alpha(&live);
+
+    let empty = nothing_named(segmentation, &live, &named);
+    let matteable = live.iter().any(|class| segment::MATTEABLE.contains(class));
+    match empty && matteable {
+
+        true => match matte::subject(segmentation.photo(), width, height) {
+            Some(subject) => (subject, true),
+            None => (named, false),
+        },
+        false => (named, false),
+    }
+}
+
+fn the_subject(segmentation: &segment::Segmentation, width: usize, height: usize) -> (Alpha, bool) {
+    match matte::subject(segmentation.photo(), width, height) {
+        Some(subject) => (subject, true),
+        None => (segmentation.alpha(&segment::MATTEABLE), false),
+    }
+}
+
+fn nothing_named(segmentation: &segment::Segmentation, live: &[u16], named: &Alpha) -> bool {
+    let found = segmentation.found().iter().any(|thing| thing.classes.iter().any(|class| live.contains(class)));
+    !found || !segment::named_something(named)
+}
+
+fn cut_out(mask: &mut Mask, alpha: &mut Alpha, found: Option<&segment::Segmentation>) -> bool {
+    if mask.minus.is_empty() {
+        return true;
+    }
+    if mask.cut.0.is_none() {
+        let Some(segmentation) = found else { return false };
+        let named = segmentation.alpha(&mask.minus);
+        let cut = match mask.minus.iter().any(|class| segment::MATTEABLE.contains(class)) {
+            false => named,
+            true if !segment::named_something(&named) => {
+                matte::subject(segmentation.photo(), alpha.width, alpha.height).unwrap_or(named)
+            }
+
+            true => match matte::refine(segmentation.photo(), &named) {
+                Some(refined) if share_of(&refined) >= share_of(&named) * 0.5 => refined,
+                _ => named,
+            },
+        };
+        mask.cut = Pixels::of(&cut);
+    }
+    let Some(cut) = mask.cut.0.as_deref() else { return false };
+    let (width, height) = (alpha.width, alpha.height);
+    alpha.data.par_chunks_mut(width.max(1)).enumerate().for_each(|(y, row)| {
+        let v = (y as f32 + 0.5) / height as f32;
+        for (x, value) in row.iter_mut().enumerate() {
+            *value *= 1.0 - cut.sample((x as f32 + 0.5) / width as f32, v);
+        }
+    });
+    true
 }
 
 fn share_of(alpha: &Alpha) -> f64 {
@@ -313,7 +393,7 @@ fn search_edge(
     (refined, true)
 }
 
-fn mask_geometry(document: &Document) -> Document {
+pub fn mask_geometry(document: &Document) -> Document {
     let mut geometry = Document::new(document.source.path.clone());
     geometry.set_perspective(document.perspective());
     if let Some((rect, angle)) = document.crop() {
@@ -342,10 +422,10 @@ pub fn refine_finely(mask: &mut Mask, frame: &RgbImage) -> bool {
     true
 }
 
-fn models_needed(masks: &[Mask]) -> (bool, bool) {
+pub fn models_needed(masks: &[Mask]) -> (bool, bool) {
     let semantic = masks
         .iter()
-        .any(|mask| matches!(mask.shape, Shape::Segment { .. }) || !mask.points.is_empty());
+        .any(|mask| mask.shape.is_found() || !mask.points.is_empty() || !mask.minus.is_empty());
     let prompt = masks.iter().any(|mask| !mask.points.is_empty());
     (semantic, prompt)
 }
@@ -366,6 +446,12 @@ pub fn with_masks_resolved(document: &Document, source: &LinearImage) -> Documen
     let found = wants_model.then(|| segment::of(&frame)).flatten();
 
     let clicked = wants_prompt.then(|| sam::encode(&frame)).flatten();
+
+    if let Some(embedding) = &clicked {
+        for point in masks.iter().flat_map(|mask| &mask.points).filter(|point| point.enabled) {
+            embedding.look_closer(point.at[0], point.at[1]);
+        }
+    }
 
     let (width, height) = raster_size(frame.width(), frame.height(), MASK_RASTER);
 
@@ -468,8 +554,43 @@ fn pixels<'a, T: Sample>(
 where
     image::Rgb<T>: image::Pixel<Subpixel = T>,
 {
+    let working = working.into();
+    let display_referred = working.display_referred;
     let (data, width, height) = finished(document, working, detail_scale, region, tone);
-    encode(width, height, &data, &document.curves(), document.working_space, document.output_space)
+    let lut = lut_of(document);
+    encode(width, height, &data, &document.curves(), document.working_space, document.output_space, display_referred, lut.as_ref())
+}
+
+fn lut_of(document: &Document) -> Option<(std::sync::Arc<numa_core::lut::Lut>, f32)> {
+    let choice = document.lut.as_ref().filter(|choice| choice.amount > 0.0)?;
+    Some((load_lut(&choice.name)?, (choice.amount / 100.0).min(1.0)))
+}
+
+pub fn load_lut(name: &str) -> Option<std::sync::Arc<numa_core::lut::Lut>> {
+    use std::sync::{Arc, Mutex};
+    type Kept = Vec<(String, std::time::SystemTime, Arc<numa_core::lut::Lut>)>;
+    static KEPT: Mutex<Kept> = Mutex::new(Vec::new());
+
+    if std::path::Path::new(name).file_name().and_then(|file| file.to_str()) != Some(name) {
+        return None;
+    }
+    let path = numa_core::paths::luts_dir().join(name);
+    let modified = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, _, lut)) = kept.iter().find(|(was, at, _)| was == name && *at == modified) {
+        return Some(lut.clone());
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let lut = match numa_core::lut::Lut::parse(name, &text) {
+        Ok(lut) => Arc::new(lut),
+        Err(err) => {
+            log::warn!("the LUT {name} does not read: {err}");
+            return None;
+        }
+    };
+    kept.retain(|(was, _, _)| was != name);
+    kept.push((name.to_string(), modified, lut.clone()));
+    Some(lut)
 }
 
 struct Passes {
@@ -522,7 +643,13 @@ fn finished<'a>(
     let mut data = take_pixels(&mut working);
     let working = &*working;
 
-    let basic = document.basic();
+    let mut basic = document.basic();
+
+    if working.display_referred {
+        let rest = numa_core::document::Detail::default();
+        basic.detail.sharpen = (basic.detail.sharpen - rest.sharpen).max(0.0);
+        basic.detail.denoise_colour = (basic.detail.denoise_colour - rest.denoise_colour).max(0.0);
+    }
     let (width, height) = (working.width as usize, working.height as usize);
     let weights = document.working_space.luminance_weights();
     match measuring {
@@ -539,7 +666,7 @@ fn finished<'a>(
     passes.mark("operations");
 
     let (point, space) = (working.white_point, document.working_space);
-    apply_masks(document, &mut data, width, height, region, point, space, detail_scale);
+    apply_masks(document, &mut data, width, height, region, point, space, detail_scale, working.display_referred);
 
     passes.mark("masks");
 
@@ -709,6 +836,7 @@ pub fn develop_hdr<'a>(
     detail_scale: f32,
 ) -> (RgbImage, Vec<f32>) {
     let working = to_working_space(document, source, inputs);
+    let display_referred = working.display_referred;
     let (data, width, height) = match geometry_of(document, &working) {
         Some(geometry) => {
             drop(working);
@@ -717,7 +845,8 @@ pub fn develop_hdr<'a>(
         None => finished(document, working, detail_scale, WHOLE_FRAME, local::Tone::Own),
     };
     let curves = document.curves();
-    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space);
+    let lut = lut_of(document);
+    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space, display_referred, lut.as_ref());
     let shape = shaper(&curves);
     let weights = document.working_space.luminance_weights();
     let ceiling = HDR_STOPS.exp2();
@@ -729,7 +858,7 @@ pub fn develop_hdr<'a>(
                 return 1.0;
             }
             let sdr: f32 = (0..3)
-                .map(|channel| weights[channel] * ColourSpace::Srgb.decode(shape(channel, tone::curve(pixel[channel]).clamp(0.0, 1.0))))
+                .map(|channel| weights[channel] * ColourSpace::Srgb.decode(shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))))
                 .sum();
             (scene.min(ceiling) / sdr.max(1e-6)).max(1.0)
         })
@@ -835,17 +964,26 @@ fn apply_masks(
     white_point: Option<numa_core::color::WhiteBalance>,
     space: ColourSpace,
     detail_scale: f32,
+    display_referred: bool,
 ) {
 
     let map = document.masks_map.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-    for mask in document.masks() {
+    let masks = document.masks();
+    for (index, mask) in masks.iter().enumerate() {
         if mask.is_idle() || mask.covers_nothing() {
             continue;
         }
 
-        let field = mask.field_through(width, height, region, map);
+        let field = numa_core::mask::field_among(&masks, index, width, height, region, map);
 
         let Some((top, bottom)) = rows_to_work(&mask.basic, &field, width, height) else { continue };
+
+        let rows = [
+            region[0],
+            region[1] + region[3] * top as f32 / height as f32,
+            region[2],
+            region[3] * (bottom + 1 - top) as f32 / height as f32,
+        ];
         let height = bottom + 1 - top;
         let (start, end) = (top * width * 3, (bottom + 1) * width * 3);
         let field = &field[top * width..(bottom + 1) * width];
@@ -897,6 +1035,14 @@ fn apply_masks(
         detail::moire(&mut local, width, height, mask.basic.detail.moire / 100.0, detail_scale);
 
         apply_basic(&mask.basic, &mut local);
+
+        if !mask.mixer.colour_is_identity() {
+            let looks = [Look::new(Table::resolve(&mask.mixer.table(), 0.0)).in_space(space)];
+            apply_looks(&looks, &mut local);
+        }
+        if !mask.point_colours.is_identity() {
+            apply_point_colours(&mask.point_colours, space, &mut local);
+        }
         local::tone_map(
             &mut local,
             width,
@@ -907,15 +1053,7 @@ fn apply_masks(
             local::Tone::Own,
         );
 
-        if !mask.curve.is_identity() {
-            let table = mask.curve.lookup();
-            local.par_chunks_exact_mut(3).for_each(|pixel| {
-                for channel in pixel.iter_mut() {
-                    let display = numa_core::tone::curve(*channel).clamp(0.0, 1.0);
-                    *channel = numa_core::tone::scene_value_for(through(&table, display));
-                }
-            });
-        }
+        finish_mask(&mask, &mut local, width, height, rows, space, detail_scale, display_referred);
 
         data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
             let weight = field[index];
@@ -928,6 +1066,80 @@ fn apply_masks(
             }
         });
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_mask(
+    mask: &numa_core::mask::Mask,
+    local: &mut [f32],
+    width: usize,
+    height: usize,
+    rows: [f32; 4],
+    space: ColourSpace,
+    detail_scale: f32,
+    display_referred: bool,
+) {
+
+    let channels = mask.channel_curves.iter().any(|curve| !curve.is_identity());
+    if !mask.curve.is_identity() || channels {
+        let table = mask.curve.lookup();
+        let tables = mask.channel_curves.each_ref().map(Curve::lookup);
+        local.par_chunks_exact_mut(3).for_each(|pixel| {
+            for (index, channel) in pixel.iter_mut().enumerate() {
+                let display = numa_core::tone::shown(*channel, display_referred).clamp(0.0, 1.0);
+                let shaped = through(&tables[index], through(&table, display));
+                *channel = numa_core::tone::scene_for(shaped, display_referred);
+            }
+        });
+    }
+
+    let weights = space.luminance_weights();
+    if mask.mixer.monochrome {
+        local.par_chunks_exact_mut(3).for_each(|pixel| {
+            let rgb = [pixel[0], pixel[1], pixel[2]];
+            let luminance = rgb[0] * weights[0] + rgb[1] * weights[1] + rgb[2] * weights[2];
+            pixel.fill(luminance * mask.mixer.grey_gain(rgb));
+        });
+    }
+    if !mask.grading.is_identity() {
+        local.par_chunks_exact_mut(3).for_each(|pixel| {
+            let graded = mask.grading.apply([pixel[0], pixel[1], pixel[2]]);
+            pixel.copy_from_slice(&graded);
+        });
+    }
+    if !mask.colour.is_identity() {
+        tint(local, mask.colour, weights);
+    }
+    if mask.basic.effects.grain > 0.0 {
+        let frame = [width as f32 / rows[2].max(1e-6), (height as f32) / rows[3].max(1e-6)];
+        let full = frame.map(|edge| edge / detail_scale.max(1e-6));
+        let effects = &mask.basic.effects;
+        effects::grain(local, width, height, rows, full, [effects.grain, effects.grain_size, effects.grain_roughness], weights);
+    }
+}
+
+fn tint(data: &mut [f32], colour: numa_core::mask::Tint, weights: [f32; 3]) {
+    let hue = colour.hue.rem_euclid(360.0) / 60.0;
+    let x = 1.0 - (hue.rem_euclid(2.0) - 1.0).abs();
+    let rgb = match hue as u32 {
+        0 => [1.0, x, 0.0],
+        1 => [x, 1.0, 0.0],
+        2 => [0.0, 1.0, x],
+        3 => [0.0, x, 1.0],
+        4 => [x, 0.0, 1.0],
+        _ => [1.0, 0.0, x],
+    };
+
+    let linear = rgb.map(|value: f32| ColourSpace::Srgb.decode(value));
+    let own = linear[0] * weights[0] + linear[1] * weights[1] + linear[2] * weights[2];
+    let hue_of = linear.map(|value| value / own.max(1e-6));
+    let strength = (colour.saturation / 100.0).clamp(0.0, 1.0) * 0.6;
+    data.par_chunks_exact_mut(3).for_each(|pixel| {
+        let luminance = pixel[0] * weights[0] + pixel[1] * weights[1] + pixel[2] * weights[2];
+        for (channel, value) in pixel.iter_mut().enumerate() {
+            *value += (luminance * hue_of[channel] - *value) * strength;
+        }
+    });
 }
 
 fn rows_to_work(basic: &Basic, field: &[f32], width: usize, height: usize) -> Option<(usize, usize)> {
@@ -1390,7 +1602,7 @@ fn encode_srgb(
     working: ColourSpace,
     output: ColourSpace,
 ) -> RgbImage {
-    encode(width, height, data, curves, working, output)
+    encode(width, height, data, curves, working, output, false, None)
 }
 
 fn shaper(curves: &[Curve]) -> impl Fn(usize, f32) -> f32 + Sync {
@@ -1416,6 +1628,10 @@ fn encode<T: Sample>(
     curves: &[Curve],
     working: ColourSpace,
     output: ColourSpace,
+
+    display_referred: bool,
+
+    lut: Option<&(std::sync::Arc<numa_core::lut::Lut>, f32)>,
 ) -> Frame<T>
 where
     image::Rgb<T>: image::Pixel<Subpixel = T>,
@@ -1424,6 +1640,11 @@ where
 
     let shape = shaper(curves);
 
+    let looked = |display: [f32; 3]| match lut {
+        Some((lut, amount)) => lut.mix(display, *amount).map(|value| value.clamp(0.0, 1.0)),
+        None => display,
+    };
+
     let recode = (working != output || output != ColourSpace::Srgb)
         .then(|| (working.convert_to(output), output));
 
@@ -1431,9 +1652,11 @@ where
         out.par_chunks_exact_mut(3)
             .zip(data.par_chunks_exact(3))
             .for_each(|(bytes, pixel)| {
-                let shaped: [f32; 3] = std::array::from_fn(|channel| {
-                    ColourSpace::Srgb.decode(shape(channel, tone::curve(pixel[channel]).clamp(0.0, 1.0)))
-                });
+
+                let display = looked(std::array::from_fn(|channel| {
+                    shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))
+                }));
+                let shaped: [f32; 3] = display.map(|value| ColourSpace::Srgb.decode(value));
                 let turned = match &matrix {
                     Some(matrix) => std::array::from_fn(|channel| {
                         let row = matrix[channel];
@@ -1451,9 +1674,11 @@ where
     out.par_chunks_exact_mut(3)
         .zip(data.par_chunks_exact(3))
         .for_each(|(bytes, pixel)| {
-            for (channel, (byte, value)) in bytes.iter_mut().zip(pixel).enumerate() {
-                let display = tone::curve(*value).clamp(0.0, 1.0);
-                *byte = T::quantise(shape(channel, display));
+            let display = looked(std::array::from_fn(|channel| {
+                shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))
+            }));
+            for (byte, value) in bytes.iter_mut().zip(display) {
+                *byte = T::quantise(value);
             }
         });
 
@@ -2172,6 +2397,60 @@ mod tests {
     }
 
     #[test]
+    fn a_subject_is_cut_out_of_a_gradient() {
+        use numa_core::mask::{Alpha, Pixels};
+        let mut mask = Mask::new(Shape::Linear { from: [0.0, 0.0], to: [0.0, 1.0] });
+        mask.feather = 0.0;
+        mask.minus = vec![12];
+
+        resolve_mask(&mut mask, None, None, None, 32, 32);
+        assert!(mask.is_pending());
+
+        let person = Alpha::new(32, 32, (0..32 * 32).map(|at| if at % 32 >= 16 { 1.0 } else { 0.0 }).collect());
+        mask.cut = Pixels::of(&person);
+        resolve_mask(&mut mask, None, None, None, 32, 32);
+        assert!(mask.weight(0.25, 0.9) > 0.8, "the gradient where nobody is");
+        assert!(mask.weight(0.75, 0.9) < 0.05, "the person was not cut out");
+        assert_eq!(models_needed(&[mask]).0, true, "a cut needs the semantic model");
+    }
+
+    #[test]
+    fn a_mask_has_everything_the_photograph_has() {
+        use numa_core::mask::{Mask, Shape, Tint};
+
+        let colour = [0.12, 0.05, 0.02];
+        let frame = LinearImage::new(9, 1, (0..9).flat_map(|_| colour).collect());
+        let untouched = develop(&plain(), &frame, &Default::default());
+        let edits: Vec<(&str, Box<dyn Fn(&mut Mask)>)> = vec![
+            ("mixer", Box::new(|mask: &mut Mask| mask.mixer.bands[1][1] = -100.0)),
+            ("black and white", Box::new(|mask: &mut Mask| mask.mixer.monochrome = true)),
+            ("grade", Box::new(|mask: &mut Mask| {
+                mask.grading.global.hue = 220.0;
+                mask.grading.global.saturation = 80.0;
+            })),
+            ("red curve", Box::new(|mask: &mut Mask| {
+                mask.channel_curves[0] = numa_core::curve::Curve::new(vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
+            })),
+            ("colour", Box::new(|mask: &mut Mask| mask.colour = Tint { hue: 200.0, saturation: 80.0 })),
+            ("point colour", Box::new(|mask: &mut Mask| {
+                let mut point = numa_core::point::PointColour::picked(colour);
+                point.saturation = -100.0;
+                mask.point_colours.points.push(point);
+            })),
+        ];
+        for (name, edit) in edits {
+            let mut mask = Mask::new(Shape::Linear { from: [0.6, 0.5], to: [0.7, 0.5] });
+            edit(&mut mask);
+            assert!(!mask.is_idle(), "{name}: a mask asking for it is not idle");
+            let mut document = plain();
+            document.set_masks(vec![mask]);
+            let rendered = develop(&document, &frame, &Default::default());
+            assert_eq!(rendered.get_pixel(0, 0), untouched.get_pixel(0, 0), "{name} reached outside the mask");
+            assert_ne!(rendered.get_pixel(8, 0), untouched.get_pixel(8, 0), "{name} did nothing inside it");
+        }
+    }
+
+    #[test]
     fn a_mask_that_measures_the_frame_gets_all_of_it() {
         let (width, height) = (4usize, 400usize);
         let mut field = vec![0.0f32; width * height];
@@ -2799,5 +3078,26 @@ mod tests {
     fn negative_values_and_blowouts_stay_in_range() {
         assert_eq!(red(&with(Basic::with(|b| b.tone.exposure = -20.0)), &grey(1.0)), 0);
         assert_eq!(red(&with(Basic::with(|b| b.tone.exposure = 20.0)), &grey(1.0)), 255);
+    }
+
+    #[test]
+    fn a_lut_works_on_display_values() {
+        let mut text = String::from("LUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    text += &format!("{} {} {}\n", 1 - r, 1 - g, 1 - b);
+                }
+            }
+        }
+        let lut = std::sync::Arc::new(numa_core::lut::parse_cube(&text).unwrap());
+        let data = [0.18f32, 0.18, 0.18];
+        let srgb = ColourSpace::Srgb;
+        let plain: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, None);
+        let inverted: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Some(&(lut.clone(), 1.0)));
+        let half: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Some(&(lut, 0.5)));
+        let code = plain.get_pixel(0, 0)[0] as i32;
+        assert!((inverted.get_pixel(0, 0)[0] as i32 - (255 - code)).abs() <= 1);
+        assert!((half.get_pixel(0, 0)[0] as i32 - 128).abs() <= 1);
     }
 }

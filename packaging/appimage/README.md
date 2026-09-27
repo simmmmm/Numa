@@ -120,10 +120,10 @@ has to match what the machine is actually running.
 
 Two things the binary carries that constrain who you can hand it to.
 
-**`rawler` (LGPL-2.1) and `lensfun` (LGPL-3.0-or-later) are linked into it
-statically**, because that is what Rust does. Both licences require whoever
-receives the binary to be able to relink it against a *modified* copy of those
-libraries. Dynamic linking satisfies that on its own — the library is a separate
+**`rawler` (LGPL-2.1) is linked into it statically**, because that is what
+Rust does. Its licence requires whoever
+receives the binary to be able to relink it against a *modified* copy of that
+library. Dynamic linking satisfies that on its own — the library is a separate
 file to swap. Static linking does not, so a bare binary handed to someone is
 short of the obligation. The cheap way to satisfy it is to pass the source along
 with the AppImage; it is your code and any licence will do.

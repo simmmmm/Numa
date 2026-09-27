@@ -54,6 +54,14 @@ pub(super) fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
     }
     titled.append(&name);
 
+    if state.catalog.is_offline(numa::io::catalog::library_of(photo.id)) {
+        let away = gtk::Image::from_icon_name("drive-removable-media-symbolic");
+        away.set_pixel_size(11);
+        away.add_css_class("dim-label");
+        away.set_tooltip_text(Some("Source file not available — its drive is not connected"));
+        titled.append(&away);
+    }
+
     let badge = gtk::Label::new(Some(&badge_text(photo.rating, photo.flag)));
     badge.add_css_class("photo-badge");
     style_badge(&badge, photo.rating, photo.flag);

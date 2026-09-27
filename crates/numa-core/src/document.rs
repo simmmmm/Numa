@@ -33,6 +33,9 @@ pub struct Document {
     #[serde(default)]
     pub ai_sharpen: f32,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lut: Option<crate::lut::LutChoice>,
+
     #[serde(skip)]
     pub output_space: ColourSpace,
     pub operations: Vec<Operation>,
@@ -357,6 +360,7 @@ impl Document {
             working_space: ColourSpace::default(),
             ai_denoise: 0.0,
             ai_sharpen: 0.0,
+            lut: None,
             output_space: ColourSpace::default(),
             operations: Vec::new(),
             faces: Vec::new(),
@@ -591,7 +595,16 @@ impl Document {
             .nth(index)
     }
 
-    pub fn set_masks(&mut self, masks: Vec<Mask>) {
+    pub fn set_masks(&mut self, mut masks: Vec<Mask>) {
+        let mut next = masks.iter().map(|mask| mask.id).max().unwrap_or(0);
+        let mut seen = std::collections::HashSet::new();
+        for mask in &mut masks {
+            if mask.id == 0 || !seen.insert(mask.id) {
+                next += 1;
+                mask.id = next;
+                seen.insert(next);
+            }
+        }
         self.operations.retain(|operation| !matches!(operation, Operation::Mask(_)));
         self.operations.extend(masks.into_iter().map(Operation::Mask));
     }
@@ -668,6 +681,7 @@ impl Document {
             && self.colour_profile.is_none()
             && self.ai_denoise == 0.0
             && self.ai_sharpen == 0.0
+            && self.lut.is_none()
     }
 
     pub fn copy_from(&mut self, source: &Document, parts: EditParts) {
@@ -677,6 +691,8 @@ impl Document {
         if parts.colour {
             self.film_simulation = source.film_simulation.clone();
             self.colour_profile = source.colour_profile.clone();
+
+            self.lut = source.lut.clone();
             self.set_mixer(source.mixer());
             self.set_point_colours(source.point_colours());
 
@@ -782,6 +798,45 @@ mod tests {
         let stored = r#"{"shape":{"type":"Linear","from":[0.0,0.0],"to":[0.0,1.0]}}"#;
         let read: Mask = serde_json::from_str(stored).expect("an old mask still parses");
         assert!(read.is_idle(), "a mask from before this still asks for nothing");
+    }
+
+    #[test]
+    fn subject_and_background_saved_as_classes_open_as_the_subject() {
+        use crate::mask::Shape;
+        let before = r#"{"source":{"path":"/tmp/x.RAF"},"white_balance":null,"operations":[
+            {"type":"Mask","shape":{"type":"Segment","classes":[12]},"name":"Subject","matte":true,"basic":{"exposure":0.7}},
+            {"type":"Mask","shape":{"type":"Segment","classes":[12,126]},"name":"Background","inverted":true,"matte":true},
+            {"type":"Mask","shape":{"type":"Segment","classes":[12]},"name":"Subject","inverted":true},
+            {"type":"Mask","shape":{"type":"Segment","classes":[12]}},
+            {"type":"Mask","shape":{"type":"Segment","classes":[2]},"name":"Subject"},
+            {"type":"Mask","shape":{"type":"Segment","classes":[12]},"name":"Background"}
+        ]}"#;
+        let document: Document = serde_json::from_str(before).expect("an old stack still parses");
+        let masks = document.masks();
+        let shapes: Vec<(bool, Option<&str>, bool)> =
+            masks.iter().map(|mask| (mask.shape == Shape::Subject, mask.name.as_deref(), mask.inverted)).collect();
+        assert_eq!(
+            shapes,
+            vec![
+                (true, None, false),
+                (true, None, true),
+
+                (true, Some("Subject"), true),
+
+                (false, None, false),
+
+                (false, Some("Subject"), false),
+
+                (false, Some("Background"), false),
+            ]
+        );
+        assert_eq!(masks[0].basic.tone.exposure, 0.7, "the edit comes with it");
+        assert!(masks[0].matte && masks[1].matte);
+
+        let written = serde_json::to_string(&document).expect("writes");
+        let again: Document = serde_json::from_str(&written).expect("reads");
+        assert_eq!(written, serde_json::to_string(&again).expect("writes again"));
+        assert_eq!(again.masks()[0].shape, Shape::Subject);
     }
 
     #[test]

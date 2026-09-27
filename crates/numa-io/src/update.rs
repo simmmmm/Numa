@@ -12,6 +12,10 @@ struct Release {
     prerelease: bool,
 }
 
+pub fn checks_itself(flatpak_id: Option<&std::ffi::OsStr>) -> bool {
+    flatpak_id.is_none()
+}
+
 pub fn newer_release(json: &str, current: &str) -> Option<(String, String)> {
     let releases: Vec<Release> = serde_json::from_str(json).ok()?;
     let current = version(current)?;
@@ -34,6 +38,12 @@ fn version(tag: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flatpak_does_not_check_itself() {
+        assert!(checks_itself(None));
+        assert!(!checks_itself(Some("com.tijmen.Numa".as_ref())));
+    }
 
     #[test]
     fn only_a_newer_numbered_release_counts() {

@@ -164,6 +164,7 @@ pub fn correct_geometry(image: &LinearImage, profile: &LensProfile) -> LinearIma
         clip: image.clip,
         rendering: image.rendering.clone(),
         film_mode: image.film_mode.clone(),
+        display_referred: image.display_referred,
     }
 }
 

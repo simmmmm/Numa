@@ -5,11 +5,15 @@ use numa::cull;
 use numa::core::color::{self, WhiteBalance};
 use numa::core::document::{Balance, Basic, Calibration, Detail, Document, EditParts, Effects, Optics, Perspective, Presence, Tone};
 use numa::core::image::LinearImage;
-use numa::core::beautify::{Beautify, Portrait};
+use numa::core::beautify::Portrait;
+#[cfg(test)]
+use numa::core::beautify::Beautify;
 use numa::core::grading::{Grading, Range};
 use numa::core::mask::{Alpha, Mask, Pixels, RegionPoint, Shape, Stroke};
 use numa::core::mixer::{Mixer, BANDS};
-use numa::core::point::{PointColour, PointColours};
+use numa::core::point::PointColour;
+#[cfg(test)]
+use numa::core::point::PointColours;
 use numa::core::retouch::{Retouch, Spot};
 use numa::core::space::ColourSpace;
 use numa::io::catalog::{Catalog, FileType, Filter, Flag, Library, Photo, Sort};
@@ -30,6 +34,7 @@ use crate::ui::justified::{self, Justified};
 use crate::ui::thumbnail;
 
 mod ai_denoise;
+mod lut;
 mod downloads;
 mod masks;
 mod colour;
@@ -453,6 +458,10 @@ fn install_window_lifecycle(state: &App, window: &adw::ApplicationWindow) {
         move |window| {
             save_open_edits(&state);
 
+            if let Some(library) = state.libraries.current.borrow().as_ref() {
+                state.catalog.keep_for_offline(library.id);
+            }
+
             let (width, height) = window.default_size();
             state.catalog.remember(
                 WINDOW_STATE,
@@ -464,20 +473,7 @@ fn install_window_lifecycle(state: &App, window: &adw::ApplicationWindow) {
 }
 
 fn render_inputs(document: &Document) -> render::RenderInputs {
-    render::RenderInputs {
-        profile: document
-            .colour_profile
-            .as_deref()
-            .filter(|name| *name != render::NO_COLOUR_PROFILE)
-            .and_then(numa::io::dcp::by_name),
-        denoised: (document.ai_denoise > 0.0)
-            .then(|| numa::io::denoised::load(std::path::Path::new(&document.source.path)))
-            .flatten(),
-
-        sharpened: (document.ai_sharpen > 0.0)
-            .then(|| numa::io::denoised::load_sharpened(std::path::Path::new(&document.source.path), document.ai_denoise > 0.0))
-            .flatten(),
-    }
+    numa::io::inputs::render_inputs(document)
 }
 
 struct OpenPhoto {
@@ -531,7 +527,7 @@ struct OpenPhoto {
     working_key: ColourKey,
     document: Document,
 
-    before_preset: Option<Document>,
+    before_preset: Option<PresetOn>,
     history: History,
 
     as_shot: WhiteBalance,
@@ -591,7 +587,5 @@ mod crop_aspect;
 #[cfg(test)]
 mod brush_scale;
 
-#[cfg(test)]
-mod mask_names;
 mod mask_toolbar;
 mod watermark;

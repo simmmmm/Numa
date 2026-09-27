@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use image::{imageops, RgbImage};
 use numa_infer::Model;
@@ -23,13 +22,12 @@ pub fn model_path() -> PathBuf {
     numa_core::paths::models_dir().join("open_closed_eye.onnx")
 }
 
-fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+fn plan() -> Option<std::sync::Arc<Model>> {
+    static PLAN: numa_infer::Kept = numa_infer::Kept::new();
     PLAN.get_or_init(|| {
         let path = model_path();
         path.exists().then(|| Model::load(&path)).flatten()
     })
-    .as_ref()
 }
 
 pub fn is_installed() -> bool {

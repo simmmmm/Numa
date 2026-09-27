@@ -2,5 +2,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo test --workspace --release
+CAP=10G dev/capped.sh cargo test --workspace --release
 python3 dev/shape.py

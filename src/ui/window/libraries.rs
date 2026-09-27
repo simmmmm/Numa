@@ -1,7 +1,9 @@
 use super::*;
 
-pub(super) fn describe_new_library(state: &App, window: &adw::ApplicationWindow, count: usize) {
-    let paths: Vec<PathBuf> = state.grid.cards.borrow().values().map(|(photo, _)| photo.path.clone()).take(300).collect();
+pub(super) fn describe_new_library(state: &App, window: &adw::ApplicationWindow, library: i64, count: usize) {
+
+    let photos = state.catalog.photos(library, &Filter::default()).unwrap_or_default();
+    let paths: Vec<PathBuf> = photos.into_iter().map(|photo| photo.path).take(300).collect();
     let (state, window) = (state.clone(), window.clone());
     glib::spawn_future_local(async move {
         let found = gio::spawn_blocking(move || {
@@ -103,6 +105,7 @@ pub(super) fn refresh_folders(state: &App, library: &Library, photos: &[Photo]) 
 const SCAN_AT_MOST: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub(super) fn rescan_in_background(state: &App) {
+    follow_drive(state);
     let Some(library) = state.libraries.current.borrow().clone() else { return };
 
     if folder_is_missing(&library.path) {
@@ -172,6 +175,35 @@ pub(super) fn sync_in_background(state: &App, libraries: Vec<Library>, done: imp
     });
 }
 
+pub(super) fn refused_offline(state: &App, ids: impl IntoIterator<Item = i64>, what: &str) -> bool {
+    let Some(away) = ids.into_iter().map(numa::io::catalog::library_of).find(|id| state.catalog.is_offline(*id)) else {
+        return false;
+    };
+    let name = state.libraries.all.borrow().iter().find(|library| library.id == away).map(Library::label);
+    state.toast(&format!("{} is not connected — {what} waits until it is back", name.unwrap_or_default()));
+    true
+}
+
+pub(super) fn follow_drive(state: &App) {
+    let Some(library) = state.libraries.current.borrow().clone() else { return };
+    let back = say_if_back(state, &library);
+    let spans = state.libraries.filter.borrow().spans_libraries();
+    if back || (!spans && state.grid.offline.is_revealed() != state.catalog.is_offline(library.id)) {
+        reload_grid(state);
+    }
+}
+
+fn say_if_back(state: &App, library: &Library) -> bool {
+    let Some(marks) = state.catalog.reconnect(library.id) else { return false };
+    let name = library.label();
+    state.toast(&match marks {
+        0 => format!("{name} is back"),
+        1 => format!("{name} is back — 1 mark from while it was away is in"),
+        n => format!("{name} is back — {n} marks from while it was away are in"),
+    });
+    true
+}
+
 pub(super) fn folder_is_missing(path: &Path) -> bool {
     thread_local! {
         static SAID: RefCell<std::collections::HashSet<PathBuf>> =
@@ -234,6 +266,13 @@ pub(super) fn select_library_index(state: &App, index: u32) {
     let selected = state.libraries.all.borrow().get(index as usize).cloned();
     remember_library(state, selected.as_ref());
 
+    if let Some(leaving) = state.libraries.current.borrow().as_ref().filter(|leaving| selected.as_ref().map(|s| s.id) != Some(leaving.id)) {
+        state.catalog.keep_for_offline(leaving.id);
+    }
+    if let Some(library) = &selected {
+        say_if_back(state, library);
+    }
+
     if state.libraries.current.borrow().as_ref().map(|library| library.id) != selected.as_ref().map(|library| library.id) {
         state.libraries.folder.replace(None);
     }
@@ -243,6 +282,10 @@ pub(super) fn select_library_index(state: &App, index: u32) {
 }
 
 pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<PathBuf>) {
+    if folder_is_missing(&library.path) {
+        state.toast(&format!("{} is not connected — copying in waits until it is back", library.label()));
+        return;
+    }
     let state = state.clone();
     glib::spawn_future_local(async move {
         let folder = library.path.clone();

@@ -152,7 +152,11 @@ pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: R
     header.append(&title);
     header.append(&value);
 
+    scale.update_relation(&[gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()])]);
+
     scale.set_hexpand(true);
+
+    scale.update_relation(&[gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()])]);
     shift_moves_ten(scale, &scale.adjustment());
 
     scale.set_draw_value(false);

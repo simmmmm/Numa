@@ -29,8 +29,123 @@
   <url type="homepage">https://github.com/simmmmm/Numa</url>
   <launchable type="desktop-id">com.tijmen.Numa.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
+  <project_license>PolyForm-Noncommercial-1.0.0</project_license>
   <releases>
+    <release version="0.26.0" date="2026-09-27">
+      <description>
+        <p>
+          Lens corrections now run on Numa's own code, reading the LensFun
+          database, and find more lenses and cameras by the names in their
+          files. The Colour tab has a camera profile picker again, with
+          Numa's own profiles for six cameras.
+        </p>
+        <p>
+          Twelve built-in looks, with a Strength slider once one is chosen.
+          LUTs (.cube and .3dl) with an Amount. A waveform and RGB parade
+          beside the histogram.
+        </p>
+        <p>
+          A Canon multiple exposure no longer comes out magenta.
+        </p>
+      </description>
+    </release>
+    <release version="0.25.1" date="2026-09-26">
+      <description>
+        <p>
+          A JPEG, HEIF or PNG opens looking exactly as it is: Numa no longer
+          lays its raw contrast and sharpening over a finished picture, and a
+          Display P3 or Adobe RGB photograph keeps its colours.
+        </p>
+      </description>
+    </release>
+    <release version="0.25.0" date="2026-09-26">
+      <description>
+        <p>
+          A library on a drive that is not connected stays in the list and
+          opens from what Numa remembers: the thumbnails it already made, each
+          marked as away. Stars and flags given meanwhile go into the library
+          when the drive is back.
+        </p>
+        <p>
+          The grade has a colour wheel for each range, as on the iPad.
+        </p>
+      </description>
+    </release>
+    <release version="0.24.2" date="2026-09-26">
+      <description>
+        <p>
+          On the iPhone and iPad, selecting by a tap asks for a quarter of the
+          memory it did and answers faster, with the same selections.
+        </p>
+      </description>
+    </release>
+    <release version="0.24.1" date="2026-09-26">
+      <description>
+        <p>
+          The mask models give their memory back after each use instead of
+          keeping their highest mark, so an editor with masks holds about a
+          gigabyte less.
+        </p>
+      </description>
+    </release>
+    <release version="0.24.0" date="2026-09-26">
+      <description>
+        <p>
+          A night of testing: a folder renamed inside a library keeps its
+          ratings and edits, undo and history steps are saved at once, and
+          TIFF and WebP files open. Subject and Person no longer hold up the
+          window, the mask bar fits a narrow window, the light scheme is
+          readable, a quarter turn keeps the crop and its ratio, and AVIF
+          exports carry the creator, copyright, rating and keywords.
+        </p>
+      </description>
+    </release>
+    <release version="0.23.0" date="2026-09-25">
+      <description>
+        <p>
+          Subject is what the photograph is about, found by BiRefNet, and is
+          a mask of its own rather than the person another model found.
+          Person stays as it was. Heads, hats and feet are no longer cut
+          through, and Refine edge keeps thin things.
+        </p>
+        <p>
+          Clicking on a thing follows the photograph's edge instead of
+          blocks, with far fewer stray spots and holes. The groups are
+          cleaner: Mountains is new, and sky between branches is Sky.
+        </p>
+      </description>
+    </release>
+    <release version="0.22.0" date="2026-09-25">
+      <description>
+        <p>
+          Subtract: a person, an animal, the sky or anything else the model
+          finds can be cut back out of a mask — the gradient over the sky
+          with the person on the horizon left as they were. A person or an
+          animal is cut along the matting model's edge.
+        </p>
+        <p>
+          The export's watermark is set by the same code on every platform.
+          Where the processor runs AI sharpen through Core ML, it now runs
+          at one tile size, which lets the whole model through.
+        </p>
+      </description>
+    </release>
+    <release version="0.21.0" date="2026-09-25">
+      <description>
+        <p>
+          A mask can do everything the photograph can that belongs to a
+          region: the colour mixer and black and white, its own point
+          colours and colour grade, red, green and blue curves, a Color that
+          washes the region in one hue, grain, and all of Detail.
+        </p>
+        <p>
+          AI denoise and AI sharpen are buttons rather than switches. A point
+          colour just picked is scrolled to and lit up, and its hue slider is
+          in colour like the mixer's. Masks are kept on disk, so a
+          photograph with a subject mask opens without running a model.
+        </p>
+      </description>
+    </release>
     <release version="0.20.5" date="2026-09-24">
       <description>
         <p>
@@ -262,6 +377,9 @@
           The masks found in a photograph of an animal are Foreground,
           Background and the animal again, not three of the animal.
         </p>
+        <p>
+          The first public release, as a Flatpak bundle and an AppImage.
+        </p>
       </description>
     </release>
     <release version="0.19.2" date="2026-09-22">
@@ -311,6 +429,10 @@
       </description>
     </release>
   </releases>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
   <content_rating type="oars-1.1"/>
   <categories>
     <category>Graphics</category>

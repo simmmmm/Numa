@@ -94,6 +94,15 @@ fn sweep(
     }
 
     let Some((first, last)) = visible_cards(list, container, adjustment, across, count) else {
+
+        let unplaced = list.borrow().first().is_some_and(|card| card.widget.width() == 0);
+        if unplaced {
+            let state = state.clone();
+            container.as_ref().add_tick_callback(move |_, _| {
+                schedule_thumbnails(&state);
+                glib::ControlFlow::Break
+            });
+        }
         return;
     };
 
@@ -197,7 +206,12 @@ fn visible_cards(
 
     let bounds = |index: usize| {
         let cards = list.borrow();
-        let bounds = cards.get(index)?.widget.compute_bounds(container)?;
+        let card = cards.get(index)?;
+
+        if card.widget.width() == 0 {
+            return None;
+        }
+        let bounds = card.widget.compute_bounds(container)?;
         Some(if across {
             (bounds.x() as f64, (bounds.x() + bounds.width()) as f64)
         } else {

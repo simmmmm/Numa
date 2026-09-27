@@ -63,6 +63,13 @@ modules:
     build-commands:
       - cargo build --release
       - install -Dm755 target/release/numa /app/bin/numa
+      # OPTICS-005: the LensFun database, read from beside the binary.
+      - install -Dm644 -t /app/share/numa/lensfun data/lensfun/*
+      # RENDER-015: Numa's own camera profiles, which travel inside the app
+      # only; the public copy has no data/private-profiles and skips this.
+      - if [ -d data/private-profiles ]; then
+          install -Dm644 -t /app/share/numa/profiles/numa data/private-profiles/*;
+        fi
       - install -Dm644 data/com.tijmen.Numa.desktop
         /app/share/applications/com.tijmen.Numa.desktop
       - install -Dm644 data/com.tijmen.Numa.metainfo.xml

@@ -15,15 +15,21 @@ pub(super) fn build_effects(
         effects.append(&slider_row(state, name, scale, *readout));
     }
 
-    for (title, range) in [("Vignette", 23..27), ("Grain", 27..30)] {
+    for (title, range, frame_only) in [("Vignette", 23..27, true), ("Grain", 27..30, false)] {
         let header = section_header(title);
-        global_only(header.as_ref());
+        if frame_only {
+            global_only(header.as_ref());
+        }
         effects.append(&header);
         for (name, scale, readout) in &all[range] {
             let row = slider_row(state, name, scale, *readout);
-            global_only(row.as_ref());
+            if frame_only {
+                global_only(row.as_ref());
+            }
             effects.append(&row);
         }
     }
+
+    effects.append(&lut::build(state, global_only));
     effects
 }

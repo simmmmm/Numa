@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use image::{imageops, RgbImage};
 
@@ -47,9 +46,9 @@ fn model_path() -> Option<PathBuf> {
     numa_core::paths::model_file(&["image_classification_ppresnet50_2022jan.onnx"])
 }
 
-fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
-    PLAN.get_or_init(|| Model::load(&model_path()?)).as_ref()
+fn plan() -> Option<std::sync::Arc<Model>> {
+    static PLAN: numa_infer::Kept = numa_infer::Kept::new();
+    PLAN.get_or_init(|| Model::load(&model_path()?))
 }
 
 pub fn is_installed() -> bool {
@@ -64,7 +63,7 @@ pub struct Guess {
 
 pub fn animal(found: &Segmentation) -> Option<Guess> {
     let model = plan()?;
-    let best = groups(model, found.photo(), &region(found)?)?.into_iter().next()?;
+    let best = groups(&model, found.photo(), &region(found)?)?.into_iter().next()?;
     log::debug!("the subject is most like {}, {:.0} %", best.name, best.confidence * 100.0);
     (best.confidence >= CONFIDENT).then_some(best)
 }

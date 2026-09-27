@@ -14,6 +14,9 @@ use numa_infer::Model;
 pub const TILE: usize = 256;
 
 fn tile_for(model: &Model) -> usize {
+    if let Some(edge) = model.edge() {
+        return edge;
+    }
     match model.on_card() {
         true => 512,
         false => 320,
@@ -43,7 +46,7 @@ pub fn sharpen_installed() -> bool {
 pub fn sharpen(source: &LinearImage, progress: impl FnMut(usize, usize) -> bool) -> Result<Option<Denoised>, String> {
     let path = numa_core::paths::model_file(&[SHARPEN_MODEL]).ok_or("the AI sharpen model is not installed")?;
     let model = Model::load(&path).ok_or("the AI sharpen model could not be loaded")?;
-    pass(source, &model, TILE, progress)
+    pass(source, &model, model.edge().unwrap_or(TILE), progress)
 }
 
 pub fn denoise(source: &LinearImage, progress: impl FnMut(usize, usize) -> bool) -> Result<Option<Denoised>, String> {

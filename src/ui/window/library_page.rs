@@ -14,6 +14,7 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     );
     state.grid.welcome.bind_property("visible", &hint, "visible").invert_boolean().sync_create().build();
     page.append(&hint);
+    page.append(&state.grid.offline);
 
     state.grid.empty.set_vexpand(true);
     page.append(&state.grid.empty);
@@ -406,6 +407,9 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
         state.toast("Select a photo first");
         return;
     }
+    if refused_offline(state, selected_ids(state), "moving to the trash") {
+        return;
+    }
 
     let doomed: Vec<(i64, PathBuf)> = {
         let cards = state.grid.cards.borrow();
@@ -430,7 +434,8 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
     let dialog = adw::AlertDialog::new(
         Some(&title),
         Some(
-            "The file goes to your desktop's trash, where it can be put back.              Its rating, flag and edits are forgotten here and those do not come back.",
+            "The file goes to your desktop's trash, where it can be put back. \
+             Its rating, flag and edits are forgotten here and those do not come back.",
         ),
     );
     dialog.add_response("cancel", "Cancel");

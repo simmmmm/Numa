@@ -34,6 +34,8 @@ pub struct LinearImage {
     pub film_mode: Option<String>,
 
     pub white_point: Option<crate::color::WhiteBalance>,
+
+    pub display_referred: bool,
 }
 
 fn turned_data(source: &[f32], width: usize, height: usize, transpose: bool, flip_x: bool, flip_y: bool) -> Vec<f32> {
@@ -65,6 +67,7 @@ impl LinearImage {
             rendering: None,
             film_mode: None,
             white_point: None,
+            display_referred: false,
         }
     }
 
@@ -108,6 +111,7 @@ impl LinearImage {
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
             white_point: None,
+            display_referred: self.display_referred,
         }
     }
 
@@ -128,6 +132,7 @@ impl LinearImage {
             rendering: self.rendering,
             film_mode: self.film_mode,
             white_point: None,
+            display_referred: self.display_referred,
         }
     }
 
@@ -165,6 +170,7 @@ impl LinearImage {
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
             white_point: None,
+            display_referred: self.display_referred,
         }
     }
 
@@ -257,6 +263,7 @@ impl LinearImage {
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
             white_point: None,
+            display_referred: self.display_referred,
         })
     }
 }

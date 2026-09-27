@@ -8,7 +8,7 @@ export NUMA_TAB=${4:-light}
 Xvfb :77 -screen 0 1920x1080x24 >/dev/null 2>&1 &
 xvfb=$!
 sleep 2
-DISPLAY=:77 "$(dirname "$0")/../target/release/numa" >"${out%.png}.log" 2>&1 &
+DISPLAY=:77 CAP=4G "$(dirname "$0")/capped.sh" "$(dirname "$0")/../target/release/numa" >"${out%.png}.log" 2>&1 &
 app=$!
 sleep "$wait_for"
 DISPLAY=:77 import -window root "$out" 2>/dev/null

@@ -143,6 +143,9 @@ pub(super) fn write_panel_for(state: &App, rating: u8, flag: Flag) {
 }
 
 pub(super) fn open_photo(state: &App, id: i64) {
+    if refused_offline(state, [id], "editing") {
+        return;
+    }
     let Some((photo, _)) = state.grid.cards.borrow().get(&id).cloned() else { return };
 
     save_open_edits(state);
@@ -232,6 +235,14 @@ pub(super) fn open_photo(state: &App, id: i64) {
 
         write_opened_sliders(&state, basic, balance);
         write_rest_of_panel(&state);
+        give_back_freed_memory();
+    });
+}
+
+pub(super) fn give_back_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    std::thread::spawn(|| unsafe {
+        libc::malloc_trim(0);
     });
 }
 
@@ -342,6 +353,7 @@ pub(super) fn write_rest_of_panel(state: &App) {
     write_perspective(state);
     write_lens(state);
     ai_denoise::write(state);
+    lut::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);

@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use image::RgbImage;
 use numa_core::retouch::{Kind, Spot};
 use numa_infer::Model;
@@ -18,9 +16,9 @@ pub fn is_installed() -> bool {
     numa_core::paths::model_file(&[MODEL]).is_some()
 }
 
-fn model() -> Option<&'static Model> {
-    static MODEL_ONCE: OnceLock<Option<Model>> = OnceLock::new();
-    MODEL_ONCE.get_or_init(|| Model::load(&numa_core::paths::model_file(&[MODEL])?)).as_ref()
+fn model() -> Option<std::sync::Arc<Model>> {
+    static MODEL_ONCE: numa_infer::Kept = numa_infer::Kept::new();
+    MODEL_ONCE.get_or_init(|| Model::load(&numa_core::paths::model_file(&[MODEL])?))
 }
 
 pub fn people(frame: &RgbImage) -> Option<Vec<Spot>> {

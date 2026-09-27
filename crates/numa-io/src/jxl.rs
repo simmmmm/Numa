@@ -82,13 +82,27 @@ unsafe fn symbol<T>(handle: *mut c_void, name: &CStr) -> Option<T> {
     (!address.is_null()).then(|| std::mem::transmute_copy(&address))
 }
 
+#[cfg(not(target_vendor = "apple"))]
+const JXL: &[&CStr] = &[c"libjxl.so.0.12", c"libjxl.so.0.11", c"libjxl.so.0.10", c"libjxl.so.0.9", c"libjxl.so.0.8", c"libjxl.so.0.7", c"libjxl.so"];
+#[cfg(not(target_vendor = "apple"))]
+const JXL_THREADS: &[&CStr] = &[c"libjxl_threads.so.0.12", c"libjxl_threads.so.0.11", c"libjxl_threads.so.0.10", c"libjxl_threads.so.0.9", c"libjxl_threads.so.0.8", c"libjxl_threads.so.0.7", c"libjxl_threads.so"];
+
+#[cfg(target_os = "macos")]
+const JXL: &[&CStr] = &[c"/opt/homebrew/lib/libjxl.dylib", c"libjxl.dylib"];
+#[cfg(target_os = "macos")]
+const JXL_THREADS: &[&CStr] = &[c"/opt/homebrew/lib/libjxl_threads.dylib", c"libjxl_threads.dylib"];
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+const JXL: &[&CStr] = &[];
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+const JXL_THREADS: &[&CStr] = &[];
+
 fn library() -> Option<&'static Library> {
     static LIBRARY: OnceLock<Option<Library>> = OnceLock::new();
     LIBRARY
         .get_or_init(|| unsafe {
-            let jxl = open(&[c"libjxl.so.0.12", c"libjxl.so.0.11", c"libjxl.so.0.10", c"libjxl.so.0.9", c"libjxl.so.0.8", c"libjxl.so.0.7", c"libjxl.so"])?;
+            let jxl = open(JXL)?;
 
-            let threads = open(&[c"libjxl_threads.so.0.12", c"libjxl_threads.so.0.11", c"libjxl_threads.so.0.10", c"libjxl_threads.so.0.9", c"libjxl_threads.so.0.8", c"libjxl_threads.so.0.7", c"libjxl_threads.so"]);
+            let threads = open(JXL_THREADS);
             let runner = threads.and_then(|threads| {
                 Some((
                     symbol(threads, c"JxlThreadParallelRunner")?,

@@ -1,5 +1,23 @@
 use super::*;
 
+pub(super) struct PresetOn {
+    pub(super) base: Document,
+    pub(super) left: EditState,
+    pub(super) name: String,
+    pub(super) preset: numa::io::presets::Preset,
+    pub(super) amount: f64,
+}
+
+impl OpenPhoto {
+
+    pub(super) fn preset_base(&self) -> &Document {
+        match &self.before_preset {
+            Some(on) if on.left == EditState::of(&self.document) => &on.base,
+            _ => &self.document,
+        }
+    }
+}
+
 pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> gtk::Box {
     let names = numa::io::presets::list(&numa::io::presets::dir());
     let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -67,7 +85,7 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
                 done();
                 let label = name.rsplit('/').next().unwrap_or(&name).to_string();
                 match numa::io::presets::load(&numa::io::presets::dir(), &name) {
-                    Ok(preset) => apply_edit(&state, &preset.document, preset.parts, &format!("“{label}” applied to"), true),
+                    Ok(preset) => apply_edit(&state, &preset.document, preset.parts, &format!("“{label}” applied to"), Some(&label)),
                     Err(err) => state.toast(&err),
                 }
             }
@@ -130,7 +148,7 @@ pub(super) fn preview_preset(state: &App, name: &str) {
                     let Some(photo) = open.as_ref() else { return };
 
                     let mut document =
-                        photo.before_preset.clone().unwrap_or_else(|| photo.document.clone());
+                        photo.preset_base().clone();
                     document.copy_from(&preset.document, preset.parts);
 
                     let scale = photo.proxy.width.max(photo.proxy.height) as f32
@@ -376,7 +394,7 @@ thread_local! {
 
 pub(super) fn forget_cards(state: &App) {
     let key = state.open.borrow().as_ref().map(|photo| {
-        let stack = photo.before_preset.as_ref().unwrap_or(&photo.document);
+        let stack = photo.preset_base();
         format!("{}\u{1f}{}", source_key(&photo.source), serde_json::to_string(stack).unwrap_or_default())
     });
     let stale = CANVAS.with(|canvas| match (&key, canvas.borrow().as_ref()) {
@@ -408,7 +426,7 @@ fn render_card(state: &App, name: &str) -> Option<gtk::gdk::Texture> {
     let key = format!(
         "{}\u{1f}{}",
         source_key(&photo.source),
-        serde_json::to_string(photo.before_preset.as_ref().unwrap_or(&photo.document)).unwrap_or_default()
+        serde_json::to_string(photo.preset_base()).unwrap_or_default()
     );
     let small = CANVAS.with(|canvas| {
         let mut canvas = canvas.borrow_mut();
@@ -419,7 +437,7 @@ fn render_card(state: &App, name: &str) -> Option<gtk::gdk::Texture> {
         canvas.as_ref().map(|(_, image)| image.clone())
     })?;
 
-    let mut document = photo.before_preset.clone().unwrap_or_else(|| photo.document.clone());
+    let mut document = photo.preset_base().clone();
     document.copy_from(&preset.document, preset.parts);
     let rendered = render::develop(&document, &small, &render_inputs(&document));
     let texture = texture_from(rendered);
@@ -456,6 +474,12 @@ pub(super) fn fill_presets_page(state: &App) {
     while let Some(child) = page.first_child() {
         page.remove(&child);
     }
+    let card = strength_card(state);
+    if let Some(parent) = card.parent().and_downcast::<gtk::Box>() {
+        parent.remove(&card);
+    }
+    page.append(&card);
+    refresh_strength(state);
     let browser = preset_browser(state, || {});
     browser.set_vexpand(true);
     page.append(&browser);
@@ -476,4 +500,81 @@ pub(super) fn fill_presets_page(state: &App) {
         actions.append(&button);
     }
     page.append(&actions);
+}
+
+thread_local! {
+
+    static STRENGTH: std::cell::OnceCell<(gtk::Box, gtk::Label, gtk::Scale)> = const { std::cell::OnceCell::new() };
+}
+
+fn strength_card(state: &App) -> gtk::Box {
+    STRENGTH.with(|strength| {
+        strength
+            .get_or_init(|| {
+                let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                card.add_css_class("strength-card");
+                let name = section_header("");
+                name.set_margin_top(0);
+                card.append(&name);
+                let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+                scale.set_value(100.0);
+                set_neutral(&scale, 100.0);
+
+                let held = Rc::new(Cell::new(false));
+                scale.connect_value_changed(glib::clone!(
+                    #[strong] state,
+                    #[strong] held,
+                    move |scale| {
+                        if !state.applying.get() && strength_moved(&state, scale.value() / 100.0) {
+                            held.set(true);
+                            state.applying.set(true);
+                        }
+                    }
+                ));
+                card.append(&slider_row(state, "Strength", &scale, Readout::Positive(0)));
+                scale.connect_value_changed(glib::clone!(
+                    #[strong] state,
+                    move |_| {
+                        if held.replace(false) {
+                            state.applying.set(false);
+                        }
+                    }
+                ));
+                (card, name, scale)
+            })
+            .0
+            .clone()
+    })
+}
+
+fn strength_moved(state: &App, amount: f64) -> bool {
+    {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else { return false };
+        let Some(on) = photo.before_preset.as_mut() else { return false };
+        if on.left != EditState::of(&photo.document) {
+            return false;
+        }
+        photo.document = numa::io::presets::at_strength(&on.base, &on.preset, amount as f32);
+        on.left = EditState::of(&photo.document);
+        on.amount = amount;
+    }
+
+    reload_open_document(state);
+    true
+}
+
+pub(super) fn refresh_strength(state: &App) {
+    let Some((card, name, scale)) = STRENGTH.with(|strength| strength.get().cloned()) else { return };
+    let chosen = state.open.borrow().as_ref().and_then(|photo| match &photo.before_preset {
+        Some(on) if on.left == EditState::of(&photo.document) => Some((on.name.clone(), on.amount)),
+        _ => None,
+    });
+    card.set_visible(chosen.is_some());
+    if let Some((label, at)) = chosen {
+        name.set_text(&label.to_uppercase());
+        state.applying.set(true);
+        scale.set_value(at * 100.0);
+        state.applying.set(false);
+    }
 }

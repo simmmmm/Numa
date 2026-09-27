@@ -268,6 +268,7 @@ pub fn search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     paths.extend(profiles_dir());
     paths.push(downloaded_profiles_dir());
+    paths.extend(numa_profiles_dir());
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(prefix) = exe.parent().and_then(|bin| bin.parent()) {
@@ -287,10 +288,24 @@ fn normalise(text: &str) -> String {
 }
 
 pub fn find(make: &str, model: &str) -> Option<DngProfile> {
-    ranked(make, model).into_iter().find_map(|(rank, profile)| rank.map(|_| profile))
+    ranked(make, model).into_iter().find_map(|(rank, profile, _)| rank.map(|_| profile))
 }
 
-fn standard_rank(profile: &DngProfile, yours: bool, model: &str) -> Option<u8> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+
+    Numa,
+
+    RawTherapee,
+
+    Yours,
+}
+
+fn standard_rank(profile: &DngProfile, source: Source, model: &str) -> Option<u8> {
+    if source == Source::Numa {
+        return None;
+    }
+    let yours = source == Source::Yours;
     if profile.name.eq_ignore_ascii_case("Adobe Standard") {
         return Some(0);
     }
@@ -303,7 +318,7 @@ fn standard_rank(profile: &DngProfile, yours: bool, model: &str) -> Option<u8> {
 }
 
 pub fn for_camera(make: &str, model: &str) -> Vec<DngProfile> {
-    ranked(make, model).into_iter().map(|(_, profile)| profile).collect()
+    ranked(make, model).into_iter().map(|(_, profile, _)| profile).collect()
 }
 
 fn ends_with_model_of_make(claimed: &str, wanted: &str, make: &str) -> bool {
@@ -320,8 +335,9 @@ fn make_first_word(make: &str) -> &str {
         .unwrap_or(make)
 }
 
-fn ranked(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile)> {
+fn ranked(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
     let own = profiles_dir();
+    let numa = numa_profiles_dir();
     let wanted = normalise(model);
     if wanted.is_empty() {
         return Vec::new();
@@ -342,16 +358,26 @@ fn ranked(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile)> {
                     .unwrap_or_default()
             });
 
-        if found.iter().any(|(_, have): &(Option<u8>, DngProfile)| have.name == profile.name) {
+        if found.iter().any(|(_, have, _): &(Option<u8>, DngProfile, Source)| have.name == profile.name) {
+            continue;
+        }
+        if is_film_simulation(&profile.name) {
             continue;
         }
         if claimed == full || claimed == wanted || ends_with_model_of_make(&claimed, &wanted, make) {
             let yours = own.as_deref().is_some_and(|own| path.parent() == Some(own));
-            found.push((standard_rank(&profile, yours, model), profile));
+            let source = if yours {
+                Source::Yours
+            } else if numa.is_some() && path.parent() == numa.as_deref() {
+                Source::Numa
+            } else {
+                Source::RawTherapee
+            };
+            found.push((standard_rank(&profile, source, model), profile, source));
         }
     }
 
-    found.sort_by_key(|(rank, _)| rank.unwrap_or(u8::MAX));
+    found.sort_by_key(|(rank, ..)| rank.unwrap_or(u8::MAX));
     found
 }
 
@@ -374,17 +400,17 @@ pub fn by_name(name: &str) -> Option<std::sync::Arc<DngProfile>> {
         .clone()
 }
 
-pub fn names_for_camera(make: &str, model: &str) -> Vec<String> {
+pub fn names_for_camera(make: &str, model: &str) -> Vec<(String, Source)> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<(String, Source)>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let Ok(mut cache) = cache.lock() else { return Vec::new() };
 
     cache
         .entry(format!("{make}|{model}"))
-        .or_insert_with(|| for_camera(make, model).into_iter().map(|p| p.name).collect())
+        .or_insert_with(|| ranked(make, model).into_iter().map(|(_, p, source)| (p.name, source)).collect())
         .clone()
 }
 
@@ -394,6 +420,26 @@ pub fn profiles_dir() -> Option<PathBuf> {
 
 pub fn downloaded_profiles_dir() -> PathBuf {
     numa_core::paths::data_dir().join("rawtherapee-dcpprofiles")
+}
+
+pub fn numa_profiles_dir() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+        candidates.push(dir.join("NumaProfiles"));
+        candidates.push(dir.join("../Resources/NumaProfiles"));
+        candidates.push(dir.join("../share").join(crate::NAME).join("profiles").join("numa"));
+    }
+    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/private-profiles"));
+    candidates.into_iter().find(|dir| dir.is_dir())
+}
+
+pub fn is_film_simulation(name: &str) -> bool {
+    const FILMS: &[&str] = &[
+        "provia", "velvia", "astia", "classicchrome", "classicneg", "eterna", "acros", "proneg",
+        "nostalgicneg", "realaace", "bleachbypass", "cameramonochrome", "camerasepia",
+    ];
+    let name = normalise(name);
+    FILMS.iter().any(|film| name.contains(film))
 }
 
 fn installed() -> Vec<PathBuf> {
@@ -425,6 +471,18 @@ mod tests {
     }
 
     #[test]
+    fn film_simulations_are_not_camera_profiles() {
+        for name in ["Camera CLASSIC CHROME", "Camera PROVIA/Standard", "Camera Velvia/Vivid", "Camera PRO Neg. Hi",
+            "Numa X-T5 Eterna", "Numa X-T5 Classic Chrome", "Camera ACROS+R FILTER", "Camera MONOCHROME"]
+        {
+            assert!(is_film_simulation(name), "{name}");
+        }
+        for name in ["Adobe Standard", "FUJIFILM X-T4", "Numa X-T4", "X-Mod", "Camera Standard", "Adobe Monochrome"] {
+            assert!(!is_film_simulation(name), "{name}");
+        }
+    }
+
+    #[test]
     fn automatic_takes_only_a_standard_profile() {
         let profile = |name: &str, camera: &str| DngProfile {
             name: name.into(),
@@ -437,16 +495,19 @@ mod tests {
             tone_curve: None,
         };
 
-        assert_eq!(standard_rank(&profile("Adobe Standard", "Fujifilm X-T5"), true, "X-T5"), Some(0));
-        assert_eq!(standard_rank(&profile("FUJIFILM X-T4", "FUJIFILM X-T4"), true, "X-T4"), Some(1));
+        assert_eq!(standard_rank(&profile("Adobe Standard", "Fujifilm X-T5"), Source::Yours, "X-T5"), Some(0));
+        assert_eq!(standard_rank(&profile("FUJIFILM X-T4", "FUJIFILM X-T4"), Source::Yours, "X-T4"), Some(1));
         let aliases = "Canon EOS 100D/Canon EOS Rebel SL1/Canon EOS Kiss X7";
-        assert_eq!(standard_rank(&profile(aliases, aliases), true, "Canon EOS 100D"), Some(1));
+        assert_eq!(standard_rank(&profile(aliases, aliases), Source::Yours, "Canon EOS 100D"), Some(1));
 
-        assert_eq!(standard_rank(&profile("Camera CLASSIC CHROME", "Fujifilm X-T5"), true, "X-T5"), None);
-        assert_eq!(standard_rank(&profile("Chrome", "Fujifilm X-T5"), true, "X-T5"), None);
-        assert_eq!(standard_rank(&profile("My portrait profile", "Fujifilm X-T5"), true, "X-T5"), None);
+        assert_eq!(standard_rank(&profile("Camera CLASSIC CHROME", "Fujifilm X-T5"), Source::Yours, "X-T5"), None);
+        assert_eq!(standard_rank(&profile("Chrome", "Fujifilm X-T5"), Source::Yours, "X-T5"), None);
+        assert_eq!(standard_rank(&profile("My portrait profile", "Fujifilm X-T5"), Source::Yours, "X-T5"), None);
 
-        assert_eq!(standard_rank(&profile("X-Mod", "Fujifilm X-E2"), false, "X-E2"), Some(1));
+        assert_eq!(standard_rank(&profile("X-Mod", "Fujifilm X-E2"), Source::RawTherapee, "X-E2"), Some(1));
+
+        assert_eq!(standard_rank(&profile("Numa EOS R5", "Canon EOS R5"), Source::Numa, "EOS R5"), None);
+        assert_eq!(standard_rank(&profile("Canon EOS R5", "Canon EOS R5"), Source::Numa, "EOS R5"), None);
     }
 
     use super::*;
@@ -499,6 +560,17 @@ mod tests {
                 assert_eq!(map.entries[index][2], 1.0, "neutral axis must be left alone");
             }
         }
+    }
+
+    #[test]
+    fn numas_own_are_offered_as_numas_and_never_automatic() {
+        if numa_profiles_dir().is_none() {
+            eprintln!("no private profiles in this tree; skipping");
+            return;
+        }
+        let names = names_for_camera("Canon", "Canon EOS R5");
+        assert!(names.contains(&("Numa EOS R5".to_string(), Source::Numa)), "{names:?}");
+        assert_ne!(find("Canon", "Canon EOS R5").map(|profile| profile.name).as_deref(), Some("Numa EOS R5"));
     }
 
     #[test]
