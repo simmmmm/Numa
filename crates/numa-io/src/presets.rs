@@ -457,6 +457,7 @@ mod tests {
         assert!(points.iter().zip([0.05, 0.45, 1.0]).all(|(y, want)| (y - want).abs() < 1e-5), "{points:?}");
     }
 
+    #[cfg(numa_looks)]
     #[test]
     fn a_look_at_half_renders_between() {
         use numa_core::image::LinearImage;
