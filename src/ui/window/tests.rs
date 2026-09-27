@@ -300,3 +300,13 @@ fn a_storage_row_leaves_out_the_folders_with_their_own_row() {
     assert_eq!(folder_size(&root, &[root.join("models")]), 10);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn the_profile_picker_is_written_once_the_photograph_is_open() {
+    let source = include_str!("open.rs");
+    let opening = source.find("pub(super) fn open_photo").unwrap();
+    let opened = source.find("*state.open.borrow_mut() = Some(OpenPhoto").unwrap();
+    assert!(!source[opening..opened].contains("refresh_profile_picker"));
+    let rest = &source[source.find("pub(super) fn write_rest_of_panel").unwrap()..];
+    assert!(rest[..rest.find("\n}\n").unwrap()].contains("refresh_profile_picker(state)"));
+}

@@ -180,8 +180,6 @@ pub(super) fn open_photo(state: &App, id: i64) {
             }
         };
 
-        refresh_profile_picker(&state);
-
         let basic = document.basic();
 
         let as_shot = proxy
@@ -360,6 +358,8 @@ pub(super) fn write_rest_of_panel(state: &App) {
     refresh_masks(state);
     select_mask(state, None);
     refresh_crumbs(state);
+
+    refresh_profile_picker(state);
 
     fill_segment_masks(state);
 
