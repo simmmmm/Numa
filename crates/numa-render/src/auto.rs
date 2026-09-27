@@ -144,12 +144,14 @@ pub fn tone(image: &LinearImage, subject: Option<&Alpha>) -> Auto {
         basic.presence.hdr = (lift.tone.exposure / MOST_SUBJECT_EXPOSURE * MOST_HDR).clamp(0.0, MOST_HDR).round();
     }
 
-    let colour = colourfulness(image);
-    basic.presence.vibrance = (((COLOUR_TARGET - colour) / COLOUR_TARGET) * 100.0)
-        .clamp(0.0, MOST_VIBRANCE)
-        .round();
+    basic.presence.vibrance = vibrance(image);
 
     Auto { basic, subject }
+}
+
+fn vibrance(image: &LinearImage) -> f32 {
+    let colour = colourfulness(image);
+    (((COLOUR_TARGET - colour) / COLOUR_TARGET) * 100.0).clamp(0.0, MOST_VIBRANCE).round()
 }
 
 fn colourfulness(image: &LinearImage) -> f32 {
@@ -208,6 +210,10 @@ fn solve(measure: impl Fn(f32) -> f32, wanted: f32) -> f32 {
     };
 
     if (measure(amount) - resting).abs() < WORTH_MOVING || amount.abs() < 2.0 {
+        return 0.0;
+    }
+
+    if amount.abs() >= 100.0 && (measure(amount) - wanted).abs() >= CLOSE_ENOUGH {
         return 0.0;
     }
     amount

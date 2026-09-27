@@ -607,7 +607,7 @@ fn asks_a_model(document: &Document) -> bool {
         })
 }
 
-fn open_id(state: &App) -> Option<i64> {
+pub(super) fn open_id(state: &App) -> Option<i64> {
     match state.open.borrow().as_ref().map(|photo| &photo.source) {
         Some(Source::Photo { id, .. }) => Some(*id),
         _ => None,

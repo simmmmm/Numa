@@ -290,8 +290,8 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     library_group.add(&row("Reject the rest of the burst and go on to the next", "Shift+Down"));
     library_group.add(&row("The neighbours beside the photograph in the loupe, on or off", "F"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
-    library_group.add(&row("Flag the selection picked", "P"));
-    library_group.add(&row("Flag the selection rejected", "X"));
+    library_group.add(&row("Flag the selection picked, again to clear", "P"));
+    library_group.add(&row("Flag the selection rejected, again to clear", "X"));
     library_group.add(&row("Clear the selection's flag", "U"));
     library_group.add(&row("Paste copied edits onto the selection", "Ctrl+V"));
     library_group.add(&row("Move the selection to the trash, after asking", "Delete"));
@@ -302,8 +302,8 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     editor_group.add(&row("Previous photo in the filmstrip", "Left / Page Up"));
     editor_group.add(&row("Next photo in the filmstrip", "Right / Page Down"));
     editor_group.add(&row("Rate the open photo 0–5 stars", "0–5"));
-    editor_group.add(&row("Flag the open photo picked", "P"));
-    editor_group.add(&row("Flag the open photo rejected", "X"));
+    editor_group.add(&row("Flag the open photo picked, again to clear", "P"));
+    editor_group.add(&row("Flag the open photo rejected, again to clear", "X"));
     editor_group.add(&row("Clear the open photo's flag", "U"));
     editor_group.add(&row("Hold to compare against the as-shot original", "Space"));
     editor_group.add(&row("Show what the camera recorded", "I"));

@@ -1,6 +1,6 @@
 # E4: what dev/check.sh asks of a change, asked of every push — the tests and
-# the shape ratchet — on the oldest desktop Numa
-# promises to build on: Ubuntu 24.04, GTK 4.14, libadwaita 1.5.
+# the shape ratchet — on the oldest desktop Numa promises to build on:
+# Ubuntu 24.04, GTK 4.14, libadwaita 1.5.
 name: CI
 
 on:

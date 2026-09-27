@@ -204,7 +204,8 @@ fn editor_key(
             _ => None,
         };
         if let Some(action) = action {
-            rate_open_photo(&state, action);
+            let open: Vec<i64> = audit::open_id(&state).into_iter().collect();
+            rate_open_photo(&state, toggled(&state, &open, action));
             return glib::Propagation::Stop;
         }
 
@@ -306,7 +307,7 @@ fn library_key(
         _ => return glib::Propagation::Proceed,
     };
 
-    apply_to_selection(&state, action);
+    apply_to_selection(&state, toggled(&state, &selected_ids(&state), action));
     refresh_loupe_bar(&state);
     glib::Propagation::Stop
 }
@@ -318,13 +319,23 @@ pub(super) enum Action {
 }
 
 pub(super) fn apply_to_selection(state: &App, action: Action) {
-    let selected = selected_cards(state);
-    if selected.is_empty() {
+    let ids = selected_ids(state);
+    if ids.is_empty() {
         state.toast("Select a photo first");
         return;
     }
-    let ids: Vec<i64> = selected.iter().filter_map(|child| child.widget_name().parse().ok()).collect();
     apply_to_ids(state, &ids, action);
+}
+
+fn selected_ids(state: &App) -> Vec<i64> {
+    selected_cards(state).iter().filter_map(|child| child.widget_name().parse().ok()).collect()
+}
+
+pub(super) fn toggled(state: &App, ids: &[i64], action: Action) -> Action {
+    let Action::Flag(flag) = action else { return action };
+    let cards = state.grid.cards.borrow();
+    let all = !ids.is_empty() && ids.iter().all(|id| cards.get(id).is_some_and(|(_, badge)| flag_from_badge(&badge.text()) == flag));
+    Action::Flag(if all { Flag::None } else { flag })
 }
 
 pub(super) fn apply_to_ids(state: &App, ids: &[i64], action: Action) {

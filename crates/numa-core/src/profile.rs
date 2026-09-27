@@ -55,6 +55,8 @@ pub struct HsvTable {
     pub entries: Vec<[f32; 3]>,
 
     pub second: Option<Vec<[f32; 3]>>,
+
+    pub scene_referred: bool,
 }
 
 impl HsvTable {
@@ -174,6 +176,7 @@ fn hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
 #[derive(Debug, Clone)]
 pub struct Table {
     value_encoding: ValueEncoding,
+    scene_referred: bool,
     hue_divisions: usize,
     sat_divisions: usize,
     val_divisions: usize,
@@ -201,6 +204,7 @@ impl Table {
 
         Self {
             value_encoding: source.value_encoding,
+            scene_referred: source.scene_referred,
             hue_divisions: source.hue_divisions,
             sat_divisions: source.sat_divisions,
             val_divisions: source.val_divisions,
@@ -394,6 +398,7 @@ pub fn fit_hue_sat_map(samples: &[HsvSample], divisions: [usize; 3], smoothness:
 
     HsvTable {
         value_encoding: encoding,
+        scene_referred: true,
         hue_divisions: hues,
         sat_divisions: sats,
         val_divisions: vals,
@@ -480,6 +485,8 @@ pub struct Rendering {
     pub to_srgb: Matrix3,
     pub hue_sat_map: Option<Table>,
     pub look_table: Option<Table>,
+
+    pub sensor_white: f32,
 }
 
 fn illuminant_temperature(code: u16) -> f32 {
@@ -535,15 +542,18 @@ pub fn mix_matrix(first: Option<Matrix3>, second: Option<Matrix3>, mix: f32) -> 
 
 impl Rendering {
 
-    pub fn resolve(profile: &DngProfile, kelvin: f32) -> Option<Self> {
+    pub fn resolve(profile: &DngProfile, kelvin: f32, sensor_white: f32) -> Option<Self> {
         let mix = illuminant_mix(profile, kelvin);
         let forward = mix_matrix(profile.forward_matrix[0], profile.forward_matrix[1], mix)?;
 
-        Some(Self::new(
-            forward,
-            profile.hue_sat_map.as_ref().map(|table| Table::resolve(table, mix)),
-            profile.look_table.as_ref().map(|table| Table::resolve(table, mix)),
-        ))
+        Some(Self {
+            sensor_white,
+            ..Self::new(
+                forward,
+                profile.hue_sat_map.as_ref().map(|table| Table::resolve(table, mix)),
+                profile.look_table.as_ref().map(|table| Table::resolve(table, mix)),
+            )
+        })
     }
 
     pub fn new(forward: Matrix3, hue_sat_map: Option<Table>, look_table: Option<Table>) -> Self {
@@ -552,6 +562,7 @@ impl Rendering {
             to_srgb: multiply_matrix(&XYZ_D50_TO_SRGB, &PROPHOTO_TO_XYZ_D50),
             hue_sat_map,
             look_table,
+            sensor_white: 1.0,
         }
     }
 
@@ -559,14 +570,22 @@ impl Rendering {
         let mut rgb = multiply(&self.to_prophoto, camera);
 
         if let Some(map) = &self.hue_sat_map {
-            rgb = map.apply(rgb);
+            rgb = self.through(map, rgb);
         }
         if let Some(look) = &self.look_table {
-            rgb = look.apply(rgb);
+            rgb = self.through(look, rgb);
         }
 
         let out = multiply(&self.to_srgb, rgb);
         [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
+    }
+
+    fn through(&self, table: &Table, rgb: [f32; 3]) -> [f32; 3] {
+        if table.scene_referred || self.sensor_white <= 0.0 {
+            return table.apply(rgb);
+        }
+        let white = self.sensor_white;
+        table.apply(rgb.map(|v| v / white)).map(|v| v * white)
     }
 }
 
@@ -596,6 +615,7 @@ mod tests {
     fn table(hue_divisions: usize, sat_divisions: usize, fill: [f32; 3]) -> Table {
         Table {
             value_encoding: ValueEncoding::Linear,
+            scene_referred: false,
             hue_divisions,
             sat_divisions,
             val_divisions: 1,
@@ -683,6 +703,7 @@ mod tests {
     fn resolve_blends_the_two_illuminants() {
         let source = HsvTable {
             value_encoding: ValueEncoding::Linear,
+            scene_referred: false,
             hue_divisions: 2,
             sat_divisions: 2,
             val_divisions: 1,
@@ -818,5 +839,43 @@ mod tests {
             (out[0] - out[1]).abs() < 0.02 && (out[1] - out[2]).abs() < 0.02,
             "D50 white should render neutral, got {out:?}"
         );
+    }
+
+    #[test]
+    fn a_dng_table_is_read_at_sensor_white_and_numas_own_at_its_scale() {
+        let look = |scene_referred: bool| HsvTable {
+            value_encoding: ValueEncoding::Linear,
+            hue_divisions: 1,
+            sat_divisions: 1,
+            val_divisions: 2,
+            entries: vec![[0.0, 1.0, 1.0], [0.0, 2.0, 1.0]],
+            second: None,
+            scene_referred,
+        };
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let pixel = [0.8, 0.6, 0.6];
+        let saturation = |scene_referred: bool| {
+            let profile = DngProfile {
+                name: "test".into(),
+                camera: None,
+                color_matrix: [None, None],
+                forward_matrix: [Some(multiply_matrix(&PROPHOTO_TO_XYZ_D50, &identity)), None],
+                illuminant: [None, None],
+                hue_sat_map: None,
+                look_table: Some(look(scene_referred)),
+                tone_curve: None,
+            };
+            let rendering = Rendering::resolve(&profile, 5000.0, 4.0).unwrap();
+            let prophoto = multiply(&rendering.to_prophoto, pixel);
+            let mut out = prophoto;
+            if let Some(table) = &rendering.look_table {
+                out = rendering.through(table, prophoto);
+            }
+            rgb_to_hsv(out)[1] / rgb_to_hsv(prophoto)[1]
+        };
+
+        assert!((saturation(false) - 1.2).abs() < 0.01, "{}", saturation(false));
+
+        assert!((saturation(true) - 1.8).abs() < 0.01, "{}", saturation(true));
     }
 }

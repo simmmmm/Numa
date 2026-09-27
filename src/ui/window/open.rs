@@ -116,6 +116,7 @@ pub(super) fn step_photo(state: &App, forward: bool) {
         Source::Bracket { .. } => None,
     });
     let Some(current) = current else { return };
+    prefetch::heading(state, forward);
 
     let next = {
         let order = state.grid.order.borrow();
@@ -147,20 +148,32 @@ pub(super) fn open_photo(state: &App, id: i64) {
         return;
     }
     let Some((photo, _)) = state.grid.cards.borrow().get(&id).cloned() else { return };
+    let mut laps = raw::Laps::start();
+    let asked = timing().then(std::time::Instant::now);
 
     save_open_edits(state);
+    laps.lap("save");
 
     clear_editor_for(state, id, &photo);
+    laps.lap("clear");
 
     let (document, edits_unreadable) = stored_document(state, &photo);
+    laps.lap("catalog");
 
     let generation = begin_open(state);
+    state.render.opened_at.set(asked.map(|asked| (asked, false)));
+    let edge = proxy_edge(state);
+    let ahead = prefetch::take(&state.render.prefetch, &photo.path, photo.mtime, edge);
+    if !ahead.as_ref().is_some_and(|(_, ready)| *ready) {
+        prefetch::stand_in(state, &photo, generation);
+    }
+    let ahead = ahead.map(|(decoded, _)| decoded);
     let state = state.clone();
     let path = photo.path.clone();
     let ai_denoised = (document.ai_denoise > 0.0, document.ai_sharpen > 0.0);
-    let edge = proxy_edge(&state);
     glib::spawn_future_local(async move {
-        let decoded = busy(&state, "Opening…", move || decode_for_open(path, edge, ai_denoised)).await;
+        let decoded = busy(&state, "Opening…", move || decode_for_open(path, edge, ai_denoised, ahead)).await;
+        laps.lap("off thread");
 
         if state.open_generation.get() != generation {
             return;
@@ -197,6 +210,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
         let inputs = render_inputs(&document);
         drop(kept);
         let working = render::to_working_space(&document, &proxy, &inputs);
+        laps.lap("colour stage");
 
         *state.open.borrow_mut() = Some(OpenPhoto {
             source: Source::Photo { id: photo.id, path: photo.path.clone() },
@@ -232,7 +246,11 @@ pub(super) fn open_photo(state: &App, id: i64) {
         });
 
         write_opened_sliders(&state, basic, balance);
+        laps.lap("sliders");
         write_rest_of_panel(&state);
+        laps.lap("panel");
+        laps.report("open (main thread)", &photo.path);
+        prefetch::after_opening(&state, generation);
         give_back_freed_memory();
     });
 }
@@ -287,11 +305,12 @@ fn decode_for_open(
     path: PathBuf,
     edge: u32,
     (ai_denoised, ai_sharpened): (bool, bool),
+    ahead: Option<std::sync::mpsc::Receiver<Result<prefetch::Prepared, String>>>,
 ) -> Result<(LinearImage, (u32, u32), Option<raw::Summary>, bool, Kept), String> {
-    let linear = raw::decode_for_editing(&path)?;
-
-    let (full_size, proxy) =
-        ((linear.width, linear.height), linear.downscaled(edge).unwrap_or(linear));
+    let (proxy, full_size, summary, corrected) = match ahead.and_then(|decoded| decoded.recv().ok()) {
+        Some(prepared) => prepared?,
+        None => prefetch::prepare(&path, edge)?,
+    };
 
     let mut kept = Kept::new();
     if ai_denoised {
@@ -307,10 +326,7 @@ fn decode_for_open(
             kept.push(stored);
         }
     }
-
-    let corrected =
-        raw::lens_profile(&path).is_some_and(|profile| profile.corrects_anything());
-    Ok::<_, String>((proxy, full_size, raw::summary(&path), corrected, kept))
+    Ok::<_, String>((proxy, full_size, summary, corrected, kept))
 }
 
 type Kept = Vec<std::sync::Arc<numa::core::denoise::Denoised>>;
@@ -372,6 +388,7 @@ pub(super) fn write_rest_of_panel(state: &App) {
         ensure_faces(state);
     }
 
+    state.render.last_request.set(None);
     adjustments_changed(state);
     refresh_info(state);
 
@@ -389,6 +406,7 @@ pub(super) fn close_editor(state: &App) {
         }
     }
     begin_open(state);
+    prefetch::forget(state);
     *state.open.borrow_mut() = None;
     state.stack.set_visible_child_name("library");
     if state.grid.stale.replace(false) {

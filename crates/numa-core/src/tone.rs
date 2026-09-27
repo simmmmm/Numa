@@ -1,27 +1,50 @@
 pub const MIDDLE_GREY: f32 = 0.18;
 
-const CURVE_CONTRAST: f32 = 0.939;
+const CAMERAS: [f32; TABLE_LEN] = [
+    0.00772, 0.00854, 0.00945, 0.01045, 0.01156, 0.01279, 0.01415, 0.01565,
+    0.01732, 0.01916, 0.02119, 0.02344, 0.02597, 0.02912, 0.03387, 0.04034,
+    0.04817, 0.05723, 0.06744, 0.07886, 0.09166, 0.10660, 0.12398, 0.14376,
+    0.16643, 0.19251, 0.22177, 0.25442, 0.29093, 0.33042, 0.37222, 0.41609,
+    0.46137, 0.50807, 0.55549, 0.60278, 0.64992, 0.69667, 0.74153, 0.78407,
+    0.82428, 0.86073, 0.89175, 0.91676, 0.93468, 0.94930, 0.96408, 0.97631,
+    0.98601, 0.99317, 0.99779, 0.99987, 1.00000,
+];
+const TABLE_LEN: usize = 53;
 
+const FIRST_STOP: f32 = -8.0;
+const STEPS_PER_STOP: f32 = 4.0;
+
+const TOE: f32 = 1.715;
+
+#[cfg(test)]
 const GREY_DISPLAY: f32 = 0.461_37;
-
-fn grey_offset() -> f32 {
-    -(1.0 / GREY_DISPLAY - 1.0).ln()
-}
 
 pub fn curve(value: f32) -> f32 {
 
-    let stops = (value.max(1e-6) / MIDDLE_GREY).log2();
-    1.0 / (1.0 + (-(CURVE_CONTRAST * stops + grey_offset())).exp())
+    at_stops((value.max(1e-6) / MIDDLE_GREY).log2())
+}
+
+fn at_stops(stops: f32) -> f32 {
+    let at = (stops - FIRST_STOP) * STEPS_PER_STOP;
+    if at <= 0.0 {
+        return CAMERAS[0] * (at / STEPS_PER_STOP / TOE).exp2();
+    }
+    let (low, t) = (at.floor() as usize, at.fract());
+    if low + 1 >= TABLE_LEN {
+        return CAMERAS[TABLE_LEN - 1];
+    }
+    CAMERAS[low] * (1.0 - t) + CAMERAS[low + 1] * t
 }
 
 pub fn scene_value_for(display: f32) -> f32 {
-
-    let clamped = display.clamp(1e-4, 1.0 - 1e-4);
-    let stops = ((1.0 / clamped - 1.0).ln().neg() - grey_offset()) / CURVE_CONTRAST;
-    MIDDLE_GREY * stops.exp2()
+    let wanted = display.clamp(1e-4, 1.0 - 1e-4);
+    let (mut low, mut high) = (-24.0f32, FIRST_STOP + TABLE_LEN as f32 / STEPS_PER_STOP);
+    for _ in 0..48 {
+        let middle = (low + high) / 2.0;
+        if at_stops(middle) < wanted { low = middle } else { high = middle }
+    }
+    MIDDLE_GREY * high.exp2()
 }
-
-use std::ops::Neg;
 
 pub fn shown(value: f32, display_referred: bool) -> f32 {
     match display_referred {

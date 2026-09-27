@@ -84,12 +84,7 @@ pub fn to_working_space<'a>(
 
         let mut image = source.into_owned();
         if let Some(matrix) = ColourSpace::Srgb.convert_to(document.working_space) {
-            image.data.par_chunks_exact_mut(3).for_each(|pixel| {
-                let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
-                for (channel, row) in pixel.iter_mut().zip(matrix.iter()) {
-                    *channel = (row[0] * r + row[1] * g + row[2] * b).max(0.0);
-                }
-            });
+            into_space(&mut image.data, &matrix);
         }
         return image;
     };
@@ -104,7 +99,7 @@ pub fn to_working_space<'a>(
 
     let resolved = profile_for(document, source, inputs)
         .as_ref()
-        .and_then(|dng| Rendering::resolve(dng, effective.temperature));
+        .and_then(|dng| Rendering::resolve(dng, effective.temperature, source.clip.unwrap_or(1.0)));
 
     match resolved {
         Some(rendering) => {
@@ -152,12 +147,7 @@ pub fn to_working_space<'a>(
     }
 
     match ColourSpace::Srgb.convert_to(document.working_space) {
-        Some(matrix) => data.par_chunks_exact_mut(3).for_each(|pixel| {
-            let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
-            for (channel, row) in pixel.iter_mut().zip(matrix.iter()) {
-                *channel = (row[0] * r + row[1] * g + row[2] * b).max(0.0);
-            }
-        }),
+        Some(matrix) => into_space(&mut data, &matrix),
         None => data.par_iter_mut().for_each(|value| *value = value.max(0.0)),
     }
 
@@ -165,6 +155,15 @@ pub fn to_working_space<'a>(
         .with_film_mode(source.film_mode.clone());
     working.white_point = Some(effective);
     working
+}
+
+fn into_space(data: &mut [f32], matrix: &[[f32; 3]; 3]) {
+    data.par_chunks_exact_mut(3).for_each(|pixel| {
+        let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
+        for (channel, row) in pixel.iter_mut().zip(matrix.iter()) {
+            *channel = (row[0] * r + row[1] * g + row[2] * b).max(0.0);
+        }
+    });
 }
 
 fn neutralise_clipping(balanced: [f32; 3], camera: &[f32], clip: Option<f32>, floor: f32) -> [f32; 3] {
@@ -2260,14 +2259,14 @@ mod tests {
 
         let before = apply_stack(&document, &grey, 1.0);
         let after = apply_stack(&resolved, &grey, 1.0);
-        assert_eq!(before.get_pixel(16, 16)[0], 197, "the fixture is not what it was");
+        assert_eq!(before.get_pixel(16, 16)[0], 188, "the fixture is not what it was");
         assert!(
             after.get_pixel(16, 16)[0] < 100,
             "the lasso did nothing: {:?}",
             after.get_pixel(16, 16)
         );
 
-        assert_eq!(after.get_pixel(0, 0)[0], 197);
+        assert_eq!(after.get_pixel(0, 0)[0], 188);
 
         let plain = Document::new("x".into());
         assert!(with_masks_resolved(&plain, &grey).masks().is_empty());
@@ -3061,7 +3060,7 @@ mod tests {
     #[test]
     fn highlight_recovery_reaches_above_white() {
 
-        let blown = grey(64.0);
+        let blown = grey(5.8);
         assert_eq!(red(&plain(), &blown), 255, "starts at display white");
 
         let recovered = with(Basic::with(|b| b.tone.highlights = -100.0));
