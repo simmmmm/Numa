@@ -33,6 +33,8 @@ pub(super) struct Job {
     have_full: bool,
     geometry: Geometry,
     proxy_scale: f32,
+
+    scope_kind: render::scope::Kind,
     started: Option<std::time::Instant>,
 }
 
@@ -58,6 +60,7 @@ pub(super) struct Done {
     placement: Option<crate::ui::pixel_paintable::Placement>,
     backdrop: Option<image::RgbImage>,
     histogram: render::histogram::Histogram,
+    scope: Option<render::scope::Scope>,
     tile: Option<[f32; 4]>,
     wants_full: bool,
     have_full: bool,
@@ -165,6 +168,7 @@ fn plan(state: &App) -> Option<Job> {
         wants_full,
         have_full,
         proxy_scale,
+        scope_kind: state.info.scope_kind.get(),
         started,
     })
 }
@@ -215,6 +219,8 @@ fn work(job: Job) -> Done {
     let (backdrop, histogram) =
         whole_frame_behind(&mut frames, &mut made, &document, &key, whole_frame, job.proxy_scale, drafting, &rendered);
 
+    let scope = render::scope::of(backdrop.as_ref().unwrap_or(&rendered), job.scope_kind);
+
     Done {
         serial,
         generation,
@@ -225,6 +231,7 @@ fn work(job: Job) -> Done {
         placement,
         backdrop,
         histogram,
+        scope,
         tile,
         wants_full,
         have_full,
@@ -307,6 +314,7 @@ fn finish(state: &App, done: Done) {
         );
     }
 
+    *state.info.scope.borrow_mut() = done.scope;
     present(state, done.rendered, done.placement, done.backdrop, done.histogram, done.wants_full, done.have_full);
 }
 

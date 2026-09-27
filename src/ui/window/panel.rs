@@ -88,7 +88,7 @@ thread_local! {
     pub(super) static RAIL_DOTS: RefCell<Vec<(&'static str, gtk::Box)>> = const { RefCell::new(Vec::new()) };
 }
 
-pub(super) const MASK_TABS: [&str; 4] = ["light", "colour", "effects", "detail"];
+pub(super) const MASK_TABS: [&str; 5] = ["light", "colour", "effects", "grade", "detail"];
 
 pub(super) fn refresh_rail_dots(state: &App) {
     fn scales(widget: &gtk::Widget, found: &mut Vec<gtk::Scale>) {

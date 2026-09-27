@@ -36,7 +36,7 @@ pub(super) fn add_library_dialog(state: &App, window: &adw::ApplicationWindow) {
                     n => format!("Added {n} photo(s) from {}", path.display()),
                 });
                 if count > 0 {
-                    describe_new_library(&state, &window, count);
+                    describe_new_library(&state, &window, library.id, count);
                 }
             }
 
@@ -64,9 +64,11 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
 
     let holder = libraries
         .iter()
-        .filter(|library| path.starts_with(&library.path))
-        .max_by_key(|library| library.path.components().count())
-        .cloned();
+        .filter_map(|library| {
+            let root = library.path.canonicalize().unwrap_or_else(|_| library.path.clone());
+            Some((library.clone(), library.path.join(path.strip_prefix(&root).ok()?)))
+        })
+        .max_by_key(|(library, _)| library.path.components().count());
 
     let show = |state: &App, library: Library, path: &Path| {
         if let Err(err) = state.catalog.sync_library(&library) {
@@ -91,7 +93,7 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
         }
     };
 
-    if let Some(library) = holder {
+    if let Some((library, path)) = holder {
         show(state, library, &path);
         return;
     }

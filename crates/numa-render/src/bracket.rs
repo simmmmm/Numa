@@ -115,6 +115,8 @@ pub fn merge(frames: &[Frame]) -> Result<LinearImage, String> {
         clip: None,
         rendering: first.image.rendering.clone(),
         film_mode: first.image.film_mode.clone(),
+
+        display_referred: false,
     })
 }
 

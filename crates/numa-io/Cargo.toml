@@ -17,7 +17,7 @@ byteorder.workspace = true
 dirs.workspace = true
 image.workspace = true
 kamadak-exif.workspace = true
-lensfun.workspace = true
+roxmltree.workspace = true
 log.workspace = true
 rawler.workspace = true
 rayon.workspace = true
@@ -31,3 +31,6 @@ libc.workspace = true
 ndarray.workspace = true
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 avif-serialize = "0.8"
+
+[dev-dependencies]
+lensfun = "=0.7.0"

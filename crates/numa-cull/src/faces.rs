@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use image::{imageops, RgbImage};
 use numa_infer::Model;
@@ -55,8 +54,8 @@ pub fn is_installed() -> bool {
     plan().is_some()
 }
 
-fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+fn plan() -> Option<std::sync::Arc<Model>> {
+    static PLAN: numa_infer::Kept = numa_infer::Kept::new();
     PLAN.get_or_init(|| {
         let path = model_path();
         if !path.exists() {
@@ -65,7 +64,6 @@ fn plan() -> Option<&'static Model> {
 
         Model::load(&path)
     })
-    .as_ref()
 }
 
 pub fn detect(image: &RgbImage) -> Option<Vec<Face>> {

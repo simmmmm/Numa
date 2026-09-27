@@ -21,6 +21,13 @@ pub(super) fn reload_grid(state: &App) {
 
     refresh_picker(state);
 
+    let offline = state.catalog.is_offline(library.id) && !state.libraries.filter.borrow().spans_libraries();
+    state.grid.offline.set_title(&format!(
+        "{} is not connected — showing what Numa remembers. Stars and flags given now go in when it is back.",
+        library.label()
+    ));
+    state.grid.offline.set_revealed(offline);
+
     state.libraries.scale.set(match state.libraries.filter.borrow().spans_libraries() {
         true => cull::Scale::default(),
         false => state.catalog.scale(library.id).unwrap_or_default(),
@@ -96,6 +103,8 @@ pub(super) struct State {
     pub(super) thumbnail_generation: Rc<Cell<u64>>,
 
     pub(super) thumbnail_watch: Rc<Cell<bool>>,
+
+    pub(super) offline: adw::Banner,
 }
 
 impl State {
@@ -111,6 +120,7 @@ impl State {
             stale: Rc::new(Cell::new(false)),
             thumbnail_generation: Rc::new(Cell::new(0)),
             thumbnail_watch: Rc::new(Cell::new(false)),
+            offline: adw::Banner::new(""),
         }
     }
 }

@@ -72,20 +72,22 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
         page.add(&menu);
     }
 
-    let updates = adw::PreferencesGroup::new();
-    updates.set_title("Updates");
-    let check = adw::SwitchRow::new();
-    check.set_title("Check for new versions");
-    check.set_subtitle("Once a day, from the releases page on GitHub. Nothing about you or your photographs is sent.");
-    check.set_active(state.catalog.setting(UPDATE_CHECK).as_deref() == Some("yes"));
-    check.connect_active_notify(glib::clone!(
-        #[strong] state,
-        move |row| {
-            let _ = state.catalog.set_setting(UPDATE_CHECK, if row.is_active() { "yes" } else { "no" });
-        }
-    ));
-    updates.add(&check);
-    page.add(&updates);
+    if checks_itself() {
+        let updates = adw::PreferencesGroup::new();
+        updates.set_title("Updates");
+        let check = adw::SwitchRow::new();
+        check.set_title("Check for new versions");
+        check.set_subtitle("Once a day, from the releases page on GitHub. Nothing about you or your photographs is sent.");
+        check.set_active(state.catalog.setting(UPDATE_CHECK).as_deref() == Some("yes"));
+        check.connect_active_notify(glib::clone!(
+            #[strong] state,
+            move |row| {
+                let _ = state.catalog.set_setting(UPDATE_CHECK, if row.is_active() { "yes" } else { "no" });
+            }
+        ));
+        updates.add(&check);
+        page.add(&updates);
+    }
     page
 }
 
@@ -114,15 +116,20 @@ fn storage_page(folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::Pr
         "Ratings, edits and names are kept in a hidden .numa folder inside each library, \
          so they travel with the photographs. These are Numa's own files on this computer.",
     ));
-    for (title, dir) in [
+    let rows = [
         ("Settings and list of libraries", numa::core::paths::data_dir()),
         ("Models", numa::core::paths::models_dir()),
         ("Presets", numa::io::presets::dir()),
         ("Thumbnails", numa::io::thumbs::cache_dir()),
-    ] {
+        ("Masks the models made", numa::io::mask_store::dir()),
+    ];
+
+    let own_rows: Vec<PathBuf> = rows.iter().map(|(_, dir)| dir.clone()).collect();
+    for (title, dir) in rows {
         let row = folder_row(title, dir.clone());
-        show_size(&row, dir.clone());
-        if dir == numa::io::thumbs::cache_dir() {
+        let others = own_rows.iter().filter(|other| **other != dir).cloned().collect();
+        show_size(&row, dir.clone(), others);
+        if dir == numa::io::thumbs::cache_dir() || dir == numa::io::mask_store::dir() {
             row.add_suffix(&clear_button(&row, dir));
         }
         storage.add(&row);
@@ -188,12 +195,12 @@ fn colour_group() -> adw::PreferencesGroup {
     colour
 }
 
-fn show_size(row: &adw::ActionRow, dir: PathBuf) {
+fn show_size(row: &adw::ActionRow, dir: PathBuf, others: Vec<PathBuf>) {
     let shown = dir.display().to_string();
     glib::spawn_future_local(glib::clone!(
         #[weak] row,
         async move {
-            let Ok(bytes) = gio::spawn_blocking(move || folder_size(&dir)).await else { return };
+            let Ok(bytes) = gio::spawn_blocking(move || folder_size(&dir, &others)).await else { return };
             row.set_subtitle(&format!("{shown} · {}", glib::format_size(bytes)));
         }
     ));
@@ -202,7 +209,7 @@ fn show_size(row: &adw::ActionRow, dir: PathBuf) {
 fn clear_button(row: &adw::ActionRow, dir: PathBuf) -> gtk::Button {
     let clear = gtk::Button::with_label("Clear");
     clear.set_valign(gtk::Align::Center);
-    clear.set_tooltip_text(Some("Delete the cached thumbnails; they are made again when needed"));
+    clear.set_tooltip_text(Some("Delete these; they are made again when needed"));
     clear.connect_clicked(glib::clone!(
         #[weak] row,
         move |button| {
@@ -219,7 +226,7 @@ fn clear_button(row: &adw::ActionRow, dir: PathBuf) -> gtk::Button {
                         }
                     })
                     .await;
-                    show_size(&row, dir);
+                    show_size(&row, dir, Vec::new());
                     button.set_sensitive(true);
                 }
             ));
@@ -228,13 +235,17 @@ fn clear_button(row: &adw::ActionRow, dir: PathBuf) -> gtk::Button {
     clear
 }
 
-pub(super) fn folder_size(dir: &std::path::Path) -> u64 {
+pub(super) fn folder_size(dir: &std::path::Path, skip: &[PathBuf]) -> u64 {
     let mut total = 0;
     let mut pending = vec![dir.to_path_buf()];
     while let Some(dir) = pending.pop() {
         for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             match entry.metadata() {
-                Ok(meta) if meta.is_dir() => pending.push(entry.path()),
+                Ok(meta) if meta.is_dir() => {
+                    if !skip.contains(&entry.path()) {
+                        pending.push(entry.path());
+                    }
+                }
                 Ok(meta) => total += meta.len(),
                 Err(_) => {}
             }

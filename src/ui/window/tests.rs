@@ -289,3 +289,14 @@ fn a_hif_beside_its_raw_is_the_same_frame() {
     assert_eq!(twins.get(&2), Some(&1));
     assert_eq!(twins.len(), 1, "only the HIF of the same second is a twin: {twins:?}");
 }
+
+#[test]
+fn a_storage_row_leaves_out_the_folders_with_their_own_row() {
+    let root = std::env::temp_dir().join(format!("numa-sizes-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("models")).unwrap();
+    std::fs::write(root.join("catalog.db"), [0u8; 10]).unwrap();
+    std::fs::write(root.join("models").join("big.onnx"), [0u8; 1000]).unwrap();
+    assert_eq!(folder_size(&root, &[]), 1010);
+    assert_eq!(folder_size(&root, &[root.join("models")]), 10);
+    std::fs::remove_dir_all(&root).unwrap();
+}

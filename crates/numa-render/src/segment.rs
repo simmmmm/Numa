@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use image::{imageops, RgbImage};
 use numa_infer::Model;
 
 use numa_core::mask::Alpha;
+use rayon::prelude::*;
 use crate::local::{self, Plane};
 
 const EDGE: usize = 1024;
@@ -12,7 +12,7 @@ const EDGE: usize = 1024;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-const REFINE: usize = 2048;
+pub(crate) const REFINE: usize = 2048;
 
 const REFINE_RADIUS: f32 = 1.0 / 256.0;
 const REFINE_EPSILON: f32 = 1e-5;
@@ -26,12 +26,12 @@ pub fn model_path() -> PathBuf {
 }
 
 pub fn is_installed() -> bool {
-    PLAN.get().map_or_else(|| model_path().exists(), Option::is_some)
+    PLAN.loaded().unwrap_or_else(|| model_path().exists())
 }
 
-static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+static PLAN: numa_infer::Kept = numa_infer::Kept::new();
 
-fn plan() -> Option<&'static Model> {
+fn plan() -> Option<std::sync::Arc<Model>> {
     PLAN.get_or_init(|| {
         let path = model_path();
         if !path.exists() {
@@ -40,7 +40,6 @@ fn plan() -> Option<&'static Model> {
 
         Model::load(&path)
     })
-    .as_ref()
 }
 
 pub struct Segmentation {
@@ -108,7 +107,84 @@ impl Segmentation {
 
     pub fn alpha(&self, classes: &[u16]) -> Alpha {
 
-        self.refine(self.coarse(classes))
+        let mut coarse = self.coarse(classes);
+        drop_specks(&mut coarse);
+        let mut alpha = self.refine(coarse);
+
+        let sky = classes.contains(&SKY);
+        let through = classes.iter().any(|class| SEE_THROUGH.contains(class));
+        if sky != through {
+            if let Some((like, reach)) = self.sky_through() {
+                for ((value, like), reach) in alpha.data.iter_mut().zip(&like.data).zip(&reach.data) {
+                    *value = match sky {
+                        true => *value * (1.0 - reach) + like * reach,
+                        false => *value * (1.0 - like * reach),
+                    };
+                }
+            }
+        }
+        alpha
+    }
+
+    fn sky_through(&self) -> Option<(Plane, Plane)> {
+        let (width, height) = (self.photo.width() as usize, self.photo.height() as usize);
+        let sky = local::upsample(&self.coarse(&[SKY]), width, height);
+        let through = local::upsample(&self.coarse(&SEE_THROUGH), width, height);
+        let solid = local::upsample(&self.coarse(&BEHIND), width, height);
+        if !through.data.iter().zip(&sky.data).any(|(t, s)| *t > 0.05 && *s > 0.03) {
+            return None;
+        }
+        let colour: Vec<Plane> = (0..3)
+            .map(|c| Plane::new(width, height, self.photo.pixels().map(|p| p[c] as f32 / 255.0).collect()))
+            .collect();
+        let long = width.max(height) as f32;
+
+        let sure = Plane::new(width, height, sky.data.iter().map(|s| (*s > 0.9) as u8 as f32).collect());
+        let far = ((long / 8.0) as usize).max(1);
+        let (sky_colour, spread, weight) = weighted_mean(&colour, &sure, far);
+        let tolerance: Vec<f32> = spread.iter().map(|s| (2.5 * s.sqrt()).max(0.06)).collect();
+        let off_sky: Vec<f32> = (0..width * height).map(|i| distance(&colour, &sky_colour, i)).collect();
+
+        let branch = Plane::new(
+            width,
+            height,
+            (0..width * height)
+                .map(|i| through.data[i].clamp(0.0, 1.0) * smooth(tolerance[i], 3.0 * tolerance[i], off_sky[i]))
+                .collect(),
+        );
+        let near = ((long / 128.0) as usize).max(1);
+        let (branch_colour, _, branch_weight) = weighted_mean(&colour, &branch, near);
+
+        let mut like = Plane::new(width, height, vec![0.0; width * height]);
+        let mut reach = Plane::new(width, height, vec![0.0; width * height]);
+        like.data.par_iter_mut().zip(reach.data.par_iter_mut()).enumerate().for_each(|(i, (like, reach))| {
+            let tol = tolerance[i];
+            let axis: [f32; 3] = std::array::from_fn(|c| sky_colour[c][i] - branch_colour[c][i]);
+            let length = axis.iter().map(|a| a * a).sum::<f32>() + 1e-6;
+            let branches = branch_weight[i] > 1e-3;
+            *like = if off_sky[i] < 0.5 * tol {
+                1.0
+            } else if branches {
+
+                let from: [f32; 3] = std::array::from_fn(|c| colour[c].data[i] - branch_colour[c][i]);
+                let along = (from.iter().zip(&axis).map(|(f, a)| f * a).sum::<f32>() / length).clamp(0.0, 1.0);
+                let aside = (from.iter().map(|f| f * f).sum::<f32>() - along * along * length).max(0.0).sqrt();
+                along * (1.0 - smooth(tol, 2.0 * tol, aside))
+            } else {
+                0.0
+            };
+
+            let contrast = match branches {
+                true => smooth(1.5 * tol, 3.0 * tol, length.sqrt()),
+                false => 1.0,
+            };
+            *reach = contrast
+                * smooth(0.005, 0.03, weight[i])
+                * smooth(0.05, 0.3, through.data[i])
+                * smooth(0.03, 0.12, sky.data[i])
+                * (1.0 - smooth(0.1, 0.4, solid.data[i]));
+        });
+        Some((like, reach))
     }
 
     pub fn coarse(&self, classes: &[u16]) -> Plane {
@@ -196,24 +272,28 @@ impl Segmentation {
     }
 
     fn refine(&self, coarse: Plane) -> Alpha {
-        let (width, height) = (self.guide.width, self.guide.height);
-        let upsampled = local::upsample(&coarse, width, height);
-        let radius = ((width.max(height) as f32 * REFINE_RADIUS) as usize).max(1);
-        let refined = local::guided_by(&self.guide, &upsampled, radius, REFINE_EPSILON);
-
-        Alpha::new(
-            width,
-            height,
-            refined
-                .data
-                .iter()
-                .map(|value| {
-                    let t = ((value - 0.5) * CERTAINTY + 0.5).clamp(0.0, 1.0);
-                    t * t * (3.0 - 2.0 * t)
-                })
-                .collect(),
-        )
+        refine(&self.guide, &coarse)
     }
+}
+
+pub(crate) fn refine(guide: &Plane, coarse: &Plane) -> Alpha {
+    let (width, height) = (guide.width, guide.height);
+    let upsampled = local::upsample(coarse, width, height);
+    let radius = ((width.max(height) as f32 * REFINE_RADIUS) as usize).max(1);
+    let refined = local::guided_by(guide, &upsampled, radius, REFINE_EPSILON);
+
+    Alpha::new(
+        width,
+        height,
+        refined
+            .data
+            .iter()
+            .map(|value| {
+                let t = ((value - 0.5) * CERTAINTY + 0.5).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            })
+            .collect(),
+    )
 }
 
 pub fn of(image: &RgbImage) -> Option<Segmentation> {
@@ -294,7 +374,7 @@ fn fit(image: &RgbImage, long_edge: usize) -> RgbImage {
     imageops::resize(image, width, height, imageops::FilterType::Lanczos3)
 }
 
-fn luminance(image: &RgbImage, long_edge: usize) -> Plane {
+pub(crate) fn luminance(image: &RgbImage, long_edge: usize) -> Plane {
     let scale = long_edge as f32 / image.width().max(image.height()) as f32;
     let (width, height) = (
         ((image.width() as f32 * scale).round() as u32).max(1),
@@ -327,17 +407,90 @@ pub struct Found {
     pub share: f32,
 }
 
+const SKY: u16 = 2;
+
+fn drop_specks(grid: &mut Plane) {
+    const CELLS: usize = 5;
+    const SURE: f32 = 0.7;
+    let (width, height) = (grid.width, grid.height);
+    let mut seen = vec![false; grid.data.len()];
+    for start in 0..grid.data.len() {
+        if seen[start] || grid.data[start] <= 0.5 {
+            continue;
+        }
+        seen[start] = true;
+        let (mut island, mut stack) = (vec![start], vec![start]);
+        while let Some(cell) = stack.pop() {
+            let (x, y) = (cell % width, cell / width);
+            let neighbours = [
+                (x > 0).then(|| cell - 1),
+                (x + 1 < width).then(|| cell + 1),
+                (y > 0).then(|| cell - width),
+                (y + 1 < height).then(|| cell + width),
+            ];
+            for next in neighbours.into_iter().flatten() {
+                if !seen[next] && grid.data[next] > 0.5 {
+                    seen[next] = true;
+                    island.push(next);
+                    stack.push(next);
+                }
+            }
+        }
+        if island.len() < CELLS && island.iter().all(|cell| grid.data[*cell] < SURE) {
+            for cell in island {
+                grid.data[cell] = grid.data[cell].min(0.99 - grid.data[cell]);
+            }
+        }
+    }
+}
+
+const SEE_THROUGH: [u16; 9] = [4, 17, 72, 32, 38, 93, 87, 136, 95];
+
+const BEHIND: [u16; 7] = [0, 1, 25, 48, 84, 16, 68];
+
+fn weighted_mean(colour: &[Plane], weight: &Plane, radius: usize) -> ([Vec<f32>; 3], Vec<f32>, Vec<f32>) {
+    let covered = local::blur(weight, radius);
+    let mut spread = vec![0.0f32; weight.data.len()];
+    let mean = std::array::from_fn(|c| {
+        let product = |power: i32| {
+            Plane::new(
+                weight.width,
+                weight.height,
+                colour[c].data.iter().zip(&weight.data).map(|(v, w)| v.powi(power) * w).collect(),
+            )
+        };
+        let first = local::blur(&product(1), radius);
+        let second = local::blur(&product(2), radius);
+        let mean: Vec<f32> = first.data.iter().zip(&covered.data).map(|(v, w)| v / (w + 1e-6)).collect();
+        for (i, s) in spread.iter_mut().enumerate() {
+            *s += (second.data[i] / (covered.data[i] + 1e-6) - mean[i] * mean[i]).max(0.0);
+        }
+        mean
+    });
+    (mean, spread, covered.data)
+}
+
+fn distance(colour: &[Plane], to: &[Vec<f32>; 3], i: usize) -> f32 {
+    (0..3).map(|c| (colour[c].data[i] - to[c][i]).powi(2)).sum::<f32>().sqrt()
+}
+
+fn smooth(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 const FOUND_FLOOR: f32 = 0.005;
 
 pub const PRESETS: &[(&str, &[u16])] = &[
     ("Sky", &[2]),
-    ("Buildings", &[0, 1, 25, 48]),
+    ("Buildings", &[0, 1, 5, 8, 14, 25, 42, 43, 48, 79, 84, 86]),
 
     ("Person", &[12]),
     ("Animal", &[126]),
     ("Greenery", &[4, 9, 17, 66, 72]),
-    ("Ground", &[3, 6, 11, 13, 29, 46, 52]),
-    ("Water", &[21, 26, 60, 113, 128]),
+    ("Ground", &[3, 6, 11, 13, 29, 34, 46, 52, 54, 91, 94]),
+    ("Mountains", &[16, 68]),
+    ("Water", &[21, 26, 60, 109, 113, 128]),
 ];
 
 pub fn name_for(classes: &[u16]) -> String {
@@ -400,6 +553,73 @@ mod tests {
             guide: Plane::new(width, height, vec![0.5; cells]),
             photo: RgbImage::new(width as u32, height as u32),
         }
+    }
+
+    #[test]
+    fn specks_the_model_hesitated_over_are_dropped() {
+        let (width, height) = (20usize, 10usize);
+        let mut grid = Plane::new(width, height, vec![0.1; width * height]);
+        for y in 0..height {
+            for x in 0..8 {
+                grid.data[y * width + x] = 0.6;
+            }
+        }
+        grid.data[2 * width + 12] = 0.6;
+        grid.data[2 * width + 13] = 0.55;
+        grid.data[7 * width + 16] = 0.9;
+        drop_specks(&mut grid);
+        assert!(grid.data[2 * width + 12] < 0.5 && grid.data[2 * width + 13] < 0.5, "the speck goes");
+        assert!(grid.data[2 * width + 12] > 0.3, "softly: {}", grid.data[2 * width + 12]);
+        assert_eq!(grid.data[7 * width + 16], 0.9, "the sure one stays");
+        assert_eq!(grid.data[5 * width + 3], 0.6, "the body stays");
+    }
+
+    #[test]
+    fn the_sky_between_the_branches_is_sky() {
+        let (grid, size) = (16usize, 256u32);
+        let crown = |behind: f32| {
+            let cells = grid * grid;
+            let mut probability = vec![0.0f32; LABELS.len() * cells];
+            let mut winner = vec![0u16; cells];
+            for cell in 0..cells {
+                let (sky, tree) = match cell / grid < grid / 2 {
+                    true => (1.0, 0.0),
+                    false => (0.1, 0.9 - behind),
+                };
+                probability[SKY as usize * cells + cell] = sky;
+                probability[4 * cells + cell] = tree;
+                probability[cells + cell] = behind;
+                winner[cell] = if sky == 1.0 { SKY } else { 4 };
+            }
+
+            let photo = RgbImage::from_fn(size, size, |x, y| match y >= size / 2 && (x % 4 == 0 || y % 4 == 0) {
+                true => image::Rgb([30, 25, 20]),
+                false => image::Rgb([150, 190, 230]),
+            });
+            Segmentation {
+                width: grid,
+                height: grid,
+                probability,
+                winner,
+                guide: luminance(&photo, size as usize),
+                photo,
+            }
+        };
+        let at = |alpha: &Alpha, x: usize, y: usize| alpha.data[y * alpha.width + x];
+        let (gap, twig) = ((2, 146), (4, 146));
+
+        let bare = crown(0.0);
+        let (sky, greenery) = (bare.alpha(&[SKY]), bare.alpha(&[4]));
+        assert!(at(&sky, gap.0, gap.1) > 0.8, "a gap is sky: {}", at(&sky, gap.0, gap.1));
+        assert!(at(&sky, twig.0, twig.1) < 0.2, "a twig is not: {}", at(&sky, twig.0, twig.1));
+        assert!(at(&greenery, gap.0, gap.1) < 0.2, "and the gap leaves the tree: {}", at(&greenery, gap.0, gap.1));
+        assert!(at(&greenery, twig.0, twig.1) > 0.8, "the twig stays: {}", at(&greenery, twig.0, twig.1));
+
+        let both = bare.alpha(&[SKY, 4]);
+        assert!(at(&both, twig.0, twig.1) > 0.8);
+
+        let walled = crown(0.5).alpha(&[SKY]);
+        assert!(at(&walled, gap.0, gap.1) < 0.2, "a building behind: {}", at(&walled, gap.0, gap.1));
     }
 
     #[test]

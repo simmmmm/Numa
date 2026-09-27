@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::curve::Curve;
 use crate::document::Basic;
+use crate::grading::Grading;
+use crate::mixer::Mixer;
+use crate::point::PointColours;
 use crate::plane::{blur, Plane};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +24,8 @@ pub enum Shape {
     },
 
     Segment { classes: Vec<u16> },
+
+    Subject,
 
     ColourRange {
         hue: f32,
@@ -359,7 +364,11 @@ impl Stored {
         Self::of_cells(alpha.width, alpha.height, data)
     }
 
-    fn of_cells(width: usize, height: usize, data: Vec<u16>) -> Self {
+    pub fn cells(&self) -> &[u16] {
+        &self.data
+    }
+
+    pub fn of_cells(width: usize, height: usize, data: Vec<u16>) -> Self {
         let covers = Self::box_of(&data, width, height);
         Self { width, height, data, covers }
     }
@@ -482,12 +491,63 @@ impl PartialEq for Pixels {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct Tint {
+    pub hue: f32,
+    pub saturation: f32,
+}
+
+impl Tint {
+    pub fn is_identity(&self) -> bool {
+        self.saturation <= 0.0
+    }
+}
+
+impl Shape {
+
+    pub fn is_found(&self) -> bool {
+        matches!(self, Shape::Segment { .. } | Shape::Subject)
+    }
+}
+
+pub const SUBJECT_CLASSES: [u16; 2] = [12, 126];
+
+impl<'de> Deserialize<'de> for Mask {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut mask = Mask::deserialize(deserializer)?;
+        mask.upgrade();
+        Ok(mask)
+    }
+}
+
+impl Serialize for Mask {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Mask::serialize(self, serializer)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct Mask {
     pub shape: Shape,
 
     #[serde(default)]
     pub curve: Curve,
+
+    #[serde(default)]
+    pub channel_curves: [Curve; 3],
+
+    #[serde(default)]
+    pub mixer: Mixer,
+
+    #[serde(default)]
+    pub point_colours: PointColours,
+
+    #[serde(default)]
+    pub grading: Grading,
+
+    #[serde(default)]
+    pub colour: Tint,
 
     #[serde(default = "Basic::local")]
     pub basic: Basic,
@@ -500,6 +560,15 @@ pub struct Mask {
 
     #[serde(default)]
     pub strokes: Vec<Stroke>,
+
+    #[serde(default)]
+    pub minus: Vec<u16>,
+
+    #[serde(default)]
+    pub minus_masks: Vec<u32>,
+
+    #[serde(default)]
+    pub id: u32,
 
     #[serde(default = "shown")]
     pub visible: bool,
@@ -535,6 +604,9 @@ pub struct Mask {
 
     #[serde(skip)]
     pub unshaped: Pixels,
+
+    #[serde(skip)]
+    pub cut: Pixels,
 }
 
 fn turned_point(at: [f32; 2]) -> [f32; 2] {
@@ -569,7 +641,7 @@ impl Mask {
                 *centre = mapped_point(forward, *centre);
                 *radius = [radius[0] * forward[0].hypot(forward[3]), radius[1] * forward[1].hypot(forward[4])];
             }
-            Shape::Segment { .. } | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
+            Shape::Segment { .. } | Shape::Subject | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
         }
         for point in &mut self.points {
             point.at = mapped_point(forward, point.at);
@@ -580,7 +652,7 @@ impl Mask {
             }
             stroke.radius *= scale;
         }
-        for pixels in [&mut self.map, &mut self.unshaped] {
+        for pixels in [&mut self.map, &mut self.unshaped, &mut self.cut] {
             if let Some(stored) = pixels.0.as_deref() {
                 *pixels = Pixels(Some(Arc::new(stored.remapped(map, width, height))));
             }
@@ -597,7 +669,7 @@ impl Mask {
                 *point = turned_point(*point);
             }
         }
-        for pixels in [&mut self.map, &mut self.unshaped] {
+        for pixels in [&mut self.map, &mut self.unshaped, &mut self.cut] {
             if let Some(stored) = pixels.0.as_deref() {
                 *pixels = Pixels(Some(Arc::new(stored.turned())));
             }
@@ -618,7 +690,7 @@ impl Shape {
                 *radius = [radius[1], radius[0]];
             }
 
-            Shape::Segment { .. } | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
+            Shape::Segment { .. } | Shape::Subject | Shape::ColourRange { .. } | Shape::LuminanceRange { .. } | Shape::Painted => {}
         }
     }
 
@@ -652,6 +724,7 @@ impl Shape {
             }
 
             Shape::Segment { .. }
+            | Shape::Subject
             | Shape::Painted
             | Shape::ColourRange { .. }
             | Shape::LuminanceRange { .. } => 0.0,
@@ -702,12 +775,32 @@ impl Mask {
         }
     }
 
+    pub fn upgrade(&mut self) {
+        let Shape::Segment { classes } = &self.shape else { return };
+        let subjects = !classes.is_empty() && classes.iter().all(|class| SUBJECT_CLASSES.contains(class));
+        let was = match self.name.as_deref() {
+            Some("Subject") => Some(false),
+            Some("Background") if self.inverted => Some(true),
+            _ => None,
+        };
+        let (true, Some(background)) = (subjects, was) else { return };
+        self.shape = Shape::Subject;
+        if background == self.inverted {
+            self.name = None;
+        }
+    }
+
     pub fn new(shape: Shape) -> Self {
         Self {
             matted: false,
             shape,
             basic: Basic::local(),
             curve: Curve::identity(),
+            channel_curves: Default::default(),
+            mixer: Mixer::default(),
+            point_colours: PointColours::default(),
+            grading: Grading::default(),
+            colour: Tint::default(),
             inverted: false,
             matte: false,
             matte_edge: 0.0,
@@ -720,17 +813,23 @@ impl Mask {
             name: None,
             points: Vec::new(),
             strokes: Vec::new(),
+            minus: Vec::new(),
+            minus_masks: Vec::new(),
+            id: 0,
             map: Pixels::default(),
             unshaped: Pixels::default(),
+            cut: Pixels::default(),
         }
     }
 
     pub fn wants_pixels(&self) -> bool {
         !self.strokes.is_empty()
             || !self.points.is_empty()
+            || !self.minus.is_empty()
             || matches!(
                 self.shape,
                 Shape::Segment { .. }
+                    | Shape::Subject
                     | Shape::Painted
                     | Shape::ColourRange { .. }
                     | Shape::LuminanceRange { .. }
@@ -759,9 +858,9 @@ impl Mask {
             });
         };
         match (&self.shape, found) {
-            (Shape::Segment { .. }, Some(base)) => rows(&mut alpha, &|u, v, value| *value = base.sample(u, v)),
+            (Shape::Segment { .. } | Shape::Subject, Some(base)) => rows(&mut alpha, &|u, v, value| *value = base.sample(u, v)),
 
-            (Shape::Segment { .. }, None) | (Shape::Painted, _) => {}
+            (Shape::Segment { .. } | Shape::Subject, None) | (Shape::Painted, _) => {}
             (shape, _) => rows(&mut alpha, &|u, v, value| *value = shape.weight(u, v)),
         }
 
@@ -891,11 +990,28 @@ impl Mask {
     }
 
     pub fn is_idle(&self) -> bool {
-        self.basic.is_local_identity() && self.curve.is_identity()
+        self.basic.is_local_identity()
+            && self.curve.is_identity()
+            && self.channel_curves.iter().all(Curve::is_identity)
+            && self.mixer.is_identity()
+            && self.point_colours.is_identity()
+            && self.grading.is_identity()
+            && self.colour.is_identity()
     }
 
     pub fn covers_nothing(&self) -> bool {
         !self.visible || self.opacity <= 0.0 || self.is_pending()
+    }
+
+    pub fn region_weight(&self, u: f32, v: f32) -> f32 {
+        if self.is_pending() {
+            return 0.0;
+        }
+        let weight = match &self.map.0 {
+            Some(alpha) if self.wants_pixels() => alpha.sample(u, v),
+            _ => self.shape.weight(u, v),
+        };
+        if self.inverted { 1.0 - weight } else { weight }
     }
 
     pub fn field(&self, width: usize, height: usize, region: [f32; 4]) -> Vec<f32> {
@@ -1362,6 +1478,29 @@ mod tests {
     }
 
     #[test]
+    fn a_mask_cuts_another_out_even_switched_off() {
+        let mut document = crate::document::Document::new("frame.raf".into());
+        let gradient = Mask::new(Shape::Linear { from: [0.0, 0.0], to: [0.0, 0.01] });
+        let mut circle = Mask::new(Shape::Radial { centre: [0.75, 0.5], radius: [0.2, 0.2], feather: 0.0 });
+        circle.visible = false;
+        document.set_masks(vec![gradient, circle]);
+        let mut masks = document.masks();
+        assert!(masks[0].id != 0 && masks[1].id != 0 && masks[0].id != masks[1].id);
+        masks[0].minus_masks = vec![masks[1].id];
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let field = field_among(&masks, 0, 40, 40, [0.0, 0.0, 1.0, 1.0], identity);
+        assert!(field[20 * 40 + 10] > 0.99, "the gradient where the circle is not");
+        assert!(field[20 * 40 + 30] < 0.01, "the circle was not cut out");
+
+        let original = masks[1].id;
+        masks.insert(2, masks[1].clone());
+        document.set_masks(masks);
+        let masks = document.masks();
+        assert_eq!(masks[1].id, original);
+        assert_ne!(masks[2].id, original);
+    }
+
+    #[test]
     fn inverting_is_the_other_side_of_the_same_shape() {
         let mut mask = Mask::new(Shape::Linear { from: [0.5, 0.0], to: [0.5, 1.0] });
         let before = mask.weight(0.5, 0.25);
@@ -1799,6 +1938,34 @@ mod tests {
         assert!(older.points[0].enabled);
         assert!(older.strokes[0].enabled);
     }
+}
+
+pub fn field_among(masks: &[Mask], index: usize, width: usize, height: usize, region: [f32; 4], map: [f32; 6]) -> Vec<f32> {
+    let Some(mask) = masks.get(index) else { return vec![0.0; width * height] };
+    let mut field = mask.field_through(width, height, region, map);
+    let others: Vec<&Mask> = mask
+        .minus_masks
+        .iter()
+        .filter(|id| **id != 0 && **id != mask.id)
+        .filter_map(|id| masks.iter().find(|other| other.id == *id))
+        .collect();
+    if others.is_empty() || width == 0 || height == 0 {
+        return field;
+    }
+    field.par_chunks_mut(width).enumerate().for_each(|(y, cells)| {
+        let v = region[1] + (y as f32 + 0.5) / height as f32 * region[3];
+        for (x, cell) in cells.iter_mut().enumerate() {
+            if *cell <= 0.0 {
+                continue;
+            }
+            let u = region[0] + (x as f32 + 0.5) / width as f32 * region[2];
+            let (mu, mv) = (map[0] * u + map[1] * v + map[2], map[3] * u + map[4] * v + map[5]);
+            for other in &others {
+                *cell *= 1.0 - other.region_weight(mu, mv);
+            }
+        }
+    });
+    field
 }
 
 pub fn outline(alpha: &Stored, long_edge: usize) -> Vec<Vec<[f32; 2]>> {

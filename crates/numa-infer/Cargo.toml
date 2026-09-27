@@ -14,6 +14,9 @@ log.workspace = true
 ndarray.workspace = true
 ort.workspace = true
 
+[target.'cfg(target_os = "ios")'.dependencies]
+ort = { workspace = true, features = ["coreml"] }
+
 [dev-dependencies]
 numa-cull = { path = "../numa-cull" }
 numa-io = { path = "../numa-io" }

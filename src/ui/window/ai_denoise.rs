@@ -18,6 +18,13 @@ impl Pass {
         self as usize
     }
 
+    fn verb(self) -> &'static str {
+        match self {
+            Pass::Denoise => "Denoise",
+            Pass::Sharpen => "Sharpen",
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Pass::Denoise => "AI denoise",
@@ -92,12 +99,34 @@ pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
         title.set_xalign(0.0);
         title.set_hexpand(true);
         title.add_css_class("slider-name");
+
         let switch = gtk::Switch::new();
-        switch.set_valign(gtk::Align::Center);
-        switch.update_property(&[gtk::accessible::Property::Label(pass.name())]);
+        let button = gtk::Button::with_label(pass.verb());
+        button.set_valign(gtk::Align::Center);
+        button.add_css_class("suggested-action");
+        button.update_property(&[gtk::accessible::Property::Label(pass.name())]);
+        button.connect_clicked(glib::clone!(
+            #[weak] switch,
+            move |_| switch.set_active(!switch.is_active())
+        ));
+        switch.connect_active_notify(glib::clone!(
+            #[weak] button,
+            move |switch| {
+                match switch.is_active() {
+                    true => {
+                        button.set_label("Remove");
+                        button.remove_css_class("suggested-action");
+                    }
+                    false => {
+                        button.set_label(pass.verb());
+                        button.add_css_class("suggested-action");
+                    }
+                }
+            }
+        ));
         header.set_tooltip_text(Some(pass.about()));
         header.append(&title);
-        header.append(&switch);
+        header.append(&button);
         column.append(&header);
 
         let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
@@ -105,6 +134,7 @@ pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
         set_neutral(&amount, 100.0);
         let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
         row.set_sensitive(false);
+        row.set_visible(false);
         column.append(&row);
 
         switch.connect_active_notify(glib::clone!(
@@ -160,6 +190,7 @@ fn photo_path(photo: &OpenPhoto) -> Option<PathBuf> {
 fn set_amount_sensitive(amount: &gtk::Scale, on: bool) {
     if let Some(row) = amount.parent() {
         row.set_sensitive(on);
+        row.set_visible(on);
     }
 }
 

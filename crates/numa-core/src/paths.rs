@@ -22,6 +22,10 @@ pub fn model_file(names: &[&str]) -> Option<PathBuf> {
     names.iter().map(|name| dir.join(name)).find(|path| path.is_file())
 }
 
+pub fn luts_dir() -> PathBuf {
+    data_dir().join("luts")
+}
+
 pub fn cache_dir() -> PathBuf {
     if let Some(root) = TEST_CACHE.get() {
         return root.clone();

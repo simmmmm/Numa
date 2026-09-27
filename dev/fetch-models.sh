@@ -46,9 +46,9 @@ fetch "sam_decoder.onnx" \
     "https://github.com/simmmmm/Numa/releases/download/models/sam_decoder.onnx" \
     f4514391764fbd56e08e119060d874ecd7d52994bfb1968af159e12d4943b5bb
 
-fetch "isnet.onnx" \
-    "https://github.com/simmmmm/Numa/releases/download/models/isnet.onnx" \
-    60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+fetch "birefnet.onnx" \
+    "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model_fp16.onnx" \
+    3654c741eb80bd926ada8fed1713b506ccf8d30eb1f6487e87eb9f234f33df09
 
 fetch "face_recognition_sface_2021dec.onnx" \
     "https://github.com/simmmmm/Numa/releases/download/models/face_recognition_sface_2021dec.onnx" \

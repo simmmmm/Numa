@@ -135,6 +135,63 @@ impl Corner {
     }
 }
 
+pub fn stamp(frame: &mut Developed, watermark: &Watermark, fallback: &str, set: impl Fn(&str, f64) -> Option<(Vec<u8>, i64, i64)>) {
+    let text = match watermark.text.trim() {
+        "" => fallback.trim(),
+        text => text,
+    };
+    if !watermark.on || text.is_empty() || matches!(frame, Developed::Dng(..)) {
+        return;
+    }
+    let (width, height) = frame.size();
+    let Some((stamp, stamp_width, stamp_height)) = set(text, width.max(height) as f64 * watermark.size as f64 / 1000.0) else {
+        return;
+    };
+    let inset = (width.min(height) as f64 / 40.0) as i64;
+    let (left, top) = match watermark.corner {
+        Corner::BottomRight => (width as i64 - stamp_width - inset, height as i64 - stamp_height - inset),
+        Corner::BottomLeft => (inset, height as i64 - stamp_height - inset),
+        Corner::TopRight => (width as i64 - stamp_width - inset, inset),
+        Corner::TopLeft => (inset, inset),
+    };
+
+    let over = |x: i64, y: i64, blend: &mut dyn FnMut([f32; 4])| {
+        if x < 0 || y < 0 || x >= stamp_width || y >= stamp_height {
+            return;
+        }
+        let at = ((y * stamp_width + x) * 4) as usize;
+        let [b, g, r, a] = [stamp[at], stamp[at + 1], stamp[at + 2], stamp[at + 3]].map(|v| v as f32 / 255.0);
+        if a > 0.0 {
+            blend([r, g, b, a]);
+        }
+    };
+    let (x0, y0) = (left.max(0), top.max(0));
+    let (x1, y1) = ((left + stamp_width).min(width as i64), (top + stamp_height).min(height as i64));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            match frame {
+                Developed::Eight(image) | Developed::Hdr(image, _) => {
+                    let pixel = image.get_pixel_mut(x as u32, y as u32);
+                    over(x - left, y - top, &mut |[r, g, b, a]| {
+                        for (channel, source) in pixel.0.iter_mut().zip([r, g, b]) {
+                            *channel = ((source + *channel as f32 / 255.0 * (1.0 - a)) * 255.0).round().clamp(0.0, 255.0) as u8;
+                        }
+                    });
+                }
+                Developed::Sixteen(image) => {
+                    let pixel = image.get_pixel_mut(x as u32, y as u32);
+                    over(x - left, y - top, &mut |[r, g, b, a]| {
+                        for (channel, source) in pixel.0.iter_mut().zip([r, g, b]) {
+                            *channel = ((source + *channel as f32 / 65535.0 * (1.0 - a)) * 65535.0).round().clamp(0.0, 65535.0) as u16;
+                        }
+                    });
+                }
+                Developed::Dng(..) => return,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Description {
     pub rating: u8,
@@ -419,13 +476,44 @@ fn carried_exif(settings: &ExportSettings, source: Option<&Path>) -> Option<Vec<
     app1_from(&root, false)
 }
 
+fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Option<Vec<u8>> {
+    let mut own: Vec<(u16, Value)> = Vec::new();
+    for (tag, text) in [(0x013B, &settings.creator), (0x8298, &settings.copyright)] {
+        if !text.trim().is_empty() {
+            own.push((tag, Value::from(text.trim())));
+        }
+    }
+    if settings.keywords {
+        if about.rating > 0 {
+            own.push((0x4746, Value::Short(vec![about.rating.min(5) as u16])));
+        }
+        let keywords: Vec<&str> = about.people.iter().chain(&about.albums).map(String::as_str).collect();
+        if !keywords.is_empty() {
+
+            let text = keywords.join(";").encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+            own.push((0x9C9E, Value::Byte(text)));
+        }
+    }
+    if own.is_empty() {
+        return carried_exif(settings, source);
+    }
+    let block = source.filter(|_| settings.metadata).and_then(exif_block);
+    let root = block.and_then(|block| {
+        let mut reader = std::io::Cursor::new(block.get(10..)?.to_vec());
+        IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()
+    });
+    app1_with(root.as_ref(), !settings.strip_location, own)
+}
+
 fn save_coded(image: &Frame<u16>, path: &Path, settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Result<(), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
-    let block = carried_exif(settings, source);
+    let block = match settings.format {
+        Format::Avif => described_exif(settings, source, about),
+        _ => carried_exif(settings, source),
+    };
     let exif = block.as_deref().and_then(|block| block.get(10..));
     let (width, height) = image.dimensions();
     let space = settings.written_space();
-
     let xmp = crate::xmp::description(settings, about, None).map(|description| crate::xmp::packet(&description));
     let bytes = match settings.format {
         Format::Avif => crate::avif::encode(image.as_raw(), width, height, space, settings.quality, exif),
@@ -661,12 +749,19 @@ fn exif_from_tiff(source: &Path) -> Option<Vec<u8>> {
 }
 
 fn app1_from(root: &IFD, location: bool) -> Option<Vec<u8>> {
+    app1_with(Some(root), location, Vec::new())
+}
+
+fn app1_with(root: Option<&IFD>, location: bool, own: Vec<(u16, Value)>) -> Option<Vec<u8>> {
     use std::io::Cursor;
     let mut buffer = Cursor::new(Vec::new());
     let mut tiff = TiffWriter::new(&mut buffer).ok()?;
-    let carried = carry_tags(root, &mut tiff, location)?;
+    let carried = root.and_then(|root| carry_tags(root, &mut tiff, location));
+    if carried.is_none() && own.is_empty() {
+        return None;
+    }
     let mut ifd0 = tiff.new_directory();
-    for (tag, value) in carried {
+    for (tag, value) in carried.into_iter().flatten().chain(own) {
         ifd0.add_untyped_tag(tag, value);
     }
 
@@ -740,6 +835,35 @@ fn with_exif(jpeg: Vec<u8>, exif: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_avif_says_who_made_it_in_its_exif() {
+        let settings = ExportSettings {
+            format: Format::Avif,
+            creator: "Tijmen".into(),
+            copyright: "© 2026 Tijmen".into(),
+            ..ExportSettings::default()
+        };
+        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Noordwijk best".into()] };
+        let block = described_exif(&settings, None, &about).expect("an EXIF block");
+        let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).expect("a TIFF a reader can read");
+
+        let text = |tag| match exif.get_field(tag, ::exif::In::PRIMARY).map(|field| &field.value) {
+            Some(::exif::Value::Ascii(parts)) => String::from_utf8(parts.concat()).ok(),
+            _ => None,
+        };
+        assert_eq!(text(::exif::Tag::Artist).as_deref(), Some("Tijmen"));
+        assert_eq!(text(::exif::Tag::Copyright).as_deref(), Some("© 2026 Tijmen"));
+        let rating = exif.fields().find(|field| field.tag.number() == 0x4746).expect("Rating");
+        assert_eq!(rating.value.get_uint(0), Some(4));
+        let keywords = exif.fields().find(|field| field.tag.number() == 0x9C9E).expect("XPKeywords");
+        let ::exif::Value::Byte(bytes) = &keywords.value else { panic!("{:?}", keywords.value) };
+        let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+        assert_eq!(String::from_utf16_lossy(&units), "Anna;Noordwijk best\0");
+
+        let bare = ExportSettings { keywords: false, ..ExportSettings::default() };
+        assert!(described_exif(&bare, None, &about).is_none());
+    }
 
     #[test]
     fn a_small_export_is_developed_small() {
@@ -1100,5 +1224,32 @@ mod tests {
         assert!(read.get_entry_recursive(0x010Fu16).is_none(), "metadata off, and the make went anyway");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+
+    fn set(text: &str, size: f64) -> Option<(Vec<u8>, i64, i64)> {
+        let (width, height) = ((size * text.len() as f64 * 0.6) as i64, size as i64);
+        Some(([255u8, 255, 255, 180].repeat((width * height) as usize), width, height))
+    }
+
+    #[test]
+    fn the_mark_goes_in_its_corner() {
+        let blank = || Developed::Eight(image::RgbImage::from_pixel(400, 300, image::Rgb([20, 20, 20])));
+        let mark = Watermark { on: true, text: "© Numa".into(), corner: Corner::BottomRight, size: 60 };
+        let mut frame = blank();
+        stamp(&mut frame, &mark, "", set);
+        let Developed::Eight(image) = frame else { unreachable!() };
+        let lit = |x0: u32, y0: u32| (x0..x0 + 200).flat_map(|x| (y0..y0 + 150).map(move |y| (x, y))).filter(|&(x, y)| image.get_pixel(x, y)[0] > 60).count();
+        assert!(lit(200, 150) > 100, "no text in the bottom right");
+        assert_eq!(lit(0, 0), 0, "text outside its corner");
+
+        let mut untouched = blank();
+        stamp(&mut untouched, &Watermark { text: String::new(), ..mark }, "", set);
+        let Developed::Eight(image) = untouched else { unreachable!() };
+        assert!(image.pixels().all(|pixel| pixel[0] == 20));
     }
 }

@@ -104,7 +104,7 @@ pub(super) fn set_mask_edge(state: &App, index: usize, which: u8, value: f32) {
 
         refresh_outline(state);
     } else {
-        rebuild_mask_map(state, index);
+        refill_mask_map(state, index);
     }
     request_render(state);
     show_coverage(state);
@@ -141,6 +141,51 @@ pub(super) fn rename_mask(state: &App, index: usize, name: &str) {
     }
 
     refresh_masks(state);
+    schedule_history_push(state);
+}
+
+pub(super) fn subtract_from_mask(state: &App, index: usize, classes: Vec<u16>) {
+    let found = {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else { return };
+        let found = photo.segmentation.is_some();
+        let Some(mask) = photo.document.mask_mut(index) else { return };
+        if mask.minus == classes {
+            return;
+        }
+        mask.minus = classes;
+        mask.cut = Pixels(None);
+        mask.map = Pixels(None);
+        photo.view = None;
+        found
+    };
+    match found {
+        true => rebuild_mask_map(state, index),
+        false => ensure_segmentation(state),
+    }
+    refresh_masks(state);
+    request_render(state);
+    schedule_history_push(state);
+}
+
+pub(super) fn subtract_mask_from(state: &App, index: usize, other: usize, on: bool) {
+    {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else { return };
+
+        let masks = photo.document.masks();
+        photo.document.set_masks(masks);
+        let Some(id) = photo.document.masks().get(other).map(|them| them.id) else { return };
+        let Some(mask) = photo.document.mask_mut(index) else { return };
+        mask.minus_masks.retain(|kept| *kept != id);
+        if on {
+            mask.minus_masks.push(id);
+        }
+        photo.view = None;
+    }
+    refresh_masks(state);
+    refresh_outline(state);
+    request_render(state);
     schedule_history_push(state);
 }
 
@@ -337,15 +382,15 @@ pub(super) fn select_mask(state: &App, index: Option<usize>) {
 pub(super) fn select_mask_now(state: &App, index: Option<usize>) {
     state.mask_overlay.selected_mask.set(index);
 
-    let target = {
+    let (target, mask_colour) = {
         let open = state.open.borrow();
         let Some(photo) = open.as_ref() else { return };
         match index.and_then(|index| photo.document.masks().get(index).cloned()) {
-            Some(mask) => mask.basic,
+            Some(mask) => (mask.basic, mask.colour),
             None => {
 
                 state.mask_overlay.selected_mask.set(None);
-                photo.document.basic()
+                (photo.document.basic(), Default::default())
             }
         }
     };
@@ -360,15 +405,21 @@ pub(super) fn select_mask_now(state: &App, index: Option<usize>) {
     state.colour.mask_tint.set_value(-target.balance.tint as f64);
 
     state.light.curve_area.queue_draw();
+    state.colour.mask_hue.set_value(mask_colour.hue as f64);
+    state.colour.mask_colour_strength.set_value(mask_colour.saturation as f64);
     refresh_slider_marks(state);
     state.applying.set(false);
+
+    write_mixer(state);
+    write_point_colours(state);
+    write_grading(state);
 
     if selected != state.mask_overlay.brush_owner.get() {
         state.mask_overlay.brush_owner.set(selected);
         state.masks.brush.set(MaskTool::Off);
 
         let settled = selected_mask(state).is_some_and(|mask| match mask.shape {
-            Shape::Segment { .. } => true,
+            Shape::Segment { .. } | Shape::Subject => true,
             Shape::Painted => !is_empty_painted(&mask),
             _ => false,
         });

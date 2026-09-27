@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use image::RgbImage;
 
@@ -26,21 +25,27 @@ pub fn model_path() -> PathBuf {
     super::faces::model_dir().join("face_recognition_sface_2021dec.onnx")
 }
 
+pub const ALLOWED: bool = !cfg!(target_vendor = "apple");
+
 pub fn is_installed() -> bool {
-    PLAN.get().map_or_else(|| model_path().exists(), Option::is_some)
+    ALLOWED && PLAN.loaded().unwrap_or_else(|| model_path().exists())
 }
 
-static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+static PLAN: numa_infer::Kept = numa_infer::Kept::new();
 
-fn plan() -> Option<&'static Model> {
+fn plan() -> Option<std::sync::Arc<Model>> {
     PLAN.get_or_init(|| {
         let path = model_path();
+        if !ALLOWED {
+
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
         if !path.exists() {
             return None;
         }
         Model::load(&path)
     })
-    .as_ref()
 }
 
 pub fn embed(image: &RgbImage, face: &Face) -> Option<[f32; LENGTH]> {
@@ -198,6 +203,14 @@ fn similarity(from: &[[f32; 2]], to: &[[f32; 2]]) -> Option<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_vendor = "apple")]
+    fn nobody_is_recognised_where_numa_is_sold() {
+        assert!(!ALLOWED);
+        assert!(!is_installed());
+        assert!(plan().is_none());
+    }
 
     #[test]
     fn the_transform_found_is_the_one_that_was_applied() {

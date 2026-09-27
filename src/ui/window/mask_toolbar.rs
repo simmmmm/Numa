@@ -89,7 +89,9 @@ impl Toolbar {
 pub(super) fn build_mask_toolbar(state: &App) -> adw::BreakpointBin {
     let bar = &state.masks.toolbar;
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.add_css_class("mask-toolbar");
+
+    row.set_margin_start(12);
+    row.set_margin_end(12);
 
     let editing = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     editing.add_css_class("mask-editing");
@@ -125,7 +127,10 @@ pub(super) fn build_mask_toolbar(state: &App) -> adw::BreakpointBin {
         #[strong] state,
         move |_| refine_selected_mask(&state)
     ));
-    row.append(&bar.again);
+
+    let again = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    again.append(&bar.again);
+    row.append(&again);
     row.append(&separator());
 
     let more = gtk::MenuButton::new();
@@ -159,18 +164,28 @@ pub(super) fn build_mask_toolbar(state: &App) -> adw::BreakpointBin {
     bar.chip_thumb.set_valign(gtk::Align::Center);
 
     let bin = bar.bin.clone();
+    bin.add_css_class("mask-toolbar");
     bin.set_child(Some(&row));
-    narrowing(&bin, &editing_label, state);
+    narrowing(&bin, &row, [&editing, &again], &editing_label, state);
     bin.set_visible(false);
     bin
 }
 
-fn narrowing(bin: &adw::BreakpointBin, editing: &gtk::Label, state: &App) {
+fn narrowing(bin: &adw::BreakpointBin, row: &gtk::Box, [mark, again]: [&gtk::Box; 2], editing: &gtk::Label, state: &App) {
     let bar = &state.masks.toolbar;
 
-    bin.set_width_request(680);
+    bin.set_width_request(540);
     bin.set_height_request(56);
     let hidden = false.to_value();
+    let (closer, edge) = (2i32.to_value(), 4i32.to_value());
+    let mut dividers: Vec<(gtk::Widget, &glib::Value)> = Vec::new();
+    let mut child = row.first_child();
+    while let Some(widget) = child {
+        if widget.is::<gtk::Separator>() {
+            dividers.push((widget.clone(), &hidden));
+        }
+        child = widget.next_sibling();
+    }
     let steps: [(f64, Vec<(gtk::Widget, &glib::Value)>); 2] = [
         (
             975.0,
@@ -182,16 +197,23 @@ fn narrowing(bin: &adw::BreakpointBin, editing: &gtk::Label, state: &App) {
         ),
         (
             750.0,
-            vec![
+            [
                 (bar.adding_words[0].clone().upcast(), &hidden),
                 (bar.adding_words[1].clone().upcast(), &hidden),
                 (state.editor_page.mask_where_label.clone().upcast(), &hidden),
                 (bar.tool_label.clone().upcast(), &hidden),
-            ],
+                (mark.clone().upcast(), &hidden),
+                (again.clone().upcast(), &hidden),
+            ]
+            .into_iter()
+            .chain(dividers)
+
+            .chain(bar.chip.child().and_then(|inside| inside.last_child()).map(|arrow| (arrow, &hidden)))
+            .collect(),
         ),
     ];
     let mut setters: Vec<(gtk::Widget, &glib::Value)> = Vec::new();
-    for (width, more) in steps {
+    for (index, (width, more)) in steps.into_iter().enumerate() {
         setters.extend(more);
         let step = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
@@ -200,6 +222,11 @@ fn narrowing(bin: &adw::BreakpointBin, editing: &gtk::Label, state: &App) {
         ));
         for (widget, value) in &setters {
             step.add_setter(widget, "visible", Some(value));
+        }
+        if index == 1 {
+            step.add_setter(row, "spacing", Some(&closer));
+            step.add_setter(row, "margin-start", Some(&edge));
+            step.add_setter(row, "margin-end", Some(&edge));
         }
         bin.add_breakpoint(step);
     }
@@ -715,7 +742,7 @@ pub(super) fn refresh_mask_toolbar(state: &App) {
 
     let subject = match &mask.shape {
         Shape::Segment { classes } => classes.iter().any(|class| segment::MATTEABLE.contains(class)),
-        Shape::Painted => true,
+        Shape::Subject | Shape::Painted => true,
         _ => false,
     };
     let can_refine = subject && numa::render::matte::is_installed() && segment::is_installed();

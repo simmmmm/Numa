@@ -343,7 +343,7 @@ leave on high-contrast edges.
 **Lens corrections.** Vignetting, distortion and lateral chromatic aberration
 are corrected in a single resampling pass. Fujifilm cameras write their lens
 corrections into each RAF, and Numa uses those first. Everything else is
-corrected from the lensfun database.
+corrected from the LensFun database, by Numa's own code.
 
 **Crop and straighten** with handles, aspect ratio presets and a rule-of-thirds
 overlay. Quarter turns, mirroring and EXIF orientation are handled.
@@ -378,7 +378,7 @@ can be cleaned up by painting it out.
 - **Subject.** Person and Animal fall back to a matting model when the
   semantic model finds nothing, and the chip names the animal ("Bird", "Dog")
   when an image classifier is confident.
-- **Refine.** *Edge* traces a real edge with IS-Net; *Hair* follows hair and
+- **Refine.** *Edge* traces a real edge with BiRefNet; *Hair* follows hair and
   fur with ViTMatte.
 - **By colour or brightness.** Colour range and luminance range masks select
   every pixel of a colour or between two brightnesses, anywhere in the frame.
@@ -658,14 +658,14 @@ recognition thresholds, and the bugs that were hardest to find.
 | [`rusqlite`](https://crates.io/crates/rusqlite) | The catalogs. A rating writes one row, and a filter is a `WHERE` clause. |
 | [`ort`](https://crates.io/crates/ort) + [`ndarray`](https://crates.io/crates/ndarray) | ONNX Runtime for every model. |
 | [`image`](https://crates.io/crates/image) + [`rayon`](https://crates.io/crates/rayon) | Pixel work across all cores. |
-| [`lensfun`](https://crates.io/crates/lensfun) | Lens corrections for lenses that do not describe themselves in the file. |
+| [`roxmltree`](https://crates.io/crates/roxmltree) | Reading the LensFun lens database (CC BY-SA 3.0, the LensFun community), for lenses that do not describe themselves in the file. The corrections themselves are Numa's own code. |
 | [`serde`](https://crates.io/crates/serde) · [`serde_json`](https://crates.io/crates/serde_json) · [`dirs`](https://crates.io/crates/dirs) · [`log`](https://crates.io/crates/log) · [`env_logger`](https://crates.io/crates/env_logger) · [`byteorder`](https://crates.io/crates/byteorder) · [`libc`](https://crates.io/crates/libc) | Supporting work. |
 
 | Model | Used for |
 |---|---|
 | EfficientViT-Seg-B2 (ADE20K) | Semantic mask presets |
 | SlimSAM-77 | Click to select |
-| IS-Net | Matting and refined edges |
+| BiRefNet | The subject, and refined edges |
 | ViTMatte-S | Hair and fur in Refine edge |
 | YuNet | Face detection |
 | open-closed-eye-0001 (OpenVINO) | Asking about closed eyes in culling |
@@ -725,8 +725,9 @@ published with the downloads.
 - **[rawler](https://github.com/dnglab/dnglab)** for RAW decoding in Rust.
 - **[MIT Han Lab](https://github.com/mit-han-lab/efficientvit)** for
   EfficientViT, **[Xenova](https://huggingface.co/Xenova)** for the ONNX
-  conversion of SlimSAM, **[rembg](https://github.com/danielgatis/rembg)** for
-  the IS-Net export, and **[OpenCV Zoo](https://github.com/opencv/opencv_zoo)**
+  conversion of SlimSAM, **[BiRefNet](https://github.com/ZhengPeng7/BiRefNet)**
+  (Peng Zheng et al.) and **[onnx-community](https://huggingface.co/onnx-community)**
+  for its ONNX export, and **[OpenCV Zoo](https://github.com/opencv/opencv_zoo)**
   for YuNet, SFace and PP-ResNet, **[SCUNet](https://github.com/cszn/SCUNet)**
   for the denoiser, **[darktable](https://www.darktable.org)** for choosing
   and converting RealPLKSR, **[LaMa](https://github.com/advimman/lama)** and

@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) use numa::io::masks::{mask_label, mask_name};
+
 pub(super) fn build_mask_overlay(state: &App) -> gtk::DrawingArea {
     let area = state.mask_overlay.area.clone();
     area.set_visible(false);
@@ -312,35 +314,6 @@ pub(super) fn is_gradient(mask: &Mask) -> bool {
         && mask.points.is_empty()
 }
 
-pub(super) fn mask_name(mask: &Mask) -> String {
-
-    if let Some(name) = mask.name.as_ref().filter(|name| !name.trim().is_empty()) {
-        return name.trim().to_string();
-    }
-    match &mask.shape {
-        Shape::Linear { .. } => "Linear".to_string(),
-        Shape::Radial { .. } => "Radial".to_string(),
-        Shape::Segment { classes } => segment::name_for(classes),
-
-        Shape::Painted if mask.strokes.is_empty() && !mask.points.is_empty() => "Click".to_string(),
-        Shape::Painted => "Brush".to_string(),
-        Shape::ColourRange { .. } => "Colour range".to_string(),
-        Shape::LuminanceRange { .. } => "Luminance range".to_string(),
-    }
-}
-
-pub(super) fn mask_label(masks: &[Mask], index: usize) -> String {
-    let name = mask_name(&masks[index]);
-    let same: Vec<usize> =
-        (0..masks.len()).filter(|other| mask_name(&masks[*other]) == name).collect();
-    match same.len() > 1 {
-        true => {
-            format!("{name} {}", same.iter().position(|other| *other == index).unwrap_or(0) + 1)
-        }
-        false => name,
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Handle {
     Start,
@@ -371,6 +344,7 @@ pub(super) fn nearest_mask_handle(shape: &Shape, u: f32, v: f32) -> Handle {
         }
 
         Shape::Segment { .. }
+        | Shape::Subject
         | Shape::Painted
         | Shape::ColourRange { .. }
         | Shape::LuminanceRange { .. } => Handle::Whole,
@@ -422,7 +396,7 @@ pub(super) fn move_mask_handle(shape: Shape, handle: Handle, shift: [f32; 2], at
             feather,
         },
 
-        (shape @ (Shape::Segment { .. } | Shape::Painted), _) => shape,
+        (shape @ (Shape::Segment { .. } | Shape::Subject | Shape::Painted), _) => shape,
     }
 }
 
@@ -585,15 +559,31 @@ pub(super) fn gradient_alpha(state: &App, mask: &Mask) -> Option<std::sync::Arc<
     Some(std::sync::Arc::new(numa::core::mask::Stored::new(&Alpha::new(width, height, data))))
 }
 
+fn cut_alpha(state: &App, mask: &Mask) -> Option<std::sync::Arc<numa::core::mask::Stored>> {
+    if mask.minus_masks.is_empty() {
+        return None;
+    }
+    let index = state.mask_overlay.selected_mask.get()?;
+    let mut masks = state.open.borrow().as_ref()?.document.masks();
+
+    let shown = masks.get_mut(index)?;
+    shown.visible = true;
+    shown.opacity = 1.0;
+    let (width, height) = mask_raster_size(state);
+    let field = numa::core::mask::field_among(&masks, index, width, height, [0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    Some(std::sync::Arc::new(numa::core::mask::Stored::new(&Alpha::new(width, height, field))))
+}
+
 pub(super) fn refresh_outline(state: &App) {
     let selected = selected_mask(state);
-    let made = selected.as_ref().and_then(|mask| gradient_alpha(state, mask));
+    let cut = selected.as_ref().and_then(|mask| cut_alpha(state, mask));
+    let made = cut.clone().or_else(|| selected.as_ref().and_then(|mask| gradient_alpha(state, mask)));
     let traced = selected
         .as_ref()
         .and_then(|mask| {
 
             let visible = mask.visible && !matches!(mask.shape, Shape::Linear { .. } | Shape::Radial { .. });
-            mask.map.0.as_ref().or(made.as_ref()).filter(|_| visible).map(|alpha| {
+            cut.as_ref().or(mask.map.0.as_ref()).or(made.as_ref()).filter(|_| visible).map(|alpha| {
                 let mut paths = numa::core::mask::outline(alpha, OUTLINE_EDGE);
 
                 if paths.len() > 400 {
@@ -607,9 +597,13 @@ pub(super) fn refresh_outline(state: &App) {
     *state.mask_overlay.outline.borrow_mut() = traced;
 
     let wash = selected.as_ref().and_then(|mask| {
-        let alpha = mask.map.0.as_ref().or(made.as_ref())?;
+
+        let (alpha, inverted) = match &cut {
+            Some(cut) => (cut, false),
+            None => (mask.map.0.as_ref().or(made.as_ref())?, mask.inverted),
+        };
         state.mask_overlay.wash_size.set((alpha.width, alpha.height));
-        build_wash(alpha, mask.inverted)
+        build_wash(alpha, inverted)
     });
     *state.mask_overlay.wash.borrow_mut() = wash;
     *state.mask_overlay.dot_cache.borrow_mut() = match &selected {
@@ -750,6 +744,7 @@ pub(super) fn draw_mask(context: &gtk::cairo::Context, content: (f64, f64, f64, 
     let handles: Vec<(f64, f64)> = match shape {
 
         Shape::Segment { .. }
+        | Shape::Subject
         | Shape::Painted
         | Shape::ColourRange { .. }
         | Shape::LuminanceRange { .. } => Vec::new(),

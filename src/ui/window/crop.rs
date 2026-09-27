@@ -291,6 +291,10 @@ fn swap_orientation(state: &App) {
     state.crop.turned.set(Some((state.crop.rect.get(), now)));
 }
 
+pub(super) fn turned_rect([x, y, width, height]: [f32; 4]) -> [f32; 4] {
+    [1.0 - y - height, x, height, width]
+}
+
 fn turn_buttons(state: &App) -> gtk::Box {
     let turns = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     turns.add_css_class("linked");
@@ -319,7 +323,13 @@ fn turn_buttons(state: &App) -> gtk::Box {
 
                 forget_model_frames(&state);
 
-                state.crop.rect.set([0.0, 0.0, 1.0, 1.0]);
+                state.crop.rect.set(turned_rect(state.crop.rect.get()));
+                if let Some(ratio) = state.crop.ratio.get() {
+                    state.crop.ratio.set(Some(1.0 / ratio));
+                    state.crop.landscape.set(!state.crop.landscape.get());
+                    label_ratios(&state);
+                }
+                state.crop.fit_base.set(None);
                 state.crop.area.queue_draw();
                 commit_crop(&state);
 

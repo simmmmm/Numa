@@ -18,7 +18,7 @@
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 1.1px;
-    color: #8d8d8d;
+    color: alpha(@window_fg_color, 0.5);
     opacity: 1;
 }
 
@@ -28,7 +28,7 @@
 
 .slider-name {
     font-size: 13px;
-    color: #bdbdbd;
+    color: alpha(@window_fg_color, 0.72);
 }
 
 /* UX-017: one control leads its section, and says so at full weight. */
@@ -38,17 +38,18 @@
 
 .slider-value {
     font-size: 12.5px;
-    color: #8d8d8d;
+    color: alpha(@window_fg_color, 0.5);
     opacity: 1;
     /* Tabular figures: without these the readout jitters while dragging. */
     font-feature-settings: "tnum";
 }
 
-/* Moved: the name and the number come up to white, which is the whole of what
-   "this one has been touched" has to say. */
+/* Moved: the name and the number come up to full strength — white on the dark
+   scheme, black on the light — which is the whole of what "this one has been
+   touched" has to say. */
 .touched .slider-name,
 .touched .slider-value {
-    color: #ffffff;
+    color: @window_fg_color;
 }
 
 /* A slim bipolar slider. GTK draws the handle inside the trough by default, so
@@ -67,7 +68,7 @@
     /* PANEL_PLAN P1: a 2 px hairline, and a 10 px area for the thumb to sit in. */
     min-height: 2px;
     border-radius: 1px;
-    background-color: rgba(255, 255, 255, 0.11);
+    background-color: alpha(@window_fg_color, 0.11);
 }
 
 /* PANEL_PLAN P1: what GTK draws between a slider's lower bound and its value.
@@ -123,18 +124,18 @@ scale highlight {
    been touched — what changes is the fill `paint_track` draws on it and the
    thumb. A track that brightened as well said the same thing twice. */
 .quiet scale trough {
-    background-color: rgba(255, 255, 255, 0.11);
+    background-color: alpha(@window_fg_color, 0.11);
 }
 
 /* Neutral: the thumb is there, dim, on its neutral position — not absent.
    Transparent until hover was a control that appeared out of nothing. */
 .quiet scale slider {
-    background: rgba(255, 255, 255, 0.28);
+    background: alpha(@window_fg_color, 0.28);
     transition: background 120ms ease-out;
 }
 
 .quiet scale:hover trough {
-    background-color: rgba(255, 255, 255, 0.18);
+    background-color: alpha(@window_fg_color, 0.18);
 }
 
 .quiet scale:hover slider {
@@ -190,6 +191,21 @@ scale highlight {
     border-radius: 3px;
     border: none;
     opacity: 0.55;
+}
+
+/* UX-022: which picture the histogram's place shows — small, in the grey of
+   a section label, so it reads as a setting of the graph and not a tool. */
+.scope-switch button {
+    min-height: 20px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    color: alpha(@window_fg_color, 0.5);
+}
+
+.scope-switch button:checked {
+    color: @window_fg_color;
 }
 
 .clip-light:hover { opacity: 0.85; }
@@ -469,10 +485,11 @@ scale highlight {
     /* PANEL_PLAN D3: which one is on, without clicking to find out.
        `alpha(currentColor, 0.2)` was a fifth of the *label's* colour, and the
        label on a quiet flat button is #9a9a9a — a fifth of dim grey on a dark
-       ground is nothing, which is why the three read as identical. White, and
-       the text goes white with it, the same pair that marks the rail's tab. */
-    background: rgba(255, 255, 255, 0.16);
-    color: #ffffff;
+       ground is nothing, which is why the three read as identical. The foreground
+       colour, and the text at full strength with it — the same pair that marks the
+       rail's tab, and one that follows the colour scheme. */
+    background: alpha(@window_fg_color, 0.16);
+    color: @window_fg_color;
     font-weight: 600;
 }
 
@@ -593,6 +610,18 @@ scale highlight {
    fill from — the handle's position is the value, as on the hue slider. */
 .adjustment scale.mixer-track highlight {
     background: none;
+}
+
+/* ADJ-006: a point colour just picked, lit once so it is seen where it
+   landed; the fade is the transition back. */
+.point-section {
+    border-radius: 8px;
+    transition: background 700ms ease-out;
+}
+
+.point-section.point-flash {
+    background: alpha(@accent_bg_color, 0.22);
+    transition: none;
 }
 
 .adjustment scale.mixer-track slider {
@@ -812,16 +841,16 @@ button.rail-tab {
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: #9a9a9a;
+    color: alpha(@window_fg_color, 0.56);
 }
 
 .rail-tab:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: alpha(@window_fg_color, 0.06);
 }
 
 .rail-tab:checked {
-    background: rgba(255, 255, 255, 0.11);
-    color: #ffffff;
+    background: alpha(@window_fg_color, 0.11);
+    color: @window_fg_color;
 }
 
 /* 10 px, not the artboard's 9.5: GTK renders 9.5 as 9 px of ink, and 9 px on
@@ -871,7 +900,7 @@ button.rail-tab {
 }
 
 .mask-scope > image {
-    color: #62a0ea;
+    color: @accent_color;
 }
 
 /* The eye, small: a full button filled the 34 px line top to bottom, where
@@ -885,7 +914,7 @@ button.rail-tab {
 
 /* The path's last step while a mask is edited, in the mask's accent. */
 .mask-crumb {
-    color: #62a0ea;
+    color: @accent_color;
     font-weight: 600;
     padding: 0 6px;
 }
@@ -893,13 +922,12 @@ button.rail-tab {
 /* The toolbar, in the filmstrip's place: one row of 56 px. */
 .mask-toolbar {
     min-height: 56px;
-    padding: 0 12px;
-    background: #232830;
+    background: mix(@window_bg_color, @accent_bg_color, 0.06);
     border-top: 1px solid rgba(98, 160, 234, 0.35);
 }
 
 .mask-editing {
-    color: #62a0ea;
+    color: @accent_color;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1.2px;
@@ -917,7 +945,7 @@ button.rail-tab {
 
 .mask-chip .mask-where {
     font-size: 11px;
-    color: #9fb3cc;
+    color: alpha(@window_fg_color, 0.6);
 }
 
 .mask-thumb {
@@ -927,7 +955,7 @@ button.rail-tab {
 /* Add or Subtract: a switch of two, the pressed one a pill of accent in its
    track, so which is on is plain. */
 .mask-adding {
-    background: alpha(#ffffff, 0.08);
+    background: alpha(@window_fg_color, 0.08);
     border-radius: 9px;
     padding: 2px;
 }
@@ -941,7 +969,7 @@ button.rail-tab {
 }
 
 .mask-adding > button:hover:not(:checked) {
-    background: alpha(#ffffff, 0.08);
+    background: alpha(@window_fg_color, 0.08);
 }
 
 .mask-adding > button:checked {
@@ -953,7 +981,7 @@ button.rail-tab {
    the full one — Add and Subtract keep the solid blue for which way. */
 .mask-select.tool-in-hand > button {
     background: alpha(#3584e4, 0.2);
-    color: #99c1f1;
+    color: @accent_color;
     box-shadow: inset 0 0 0 1px alpha(#3584e4, 0.55);
 }
 
@@ -1024,6 +1052,15 @@ button.rail-tab {
 .preset-card {
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.35);
+}
+
+/* LIB-006: the chosen preset and its Strength, together on a quiet fill so
+   they read as one thing. */
+.strength-card {
+    padding: 10px 12px 6px 12px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    background: alpha(@window_fg_color, 0.06);
 }
 
 /* The Presets page is the one page not wrapped in a scroller, so it carries

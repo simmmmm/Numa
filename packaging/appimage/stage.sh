@@ -24,6 +24,14 @@ install -m 0644 "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.ti
 install -m 0644 "$ROOT_DIR/data/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png" \
         "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.tijmen.Numa-dark.png"
 
+install -d "$APPDIR/usr/share/numa/lensfun"
+install -m 0644 "$ROOT_DIR"/data/lensfun/* "$APPDIR/usr/share/numa/lensfun/"
+
+if [[ -d "$ROOT_DIR/data/private-profiles" ]]; then
+  install -d "$APPDIR/usr/share/numa/profiles/numa"
+  install -m 0644 "$ROOT_DIR"/data/private-profiles/* "$APPDIR/usr/share/numa/profiles/numa/"
+fi
+
 install -m 0644 "$DESKTOP_SRC" "$APPDIR/com.tijmen.Numa.desktop"
 install -m 0644 "$ICON_SRC" "$APPDIR/com.tijmen.Numa.png"
 

@@ -28,6 +28,9 @@ pub(super) struct State {
 
     pub(super) mask_temperature: gtk::Scale,
     pub(super) mask_tint: gtk::Scale,
+
+    pub(super) mask_hue: gtk::Scale,
+    pub(super) mask_colour_strength: gtk::Scale,
 }
 
 impl State {
@@ -57,6 +60,8 @@ impl State {
             monochrome: gtk::Switch::new(),
 
             mask_temperature: gtk::Scale::with_range(gtk::Orientation::Horizontal, -2000.0, 2000.0, 10.0),
+            mask_hue: gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 360.0, 1.0),
+            mask_colour_strength: gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0),
             mask_tint: gtk::Scale::with_range(
                 gtk::Orientation::Horizontal,
                 -color::MAX_TINT as f64,
@@ -163,8 +168,8 @@ fn build_monochrome(state: &App) -> gtk::Box {
             {
                 let mut open = state.open.borrow_mut();
                 let Some(photo) = open.as_mut() else { return };
-                let mixer = Mixer { monochrome: switch.is_active(), ..photo.document.mixer() };
-                photo.document.set_mixer(mixer);
+                let mixer = Mixer { monochrome: switch.is_active(), ..mixer_in(&state, &photo.document) };
+                set_mixer_in(&state, &mut photo.document, mixer);
                 photo.view = None;
             }
             write_mixer(&state);
@@ -205,6 +210,7 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
     column.append(&row);
 
     let controls = state.colour.point_controls.clone();
+    controls.add_css_class("point-section");
     let names = [
         ("Hue", Readout::Signed(0)),
         ("Saturation", Readout::Signed(0)),
@@ -213,6 +219,11 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
     ];
     for (index, (name, readout)) in names.into_iter().enumerate() {
         let scale = &state.colour.point_sliders[index];
+
+        if index == 0 {
+            scale.add_css_class("mixer-track");
+            scale.add_css_class("point-hue");
+        }
         scale.connect_value_changed(glib::clone!(
             #[strong] state,
             move |_| {
@@ -241,13 +252,13 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
             {
                 let mut open = state.open.borrow_mut();
                 let Some(photo) = open.as_mut() else { return };
-                let mut points = photo.document.point_colours();
+                let mut points = points_in(&state, &photo.document);
                 let selected = state.colour.point_selected.get();
                 if selected < points.points.len() {
                     points.points.remove(selected);
                 }
                 state.colour.point_selected.set(selected.saturating_sub(1));
-                photo.document.set_point_colours(points);
+                set_points_in(&state, &mut photo.document, points);
             }
             write_point_colours(&state);
             request_render(&state);
@@ -313,6 +324,13 @@ pub(super) fn build_colour(
     global_only(white.as_ref());
     colour.append(&white);
 
+    let profile_header = section_header("Camera profile");
+    global_only(profile_header.as_ref());
+    colour.append(&profile_header);
+    let profile = build_profile_picker(state);
+    global_only(profile.as_ref());
+    colour.append(&profile);
+
     let mask_header = section_header("White balance");
     mask_only(mask_header.as_ref());
     colour.append(&mask_header);
@@ -342,8 +360,18 @@ pub(super) fn build_colour(
     }
 
     colour.append(&section_header("Colour"));
+    state.colour.mask_hue.add_css_class("hue-slider");
+    for (name, scale, readout) in [
+        ("Hue", &state.colour.mask_hue, Readout::Degrees),
+        ("Strength", &state.colour.mask_colour_strength, Readout::Positive(0)),
+    ] {
+        let row = slider_row(state, name, scale, readout);
+        set_neutral(scale, 0.0);
+        mask_only(row.as_ref());
+        colour.append(&row);
+    }
+
     let monochrome = build_monochrome(state);
-    global_only(monochrome.as_ref());
     colour.append(&monochrome);
     for (name, scale, readout) in &all[9..11] {
         let row = slider_row(state, name, scale, *readout);
@@ -356,9 +384,6 @@ pub(super) fn build_colour(
     let mixer_header = section_header("Mixer");
     let mixer = build_mixer(state);
     let point = build_point_colours(state);
-    global_only(mixer_header.as_ref());
-    global_only(mixer.as_ref());
-    global_only(point.as_ref());
     colour.append(&mixer_header);
     colour.append(&mixer);
     colour.append(&point);
@@ -366,7 +391,6 @@ pub(super) fn build_colour(
     colour
 }
 
-#[allow(dead_code)]
 pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.set_margin_bottom(6);
@@ -418,11 +442,19 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
 
 fn profile_choices(state: &App) -> Vec<Option<String>> {
     let mut choices = vec![None, Some(render::NO_COLOUR_PROFILE.to_string())];
-    choices.extend(camera_profiles(state).into_iter().map(Some));
+    choices.extend(camera_profiles(state).into_iter().map(|(name, _)| Some(name)));
     choices
 }
 
-fn camera_profiles(state: &App) -> Vec<String> {
+fn source_label(source: dcp::Source) -> &'static str {
+    match source {
+        dcp::Source::Numa => "Numa",
+        dcp::Source::RawTherapee => "RawTherapee",
+        dcp::Source::Yours => "yours",
+    }
+}
+
+fn camera_profiles(state: &App) -> Vec<(String, dcp::Source)> {
     let open = state.open.borrow();
     let Some(summary) = open.as_ref().and_then(|photo| photo.summary.as_ref()) else {
         return Vec::new();
@@ -440,14 +472,19 @@ pub(super) fn refresh_profile_picker(state: &App) {
         )
     };
 
+    let profiles = camera_profiles(state);
+    let source_of = |name: &str| profiles.iter().find(|(n, _)| n == name).map(|(_, source)| *source);
     let mut labels = vec![
         match &automatic {
-            Some(name) => format!("Automatic — {name}"),
-            None => "Automatic — none for this camera".to_string(),
+            Some(name) => match source_of(name) {
+                Some(source) => format!("Automatic — {name} · {}", source_label(source)),
+                None => format!("Automatic — {name}"),
+            },
+            None => "Automatic — the camera's matrix".to_string(),
         },
-        "None (colour matrix only)".to_string(),
+        "Camera matrix only".to_string(),
     ];
-    labels.extend(camera_profiles(state));
+    labels.extend(profiles.iter().map(|(name, source)| format!("{name} · {}", source_label(*source))));
     let model = gtk::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>());
 
     state.applying.set(true);
@@ -459,9 +496,16 @@ pub(super) fn refresh_profile_picker(state: &App) {
     state.colour.profile_picker.set_selected(index as u32);
     state.applying.set(false);
 
-    state.colour.profile_label.set_text(
-        &dcp::profiles_dir()
-            .map(|dir| format!("More profiles: .dcp files in {}", dir.display()))
-            .unwrap_or_default(),
-    );
+    let showing = chosen.clone().or(automatic);
+    let from = match showing.as_deref() {
+        None => "From the colour matrix in the raw file.".to_string(),
+        Some(name) if name == render::NO_COLOUR_PROFILE => "From the colour matrix in the raw file.".to_string(),
+        Some(name) => match source_of(name) {
+            Some(dcp::Source::Numa) => "Numa's own profile, fitted from public-domain raws.".to_string(),
+            Some(dcp::Source::RawTherapee) => "A RawTherapee profile (GPL-3.0).".to_string(),
+            Some(dcp::Source::Yours) | None => "One of your own profiles.".to_string(),
+        },
+    };
+    let more = dcp::profiles_dir().map(|dir| format!(" More: .dcp files in {}", dir.display())).unwrap_or_default();
+    state.colour.profile_label.set_text(&format!("{from}{more}"));
 }

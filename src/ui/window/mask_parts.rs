@@ -13,6 +13,7 @@ pub(super) fn refresh_mask_parts(state: &App, masks: &[Mask], selected: Option<u
     let index = selected.unwrap_or(0);
 
     append_mask_name_row(state, mask, index);
+    append_subtract_row(state, mask, index);
 
     state.masks.strength.set_value((mask.opacity * 100.0) as f64);
     state.masks.feather.set_value(mask.feather as f64);
@@ -57,6 +58,70 @@ fn append_mask_name_row(state: &App, mask: &Mask, index: usize) {
         }
     ));
     state.masks.mask_parts.append(&name);
+}
+
+fn append_subtract_row(state: &App, mask: &Mask, index: usize) {
+    let masks = state.open.borrow().as_ref().map(|photo| photo.document.masks()).unwrap_or_default();
+    let row = adw::ExpanderRow::new();
+    row.set_title("Subtract");
+    let mut chosen: Vec<String> = Vec::new();
+
+    let tick = |row: &adw::ExpanderRow, title: &str, on: bool, toggled: Box<dyn Fn(bool)>| {
+        let check = gtk::CheckButton::new();
+        check.set_active(on);
+        check.set_valign(gtk::Align::Center);
+        let line = adw::ActionRow::new();
+        line.set_title(title);
+        line.add_prefix(&check);
+        line.set_activatable_widget(Some(&check));
+        check.connect_toggled(move |check| toggled(check.is_active()));
+        row.add_row(&line);
+    };
+
+    for (other, them) in masks.iter().enumerate().filter(|(other, _)| *other != index) {
+        let label = numa::io::masks::mask_label(&masks, other);
+        let on = them.id != 0 && mask.minus_masks.contains(&them.id);
+        if on {
+            chosen.push(label.clone());
+        }
+        let state = state.clone();
+        tick(&row, &label, on, Box::new(move |on| {
+            if state.applying.get() {
+                return;
+            }
+
+            let state = state.clone();
+            glib::idle_add_local_once(move || subtract_mask_from(&state, index, other, on));
+        }));
+    }
+    for (name, classes) in segment::PRESETS {
+        let on = !mask.minus.is_empty() && classes.iter().all(|class| mask.minus.contains(class));
+        if on {
+            chosen.push(name.to_string());
+        }
+        let state = state.clone();
+        let classes = classes.to_vec();
+        tick(&row, name, on, Box::new(move |on| {
+            if state.applying.get() {
+                return;
+            }
+            let Some(mut minus) = state.open.borrow().as_ref().and_then(|photo| photo.document.masks().get(index).map(|mask| mask.minus.clone()))
+            else {
+                return;
+            };
+            minus.retain(|class| !classes.contains(class));
+            if on {
+                minus.extend(&classes);
+            }
+            let state = state.clone();
+            glib::idle_add_local_once(move || subtract_from_mask(&state, index, minus));
+        }));
+    }
+    row.set_subtitle(&match chosen.is_empty() {
+        true => "Nothing".to_string(),
+        false => chosen.join(", "),
+    });
+    state.masks.mask_parts.append(&row);
 }
 
 fn list_mask_parts(state: &App, mask: &Mask) -> Vec<(String, MaskPart, bool)> {

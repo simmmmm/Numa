@@ -12,6 +12,7 @@ use numa_core::lens::{correct_geometry, correct_vignetting, LensProfile};
 use numa_core::profile::DngProfile;
 use crate::dcp;
 use numa_core::image::LinearImage;
+use numa_core::space::ColourSpace;
 
 const BASELINE_EV: f32 = 1.241;
 
@@ -98,30 +99,76 @@ pub fn as_shot(path: &Path) -> Result<RgbImage, String> {
     Ok(numa_render::develop(&document, linear, &Default::default()))
 }
 
-fn open_heif(path: &Path) -> Result<DynamicImage, String> {
+fn open_heif(path: &Path) -> Result<(DynamicImage, ColourSpace), String> {
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     let context =
         heic_rs::context::Context::open(&bytes).map_err(|err: heic_rs::Error| err.to_string())?;
     let primary = context.meta.primary;
 
+    let space = context.props(primary).map_or(ColourSpace::Srgb, |props| match (props.icc, props.nclx) {
+        (Some(icc), _) => icc_space(icc),
+        (None, Some(nclx)) if nclx.primaries == 12 => ColourSpace::DisplayP3,
+        _ => ColourSpace::Srgb,
+    });
+
     let full = heif_item(&context, primary);
-    if full.is_ok() {
-        return full;
+    if let Ok(image) = full {
+        return Ok((image, space));
     }
 
     let transforms = context.props(primary).map(|props| props.transforms).unwrap_or_default();
     for preview in heif_previews(&context, primary) {
         if let Ok(image) = heif_preview(&context, preview, &transforms) {
             log::warn!(
-                "{}: only its {}x{} preview — this file's full resolution needs HEVC                  Range Extensions, which the decoder here does not do",
+                "{}: only its {}x{} preview — this file's full resolution needs HEVC \
+                 Range Extensions, which the decoder here does not do",
                 path.display(),
                 image.width(),
                 image.height(),
             );
-            return Ok(image);
+            return Ok((image, space));
         }
     }
-    full
+    full.map(|image| (image, space))
+}
+
+fn icc_space(icc: &[u8]) -> ColourSpace {
+    let word = |at: usize| icc.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let colorant = |name: &[u8; 4]| -> Option<[f32; 3]> {
+        let count = word(128)? as usize;
+        let entry = (0..count.min(256)).map(|i| 132 + 12 * i).find(|at| icc.get(*at..*at + 4) == Some(name))?;
+        let offset = word(entry + 4)? as usize;
+        if icc.get(offset..offset + 4)? != b"XYZ " {
+            return None;
+        }
+        let fixed = |i: usize| word(offset + 8 + 4 * i).map(|v| v as i32 as f32 / 65536.0);
+        Some([fixed(0)?, fixed(1)?, fixed(2)?])
+    };
+    let Some(columns) = [b"rXYZ", b"gXYZ", b"bXYZ"].into_iter().map(colorant).collect::<Option<Vec<_>>>() else {
+        return ColourSpace::Srgb;
+    };
+    [ColourSpace::Srgb, ColourSpace::DisplayP3, ColourSpace::AdobeRgb, ColourSpace::ProPhoto]
+        .into_iter()
+        .find(|space| {
+            let matrix = space.to_xyz();
+            (0..3).all(|c| (0..3).all(|row| (matrix[row][c] - columns[c][row]).abs() < 0.005))
+        })
+        .unwrap_or(ColourSpace::Srgb)
+}
+
+fn linear_srgb(rgb: &RgbImage, space: ColourSpace) -> Vec<f32> {
+    let table: Vec<f32> = (0..=255u8).map(|code| space.decode(code as f32 / 255.0)).collect();
+    let matrix = space.convert_to(ColourSpace::Srgb);
+    rgb.as_raw()
+        .par_chunks_exact(3)
+        .flat_map_iter(|code| {
+            let linear = [table[code[0] as usize], table[code[1] as usize], table[code[2] as usize]];
+            match &matrix {
+                Some(m) => std::array::from_fn(|row| m[row][0] * linear[0] + m[row][1] * linear[1] + m[row][2] * linear[2]),
+                None => linear,
+            }
+        })
+        .collect()
 }
 
 fn heif_preview(
@@ -242,7 +289,7 @@ fn orient_image(mut image: DynamicImage, orientation: rawler::Orientation) -> Dy
     image
 }
 
-fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
+fn open_upright(path: &Path) -> Result<(image::DynamicImage, ColourSpace), String> {
     use image::ImageDecoder;
 
     let fail = |err: String| format!("{}: {}", path.display(), err);
@@ -257,15 +304,16 @@ fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
         .map_err(|err| fail(err.to_string()))?;
 
     let orientation = decoder.orientation().map_err(|err| fail(err.to_string()))?;
+    let space = decoder.icc_profile().ok().flatten().map_or(ColourSpace::Srgb, |icc| icc_space(&icc));
     let mut image =
         image::DynamicImage::from_decoder(decoder).map_err(|err| fail(err.to_string()))?;
     image.apply_orientation(orientation);
-    Ok(image)
+    Ok((image, space))
 }
 
 pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
-    let image = if is_raw(path) {
-        preview(path)?
+    let (image, space) = if is_raw(path) {
+        (preview(path)?, ColourSpace::Srgb)
     } else {
         open_upright(path)?
     };
@@ -276,7 +324,13 @@ pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
         image
     };
 
-    Ok(image.into_rgb8())
+    let rgb = image.into_rgb8();
+    if space == ColourSpace::Srgb {
+        return Ok(rgb);
+    }
+
+    let codes = linear_srgb(&rgb, space).iter().map(|v| (ColourSpace::Srgb.encode(*v) * 255.0 + 0.5) as u8).collect();
+    Ok(RgbImage::from_raw(rgb.width(), rgb.height(), codes).expect("same size"))
 }
 
 #[cfg(test)]
@@ -549,6 +603,38 @@ mod tests {
     }
 
     #[test]
+    fn every_plain_file_the_library_lists_decodes() {
+        let picture = image::RgbImage::from_fn(40, 20, |x, _| image::Rgb([x as u8, 90, 200]));
+        for ext in PLAIN_EXTENSIONS.iter().filter(|ext| !HEIF_EXTENSIONS.contains(ext)) {
+            let path = std::env::temp_dir().join(format!("numa-test-plain.{ext}"));
+            picture.save(&path).unwrap_or_else(|err| panic!("{ext}: {err}"));
+            let back = load_scaled(&path, 100).unwrap_or_else(|err| panic!("{ext}: {err}"));
+            assert_eq!((back.width(), back.height()), (40, 20), "{ext}");
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_canon_multiple_exposure_is_not_white_balanced_twice() {
+        let raws = Path::new("/mnt/data-games/dev/numa-scratch/profiles-pilot/raws");
+        let double = raws.join("Canon EOS 5D Mark IV/986.CR2");
+        if !double.exists() {
+            eprintln!("skipped: {} is not on this computer", double.display());
+            return;
+        }
+        assert_eq!(canon_multi_exposure(&double), Some(true));
+        let profile = decode_linear(&double).unwrap().profile.expect("a matrix");
+        assert_eq!(profile.as_shot, [1.0, 1.0, 1.0]);
+
+        for single in ["Canon EOS 5DS/2083.CR2", "Canon EOS R5/4692.CR3"] {
+            let single = raws.join(single);
+            if single.exists() {
+                assert_eq!(canon_multi_exposure(&single), Some(false), "{}", single.display());
+            }
+        }
+    }
+
+    #[test]
     fn classifies_extensions() {
         assert!(
             !is_supported(&PathBuf::from("/photos/._DSCF0001.RAF")),
@@ -626,7 +712,13 @@ fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f
             .raw_image(&source, &RawDecodeParams::default(), false)
             .map_err(|e| fail(e.to_string()))?;
 
-        let profile = camera_profile(&raw);
+        let mut profile = camera_profile(&raw);
+
+        if raw.camera.make == "Canon" && canon_multi_exposure(path) == Some(true) {
+            if let Some(profile) = profile.as_mut() {
+                profile.as_shot = [1.0, 1.0, 1.0];
+            }
+        }
         let rendering = find_rendering(&raw).filter(|_| !dump_without_rendering());
 
         let metadata = decoder.raw_metadata(&source, &RawDecodeParams::default()).ok();
@@ -934,27 +1026,56 @@ fn camera_profile(raw: &rawler::RawImage) -> Option<CameraProfile> {
     })
 }
 
+fn canon_multi_exposure(path: &Path) -> Option<bool> {
+    use std::io::Read;
+    const SCAN: u64 = 2 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(SCAN).read_to_end(&mut bytes).ok()?;
+
+    let (tiff, ifd) = if bytes.get(8..10) == Some(b"CR") {
+        let tiff = &bytes[..];
+        let exif = tiff_entry(tiff, tiff_u32(tiff, 4)? as usize, 0x8769)?;
+        let exif = tiff_u32(tiff, exif + 8)? as usize;
+        let note = tiff_entry(tiff, exif, 0x927c)?;
+        (tiff, tiff_u32(tiff, note + 8)? as usize)
+    } else {
+        let at = bytes.windows(4).position(|window| window == b"CMT3")?;
+        let tiff = &bytes[at + 4..];
+        (tiff, tiff_u32(tiff, 4)? as usize)
+    };
+    let entry = tiff_entry(tiff, ifd, 0x4021)?;
+
+    let values = tiff_u32(tiff, entry + 8)? as usize;
+    Some(tiff_u32(tiff, values + 4)? != 0)
+}
+
+fn tiff_u32(tiff: &[u8], at: usize) -> Option<u32> {
+    let raw: [u8; 4] = tiff.get(at..at + 4)?.try_into().ok()?;
+    Some(if tiff.starts_with(b"MM") { u32::from_be_bytes(raw) } else { u32::from_le_bytes(raw) })
+}
+
+fn tiff_entry(tiff: &[u8], ifd: usize, tag: u16) -> Option<usize> {
+    let u16_at = |at: usize| -> Option<u16> {
+        let raw: [u8; 2] = tiff.get(at..at + 2)?.try_into().ok()?;
+        Some(if tiff.starts_with(b"MM") { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) })
+    };
+    (0..u16_at(ifd)? as usize)
+        .map(|index| ifd + 2 + index * 12)
+        .find(|&entry| u16_at(entry) == Some(tag))
+}
+
 pub fn decode_linear_any(path: &Path) -> Result<LinearImage, String> {
     if is_raw(path) {
         return decode_linear(path);
     }
 
-    let rgb = open_upright(path)?.into_rgb8();
+    let (image, space) = open_upright(path)?;
+    let rgb = image.into_rgb8();
 
-    let data = rgb
-        .as_raw()
-        .iter()
-        .map(|byte| {
-            let v = *byte as f32 / 255.0;
-            if v <= 0.040_45 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        })
-        .collect();
-
-    Ok(LinearImage::new(rgb.width(), rgb.height(), data))
+    let data = linear_srgb(&rgb, space);
+    let mut image = LinearImage::new(rgb.width(), rgb.height(), data);
+    image.display_referred = true;
+    Ok(image)
 }
 
 fn find_rendering(raw: &rawler::RawImage) -> Option<Arc<DngProfile>> {
@@ -1112,16 +1233,20 @@ pub fn lens_profile(path: &Path) -> Option<LensProfile> {
 fn lensfun_profile(path: &Path) -> Option<LensProfile> {
     let summary = summary(path)?;
     let (width, height) = summary.sensor;
-    super::lensfun::profile(
-        &summary.make,
-        &summary.model,
-        summary.lens.as_deref()?,
-        summary.focal_length?,
 
-        summary.aperture.unwrap_or(8.0),
-        width,
-        height,
-    )
+    let bodies = [(&summary.exif_make, &summary.exif_model), (&summary.make, &summary.model)];
+    bodies.iter().find_map(|(make, model)| {
+        super::lensfun::profile(
+            make,
+            model,
+            summary.lens.as_deref().unwrap_or(""),
+            summary.focal_length?,
+
+            summary.aperture.unwrap_or(8.0),
+            width,
+            height,
+        )
+    })
 }
 
 fn fuji_lens_profile(path: &Path) -> Option<LensProfile> {
@@ -1379,6 +1504,9 @@ pub struct Summary {
 
     pub make: String,
     pub model: String,
+
+    pub exif_make: String,
+    pub exif_model: String,
     pub lens: Option<String>,
     pub focal_length: Option<f32>,
     pub aperture: Option<f32>,
@@ -1439,11 +1567,15 @@ fn read_summary(path: &Path) -> Option<Summary> {
             .as_ref()
             .map(|lens| lens.lens_model.clone())
             .filter(|model| !model.is_empty())
+
+            .or_else(|| exif.lens_model.clone().filter(|model| !model.is_empty()))
             .or_else(|| lens_model(path)),
         camera: Some(format!("{} {}", metadata.make, metadata.model).trim().to_string())
             .filter(|text| !text.is_empty()),
         make: metadata.make.clone(),
         model: metadata.model.clone(),
+        exif_make: raw.camera.make.trim().to_string(),
+        exif_model: raw.camera.model.trim().to_string(),
         focal_length: ratio(&exif.focal_length),
         aperture: ratio(&exif.fnumber),
         shutter: ratio(&exif.exposure_time),

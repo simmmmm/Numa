@@ -18,10 +18,9 @@ pub(super) fn build_detail(
     detail.append(&sharpening);
     for (name, scale, readout) in &all[13..16] {
         let row = slider_row(state, name, scale, *readout);
+
         if *name == "Sharpening" {
             row.add_css_class("lead");
-        } else {
-            global_only(row.as_ref());
         }
         detail.append(&row);
     }
@@ -35,9 +34,6 @@ pub(super) fn build_detail(
     for (name, scale, readout) in all[16..18].iter().chain(&all[19..20]) {
         let row = slider_row(state, name, scale, *readout);
 
-        if *name == "Detail" {
-            global_only(row.as_ref());
-        }
         detail.append(&row);
     }
     let ai = ai_denoise::build(state, ai_denoise::Pass::Denoise);

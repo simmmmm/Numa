@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
 use image::{imageops, RgbImage};
 use numa_infer::Model;
 
@@ -13,10 +10,9 @@ const PAD: f32 = 0.35;
 
 const INSIDE: f32 = 0.5;
 
-const CONFIDENT: f32 = 0.9;
+const SCRAP: f32 = 0.05;
 
-const STAIR_RADIUS: f32 = 1.0 / 256.0;
-const STAIR_EPSILON: f32 = 1e-5;
+const CONFIDENT: f32 = 0.9;
 
 const SLACK: f32 = 0.08;
 
@@ -24,29 +20,132 @@ const SOFT: f32 = 0.1;
 
 const OPEN: f32 = 0.02;
 
+const INWARD: usize = 8;
+
 const TILE: usize = 1024;
 
-fn model_path() -> Option<PathBuf> {
-    numa_core::paths::model_file(&["isnet.onnx", "isnet-general-use.onnx"])
+#[cfg(not(target_os = "ios"))]
+const BIREFNET: &str = "birefnet.onnx";
+#[cfg(target_os = "ios")]
+const BIREFNET: &str = "birefnet_lite_512.onnx";
+
+const ISNET: [&str; 2] = ["isnet.onnx", "isnet-general-use.onnx"];
+
+const ISNET_ALLOWED: bool = !cfg!(target_vendor = "apple");
+
+const ROOM: u64 = 1_730_000_000 + 250_000_000;
+
+const ISNET_ROOM: u64 = 2_040_000_000 + 250_000_000;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Subject {
+    BiRefNet,
+    IsNet,
+}
+
+impl Subject {
+    fn file(self) -> &'static str {
+        match self {
+            Subject::BiRefNet => BIREFNET,
+            Subject::IsNet => ISNET[0],
+        }
+    }
+}
+
+fn choose(birefnet: bool, isnet: bool, room: Option<u64>) -> Option<Subject> {
+    let fits = |need: u64| room.is_none_or(|free| free >= need);
+    if birefnet && fits(ROOM) {
+        Some(Subject::BiRefNet)
+    } else if isnet && fits(ISNET_ROOM) {
+        Some(Subject::IsNet)
+    } else {
+        None
+    }
+}
+
+fn after_declined(subject: Subject, isnet: bool, room: Option<u64>) -> Option<Subject> {
+    (subject == Subject::BiRefNet && isnet && room.is_none_or(|free| free >= ISNET_ROOM)).then_some(Subject::IsNet)
+}
+
+#[cfg(target_os = "ios")]
+fn room() -> Option<u64> {
+
+    extern "C" {
+        fn os_proc_available_memory() -> usize;
+    }
+    Some(unsafe { os_proc_available_memory() } as u64)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn room() -> Option<u64> {
+    None
+}
+
+fn isnet_here() -> bool {
+    isnet_kept(ISNET_ALLOWED, numa_core::paths::model_file(&ISNET).is_some())
+}
+
+fn isnet_kept(allowed: bool, on_disk: bool) -> bool {
+    allowed && on_disk
+}
+
+fn chosen() -> Option<Subject> {
+    choose(numa_core::paths::model_file(&[BIREFNET]).is_some(), isnet_here(), room())
 }
 
 pub fn is_installed() -> bool {
-    model_path().is_some()
+    numa_core::paths::model_file(&[BIREFNET]).is_some() || isnet_here()
 }
 
-fn plan() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
+pub fn answering() -> String {
+    named(chosen(), isnet_here())
+}
+
+fn named(chosen: Option<Subject>, isnet: bool) -> String {
+    match chosen {
+        Some(Subject::BiRefNet) if isnet => format!("{BIREFNET}+{}", ISNET[0]),
+        Some(subject) => subject.file().to_string(),
+        None => String::new(),
+    }
+}
+
+fn load(subject: Subject) -> Option<std::sync::Arc<Model>> {
+    static BIREFNET_PLAN: numa_infer::Kept = numa_infer::Kept::new();
+    static ISNET_PLAN: numa_infer::Kept = numa_infer::Kept::new();
+    match subject {
+        Subject::BiRefNet => {
+            let path = numa_core::paths::model_file(&[BIREFNET])?;
+            BIREFNET_PLAN.get_or_init(|| {
+
+                if let Err(err) = numa_infer::rewrite::prepare(&path) {
+                    log::warn!("{}: not rewritten for the card: {err}", path.display());
+                }
+                let model = Model::load(&path)?;
+
+                for old in ISNET.iter().filter_map(|name| numa_core::paths::model_file(&[name])) {
+                    let _ = std::fs::remove_file(old);
+                }
+                Some(model)
+            })
+        }
+        Subject::IsNet => {
+            let path = numa_core::paths::model_file(&ISNET)?;
+            ISNET_PLAN.get_or_init(|| Model::load(&path))
+        }
+    }
+}
+
+const VITMATTE: &str = "vitmatte_small.onnx";
+
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn vitmatte() -> Option<std::sync::Arc<Model>> {
+    static PLAN: numa_infer::Kept = numa_infer::Kept::new();
     PLAN.get_or_init(|| {
-        let path = model_path()?;
-        Model::load(&path)
-    })
-    .as_ref()
-}
+        let model = Model::load(&numa_core::paths::model_file(&[VITMATTE])?)?;
 
-fn vitmatte() -> Option<&'static Model> {
-    static PLAN: OnceLock<Option<Model>> = OnceLock::new();
-    PLAN.get_or_init(|| Model::load(&numa_core::paths::model_file(&["vitmatte_small.onnx"])?))
-        .as_ref()
+        let _ = std::fs::remove_file(numa_core::paths::models_dir().join("birefnet_lite_matting.onnx"));
+        Some(model)
+    })
 }
 
 pub fn refine(photo: &RgbImage, coarse: &Alpha) -> Option<Alpha> {
@@ -54,46 +153,84 @@ pub fn refine(photo: &RgbImage, coarse: &Alpha) -> Option<Alpha> {
 }
 
 pub fn finer(frame: &RgbImage, matte: &Alpha) -> Option<Alpha> {
-    let plan = vitmatte()?;
-    let (width, height) = (matte.width, matte.height);
-    let frame = match frame.width() as usize == width && frame.height() as usize == height {
-        true => std::borrow::Cow::Borrowed(frame),
-        false => std::borrow::Cow::Owned(imageops::resize(
-            frame,
-            width as u32,
-            height as u32,
-            imageops::FilterType::Triangle,
-        )),
-    };
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let plan = vitmatte()?;
+        by_vitmatte(&plan, &Band::of(frame, matte)?)
+    }
+    #[cfg(target_vendor = "apple")]
+    {
 
-    let subject = keep_largest(matte.clone());
-    let solid: Vec<f32> = subject.data.iter().map(|v| if *v >= INSIDE { 1.0 } else { 0.0 }).collect();
-    let (left, top, right, bottom) = box_of(&solid, width)?;
-    let long = (right - left + 1).max(bottom - top + 1) as f32;
-    let open = (long * OPEN).max(2.0) as usize;
-    let depth = local::blur(&Plane::new(width, height, solid.clone()), open).data;
-    let around = local::blur(&Plane::new(width, height, solid), 3 * open).data;
+        static SWEPT: std::sync::Once = std::sync::Once::new();
+        SWEPT.call_once(|| {
+            for old in [VITMATTE, "birefnet_lite_matting_512.onnx"] {
+                let _ = std::fs::remove_file(numa_core::paths::models_dir().join(old));
+            }
+        });
+        Some(by_closed_form(&Band::of(frame, matte)?))
+    }
+}
 
-    let asked: Vec<bool> = (0..width * height)
-        .map(|i| {
-            let band = depth[i] > 0.001 && depth[i] < 0.999;
-            let loose = around[i] > 0.001 && (SOFT..1.0 - SOFT).contains(&matte.data[i]);
-            band || loose
-        })
-        .collect();
-    let trimap: Vec<f32> = (0..width * height)
-        .map(|i| match (asked[i], matte.data[i] >= INSIDE) {
-            (true, _) => 0.5,
-            (false, true) => 1.0,
-            (false, false) => 0.0,
-        })
-        .collect();
-    let marked: Vec<f32> = asked.iter().map(|a| *a as u8 as f32).collect();
-    let (a_left, a_top, a_right, a_bottom) = box_of(&marked, width)?;
+struct Band<'a> {
 
-    let side_w = TILE.min(width / 32 * 32);
-    let side_h = TILE.min(height / 32 * 32);
-    let starts = |from: usize, to: usize, side: usize, room: usize| -> Vec<usize> {
+    frame: std::borrow::Cow<'a, RgbImage>,
+    matte: &'a Alpha,
+    width: usize,
+    height: usize,
+
+    asked: Vec<bool>,
+    area: (usize, usize, usize, usize),
+}
+
+impl<'a> Band<'a> {
+
+    fn of(frame: &'a RgbImage, matte: &'a Alpha) -> Option<Band<'a>> {
+        let (width, height) = (matte.width, matte.height);
+        let frame = match frame.width() as usize == width && frame.height() as usize == height {
+            true => std::borrow::Cow::Borrowed(frame),
+            false => std::borrow::Cow::Owned(imageops::resize(
+                frame,
+                width as u32,
+                height as u32,
+                imageops::FilterType::Triangle,
+            )),
+        };
+
+        let subject = keep_subjects(matte.clone());
+        let solid: Vec<f32> = subject.data.iter().map(|v| if *v >= INSIDE { 1.0 } else { 0.0 }).collect();
+        let (left, top, right, bottom) = box_of(&solid, width)?;
+        let long = (right - left + 1).max(bottom - top + 1) as f32;
+        let open = (long * OPEN).max(2.0) as usize;
+        let depth = local::blur(&Plane::new(width, height, solid.clone()), open).data;
+        let inner = local::blur(&Plane::new(width, height, solid.clone()), (open / INWARD).max(1)).data;
+        let around = local::blur(&Plane::new(width, height, solid.clone()), 3 * open).data;
+
+        let asked: Vec<bool> = (0..width * height)
+            .map(|i| {
+                let band = match solid[i] > 0.5 {
+                    true => inner[i] < 0.999,
+                    false => depth[i] > 0.001,
+                };
+                let loose = around[i] > 0.001 && (SOFT..1.0 - SOFT).contains(&matte.data[i]);
+                band || loose
+            })
+            .collect();
+        let marked: Vec<f32> = asked.iter().map(|a| *a as u8 as f32).collect();
+        let area = box_of(&marked, width)?;
+        Some(Band { frame, matte, width, height, asked, area })
+    }
+
+    fn trimap(&self) -> Vec<f32> {
+        (0..self.width * self.height)
+            .map(|i| match (self.asked[i], self.matte.data[i] >= INSIDE) {
+                (true, _) => 0.5,
+                (false, true) => 1.0,
+                (false, false) => 0.0,
+            })
+            .collect()
+    }
+
+    fn starts(from: usize, to: usize, side: usize, room: usize) -> Vec<usize> {
         let span = to + 1 - from;
         let count = (span.saturating_sub(side) as f32 / (side as f32 * 0.75)).ceil() as usize + 1;
         (0..count)
@@ -103,44 +240,61 @@ pub fn finer(frame: &RgbImage, matte: &Alpha) -> Option<Alpha> {
             })
             .map(|at| at.min(room - side))
             .collect()
-    };
-    let mut answers = Vec::new();
-    for y in starts(a_top, a_bottom, side_h, height) {
-        for x in starts(a_left, a_right, side_w, width) {
-            if !(y..y + side_h).any(|row| asked[row * width + x..row * width + x + side_w].iter().any(|a| *a)) {
-                continue;
-            }
-            let mut input = ndarray::Array4::<f32>::zeros((1, 4, side_h, side_w));
-            for row in 0..side_h {
-                for column in 0..side_w {
-                    let pixel = frame.get_pixel((x + column) as u32, (y + row) as u32);
-                    for channel in 0..3 {
+    }
 
-                        input[[0, channel, row, column]] = (pixel[channel] as f32 / 255.0 - 0.5) / 0.5;
-                    }
-                    input[[0, 3, row, column]] = trimap[(y + row) * width + x + column];
+    fn tiles(&self, side_w: usize, side_h: usize) -> Vec<(usize, usize)> {
+        let (left, top, right, bottom) = self.area;
+        let width = self.width;
+        let mut tiles = Vec::new();
+        for y in Self::starts(top, bottom, side_h, self.height) {
+            for x in Self::starts(left, right, side_w, width) {
+                if (y..y + side_h).any(|row| self.asked[row * width + x..row * width + x + side_w].iter().any(|a| *a)) {
+                    tiles.push((x, y));
                 }
             }
-            let outputs = match plan.run(vec![input.into_dyn().into()]) {
-                Ok(outputs) => outputs,
-                Err(err) => {
-                    log::warn!("ViTMatte failed: {err}");
-                    return None;
+        }
+        tiles
+    }
+}
+
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn by_vitmatte(plan: &Model, band: &Band) -> Option<Alpha> {
+    let (width, height) = (band.width, band.height);
+    let trimap = band.trimap();
+    let side_w = TILE.min(width / 32 * 32);
+    let side_h = TILE.min(height / 32 * 32);
+    let mut answers = Vec::new();
+    for (x, y) in band.tiles(side_w, side_h) {
+        let mut input = ndarray::Array4::<f32>::zeros((1, 4, side_h, side_w));
+        for row in 0..side_h {
+            for column in 0..side_w {
+                let pixel = band.frame.get_pixel((x + column) as u32, (y + row) as u32);
+                for channel in 0..3 {
+
+                    input[[0, channel, row, column]] = (pixel[channel] as f32 / 255.0 - 0.5) / 0.5;
                 }
-            };
-            let alpha = outputs.first()?;
-            if alpha.shape() != [1, 1, side_h, side_w] {
-                log::warn!("ViTMatte answered with {:?}", alpha.shape());
+                input[[0, 3, row, column]] = trimap[(y + row) * width + x + column];
+            }
+        }
+        let outputs = match plan.run(vec![input.into_dyn().into()]) {
+            Ok(outputs) => outputs,
+            Err(err) => {
+                log::warn!("ViTMatte failed: {err}");
                 return None;
             }
-            let piece = Piece { x: x as f32, y: y as f32, width: side_w as f32, height: side_h as f32 };
-            answers.push((piece, alpha.iter().cloned().collect::<Vec<f32>>()));
+        };
+        let alpha = outputs.first()?;
+        if alpha.shape() != [1, 1, side_h, side_w] {
+            log::warn!("ViTMatte answered with {:?}", alpha.shape());
+            return None;
         }
+        let piece = Piece { x: x as f32, y: y as f32, width: side_w as f32, height: side_h as f32 };
+        answers.push((piece, alpha.iter().cloned().collect::<Vec<f32>>()));
     }
     log::info!("ViTMatte: {} tiles of {side_w}x{side_h}", answers.len());
 
-    let mut out = matte.data.clone();
-    for (index, value) in out.iter_mut().enumerate().filter(|(index, _)| asked[*index]) {
+    let mut out = band.matte.data.clone();
+    for (index, value) in out.iter_mut().enumerate().filter(|(index, _)| band.asked[*index]) {
         let (x, y) = (index % width, index / width);
         let (mut sum, mut weight) = (0.0f32, 0.0f32);
         for (piece, alpha) in &answers {
@@ -154,6 +308,14 @@ pub fn finer(frame: &RgbImage, matte: &Alpha) -> Option<Alpha> {
         }
     }
     Some(Alpha::new(width, height, out))
+}
+
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
+fn by_closed_form(band: &Band) -> Alpha {
+    const PULL: f32 = 0.01;
+    let rgb: Vec<[f32; 3]> = band.frame.pixels().map(|p| p.0.map(|c| c as f32 / 255.0)).collect();
+    let out = crate::closed_form::solve(&rgb, band.width, band.height, &band.trimap(), &band.asked, &band.matte.data, PULL);
+    Alpha::new(band.width, band.height, out)
 }
 
 fn box_of(plane: &[f32], width: usize) -> Option<(usize, usize, usize, usize)> {
@@ -175,18 +337,21 @@ enum Ask {
 
 fn asked_about(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Alpha> {
     const KEEP: usize = 3;
+    let chosen = chosen()?;
     type Kept = Vec<(u64, Option<Alpha>)>;
     static KEPT: std::sync::Mutex<Kept> = std::sync::Mutex::new(Vec::new());
 
     let key = crate::content_hash_bytes(photo.as_raw())
         ^ crate::content_hash(&coarse.data).rotate_left(7)
         ^ ((coarse.width as u64) << 32 | coarse.height as u64).rotate_left(29)
-        ^ u64::from(question == Ask::ThisSubject);
+        ^ u64::from(question == Ask::ThisSubject)
+
+        ^ crate::content_hash_bytes(named(Some(chosen), isnet_here()).as_bytes()).rotate_left(13);
     let found = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(at, _)| *at == key).map(|(_, answer)| answer.clone());
     if let Some(answer) = found {
         return answer;
     }
-    let answer = asked_about_now(photo, coarse, question);
+    let answer = asked_about_now(photo, coarse, question, chosen);
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if kept.len() >= KEEP {
         kept.remove(0);
@@ -195,8 +360,7 @@ fn asked_about(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Alpha>
     answer
 }
 
-fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Alpha> {
-    let plan = plan()?;
+fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask, chosen: Subject) -> Option<Alpha> {
     let (left, top, right, bottom) = bounds(coarse)?;
 
     let scale_x = photo.width() as f32 / coarse.width as f32;
@@ -213,17 +377,28 @@ fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Al
         }
     };
 
-    let mut mattes = Vec::with_capacity(pieces.len());
-    let mut strongest = 0.0f32;
-    for piece in &pieces {
-        let (answer, confidence) = ask(plan, photo, *piece)?;
-        strongest = strongest.max(confidence);
-        mattes.push(answer);
-    }
-
-    if strongest < CONFIDENT {
-        return None;
-    }
+    let mut subject = chosen;
+    let (mattes, edge) = loop {
+        let Some(plan) = load(subject) else {
+            subject = after_declined(subject, isnet_here(), room())?;
+            continue;
+        };
+        let edge = plan.side().unwrap_or(EDGE);
+        let mut mattes = Vec::with_capacity(pieces.len());
+        let mut strongest = 0.0f32;
+        for piece in &pieces {
+            let (answer, confidence) = ask(&plan, subject, photo, *piece, edge)?;
+            strongest = strongest.max(confidence);
+            mattes.push(answer);
+        }
+        if strongest >= CONFIDENT {
+            log::info!("subject: answered by {}", subject.file());
+            break (mattes, edge);
+        }
+        let next = after_declined(subject, isnet_here(), room());
+        log::info!("subject: {} found none, {}", subject.file(), next.map_or("nothing else to ask", Subject::file));
+        subject = next?;
+    };
 
     let mut out = Alpha::new(coarse.width, coarse.height, vec![0.0; coarse.data.len()]);
     let slack = (right - left + 1).max(bottom - top + 1) as f32 * SLACK;
@@ -239,7 +414,7 @@ fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Al
                 let Some(share) = piece.covers(px, py) else { continue };
                 let u = (px - piece.x) / piece.width;
                 let v = (py - piece.y) / piece.height;
-                sum += share * sample(matte, u, v);
+                sum += share * sample(matte, edge, u, v);
                 weight += share;
             }
             let value = match weight > 0.0 {
@@ -250,15 +425,9 @@ fn asked_about_now(photo: &RgbImage, coarse: &Alpha, question: Ask) -> Option<Al
         }
     }
 
-    let guide = luminance_of(photo, coarse.width, coarse.height);
-    let radius = ((coarse.width.max(coarse.height) as f32 * STAIR_RADIUS) as usize).max(1);
-    let smoothed = local::guided_by(&guide, &Plane::new(coarse.width, coarse.height, out.data), radius, STAIR_EPSILON);
-
-    let out = Alpha::new(
-        coarse.width,
-        coarse.height,
-        smoothed.data.iter().zip(&allowed).map(|(value, allow)| value.clamp(0.0, 1.0) * allow).collect(),
-    );
+    for (value, allow) in out.data.iter_mut().zip(&allowed) {
+        *value *= allow;
+    }
     Some(out)
 }
 
@@ -318,7 +487,7 @@ fn pieces_of(x: u32, y: u32, width: u32, height: u32, frame_w: u32, frame_h: u32
         .collect()
 }
 
-fn ask(plan: &Model, photo: &RgbImage, piece: Piece) -> Option<(Vec<f32>, f32)> {
+fn ask(plan: &Model, subject: Subject, photo: &RgbImage, piece: Piece, edge: usize) -> Option<(Vec<f32>, f32)> {
     let crop = imageops::crop_imm(
         photo,
         piece.x as u32,
@@ -327,13 +496,17 @@ fn ask(plan: &Model, photo: &RgbImage, piece: Piece) -> Option<(Vec<f32>, f32)> 
         (piece.height as u32).max(1),
     )
     .to_image();
-    let square = imageops::resize(&crop, EDGE as u32, EDGE as u32, imageops::FilterType::Lanczos3);
+    let square = imageops::resize(&crop, edge as u32, edge as u32, imageops::FilterType::Lanczos3);
 
-    let mut input = ndarray::Array4::<f32>::zeros((1, 3, EDGE, EDGE));
+    let mut input = ndarray::Array4::<f32>::zeros((1, 3, edge, edge));
     for (x, y, pixel) in square.enumerate_pixels() {
         for channel in 0..3 {
 
-            input[[0, channel, y as usize, x as usize]] = pixel[channel] as f32 / 255.0 - 0.5;
+            let value = pixel[channel] as f32 / 255.0;
+            input[[0, channel, y as usize, x as usize]] = match subject {
+                Subject::BiRefNet => (value - [0.485, 0.456, 0.406][channel]) / [0.229, 0.224, 0.225][channel],
+                Subject::IsNet => value - 0.5,
+            };
         }
     }
 
@@ -345,27 +518,26 @@ fn ask(plan: &Model, photo: &RgbImage, piece: Piece) -> Option<(Vec<f32>, f32)> 
         }
     };
     let matte = outputs.first()?;
-    if matte.shape() != [1, 1, EDGE, EDGE] {
+    if matte.shape() != [1, 1, edge, edge] {
         log::warn!("the matting model answered with {:?}", matte.shape());
         return None;
     }
 
-    let strongest = matte.iter().cloned().fold(0.0f32, f32::max);
-
-    let mut answer = vec![0.0f32; EDGE * EDGE];
-    for (index, value) in matte.iter().enumerate() {
-        answer[index] = *value;
-    }
+    let answer: Vec<f32> = match subject {
+        Subject::BiRefNet => matte.iter().map(|value| 1.0 / (1.0 + (-value).exp())).collect(),
+        Subject::IsNet => matte.iter().copied().collect(),
+    };
+    let strongest = answer.iter().copied().fold(0.0f32, f32::max);
     Some((answer, strongest))
 }
 
-fn sample(matte: &[f32], u: f32, v: f32) -> f32 {
-    let fx = u.clamp(0.0, 1.0) * (EDGE - 1) as f32;
-    let fy = v.clamp(0.0, 1.0) * (EDGE - 1) as f32;
+fn sample(matte: &[f32], edge: usize, u: f32, v: f32) -> f32 {
+    let fx = u.clamp(0.0, 1.0) * (edge - 1) as f32;
+    let fy = v.clamp(0.0, 1.0) * (edge - 1) as f32;
     let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
-    let (x1, y1) = ((x0 + 1).min(EDGE - 1), (y0 + 1).min(EDGE - 1));
+    let (x1, y1) = ((x0 + 1).min(edge - 1), (y0 + 1).min(edge - 1));
     let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-    let at = |sx: usize, sy: usize| matte[sy * EDGE + sx];
+    let at = |sx: usize, sy: usize| matte[sy * edge + sx];
     let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
     let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
     top * (1.0 - ty) + bottom * ty
@@ -377,15 +549,15 @@ fn gate(coarse: &Alpha, slack: f32) -> Vec<f32> {
 }
 
 fn spread(inside: Vec<f32>, width: usize, height: usize, radius: f32) -> Vec<f32> {
-    let radius = (radius.max(1.0).round() as usize).max(1);
-    let plane = Plane::new(width, height, inside);
+    let reach = ((radius.max(1.0) / 2.0).round() as usize).max(1);
 
-    let plane = local::blur(&plane, radius).data;
-
-    plane
+    let touched = local::blur(&Plane::new(width, height, inside), reach);
+    let grown = touched.data.iter().map(|v| (*v > 1e-3) as u8 as f32).collect();
+    local::blur(&Plane::new(width, height, grown), reach)
+        .data
         .iter()
         .map(|v| {
-            let t = (v * 2.0).clamp(0.0, 1.0);
+            let t = v.clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
         })
         .collect()
@@ -395,7 +567,7 @@ pub fn subject(photo: &RgbImage, width: usize, height: usize) -> Option<Alpha> {
 
     let everything = Alpha::new(width, height, vec![1.0; width * height]);
     let found = asked_about(photo, &everything, Ask::WhateverStandsOut)?;
-    let largest = keep_largest(found);
+    let largest = keep_subjects(found);
 
     let covered: f64 =
         largest.data.iter().map(|value| *value as f64).sum::<f64>() / largest.data.len() as f64;
@@ -403,7 +575,7 @@ pub fn subject(photo: &RgbImage, width: usize, height: usize) -> Option<Alpha> {
     (0.0005..0.85).contains(&covered).then_some(largest)
 }
 
-fn keep_largest(alpha: Alpha) -> Alpha {
+fn keep_subjects(alpha: Alpha) -> Alpha {
     let (width, height) = (alpha.width, alpha.height);
 
     let reach = (width.max(height) / 100).max(2);
@@ -457,10 +629,11 @@ fn keep_largest(alpha: Alpha) -> Alpha {
     let Some(winner) = (0..sizes.len()).max_by_key(|index| sizes[*index]) else {
         return alpha;
     };
+    let kept: Vec<bool> = sizes.iter().map(|size| *size as f32 >= sizes[winner] as f32 * SCRAP).collect();
 
     let mut out = Alpha::new(width, height, vec![0.0; width * height]);
     for index in 0..width * height {
-        if label[index] == winner {
+        if label[index] != usize::MAX && kept[label[index]] {
             out.data[index] = alpha.data[index];
         }
     }
@@ -653,6 +826,160 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore]
+    fn subject_timed() {
+        let Ok(list) = std::env::var("PHOTOS") else { return };
+        if let Ok(dir) = std::env::var("GPU_MODELS") {
+            numa_infer::enable_gpu(std::path::Path::new(&dir), &std::env::temp_dir().join("numa-subject-guard"));
+        }
+        let started = std::time::Instant::now();
+        let which = chosen().expect("a subject model");
+        let plan = load(which).expect("loads");
+        println!("ready in {:.1?}, {}, on the card {}", started.elapsed(), which.file(), plan.on_card());
+        for path in std::env::split_paths(&list) {
+            let photo = image::open(&path).unwrap().to_rgb8();
+            let started = std::time::Instant::now();
+            let found = subject(&photo, (photo.width() / 4) as usize, (photo.height() / 4) as usize);
+            let covered = found.map(|alpha| alpha.data.iter().sum::<f32>() / alpha.data.len() as f32);
+            println!("{}: {covered:?} in {:.0?}", path.display(), started.elapsed());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn refine_edge_candidates() {
+        let (Ok(frames), Ok(method)) = (std::env::var("FRAMES"), std::env::var("METHOD")) else { return };
+        let plan = (method == "vitmatte")
+            .then(|| Model::load(std::path::Path::new(&std::env::var("MODEL").expect("MODEL"))).expect("loads"));
+        for path in frames.split(':') {
+            let frame = image::open(path).unwrap().to_rgb8();
+            let started = std::time::Instant::now();
+            let answer = match method.as_str() {
+                "coarse" => subject(&frame, frame.width() as usize, frame.height() as usize).expect("a subject"),
+                _ => {
+                    let grey = image::open(path.replace("-frame.png", "-coarse.png")).unwrap().to_luma8();
+                    let coarse = Alpha::new(grey.width() as usize, grey.height() as usize, grey.pixels().map(|p| p[0] as f32 / 255.0).collect());
+                    let band = Band::of(&frame, &coarse).expect("a band");
+                    match &plan {
+                        Some(plan) => by_vitmatte(plan, &band).expect("an answer"),
+                        None => by_closed_form(&band),
+                    }
+                }
+            };
+            println!("{path}: {method} {:.2?}", started.elapsed());
+            let mut image = image::GrayImage::new(answer.width as u32, answer.height as u32);
+            for (pixel, value) in image.pixels_mut().zip(&answer.data) {
+                *pixel = image::Luma([(value.clamp(0.0, 1.0) * 255.0).round() as u8]);
+            }
+            image.save(path.replace("-frame.png", &format!("-{method}.png"))).unwrap();
+        }
+    }
+
+    #[test]
+    fn finer_finds_strands_in_the_band() {
+        let (side, radius) = (512usize, 150.0f32);
+        let centre = side as f32 / 2.0;
+        let strand = |x: f32, y: f32| {
+            let (dx, dy) = (x - centre, y - centre);
+            let (distance, angle) = ((dx * dx + dy * dy).sqrt(), dy.atan2(dx));
+
+            let nearest = (angle / std::f32::consts::TAU * 60.0).round() * std::f32::consts::TAU / 60.0;
+            distance < radius + 60.0 && (angle - nearest).abs() * distance < 0.75
+        };
+        let frame = RgbImage::from_fn(side as u32, side as u32, |x, y| {
+            let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+            let inside = (x - centre).hypot(y - centre) < radius;
+            match inside || strand(x, y) {
+                true => image::Rgb([60, 40, 25]),
+                false => image::Rgb([110, 160, (220.0 - y / 8.0) as u8]),
+            }
+        });
+        let coarse = Alpha::new(side, side, (0..side * side)
+            .map(|i| (((i % side) as f32 + 0.5 - centre).hypot((i / side) as f32 + 0.5 - centre) < radius) as u8 as f32)
+            .collect());
+        let band = Band::of(&frame, &coarse).expect("a band");
+        let mut answers = vec![("closed form", by_closed_form(&band))];
+        match vitmatte() {
+            Some(plan) => answers.push(("ViTMatte", by_vitmatte(&plan, &band).expect("an answer"))),
+            None => eprintln!("no {VITMATTE}: only the closed form"),
+        }
+        for (way, finer) in answers {
+
+            let (mut strands, mut sky) = (Vec::new(), Vec::new());
+            for i in 0..side * side {
+                let (x, y) = ((i % side) as f32 + 0.5, (i / side) as f32 + 0.5);
+                let distance = (x - centre).hypot(y - centre);
+                if distance > radius + 60.0 || distance < radius - 40.0 {
+                    assert_eq!(finer.data[i], coarse.data[i], "{way} moved outside the band at {x},{y}");
+                } else if distance > radius + 1.0 && finer.data[i] != coarse.data[i] {
+                    match strand(x, y) {
+                        true => strands.push(finer.data[i]),
+                        false => sky.push(finer.data[i]),
+                    }
+                }
+            }
+            let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+            assert!(!strands.is_empty() && !sky.is_empty(), "{way}: the band did not reach the strands");
+
+            println!("{way}: strands {} against sky {}", mean(&strands), mean(&sky));
+            assert!(mean(&strands) > 0.05 && mean(&strands) > 10.0 * mean(&sky), "{way}: strands {} against sky {}", mean(&strands), mean(&sky));
+        }
+    }
+
+    #[test]
+    fn birefnet_where_it_is_here_and_fits() {
+        assert_eq!(choose(true, true, None), Some(Subject::BiRefNet));
+        assert_eq!(choose(true, false, Some(ROOM)), Some(Subject::BiRefNet));
+    }
+
+    #[test]
+    fn nothing_when_memory_is_short() {
+
+        assert_eq!(choose(true, true, Some(ROOM - 1)), None);
+        assert_eq!(choose(true, false, Some(ROOM - 1)), None);
+
+        assert_eq!(choose(false, true, Some(ISNET_ROOM)), Some(Subject::IsNet));
+        assert_eq!(choose(false, true, Some(ISNET_ROOM - 1)), None);
+    }
+
+    #[test]
+    fn isnet_when_birefnet_is_missing() {
+        assert_eq!(choose(false, true, Some(u64::MAX)), Some(Subject::IsNet));
+        assert_eq!(choose(false, true, None), Some(Subject::IsNet));
+        assert_eq!(choose(false, false, None), None);
+    }
+
+    #[test]
+    fn isnet_when_birefnet_declines() {
+        assert_eq!(after_declined(Subject::BiRefNet, true, None), Some(Subject::IsNet));
+        assert_eq!(after_declined(Subject::BiRefNet, true, Some(ISNET_ROOM)), Some(Subject::IsNet));
+        assert_eq!(after_declined(Subject::BiRefNet, true, Some(ISNET_ROOM - 1)), None);
+        assert_eq!(after_declined(Subject::BiRefNet, false, None), None);
+        assert_eq!(after_declined(Subject::IsNet, true, None), None);
+    }
+
+    #[test]
+    fn isnet_is_never_asked_where_numa_is_sold() {
+        let isnet = isnet_kept(false, true);
+        assert!(!isnet);
+        assert_eq!(choose(true, isnet, Some(ROOM - 1)), None);
+        assert_eq!(choose(false, isnet, None), None);
+        assert_eq!(after_declined(Subject::BiRefNet, isnet, None), None);
+        assert_eq!(named(Some(Subject::BiRefNet), isnet), BIREFNET);
+
+        assert!(isnet_kept(true, true));
+        assert_eq!(ISNET_ALLOWED, !cfg!(target_vendor = "apple"));
+    }
+
+    #[test]
+    fn the_key_names_who_can_answer() {
+        assert_eq!(named(Some(Subject::BiRefNet), false), BIREFNET);
+        assert_eq!(named(Some(Subject::BiRefNet), true), format!("{BIREFNET}+isnet.onnx"));
+        assert_eq!(named(Some(Subject::IsNet), true), "isnet.onnx");
+        assert_eq!(named(None, false), "");
+    }
+
     fn box_alpha(width: usize, height: usize, rect: (usize, usize, usize, usize)) -> Alpha {
         let mut alpha = Alpha::new(width, height, vec![0.0; width * height]);
         for y in rect.1..=rect.3 {
@@ -701,6 +1028,19 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_keeps_what_is_narrower_than_its_slack() {
+        let mut alpha = box_alpha(128, 128, (20, 60, 100, 120));
+        for y in 30..60 {
+            for x in 58..62 {
+                alpha.data[y * 128 + x] = 1.0;
+            }
+        }
+        let g = gate(&alpha, 32.0);
+        assert!(g[31 * 128 + 60] > 0.99, "the top of a four-cell column: {}", g[31 * 128 + 60]);
+        assert!(g[25 * 128 + 60] > 0.5, "just above it, inside the slack: {}", g[25 * 128 + 60]);
+    }
+
+    #[test]
     fn the_gate_is_affordable_on_a_real_frame() {
         let alpha = box_alpha(2048, 1365, (400, 300, 1600, 1100));
         let started = std::time::Instant::now();
@@ -709,18 +1049,4 @@ mod tests {
         assert_eq!(g.len(), 2048 * 1365);
         assert!(elapsed.as_millis() < 500, "the gate took {elapsed:?}");
     }
-}
-
-fn luminance_of(photo: &RgbImage, width: usize, height: usize) -> Plane {
-    let fitted = imageops::resize(photo, width as u32, height as u32, imageops::FilterType::Triangle);
-    Plane::new(
-        width,
-        height,
-        fitted
-            .pixels()
-            .map(|pixel| {
-                (0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32) / 255.0
-            })
-            .collect(),
-    )
 }

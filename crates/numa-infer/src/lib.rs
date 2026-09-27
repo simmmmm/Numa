@@ -1,5 +1,7 @@
+pub mod rewrite;
+
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ndarray::ArrayD;
 use ort::session::builder::GraphOptimizationLevel;
@@ -26,6 +28,8 @@ const ON_GPU: &[&str] = &[
     "isnet.onnx",
     "isnet-general-use.onnx",
 
+    "birefnet.onnx",
+
     "vitmatte_small.onnx",
 ];
 
@@ -44,6 +48,8 @@ pub struct Model {
     session: Mutex<Session>,
 
     on_card: bool,
+
+    edge: Option<usize>,
 }
 
 static CARD: Mutex<()> = Mutex::new(());
@@ -62,6 +68,44 @@ impl From<ArrayD<f32>> for Input {
 impl From<ArrayD<i64>> for Input {
     fn from(array: ArrayD<i64>) -> Self {
         Input::I64(array)
+    }
+}
+
+pub struct Kept {
+    slot: Mutex<Option<Option<Arc<Model>>>>,
+}
+
+static KEPT: Mutex<Vec<&'static Kept>> = Mutex::new(Vec::new());
+
+impl Kept {
+    pub const fn new() -> Self {
+        Self { slot: Mutex::new(None) }
+    }
+
+    pub fn get_or_init(&'static self, load: impl FnOnce() -> Option<Model>) -> Option<Arc<Model>> {
+        let mut slot = self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_none() {
+            *slot = Some(load().map(Arc::new));
+            KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(self);
+        }
+        slot.clone().flatten()
+    }
+
+    pub fn loaded(&self) -> Option<bool> {
+        self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(Option::is_some)
+    }
+}
+
+impl Default for Kept {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn release_all() {
+    let kept = std::mem::take(&mut *KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    for model in kept {
+        *model.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 }
 
@@ -86,7 +130,7 @@ impl Model {
             build(path, false).map(|session| (session, false))
         };
         match built {
-            Ok((session, on_card)) => Some(Model { session: Mutex::new(session), on_card }),
+            Ok((session, on_card)) => Some(Model { session: Mutex::new(session), on_card, edge: fixed_edge(path) }),
             Err(err) => {
                 log::warn!("{}: {err}", path.display());
                 None
@@ -96,6 +140,19 @@ impl Model {
 
     pub fn on_card(&self) -> bool {
         self.on_card
+    }
+
+    pub fn edge(&self) -> Option<usize> {
+        self.edge
+    }
+
+    pub fn side(&self) -> Option<usize> {
+        let session = self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dims = session.inputs().first()?.dtype().tensor_shape()?.to_vec();
+        match dims[..] {
+            [_, _, height, width] if height == width && height > 0 => Some(height as usize),
+            _ => None,
+        }
     }
 
     pub fn describe(&self) -> Vec<String> {
@@ -256,7 +313,89 @@ fn build(path: &Path, on_gpu: bool) -> Result<Session, ort::Error> {
         let at = webgpu.iter().position(|device| !software(device)).unwrap_or(0);
         builder = builder.with_devices(vec![webgpu.swap_remove(at)], None)?;
     }
+
+    #[cfg(target_os = "ios")]
+    if on_core_ml(path) {
+        use ort::ep::coreml::{ComputeUnits, ModelFormat};
+        let edge = CORE_ML_EDGE as i64;
+        let builder = builder
+            .with_dimension_override("batch", 1)?
+            .with_dimension_override("height", edge)?
+            .with_dimension_override("width", edge)?;
+        let compiled = numa_core_cache().join("coreml");
+        let _ = std::fs::create_dir_all(&compiled);
+        let coreml = ort::ep::CoreML::default()
+            .with_model_format(ModelFormat::MLProgram)
+            .with_compute_units(ComputeUnits::All)
+            .with_model_cache_dir(compiled.display());
+
+        let refused = match builder.with_execution_providers([coreml.build()]) {
+            Ok(mut with_core_ml) => match with_core_ml.commit_from_file(path) {
+                Ok(session) => return Ok(session),
+                Err(err) => err.to_string(),
+            },
+            Err(err) => err.to_string(),
+        };
+        log::warn!("{}: not through Core ML: {refused}", path.display());
+        return Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(threads())?
+            .with_intra_op_spinning(false)?
+            .with_dimension_override("batch", 1)?
+            .with_dimension_override("height", edge)?
+            .with_dimension_override("width", edge)?
+            .commit_from_file(path);
+    }
+
+    if !on_gpu && path.file_name().is_some_and(|name| LEAN.iter().any(|lean| name == *lean)) {
+        builder = builder.with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
+    }
     builder.commit_from_file(path)
+}
+
+const LEAN: &[&str] = &[
+    "birefnet.onnx",
+    "birefnet_lite.onnx",
+    "birefnet_lite_512.onnx",
+    "sam_encoder.onnx",
+    "vision_encoder.onnx",
+    "isnet.onnx",
+    "efficientvit_seg_b2_ade20k_1024.onnx",
+    "vitmatte_small.onnx",
+    "sam_decoder.onnx",
+];
+
+#[cfg(target_os = "ios")]
+const ON_CORE_ML: &[&str] = &[
+    "scunet_color_real_psnr.onnx",
+    "scunet_color_real_psnr_fp16.onnx",
+    "restormer_motion_deblurring.onnx",
+    "realplksr_x2.onnx",
+    "lama_fp32.onnx",
+];
+
+#[cfg(target_os = "ios")]
+fn on_core_ml(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| ON_CORE_ML.iter().any(|wanted| name == *wanted))
+}
+
+#[cfg(target_os = "ios")]
+const CORE_ML_EDGE: usize = 256;
+
+fn fixed_edge(_path: &Path) -> Option<usize> {
+    #[cfg(target_os = "ios")]
+    if on_core_ml(_path) {
+        return Some(CORE_ML_EDGE);
+    }
+    None
+}
+
+#[cfg(target_os = "ios")]
+fn numa_core_cache() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Library/Caches/numa")
 }
 
 fn threads() -> usize {
@@ -297,6 +436,7 @@ mod tests {
             "scunet_color_real_psnr.onnx",
             "isnet.onnx",
             "isnet-general-use.onnx",
+            "birefnet.onnx",
             "vitmatte_small.onnx",
         ] {
             assert!(on_gpu(&dir.join(name)), "{name} should be on the GPU");

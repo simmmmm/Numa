@@ -230,11 +230,15 @@ pub(super) fn refresh_found(state: &App) {
         let chip = gtk::Button::with_label(&name);
         chip.set_hexpand(true);
         chip.set_tooltip_text(Some(&tooltip));
-        let classes = thing.classes.clone();
+
+        let shape = match pair {
+            true => Shape::Subject,
+            false => Shape::Segment { classes: thing.classes.clone() },
+        };
         let chosen = name.clone();
         chip.connect_clicked(glib::clone!(
             #[strong] state,
-            move |_| add_segment_mask(&state, classes.clone(), &chosen, inverted)
+            move |_| add_segment_mask(&state, shape.clone(), &chosen, inverted)
         ));
 
         let hover = gtk::EventControllerMotion::new();
@@ -297,8 +301,17 @@ pub(super) fn fill_segment_masks(state: &App) {
             .collect()
     };
 
+    let clicked = state.open.borrow().as_ref().is_some_and(|photo| {
+        photo.embedding.is_none() && missing.iter().any(|&index| {
+            photo.document.masks().get(index).is_some_and(|mask| !mask.points.is_empty())
+        })
+    });
+    if clicked {
+        ensure_embedding(state);
+    }
+
     for index in missing {
-        rebuild_mask_map(state, index);
+        refill_mask_map(state, index);
     }
 
     drop_empty_masks(state);
@@ -314,7 +327,7 @@ pub(super) fn drop_empty_masks(state: &App) {
             .iter()
             .enumerate()
             .filter(|(_, mask)| {
-                matches!(mask.shape, Shape::Segment { .. })
+                mask.shape.is_found()
                     && mask.is_idle()
                     && !mask.is_pending()
                     && mask.points.is_empty()
@@ -402,6 +415,14 @@ pub(super) fn mask_frame(state: &App) -> Option<Arc<image::RgbImage>> {
 }
 
 pub(super) fn rebuild_mask_map(state: &App, index: usize) {
+    build_mask_map(state, index, true);
+}
+
+pub(super) fn refill_mask_map(state: &App, index: usize) {
+    build_mask_map(state, index, false);
+}
+
+fn build_mask_map(state: &App, index: usize, edited: bool) {
     let (width, height) = mask_raster_size(state);
 
     let wants_frame = selected_shape(state, index)
@@ -413,26 +434,168 @@ pub(super) fn rebuild_mask_map(state: &App, index: usize) {
 
     let segmentation = photo.segmentation.clone();
     let embedding = photo.embedding.clone();
+    let path = photo.document.source.path.clone();
+    let framing = serde_json::to_string(&render::mask_geometry(&photo.document).operations).unwrap_or_default();
     let Some(mask) = photo.document.mask_mut(index) else { return };
-    render::resolve_mask(
-        mask,
-        segmentation.as_deref(),
-        embedding.as_deref(),
-        frame.as_deref(),
-        width,
-        height,
-    );
 
-    mask.matte = false;
-    mask.fine = false;
+    let kept_as = numa::io::mask_store::worth_keeping(mask)
+        .then(|| numa::io::mask_store::key(std::path::Path::new(&path), &framing, &numa::io::mask_store::recipe(mask)));
+    let mut later = None;
+    match kept_as.as_deref().and_then(numa::io::mask_store::load) {
+        Some((unshaped, matted)) => {
+            mask.unshaped = unshaped;
+            mask.matted = matted;
+            mask.reshape_edge(width, height);
+        }
+
+        None if mask.shape.is_found() && segmentation.is_some() => {
+            later = Some((mask.clone(), kept_as));
+        }
+        None => {
+            render::resolve_mask(
+                mask,
+                segmentation.as_deref(),
+                embedding.as_deref(),
+                frame.as_deref(),
+                width,
+                height,
+            );
+
+            let settled = embedding.as_ref().is_none_or(|embedding| {
+                !mask.points.iter().any(|point| point.enabled && embedding.owes_a_closer_look(point.at[0], point.at[1]))
+            });
+            if let (Some(key), Some(_), true) = (kept_as, mask.unshaped.0.as_ref(), settled) {
+                let (unshaped, matted) = (mask.unshaped.clone(), mask.matted);
+                std::thread::spawn(move || numa::io::mask_store::save(&key, &unshaped, matted));
+            }
+        }
+    }
+
+    if edited {
+        mask.matte = false;
+        mask.fine = false;
+    }
+    let asked = later.map(|(job, kept_as)| (job, kept_as, numa::io::mask_store::recipe(mask)));
     photo.view = None;
 
     drop(open);
 
     refresh_outline(state);
+    look_closer_later(state, index);
+    if let Some((job, kept_as, recipe)) = asked {
+        resolve_later(state, job, kept_as, recipe, framing, (segmentation, embedding), (width, height));
+    }
 }
 
-pub(super) fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str, inverted: bool) {
+fn resolve_later(
+    state: &App,
+    mut mask: Mask,
+    kept_as: Option<String>,
+    recipe: String,
+    framing: String,
+    (segmentation, embedding): (Option<Arc<Segmentation>>, Option<Arc<sam::Embedding>>),
+    (width, height): (usize, usize),
+) {
+    let id = mask.id;
+    let generation = state.open_generation.get();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let resolved = busy(&state, "Finding it in the photograph…", move || {
+            let started = std::time::Instant::now();
+            render::resolve_mask(&mut mask, segmentation.as_deref(), embedding.as_deref(), None, width, height);
+
+            let settled = embedding.as_ref().is_none_or(|embedding| {
+                !mask.points.iter().any(|point| point.enabled && embedding.owes_a_closer_look(point.at[0], point.at[1]))
+            });
+            log::info!("found mask {} built in {:?}, beside the editor", mask.id, started.elapsed());
+            if let (Some(key), Some(_), true) = (kept_as, mask.unshaped.0.as_ref(), settled) {
+                let (unshaped, matted) = (mask.unshaped.clone(), mask.matted);
+                std::thread::spawn(move || numa::io::mask_store::save(&key, &unshaped, matted));
+            }
+            mask
+        })
+        .await;
+        if state.open_generation.get() != generation {
+            return;
+        }
+        let Ok(resolved) = resolved else { return };
+        {
+            let mut open = state.open.borrow_mut();
+            let Some(photo) = open.as_mut() else { return };
+            let now = serde_json::to_string(&render::mask_geometry(&photo.document).operations).unwrap_or_default();
+            let Some(index) = photo.document.masks().iter().position(|mask| mask.id == id) else { return };
+            if now != framing {
+                return;
+            }
+            let Some(mask) = photo.document.mask_mut(index) else { return };
+
+            let steps = photo.history.states.iter_mut().flat_map(|step| step.masks.iter_mut());
+            let waiting = steps.filter(|kept| kept.id == id && kept.map.0.is_none());
+            for kept in std::iter::once(mask).chain(waiting) {
+                if numa::io::mask_store::recipe(kept) == recipe {
+                    kept.unshaped = resolved.unshaped.clone();
+                    kept.matted = resolved.matted;
+                    kept.cut = resolved.cut.clone();
+                    kept.reshape_edge(width, height);
+                }
+            }
+            photo.view = None;
+        }
+        refresh_outline(&state);
+        drop_empty_masks(&state);
+        refresh_masks(&state);
+        request_render(&state);
+        show_coverage(&state);
+    });
+}
+
+fn look_closer_later(state: &App, index: usize) {
+    let (embedding, id, owed) = {
+        let open = state.open.borrow();
+        let Some(photo) = open.as_ref() else { return };
+        let Some(embedding) = photo.embedding.clone() else { return };
+        let Some(mask) = photo.document.masks().into_iter().nth(index) else { return };
+        let owed: Vec<[f32; 2]> = mask
+            .points
+            .iter()
+            .filter(|point| point.enabled && embedding.owes_a_closer_look(point.at[0], point.at[1]))
+            .map(|point| point.at)
+            .collect();
+        (embedding, mask.id, owed)
+    };
+    if owed.is_empty() {
+        return;
+    }
+
+    let generation = state.open_generation.get();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let asked = embedding.clone();
+        let landed = busy(&state, "Looking closer at what was clicked…", move || {
+            owed.iter().filter(|at| asked.look_closer(at[0], at[1])).count() > 0
+        })
+        .await;
+        if state.open_generation.get() != generation || !matches!(landed, Ok(true)) {
+            return;
+        }
+
+        let index = {
+            let open = state.open.borrow();
+            let Some(photo) = open.as_ref() else { return };
+            if !photo.embedding.as_ref().is_some_and(|now| Arc::ptr_eq(now, &embedding)) {
+                return;
+            }
+            let Some(index) = photo.document.masks().iter().position(|mask| mask.id == id) else { return };
+            index
+        };
+        refill_mask_map(&state, index);
+        refresh_masks(&state);
+        request_render(&state);
+        show_coverage(&state);
+    });
+}
+
+pub(super) fn add_segment_mask(state: &App, shape: Shape, name: &str, inverted: bool) {
     if !segment::is_installed() {
         state.toast("No segmentation model installed — see Preferences");
         return;
@@ -444,7 +607,7 @@ pub(super) fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str, inver
         let mut masks = photo.document.masks();
 
         let existing = masks.iter().position(|mask| {
-            mask.shape == Shape::Segment { classes: classes.clone() }
+            mask.shape == shape
                 && mask.inverted == inverted
                 && mask.is_idle()
         });
@@ -454,13 +617,16 @@ pub(super) fn add_segment_mask(state: &App, classes: Vec<u16>, name: &str, inver
             return;
         }
 
-        let mut mask = Mask::new(Shape::Segment { classes: classes.clone() });
-
-        mask.set_matte(classes.iter().all(|class| segment::MATTEABLE.contains(class)));
+        let matte = match &shape {
+            Shape::Segment { classes } => classes.iter().all(|class| segment::MATTEABLE.contains(class)),
+            _ => true,
+        };
+        let mut mask = Mask::new(shape);
+        mask.set_matte(matte);
 
         mask.inverted = inverted;
 
-        if name != segment::name_for(&classes) {
+        if name != mask_name(&mask) {
             mask.name = Some(name.to_string());
         }
         masks.push(mask);

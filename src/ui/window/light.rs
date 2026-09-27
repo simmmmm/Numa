@@ -77,10 +77,13 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
 
             let open = state.open.borrow();
             let curves = open.as_ref().map(|photo| match state.mask_overlay.selected_mask.get() {
-                Some(index) => {
-                    let mask = photo.document.masks().get(index).map(|mask| mask.curve.clone());
-                    [mask.unwrap_or_else(Curve::identity), Curve::identity(), Curve::identity(), Curve::identity()]
-                }
+                Some(index) => match photo.document.masks().get(index) {
+                    Some(mask) => {
+                        let [red, green, blue] = mask.channel_curves.clone();
+                        [mask.curve.clone(), red, green, blue]
+                    }
+                    None => [Curve::identity(), Curve::identity(), Curve::identity(), Curve::identity()],
+                },
                 None => photo.document.curves(),
             });
             draw_curve(
@@ -88,10 +91,7 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
                 width as f64,
                 height as f64,
                 curves.as_ref(),
-                match state.mask_overlay.selected_mask.get() {
-                    Some(_) => 0,
-                    None => state.light.curve_channel.get(),
-                },
+                state.light.curve_channel.get(),
                 state.info.histogram.borrow().as_ref(),
             );
         }
@@ -185,7 +185,7 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
     hint.set_xalign(0.0);
     hint.add_css_class("profile-note");
 
-    global_only(channels.as_ref());
+    let _ = global_only;
     column.append(&channels);
     column.append(&area);
     column.append(&hint);
@@ -244,7 +244,10 @@ fn with_curve<T>(state: &App, edit: impl FnOnce(&mut Curve) -> T) -> Option<T> {
         if let Some(index) = state.mask_overlay.selected_mask.get() {
             let mut masks = photo.document.masks();
             let mask = masks.get_mut(index)?;
-            let out = edit(&mut mask.curve);
+            let out = match state.light.curve_channel.get() {
+                0 => edit(&mut mask.curve),
+                channel => edit(&mut mask.channel_curves[(channel - 1).min(2)]),
+            };
             photo.document.set_masks(masks);
             out
         } else {

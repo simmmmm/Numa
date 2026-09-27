@@ -41,9 +41,11 @@ pub(super) fn libraries_dialog(state: &App, window: &adw::ApplicationWindow) {
         let counted = state.catalog.photo_count(library.id);
         let row = adw::EntryRow::new();
 
-        set_row_title(&row, &match counted {
-            Ok(count) => format!("{count} photo(s) · {}", library.path.display()),
-            Err(_) => format!("Not connected · {}", library.path.display()),
+        set_row_title(&row, &match (counted.as_ref(), library.path.is_dir()) {
+            (Ok(count), true) => format!("{count} photo(s) · {}", library.path.display()),
+
+            (Ok(count), false) => format!("Not connected · {count} photo(s) remembered · {}", library.path.display()),
+            (Err(_), _) => format!("Not connected · {}", library.path.display()),
         });
         row.set_text(&library.label());
         row.set_show_apply_button(true);

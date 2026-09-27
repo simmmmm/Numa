@@ -220,10 +220,10 @@ pub(super) fn apply_clipboard(state: &App) {
     let parts = state.copy_paste.parts.get();
     let source = state.copy_paste.document.borrow().clone();
     let Some(source) = source else { return };
-    apply_edit(state, &source, parts, "Pasted onto", false);
+    apply_edit(state, &source, parts, "Pasted onto", None);
 }
 
-pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done: &str, from_preset: bool) {
+pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done: &str, preset: Option<&str>) {
     if !parts.any() {
         state.toast("Nothing selected to apply");
         return;
@@ -233,16 +233,25 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
         {
             let mut open = state.open.borrow_mut();
             let Some(photo) = open.as_mut() else { return };
-            if from_preset {
+            if let Some(name) = preset {
 
-                let before =
-                    photo.before_preset.get_or_insert_with(|| photo.document.clone()).clone();
-                photo.document = before;
+                let before = photo.preset_base().clone();
+                photo.document = before.clone();
+                photo.document.copy_from(source, parts);
+                photo.before_preset = Some(PresetOn {
+                    left: EditState::of(&photo.document),
+                    base: before,
+                    name: name.to_string(),
+                    preset: numa::io::presets::Preset { parts, document: source.clone() },
+                    amount: 1.0,
+                });
+            } else {
+                photo.document.copy_from(source, parts);
             }
-            photo.document.copy_from(source, parts);
         }
 
         reload_open_document(state);
+        refresh_strength(state);
         state.toast(&format!("{done} this photo"));
         return;
     }
@@ -254,6 +263,9 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
 
     if selected.is_empty() {
         state.toast("Select photos first");
+        return;
+    }
+    if refused_offline(state, selected.iter().copied(), "changing edits") {
         return;
     }
 
@@ -304,6 +316,7 @@ pub(super) fn reload_open_document(state: &App) {
     write_perspective(state);
     write_lens(state);
     ai_denoise::write(state);
+    lut::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);

@@ -1750,7 +1750,7 @@ in the code knows what is behind it.
 
 The models are EfficientViT-Seg B2 for the found masks (it replaced SegFormer-B0,
 whose weights are under NVIDIA's non-commercial licence), SlimSAM for a click,
-IS-Net for a subject's edge (it replaced MODNet), YuNet for finding faces, SFace
+BiRefNet for the subject and its edge (it replaced IS-Net, which replaced MODNet), YuNet for finding faces, SFace
 for recognising them, PP-ResNet50 for naming an animal, and SCUNet for AI
 denoise. None is inside the application; see "What is delivered separately".
 
@@ -1804,6 +1804,7 @@ than FT-009 used:
 | SAM encoder, click to select | 671 ms | 160 ms | 4.2× — on |
 | SCUNet, AI denoise | 484 ms/tile | 181 ms/tile | 2.7× — on |
 | IS-Net, subject edge | 196 ms | 141 ms | 1.4× — CPU |
+| BiRefNet, the subject (since 25 September) | 6.2 s, 8 GB | 0.36–0.47 s | 13× — on, rewritten |
 | YuNet, faces | 1.3 ms | 3.0 ms | slower — CPU |
 | SFace, recognising | 2.9 ms | 21.7 ms | slower — CPU |
 | PP-ResNet50, naming | 6.8 ms | 10.0 ms | slower — CPU |
@@ -1865,6 +1866,36 @@ with no network, a platform ONNX Runtime does not cover:
    size (the `tract` version of EfficientViT failed at 1024 on an export made
    at 512). ONNX Runtime takes the shape from the tensor.
 6. Expect the numbers in the table, and DETAIL-003 to be blocked again.
+
+**BiRefNet, rewritten for the card** (MASK-008, 25 September). As published
+it does not build on WebGPU — Splits of 16 and 32 outputs ask for 17 storage
+buffers where the provider allows 16 — and with those cut into Slices 320
+nodes still went to the processor: the twenty deformable convolutions' index
+arithmetic, in int64, and their four-input Sums. Copying across cost 1.5 s of
+2.3. So `numa_infer::rewrite` rewrites the downloaded file once, before its
+first use: every Split of more than eight outputs becomes Slices, the index
+arithmetic stays in the model's float type from the Cast after Floor to a Cast
+put back before each GatherND (whole numbers under 2048, which float16 holds
+exactly), and each Sum becomes Adds. Then every one of the 13 142 kernels of a
+run is on the card (ONNX Runtime's profile) and a photograph takes 0.36–0.47 s
+through the model, 0.39–0.64 s through `matte::subject`; rewriting takes a
+quarter of a second, building the session three.
+
+The rewrite edits the protobuf on the wire — fields copied as they were, the
+changed nodes re-encoded — rather than decoding ONNX into generated types: no
+crate added, and nothing it does not know about can be dropped. It is written
+beside the file and renamed over it, so a crash leaves the download as it was,
+and it ends in a `metadata_props` entry that `rewrite::rewritten` finds by
+reading the last 20 bytes. On the full model its output gives the same answer
+as the Python reference rewrite to the bit on the card; on the lite model, on
+the processor, IoU 0.9999–1.0 against the unmodified model over six
+photographs (`rewrite::tests::birefnet_rewritten`).
+
+On the processor BiRefNet is heavy: the lite model passed 9 GB by its second
+photograph with ONNX Runtime's arena, which keeps every run's high-water mark,
+and peaks at 5 GB without it, no slower — so these two files run without it
+(`LEAN`). The full model is 6.2 s and about 8 GB there, which is what a Linux
+machine without the card pays.
 
 **Threads.** One run uses every core (`with_intra_threads`); runs on one model
 are serialised behind a mutex. The runtime is parallel inside a run, so the
@@ -2551,3 +2582,64 @@ froze the window for 0.9 s.
 masks. At 1:1: about 60 ms a draft and 0.2–0.5 s once after letting go. The
 draft at 1:1 still carries the tile's panning margin — four times the pixels
 on screen — and dropping it while a slider is held is the next 6×.
+
+## The subject path, re-tuned for BiRefNet — 25 September
+
+BiRefNet was chosen on the raw model over whole frames. The editor does not ask
+it that way: `resolve_mask` takes the semantic model's person or animal when
+there is one and crops round it, gates the answer to it, and filters the edge;
+with nothing named it asks about the whole frame and keeps the largest region.
+Every one of those steps was tuned against IS-Net. `tests/subject_sheets.rs`
+puts the model alone beside the path and Refine edge on 150 of the
+photographer's frames, and agreement with the model alone (intersection over
+union at a half) is the number below — it is not a quality measure where the
+route rightly chose a person, so every change was also looked at.
+
+| | frames changed | agreement, mean over 150 |
+|---|---|---|
+| as it was | — | 0.719 |
+| the gate grown, not blurred | 20 of 55 better, none worse | |
+| no guided filter over the matte | 12 of 55 better, none worse | |
+| "nothing named" by the panel's floor | 9 of 9 better | |
+| scraps under a twentieth dropped, not everything but the largest | 8 of 9 better, none worse | 0.811 (55 better, none worse) |
+
+**The gate was a blur.** It is meant to be one wherever the coarse mask is and
+fall off within the slack, and over anything narrower than the blur — a head,
+an arm, a brim — it came out under a half *inside* the mask. On DSCF2857 it
+was 0.26 at the crown of a hiker's head, which is where the straight line
+across his hair came from. Grown by half the slack and then blurred by the
+other half, it is solid wherever the mask is.
+
+**The staircase filter goes.** It was written against IS-Net's grid on a 2048
+raster. BiRefNet has no staircase to take out, and the filter, guided by
+luminance, turned dark hair on a dark hillside into a grey half and put specks
+along a light shirt. The measure it was kept for — the border's gradient
+following the photograph's, the `the_border_at_full_size` survey — came out a
+draw on ten frames: 0.697 with it, 0.707 without, five each way.
+
+**Refine edge's band is narrower inside.** As wide inside the border as out,
+anything narrower than it was all band, and ViTMatte in the dark decided it
+was not there: of what the first look was sure of, 64 % of DSCF3952's poles
+came back under a half. An eighth as wide inside, 0.8 % on the poles and under
+0.2 % on the other 33 frames; the hair outside the border is decided as
+before.
+
+**What is left is a question of which mask, not of its edge.** On 24 of the
+69 frames where the semantic model found a person, the person it found is not
+what the photograph is of: faces on billboards, a knee beside two koi, the
+driver behind a tram's windscreen, the hands of a Buddha. Subject and Person
+are the same mask — `Segment` over the matteable classes — so the path cannot
+answer "the subject" without also changing what Person means.
+
+So Subject got a shape of its own, `Shape::Subject`, resolved by
+`matte::subject` on the whole frame, and Background is it inverted. Subject's
+agreement with the model alone rose from 0.811 to 0.956 over the 150 (40
+better, none worse); of the 24, 22 now select what the photograph is of. The
+Person chip, walked through the same harness, came out identical on all 69
+frames it applies to. Stacks saved before read back as the new shape:
+`Mask::upgrade` runs on every read (a `remote = "Self"` derive, so the field
+list is still written once), and it recognises the old chip by what it was —
+person and animal classes, named "Subject", or "Background" inside out — which
+nothing else is. Auto's subject lift, which was the same `Segment` named
+"Subject", is the same shape now, and still only where a person or animal was
+named.

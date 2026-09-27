@@ -10,8 +10,14 @@ pub(super) fn build_histogram(state: &App) -> gtk::Box {
     area.add_css_class("histogram");
 
     let histogram = state.info.histogram.clone();
+    let (scope, kind) = (state.info.scope.clone(), state.info.scope_kind.clone());
     area.set_draw_func(move |_, context, width, height| {
-        draw_histogram(context, width as f64, height as f64, histogram.borrow().as_ref());
+        match (kind.get(), scope.borrow().as_ref()) {
+            (render::scope::Kind::Histogram, _) | (_, None) => {
+                draw_histogram(context, width as f64, height as f64, histogram.borrow().as_ref())
+            }
+            (_, Some(scope)) => draw_scope(context, width as f64, height as f64, scope),
+        }
     });
 
     let stacked = gtk::Overlay::new();
@@ -37,7 +43,67 @@ pub(super) fn build_histogram(state: &App) -> gtk::Box {
     }
 
     column.append(&stacked);
+    column.append(&scope_switch(state));
     column
+}
+
+const SCOPE_SETTING: &str = "scope";
+
+fn scope_switch(state: &App) -> gtk::Box {
+    let saved = state.catalog.setting(SCOPE_SETTING).map(|name| render::scope::Kind::from_name(&name)).unwrap_or_default();
+    state.info.scope_kind.set(saved);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("linked");
+    row.add_css_class("scope-switch");
+    let mut first: Option<gtk::ToggleButton> = None;
+    for kind in render::scope::Kind::ALL {
+        let button = gtk::ToggleButton::with_label(kind.name());
+        button.set_hexpand(true);
+        button.add_css_class("flat");
+        button.set_active(kind == saved);
+        match &first {
+            Some(first) => button.set_group(Some(first)),
+            None => first = Some(button.clone()),
+        }
+        button.connect_toggled(glib::clone!(
+            #[strong] state,
+            move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                state.info.scope_kind.set(kind);
+                let _ = state.catalog.set_setting(SCOPE_SETTING, kind.name());
+                state.info.histogram_area.queue_draw();
+                request_render(&state);
+            }
+        ));
+        row.append(&button);
+    }
+    row
+}
+
+fn draw_scope(context: &gtk::cairo::Context, width: f64, height: f64, scope: &render::scope::Scope) {
+
+    let stride = scope.width as i32 * 4;
+    let mut data = Vec::with_capacity(scope.rgba.len());
+    for pixel in scope.rgba.chunks_exact(4) {
+        data.extend_from_slice(&u32::from_be_bytes([0, pixel[0], pixel[1], pixel[2]]).to_ne_bytes());
+    }
+    let Ok(surface) = gtk::cairo::ImageSurface::create_for_data(
+        data,
+        gtk::cairo::Format::Rgb24,
+        scope.width as i32,
+        scope.height as i32,
+        stride,
+    ) else {
+        return;
+    };
+    let _ = context.save();
+    context.scale(width / scope.width as f64, height / scope.height as f64);
+    let _ = context.set_source_surface(&surface, 0.0, 0.0);
+    context.source().set_filter(gtk::cairo::Filter::Good);
+    let _ = context.paint();
+    let _ = context.restore();
 }
 
 pub(super) fn draw_histogram(
@@ -331,6 +397,9 @@ pub(super) struct State {
     pub(super) button: gtk::MenuButton,
     pub(super) histogram_area: gtk::DrawingArea,
     pub(super) histogram: Rc<RefCell<Option<render::histogram::Histogram>>>,
+
+    pub(super) scope: Rc<RefCell<Option<render::scope::Scope>>>,
+    pub(super) scope_kind: Rc<Cell<render::scope::Kind>>,
     pub(super) shadow_clip: gtk::ToggleButton,
     pub(super) highlight_clip: gtk::ToggleButton,
 }
@@ -344,6 +413,8 @@ impl State {
             button: gtk::MenuButton::new(),
             histogram_area: gtk::DrawingArea::new(),
             histogram: Rc::new(RefCell::new(None)),
+            scope: Rc::new(RefCell::new(None)),
+            scope_kind: Rc::new(Cell::new(render::scope::Kind::Histogram)),
             shadow_clip: gtk::ToggleButton::new(),
             highlight_clip: gtk::ToggleButton::new(),
         }

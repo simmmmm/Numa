@@ -13,7 +13,7 @@ pub fn cache_dir() -> PathBuf {
     numa_core::paths::cache_dir().join("thumbs")
 }
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 fn cache_path(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> PathBuf {
     cache_dir().join(key(path, mtime, max_edge, edits))
@@ -63,39 +63,70 @@ fn at_least(max_edge: u32) -> impl Iterator<Item = u32> {
     std::iter::once(max_edge).chain(ladder.into_iter().filter(move |step| *step > max_edge))
 }
 
+fn found(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> impl Iterator<Item = PathBuf> {
+    stood_in(path).into_iter().chain(candidates(path, mtime, max_edge, edits))
+}
+
+static STAND_INS: Mutex<Option<HashMap<PathBuf, PathBuf>>> = Mutex::new(None);
+
+fn stood_in(path: &Path) -> Option<PathBuf> {
+    STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref()?.get(path).cloned()
+}
+
+pub(crate) fn stand_in(path: PathBuf, file: PathBuf) {
+    STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get_or_insert_with(HashMap::new).insert(path, file);
+}
+
+pub(crate) fn forget_stand_ins(root: &Path) {
+    if let Some(map) = STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+        map.retain(|path, _| !path.starts_with(root));
+    }
+}
+
+pub(crate) fn largest_cached(path: &Path, mtime: i64, edits: Option<&str>) -> Option<PathBuf> {
+    let edges = || STEPS.into_iter().rev().chain([LIBRARY_EDGE]);
+    let wanted = edits.into_iter().flat_map(move |edits| edges().map(move |edge| (edge, Some(edits))));
+    wanted.chain(edges().map(|edge| (edge, None))).map(|(edge, edits)| cache_path(path, mtime, edge, edits)).find(|file| file.exists())
+}
+
 fn candidates(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> impl Iterator<Item = PathBuf> {
     library_path(path, mtime, max_edge, edits).into_iter().chain([cache_path(path, mtime, max_edge, edits)])
 }
 
 pub fn cached(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Option<PathBuf> {
-    at_least(max_edge).find_map(|edge| candidates(path, mtime, edge, edits).find(|cached| cached.exists()))
+    at_least(max_edge).find_map(|edge| found(path, mtime, edge, edits).find(|cached| cached.exists()))
 }
 
 pub fn any_cached(path: &Path, mtime: i64, edits: Option<&str>) -> Option<PathBuf> {
     std::iter::once(LIBRARY_EDGE)
         .chain(STEPS)
-        .find_map(|edge| candidates(path, mtime, edge, edits).find(|cached| cached.exists()))
+        .find_map(|edge| found(path, mtime, edge, edits).find(|cached| cached.exists()))
 }
 
 pub fn is_cached(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> bool {
     cached(path, mtime, max_edge, edits).is_some()
 }
 
-pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Result<RgbImage, String> {
-
+pub fn load_cached(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Option<RgbImage> {
     let found = at_least(max_edge).find_map(|edge| {
-        candidates(path, mtime, edge, edits).find_map(|cached| {
+        found(path, mtime, edge, edits).find_map(|cached| {
             let image = image::open(&cached).ok()?;
             used(&cached);
             Some(image)
         })
-    });
-    if let Some(image) = found {
-        return Ok(match image.width().max(image.height()) > max_edge {
-            true => image.thumbnail(max_edge, max_edge),
-            false => image,
+    })?;
+    Some(
+        match found.width().max(found.height()) > max_edge {
+            true => found.thumbnail(max_edge, max_edge),
+            false => found,
         }
-        .into_rgb8());
+        .into_rgb8(),
+    )
+}
+
+pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Result<RgbImage, String> {
+    if let Some(image) = load_cached(path, mtime, max_edge, edits) {
+        return Ok(image);
     }
 
     let image = match edits {
@@ -183,7 +214,7 @@ pub fn forget(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) {
 pub fn cached_size(path: &Path, mtime: i64, max_edge: u32) -> Option<(u32, u32)> {
     use std::io::Read;
 
-    let file = candidates(path, mtime, max_edge, None).find_map(|cached| std::fs::File::open(cached).ok())?;
+    let file = found(path, mtime, max_edge, None).find_map(|cached| std::fs::File::open(cached).ok())?;
     let mut reader = std::io::BufReader::with_capacity(1024, file);
     let mut marker = [0u8; 4];
     reader.read_exact(&mut marker[..2]).ok()?;

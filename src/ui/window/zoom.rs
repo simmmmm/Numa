@@ -20,10 +20,14 @@ pub(super) fn install_canvas_clicks(state: &App) {
 
     let to_one_to_one = gtk::GestureClick::new();
     to_one_to_one.set_button(gtk::gdk::BUTTON_PRIMARY);
+    let armed_at_first = Cell::new(false);
     to_one_to_one.connect_pressed(glib::clone!(
         #[strong] state,
         move |_, presses, x, y| {
-            if presses != 2 || armed_pipette(&state) {
+            if presses == 1 {
+                armed_at_first.set(armed_pipette(&state));
+            }
+            if presses != 2 || armed_at_first.get() || armed_pipette(&state) {
                 return;
             }
             toggle_one_to_one(&state, x, y);

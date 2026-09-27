@@ -333,7 +333,9 @@ entry does not exist, and the messages that say what is missing name
   export dialog, and from the catalogue the stars, the people in the
   photograph (IPTC's persons shown) and the albums it is in, people and albums
   together as keywords. In a JPEG as its own APP1, in a TIFF as tag 700, in a
-  JPEG XL as its `xml ` box; an AVIF has no box for it yet. *Remove location*
+  JPEG XL as its `xml ` box. An AVIF has no box for it — the container writer
+  makes an Exif item and nothing else — so there the same four are EXIF's own
+  tags: Artist, Copyright, Rating and XPKeywords (26 September). *Remove location*
   rebuilds the camera's EXIF without its GPS directory, in every format that
   carries one.
   The capture time is read too, kept beside the file's own date, and it is what
@@ -431,6 +433,22 @@ entry does not exist, and the messages that say what is missing name
   application's own catalog only lists where the libraries are and what to
   remember between runs. A library on a drive that is not connected is shown as
   not connected rather than as empty, and nothing is created at its mount point.
+
+  A library whose drive is not connected can still be looked through and
+  culled: "ik wil voor alle numa's nog dat je library ook kan bestaan uit
+  mappen waar je nu geen access toe hebt". Beside the application's catalog,
+  `offline/<id>.db` lists each library's photographs — path, dates and the
+  name of its biggest thumbnail in the user's cache — and nothing of its
+  ratings, flags or edits, which stay in the folder. Kept when the library is
+  opened (at most daily), after a scan that changed something, on switching
+  library and on closing. With the drive away the grid is that list, with the
+  cached thumbnails, a "source not available" mark on each card and a banner
+  saying so. Stars and flags work and go into `offline/<id>-marks.db` with
+  when; editing, export, pasting, the trash, Analyse and Rescan wait. When the
+  folder is back (on opening it, on the rescan triggers) the marks go into its
+  catalog — unless it holds a later decision about that photograph — the file
+  is deleted and a toast says how many came in. Core: `Catalog::is_offline`,
+  `reconnect`, `keep_for_offline`.
 
   A copy of each library's catalog is taken once a week into `.numa/backups`,
   named by date, and the last four are kept; restoring one is closing the
@@ -812,6 +830,17 @@ entry does not exist, and the messages that say what is missing name
   because the preview reads the same baseline. Nothing is written. A hover
   books a render 160 ms later rather than starting one, and only the newest
   booking counts: a pointer crossing the list walks every row on the way.
+
+  **Numa comes with twelve looks**, in a group "Numa": Soft Film, Vivid, Warm,
+  Cool Fade, Moody, Golden Hour, Matte, Teal & Orange, Cross Process, Vintage,
+  Silver and Noir. They are JSON in `crates/numa-io/looks/`, built in, and
+  `presets::seed_looks` writes each into the presets folder the first time a
+  version with it starts — Linux in `main`, the Apple clients through the
+  bridge — so a deleted one stays deleted (`.looks-seeded` remembers) and a
+  new one arrives with its version. Tone, curve, mixer, grade, grain and
+  vignette only: never white balance, detail or the crop, so they read the
+  same on a finished JPEG as on a raw. `tests/looks_sheet.rs` draws them side
+  by side, a raw and its JPEG each, for judging by eye.
 - ✅ **LIB-020**: Lightroom and Capture One presets, imported and translated —
   Lightroom Classic `.lrtemplate`, Lightroom `.xmp`, Capture One `.costyle` and
   `.costylepack`. Tone, presence, dehaze, vignette, grain, vibrance and
@@ -1104,7 +1133,7 @@ is out of focus" is a slow way to compute a number we can get exactly.
   well-provenanced ONNX one (CULL-004), and within a burst of technically equal
   frames the choice is expression and gesture, which such a score is least
   able to judge.
-- 🟡 **CULL-003**: Faces, from YuNet (OpenCV Zoo, Apache-2.0, 232 kB) through
+- 🟡 **CULL-003**: Faces, from YuNet (OpenCV Zoo, MIT, 232 kB) through
   `tract`. Turns the frame measure into the one that matters for a portrait: a
   crisp background with a soft face scores well on CULL-001 and is a reject.
   Measured on real frames — one at frame 0.53 with a face at 0.20, another the
@@ -1517,6 +1546,29 @@ dependency at all.
   (200, 100, 50) out of each of the four agrees with Numa's own matrices to the
   code value.
 - ◻️ **RENDER-010**: GPU pipeline, if the CPU one ever stops being enough.
+- ◻️ **RENDER-015**: Numa's own camera profiles for every camera, fitted as
+  RENDER-012 does — from CC0 raws first (raw.pixls.us, the embedded JPEG as
+  the target), so no profile Numa offers is GPL. Later a call to action in
+  Numa asking photographers to send a neutral raw of their camera (with its
+  JPEG, or a grey or colour card); the sending itself happens outside Numa —
+  "dat hoeft voor mij niet via numa te gaan behalve de cta" (the
+  photographer, 27 September). After v1.
+
+  Built for v1: six, the pilot's that beat the matrix on held-out frames
+  (EOS R5, D850, A7R III, E-M1 II, X-S10, X-T4; not the G9, Z 7 or K-1, and
+  not the D-LUX, whose one frame was also its training frame). Fitted from
+  CC0 raw.pixls.us frames only, never the DPReview studio frames.
+  The photographer's own ("die zijn van mij nu, bundel ze met de apps maar
+  publiceer ze niet los", 27 September): inside the apps only — Flatpak and
+  AppImage in `share/numa/profiles/numa`, Apple in the bundle's
+  `NumaProfiles/` — from `data/private-profiles`, which the public copy
+  leaves out; no download. Offered, never automatic: Automatic stays the matrix or the
+  RawTherapee profile it was. The Colour tab's Camera profile picker is back
+  for them, every entry saying where it comes from (Numa, RawTherapee,
+  yours, the camera's matrix).
+  Real camera profiles only ("echte profielen"): a Fujifilm film simulation
+  — Adobe's "Camera CLASSIC CHROME", RENDER-012's "Numa X-T5 Eterna" — is
+  neither listed nor automatic (`dcp::is_film_simulation`).
 
 ### OPTICS — Lens corrections
 
@@ -1633,6 +1685,13 @@ dependency at all.
   1.85 and 2.04 for three lenses that should have agreed, which is what a wrong
   model looks like when it is fed enough parameters.
 
+  Since 0.24 (licences, for the App Store): Numa's own code in place of the
+  crate, which is LGPL. Written clean-room from LensFun's documentation and the
+  database, and held to the crate's answers by a comparison over every lens in
+  the database (`crates/numa-io/tests/lensfun_compare.rs`). The database ships
+  beside the binary as its XML files (`data/lensfun`, CC BY-SA 3.0), not
+  compiled in.
+
   Nothing here corrects a pixel. The database is sampled onto the nine radii an
   X-Trans IV or V RAF carries and handed to the code that has been bending
   Fujifilm frames since OPTICS-002 — one correction, two sources.
@@ -1654,6 +1713,20 @@ dependency at all.
   most systems and a correction from the wrong one cannot be noticed downstream.
   A lens the database has never seen — the Viltrox 23 mm in the reference
   library — is left alone rather than approximated.
+
+  Coverage for v1 (27 September, `tests/lens_colour_coverage.rs` over CC0
+  raw.pixls.us samples of 42 bodies and ~100 lens names as cameras write
+  them): LensFun is keyed on the make and model the file writes ("PENTAX
+  K-1", "Canon EOS R6m2", "E-M10MarkIV"), which rawler tidies into names it
+  often lacks — so those are asked first, and the K-1, K-3 III, R6 II and
+  E-M10 IV are found now. A lens rawler's own list does not know keeps its
+  EXIF name. A compact's single lens is taken when its name finds nothing
+  (Leica Q, GR IIIx, D-LUX, X100V), never one calibrated through a converter.
+  A name of only numbers ("24-70mm", what Canon writes for a Sigma) matches
+  only exactly — it took Canon's own 24-70 — and a calibration with an
+  extender needs a "+" in the name. 101 of 102 bodies are in the database
+  (the GR II is not); a Nikon High Efficiency NEF (Z f, Z 8, Z 9) does not
+  decode — rawler has no TicoRAW — while their lossless ones do.
 
 ### TOOL — Tools
 
@@ -1695,7 +1768,9 @@ dependency at all.
   rectangle. **Custom** is a ratio of the photographer's own, typed the way it
   should lie. And one quarter-turn button rather than a left and a right (the
   photographer's: lying down or standing up needs one button; three presses
-  go the other way).
+  go the other way). The crop turns with the photograph, as Lightroom's does,
+  and a held ratio with it — 3:2 becomes 2:3 (26 September; it used to go back
+  to the whole frame with 3:2 still lit).
 
   **The tool cuts what it draws.** The renderer turns the frame about the crop
   rectangle's centre in the source, so off the middle and straightened, the
@@ -1997,6 +2072,17 @@ dependency at all.
   decoder asks for 17 storage buffers in one shader where the standard allows
   16, so the provider refuses the graph. MODNet, measured beside them, still
   turns the far wing into a half-transparent smear.
+
+  **On 25 September BiRefNet replaced it after all** — the full model on
+  Linux, the lite one on the iPad, the photographer's choice after 150 of his
+  own photographs side by side with IS-Net, BiRefNet lite and BEN2: it finds
+  subjects IS-Net missed, leaves a photograph with no subject empty instead of
+  scribbling in it, has the cleaner edge, and stray specks on 26 % of them
+  against IS-Net's 46 % — "the most beautiful results". The 17 storage buffers
+  above are why Numa rewrites the file once it is downloaded, after which all
+  of it runs on the card: 0.4–0.6 s a photograph (ENGINEERING, "Inference
+  runtime"). IS-Net keeps answering for anyone who has not fetched BiRefNet
+  yet, and is deleted once BiRefNet has loaded.
 
   What the shootout did find is that **IS-Net belongs on the card**: 282 ms on
   the processor against 149 ms on it, three runs each, and the two alphas are
@@ -2311,6 +2397,19 @@ dependency at all.
   and nothing in black or white.
 - ❌ **FILTER-008**: ~~Lens blur with a depth map.~~ *Dropped: a faked blur is
   not something the photographer wants.*
+- ✅ **FILTER-009**: LUTs — `.cube` (1D and 3D, up to 65, `DOMAIN_MIN/MAX`)
+  and `.3dl`, imported into the data folder's `luts/` and chosen in a LUT
+  section at the foot of Effects, with an Amount 0–100. Kept apart from the
+  camera profile, as the design principles require: a profile is how the raw
+  is rendered, a LUT is a look over the rendered photograph. Applied where a
+  LUT made for an sRGB / Rec.709 screen expects to be — on the display values
+  after the tone curve and the curves, before quantisation — with tetrahedral
+  interpolation, which keeps a grey ramp grey. The document keeps the file's
+  name and the amount, not the table; it travels with the colour when copied
+  and in a preset, fades with a preset's strength, and is a step in history
+  ("LUT"). A name whose file is gone renders as no LUT. In a wide export the
+  table reads that space's values as if they were sRGB's (a `ponytail:` in
+  `encode`).
 
 ### DETAIL — Sharpening and noise
 
@@ -2662,7 +2761,7 @@ dependency at all.
 
   **In groups, not in nouns.** Subject and Background first, then Sky and
   Water, then the groups that are here: Person, Animal, Greenery, Ground,
-  Buildings — and nothing for a group under half a per cent of the frame, which
+  Mountains, Buildings — and nothing for a group under half a per cent of the frame, which
   is a smudge. That order is the photographer's (23 September): subject,
   background, sky and water are what a photograph is edited by, and the rest is
   occasionally useful.
@@ -2673,10 +2772,20 @@ dependency at all.
   selected by clicking on it, which picks *that* one rather than every thing
   like it in the frame, and the class under the cursor is a lookup.
 
-  Subject is whatever the photograph is of — the person or animal when the
-  semantic model named one, and MASK-008's matting model when it named nothing,
-  because a kite in flight is nobody's ADE20K class and the matte is not asked
-  *which* thing it is, only which pixels are it. Background is that mask
+  Subject is whatever the photograph is of: MASK-008's matting model over the
+  whole frame (`Shape::Subject`), because a kite in flight is nobody's ADE20K
+  class and the matte is not asked *which* thing it is, only which pixels are
+  it. Until 25 September it was the person or animal when the semantic model
+  named one — the Person chip's mask under another name — and on 24 of 150 of
+  the photographer's frames that person was a passer-by, a face on a
+  billboard or a knee beside two koi while the model had the tram, the
+  Buddha or the manta ray. Measured against the model's own answer, Subject
+  went from 0.81 to 0.96 agreement over the 150, 40 better and none worse;
+  22 of the 24 now select what the photograph is of. Of the other two, the
+  model declines a dark doorway (DSCF4009, where the semantic person is kept)
+  and on a night street under Tokyo Tower finds only a cyclist (DSCF3532).
+  Person and Animal are unchanged, to the hundredth of a per cent on 69
+  frames. A stack saved with the old chips opens as the new shape. Background is that mask
   inverted, which is what the invert was always for, and it keeps the matte's
   clean edge. The pair is offered whenever the matting model is installed: "all
   of it except the subject" is a thing a photographer asks for on any frame.
@@ -2908,6 +3017,24 @@ dependency at all.
   scene-linear one underneath, where "half way" is a quarter of the way up
   anything a person would call brightness.
 
+  **Measured on the photographer's own frames** (25 September):
+  `tests/group_survey.rs` walks the export's path over 130 RAWs from
+  `Fotos/` and `dev/group_sheets.py` makes a contact sheet and counts per
+  photograph. Three things came out of looking at them. What a group left
+  out was a hole in it: windows, doors, signs, columns, awnings and ceilings
+  are Buildings now, rock is Ground, and mountain and hill — in no group at
+  all, three per cent or more of fifteen frames and nearly all of a cliff —
+  are a chip of their own, **Mountains**; the part of a frame no group
+  claims went from 22.6 % to 15.1 %. The sky stopped at the outline of every
+  tree, because the model calls a crown "tree" sky and twigs together; each
+  pixel it gave a see-through class with some sky in it is now placed
+  between the sky's colour and the branches' colour nearby, so the gaps are
+  Sky and leave Greenery, and wires and hanging fronds leave the sky. And
+  islands of the grid the model barely believed — under five cells, never
+  0.7 — are dropped before the edge is found: specks in Buildings 131 to 77,
+  Ground 104 to 66. Tried and left out: filling small holes the same way,
+  steps and stairs in Ground, a colour guided filter, a wider filter.
+
   They carry the whole adjustment stack like any other mask, take a brush or a
   lasso on top like any other mask, and MASK-011's feather and edge apply to
   what comes out.
@@ -2926,9 +3053,13 @@ dependency at all.
   nothing and the class is one of the two that model was trained for, the other
   model is asked instead.
 
-  It needs the largest connected region afterwards, because run over a whole
-  frame it also picks up a few scraps of cloud at the bottom edge, and a
-  subject mask with three bits of sky in it is not one. Labelled on a slightly
+  It needs its scraps taken out afterwards, because run over a whole frame it
+  also picks up a few bits of cloud at the bottom edge, and a subject mask
+  with three bits of sky in it is not one. That was the largest connected
+  region alone until BiRefNet (25 September), and then it threw away the
+  second of three cars, the barrels round a jar, a second boat; a region is
+  kept now if it is a twentieth of the largest — BiRefNet's scraps measured
+  three and a half per cent at most on 59 frames. Labelled on a slightly
   spread copy rather than on the matte itself: an outstretched wing is a row of
   separate feathers with sky between them, and asked directly this kept the
   body and threw the wingtips away — which is worse than keeping a scrap of
@@ -3044,9 +3175,29 @@ dependency at all.
   is asked. From a frame of the original at the mask's raster size, in tiles of
   1024 because its attention over a whole frame would want tens of gigabytes;
   on the card 1.8 s for her border, 6.7 s without one. On DSCF1264 the glow is
-  gone and the strands are strands on both sides of her head. Only the largest
-  subject is looked at again — a man in a hat behind her, whom the first look
-  gave a third, keeps his third.
+  gone and the strands are strands on both sides of her head. Only the
+  subjects the first look was sure of are looked at again — a man in a hat
+  behind her, whom the first look gave a third, keeps his third. The band is
+  an eighth as wide inside the border as outside (25 September): as wide both
+  ways, a leg, a telegraph pole or a glass's stem was all band, and in the
+  dark ViTMatte decided it was not there.
+
+  On 26 September ViTMatte-S was replaced by BiRefNet lite's matting weights
+  (MIT) everywhere, because ViTMatte's weights were trained on Adobe's
+  Composition-1k, whose licence says models trained on it "may not be sold".
+  On 27 September Linux went back to ViTMatte: the Linux version is free
+  (PolyForm Noncommercial), and the replacement was clearly weaker on dense
+  fur (a mean error of 0.16 in the fur of a made-up head against ViTMatte's
+  0.04 and the first look's 0.18). The paid Apple app, where the licence
+  does bind, has closed-form matting instead (Levin et al. 2008, patent
+  expired; `numa_render::closed_form`): the same trimap, solved from the
+  photograph's colours, no model and nothing to download. Measured on 24
+  portraits with loose hair from AIM-500 and P3M-500 against their true
+  mattes, from the iPad's first look, the mean error in the hair was 0.165
+  against the first look's 0.170 and BiRefNet lite matting's 0.166, in 0.2 s
+  and 0.5 GB rather than 1.9 s and 1.9 GB on this machine's processor; the
+  full BiRefNet matting model at 512 was 0.119 against 0.129 for the lite
+  one from Linux's first look, at twice the memory (4.2 GB), and not taken.
 
   It is a recipe (`Mask::fine`), done again when the export resolves the mask,
   from the original; not in a thumbnail, whose source is the proxy. Known: her
@@ -3092,9 +3243,57 @@ dependency at all.
   One point per call, so every click stays a part of the mask that can be
   switched off on its own — the dots in MASK-005 would have nothing to point at
   otherwise. The answer is 256 × 256, the same coarse grid as everything else
-  here, so it still goes through the guided filter and through the matting model
-  when what was clicked is a subject. SAM decides *what*; the others decide
-  where its edge is.
+  here, and it says it went through the guided filter: until 25 September it
+  did not, and a click's border was the grid's, ten pixels a step. SAM decides
+  *what*; the others decide where its edge is.
+
+  **25 September: what a click gets, made right on his own photographs.**
+  `tests/click_survey.rs` clicks the middle of every distinct thing the
+  semantic model finds, and one small thing, on 108 frames from every trip —
+  414 clicks, contact sheets looked at one by one. Five changes, each kept
+  only where the sheets and the numbers agreed:
+
+  | | before | after |
+  |---|---|---|
+  | masks with specks elsewhere | 165 | 30 |
+  | masks with pinholes | 125 | 18 |
+  | click outside its own mask | 13 | 8 |
+  | border gradient against its surroundings | 1.06 | 1.34 |
+  | border width, px of the proxy | 2.5 | 1.8 |
+  | window held per click, median / worst | 342 / 1758 ms | 100 / 402 ms |
+
+  - The guided filter against the photograph, as the semantic masks have.
+  - Specks off the clicked piece smaller than a fifth of it go, and closed
+    gaps under a hundredth of it fill. A second large piece stays: a person
+    behind a lamp post is two pieces.
+  - Of the three answers, only those that contain the click, and none that is
+    unsure of its own edge (SAM's stability under 0.6) while another is not:
+    the spray of letters on a business card became the card, one barrel
+    rather than the row, the car without the kerb stripes. Ranked by that
+    measure instead of vetoed by it, it chose parts — a knee for a statue.
+  - Something small — under a fifth of the long edge — is encoded again from
+    a crop two and a half times its size, and the answer that agrees with the
+    first is taken, because from close by the model offers the stripe on the
+    van rather than the van. A fingernail, a weathervane, a boat at sea get
+    their own outline instead of an octagon. It costs one more encoder run on
+    that click, 1.3 s on the processor here, and it runs beside the editor:
+    the first answer is on the canvas at once and the closer one replaces it
+    when it lands. Each click's answers are kept, so a click added to a mask
+    does not ask again about the ones before it.
+  - A click on the rim of a thing counts as a click on it: a steady answer
+    the click misses by a hair wins on its score over a part that takes it.
+  - The encoder without ONNX Runtime's arena: 1.8 GB at most instead of 3.7,
+    no slower.
+  - On the iPhone and the iPad, its attention a head at a time, rewritten
+    into the downloaded file once (`numa_infer::rewrite`): 0.5 GB at most
+    instead of 1.8, and faster on the processor (0.58 s against 0.94). The
+    same embedding to the bit, so the same masks: all 410 of the survey's
+    identical (26 September). Not on Linux, whose card it slows by 38 ms.
+  - A mask kept on disk from the old answers is not read back.
+
+  What stays wrong: a facade is still not one object to it (a strip of wall
+  and window), and where the model's three answers are all a different thing
+  from the one meant, no choice among them fixes it — that is a second click.
 
   What it is not is a better Buildings button. A facade is not one object to it:
   clicking a wall gives a window, a sign, a run of brick. Measured on a street
@@ -4188,6 +4387,16 @@ dependency at all.
   wash four times and rebuilt the layer list twice, and removing one rebuilt
   the list and rendered twice. Once each now. If it still crosses the line the
   log names the function, which is what the next round needs.
+- ✅ **UX-022**: Waveform and RGB parade, in the histogram's place, chosen
+  under it — Histogram, Waveform or Parade — and remembered. A histogram says
+  how much of the photograph is at each level; a waveform keeps where: across
+  is the frame's own columns, up is 0–100 IRE, brightness is how many pixels
+  of that column sit there. The parade is the same per channel, red, green and
+  blue side by side, which is where a cast shows. Worked out in
+  `render::scope` off the same whole frame as the histogram, on the render
+  worker, and handed to every client as a small picture to stretch (360×128,
+  every other row sampled). Linux under the histogram, the iPad's panel and
+  the iPhone's Light as chips under theirs; Modern has no histogram, so none.
 
 ---
 
@@ -4201,6 +4410,7 @@ is not yet built, in the order the groups appear:
 - partly built — **CULL-004** A suggested rating, 0–5, shown beside the photograph and sortable
 - partly built — **CULL-005** A score learned from this photographer's own ratings
 - planned — **RENDER-010** GPU pipeline, if the CPU one ever stops being enough
+- planned — **RENDER-015** Numa's own camera profiles for every camera, and a call to send a neutral raw
 - planned — **DETAIL-008** Settle whether a developed frame is as sharp as Lightroom's and Capture One's, with numbers rather than an impression
 - partly built — **HDR-003** HDR output — HDR files built, the HDR screen deferred
 - partly built — **MASK-008** Background and people masks, and Person and Animal find a subject the semantic model has never heard of
