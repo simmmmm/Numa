@@ -3,6 +3,10 @@ use crate::Model;
 use ndarray::{Array, ArrayD};
 
 fn value_info(name: &str, dims: &[i64]) -> Vec<u8> {
+    typed_value_info(name, dims, FLOAT)
+}
+
+fn typed_value_info(name: &str, dims: &[i64], data_type: i64) -> Vec<u8> {
     let mut shape = Vec::new();
     for dim in dims {
         let mut entry = Vec::new();
@@ -10,7 +14,7 @@ fn value_info(name: &str, dims: &[i64]) -> Vec<u8> {
         put_bytes(&mut shape, 1, &entry);
     }
     let mut tensor_type = Vec::new();
-    put_int(&mut tensor_type, 1, FLOAT);
+    put_int(&mut tensor_type, 1, data_type);
     put_bytes(&mut tensor_type, 2, &shape);
     let mut of_type = Vec::new();
     put_bytes(&mut of_type, 1, &tensor_type);
@@ -174,6 +178,85 @@ fn attention_by_head_is_the_same_attention() {
         .collect();
     let run = |path: &Path| Model::load(path).unwrap().run(values.iter().cloned().map(Into::into).collect()).unwrap();
     assert_eq!(run(&before), run(&after));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_deformable_convolution_by_row_is_the_same_convolution() {
+    let (c, k, h, w, out) = (2i64, 3i64, 4i64, 4i64, 3i64);
+    let taps = k * k * h * w;
+    let shape = |name: &str, dims: &[i64]| constant(name, &[dims.len() as i64], INT64, &int64_raw(dims));
+    let weight: Vec<u8> = (0..out * c * k * k).flat_map(|i| ((i % 7) as f32 * 0.25 - 0.7).to_le_bytes()).collect();
+    let mut nodes = vec![
+        shape("by_tap", &[1, 1, c, k * k, h, w]),
+        shape("grid", &[1, c, k, k, h, w]),
+        shape("wide", &[1, c, h * k, w * k]),
+        constant("weight", &[out, c, k, k], FLOAT, &weight),
+    ];
+    for corner in 0..4 {
+        let at = |what: &str| format!("{what}{corner}");
+        nodes.push(new_node("GatherND", &at("g"), &["image", &at("i")], &[&at("g")], &[int_attribute("batch_dims", 2)]));
+        nodes.push(new_node("Transpose", &at("t"), &[&at("g")], &[&at("t")], &[ints_attribute("perm", &[0, 1, 3, 2])]));
+        nodes.push(new_node("Reshape", &at("r"), &[&at("t"), "by_tap"], &[&at("r")], &[]));
+        nodes.push(new_node("Mul", &at("m"), &[&at("w"), &at("r")], &[&at("m")], &[]));
+    }
+    nodes.extend([
+        new_node("Sum", "sum", &["m0", "m1", "m2", "m3"], &["sum"], &[]),
+        new_node("Mul", "modulated", &["sum", "mod"], &["modulated"], &[]),
+        new_node("Reshape", "cells", &["modulated", "grid"], &["cells"], &[]),
+        new_node("Transpose", "spread", &["cells"], &["spread"], &[ints_attribute("perm", &[0, 1, 4, 2, 5, 3])]),
+        new_node("Reshape", "flat", &["spread", "wide"], &["flat"], &[]),
+        new_node("Conv", "conv", &["flat", "weight"], &["y"], &[ints_attribute("kernel_shape", &[k, k]), ints_attribute("strides", &[k, k])]),
+    ]);
+    let mut graph = Vec::new();
+    for node in &nodes {
+        put_bytes(&mut graph, 1, node);
+    }
+    put_bytes(&mut graph, 2, b"deformable");
+    put_bytes(&mut graph, 11, &value_info("image", &[1, 1, h + 2, w + 2, c]));
+    for corner in 0..4 {
+        put_bytes(&mut graph, 11, &typed_value_info(&format!("i{corner}"), &[1, 1, taps, 2], INT64));
+        put_bytes(&mut graph, 11, &value_info(&format!("w{corner}"), &[1, 1, 1, k * k, h, w]));
+    }
+    put_bytes(&mut graph, 11, &value_info("mod", &[1, 1, 1, k * k, h, w]));
+    put_bytes(&mut graph, 12, &value_info("y", &[1, out, h, w]));
+    let mut opset = Vec::new();
+    put_bytes(&mut opset, 1, b"");
+    put_int(&mut opset, 2, 17);
+    let mut model = Vec::new();
+    put_int(&mut model, 1, 8);
+    put_bytes(&mut model, 7, &graph);
+    put_bytes(&mut model, 8, &opset);
+
+    let rewritten = for_webgpu(&model).unwrap().concat();
+    let (counts, _) = census(&rewritten);
+    assert_eq!((counts.get("Sum"), counts.get("Conv")), (None, None));
+    assert_eq!((counts["GatherND"], counts["MatMul"]), (4 * k as usize, k as usize));
+
+    let dir = std::env::temp_dir().join("numa-rewrite-deformable-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (before, after) = (dir.join("before.onnx"), dir.join("after.onnx"));
+    std::fs::write(&before, &model).unwrap();
+    std::fs::write(&after, &rewritten).unwrap();
+    let noise = |n: i64, seed: i64| (0..n).map(|i| ((i * 7919 + seed * 104729) % 97) as f32 / 97.0 - 0.5).collect::<Vec<_>>();
+    let inputs = || {
+        let mut inputs: Vec<crate::Input> =
+            vec![Array::from_shape_vec(vec![1, 1, 6, 6, 2], noise((h + 2) * (w + 2) * c, 1)).unwrap().into()];
+        for corner in 0..4 {
+            let indices: Vec<i64> = (0..taps * 2).map(|i| (i * 31 + corner * 17 + 7) % (h + 2)).collect();
+            inputs.push(Array::from_shape_vec(vec![1, 1, taps as usize, 2], indices).unwrap().into());
+            inputs.push(Array::from_shape_vec(vec![1, 1, 1, 9, 4, 4], noise(k * k * h * w, corner + 2)).unwrap().into());
+        }
+        inputs.push(Array::from_shape_vec(vec![1, 1, 1, 9, 4, 4], noise(k * k * h * w, 9)).unwrap().into());
+        inputs
+    };
+    let run = |path: &Path| Model::load(path).unwrap().run(inputs()).unwrap();
+    let (was, is) = (run(&before), run(&after));
+    assert_eq!(was[0].shape(), [1, 3, 4, 4]);
+    let apart = was[0].iter().zip(is[0].iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(apart < 1e-5, "{apart}");
+    assert!(was[0].iter().any(|v| v.abs() > 0.1), "a miniature that answers zero proves nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

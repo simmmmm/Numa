@@ -149,20 +149,10 @@ pub fn vignette(
     frame: [f32; 2],
     settings: [f32; 4],
 ) {
-    let [amount, midpoint, roundness, feather] = settings;
-    if amount == 0.0 || width == 0 || height == 0 {
+    if width == 0 || height == 0 {
         return;
     }
-    let stops = amount / 100.0 * 2.0;
-    let aspect = frame[0] / frame[1].max(1e-6);
-
-    let circle = (roundness / 100.0).max(0.0);
-
-    let power = 2.0 + (-roundness / 100.0).max(0.0) * 6.0;
-    let start = 0.15 + 0.85 * (midpoint / 100.0);
-    let soft = 0.05 + 0.95 * (feather / 100.0);
-
-    let corner = 2f32.sqrt().powf(1.0 - 2.0 / power);
+    let Some([stops, aspect, circle, power, start, soft, corner]) = vignette_shape(frame, settings) else { return };
     let euclidean = power == 2.0;
 
     data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
@@ -186,6 +176,28 @@ pub fn vignette(
             }
         }
     });
+}
+
+pub fn vignette_shape(frame: [f32; 2], settings: [f32; 4]) -> Option<[f32; 7]> {
+    let [amount, midpoint, roundness, feather] = settings;
+    if amount == 0.0 {
+        return None;
+    }
+
+    let circle = (roundness / 100.0).max(0.0);
+
+    let power = 2.0 + (-roundness / 100.0).max(0.0) * 6.0;
+
+    let corner = 2f32.sqrt().powf(1.0 - 2.0 / power);
+    Some([
+        amount / 100.0 * 2.0,
+        frame[0] / frame[1].max(1e-6),
+        circle,
+        power,
+        0.15 + 0.85 * (midpoint / 100.0),
+        0.05 + 0.95 * (feather / 100.0),
+        corner,
+    ])
 }
 
 pub fn grain(

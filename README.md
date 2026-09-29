@@ -27,7 +27,7 @@
   <img alt="GTK 4 and libadwaita" src="https://img.shields.io/badge/GTK_4-libadwaita-3584e4">
   <img alt="Rust" src="https://img.shields.io/badge/written_in-Rust-b7410e">
   <img alt="Flatpak and AppImage" src="https://img.shields.io/badge/Flatpak-AppImage-4a86cf">
-  <img alt="PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/licence-PolyForm_Noncommercial-555">
+  <img alt="GPL-3.0 or later" src="https://img.shields.io/badge/licence-GPL--3.0-555">
 </p>
 
 ![The library: justified rows, ratings, flags, suggested ratings from Analyse and a mark on edited photographs](docs/screenshots/library.webp)
@@ -594,7 +594,7 @@ Preferences has a switch to remove the entry again.
 
 ## Building from source
 
-You need a Rust toolchain, GTK 4.12 or newer, libadwaita 1.5 or newer, and
+You need Rust 1.92 or newer, GTK 4.14 or newer, libadwaita 1.5 or newer, and
 `pkg-config`.
 
 ```sh
@@ -639,6 +639,16 @@ older distributions:
 ```sh
 ./packaging/appimage/build.sh
 ```
+
+**Wanted: packagers.** Numa is not in any distribution's repositories yet, nor
+on Flathub, the AUR or the Snap Store. If you would like to package it for one
+of them and keep it up to date, open an issue. Questions about the build get
+answered, and anything in the code that gets in a packager's way gets fixed.
+
+One thing to know for Flathub: it does not accept a manifest that was written
+or assisted by AI. Everything in this repository was, including
+`packaging/flatpak/`, so a Flathub manifest has to be written by a person from
+the start.
 
 ---
 
@@ -742,12 +752,17 @@ file per make.
 
 ## Licence
 
-[PolyForm Noncommercial 1.0.0](LICENSE). You may read, run, modify and share
-Numa for any non-commercial purpose. Commercial use requires a separate
-licence from the author.
+[GNU General Public License, version 3 or later](LICENSE). You may use, study,
+change and share Numa, also commercially. Whoever passes it on, changed or not,
+passes on the source under the same licence.
 
 The additional files each keep their own licence: the models are Apache-2.0 or
-MIT, and RawTherapee's camera profiles are GPL-3.0. The licence texts are
+MIT, and RawTherapee's camera profiles are GPL-3.0. Three optional models were
+trained on data licensed for non-commercial or research use only: ViTMatte-S
+(hair and fur in Refine edge), SFace (recognising people) and IS-Net (a
+fallback for Subject). They are not in Numa's packages but downloaded when
+asked for, and their terms are in
+[`data/MODELS-LICENSES.txt`](data/MODELS-LICENSES.txt). The licence texts are
 published with the downloads.
 
 ## Acknowledgements

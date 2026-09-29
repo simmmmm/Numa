@@ -1,7 +1,8 @@
 pub mod rewrite;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use ndarray::ArrayD;
 use ort::session::builder::GraphOptimizationLevel;
@@ -28,6 +29,7 @@ const ON_GPU: &[&str] = &[
     "isnet.onnx",
     "isnet-general-use.onnx",
 
+    "birefnet_f32.onnx",
     "birefnet.onnx",
 
     "vitmatte_small.onnx",
@@ -50,9 +52,33 @@ pub struct Model {
     on_card: bool,
 
     edge: Option<usize>,
+
+    sized: Option<(usize, usize)>,
 }
 
-static CARD: Mutex<()> = Mutex::new(());
+static CARD: RwLock<()> = RwLock::new(());
+
+pub fn try_card() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
+    match CARD.try_read() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+pub fn card_within(patience: std::time::Duration) -> Option<std::sync::RwLockReadGuard<'static, ()>> {
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        if let Some(guard) = try_card() {
+            return Some(guard);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
 pub enum Input {
     F32(ArrayD<f32>),
@@ -73,22 +99,37 @@ impl From<ArrayD<i64>> for Input {
 
 pub struct Kept {
     slot: Mutex<Option<Option<Arc<Model>>>>,
+
+    used: AtomicU64,
 }
 
 static KEPT: Mutex<Vec<&'static Kept>> = Mutex::new(Vec::new());
 
+fn clock() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
 impl Kept {
     pub const fn new() -> Self {
-        Self { slot: Mutex::new(None) }
+        Self { slot: Mutex::new(None), used: AtomicU64::new(0) }
     }
 
     pub fn get_or_init(&'static self, load: impl FnOnce() -> Option<Model>) -> Option<Arc<Model>> {
         let mut slot = self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.used.store(clock(), Ordering::Relaxed);
         if slot.is_none() {
             *slot = Some(load().map(Arc::new));
-            KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(self);
+            let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !kept.iter().any(|other| std::ptr::eq(*other, self)) {
+                kept.push(self);
+            }
         }
         slot.clone().flatten()
+    }
+
+    pub fn release(&self) {
+        self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
     }
 
     pub fn loaded(&self) -> Option<bool> {
@@ -103,18 +144,50 @@ impl Default for Kept {
 }
 
 pub fn release_all() {
+    release_idle(std::time::Duration::ZERO);
+}
+
+pub fn release_idle(idle: std::time::Duration) -> usize {
+    let now = clock();
+
     let kept = std::mem::take(&mut *KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    let mut stay = Vec::new();
+    let mut released = 0;
     for model in kept {
-        *model.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let mut slot = model.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if idle.is_zero() || now.saturating_sub(model.used.load(Ordering::Relaxed)) >= idle.as_millis() as u64 {
+            released += slot.take().is_some_and(|loaded| loaded.is_some()) as usize;
+        } else {
+            stay.push(model);
+        }
     }
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for model in stay {
+        if !kept.iter().any(|other| std::ptr::eq(*other, model)) {
+            kept.push(model);
+        }
+    }
+    released
 }
 
 impl Model {
 
     pub fn load(path: &Path) -> Option<Model> {
+        Self::load_at(path, None)
+    }
+
+    pub fn load_sized(path: &Path, size: (usize, usize)) -> Option<Model> {
+        Self::load_at(path, Some(size))
+    }
+
+    pub fn answers(&self, size: (usize, usize)) -> bool {
+        self.sized.is_none_or(|sized| sized == size)
+    }
+
+    fn load_at(path: &Path, size: Option<(usize, usize)>) -> Option<Model> {
         let built = if on_gpu(path) && gpu_registered() {
-            let _card = CARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            match build(path, true) {
+            let _card = CARD.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match build(path, true, size) {
                 Ok(session) => {
                     gpu_stood();
                     Ok((session, true))
@@ -123,14 +196,17 @@ impl Model {
                 Err(err) => {
                     log::warn!("{}: not on the GPU: {err}", path.display());
                     gpu_fell_back(&err.to_string());
-                    build(path, false).map(|session| (session, false))
+                    build(path, false, None).map(|session| (session, false))
                 }
             }
         } else {
-            build(path, false).map(|session| (session, false))
+            build(path, false, None).map(|session| (session, false))
         };
         match built {
-            Ok((session, on_card)) => Some(Model { session: Mutex::new(session), on_card, edge: fixed_edge(path) }),
+            Ok((session, on_card)) => {
+                let sized = size.filter(|_| on_card);
+                Some(Model { session: Mutex::new(session), on_card, edge: fixed_edge(path), sized })
+            }
             Err(err) => {
                 log::warn!("{}: {err}", path.display());
                 None
@@ -189,7 +265,7 @@ impl Model {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let _card = self.on_card.then(|| CARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        let _card = self.on_card.then(|| CARD.write().unwrap_or_else(|poisoned| poisoned.into_inner()));
         let mut session = self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let outputs = session.run(&values[..])?;
         (0..outputs.len())
@@ -289,7 +365,7 @@ fn device_name() -> String {
         .unwrap_or_else(|| "a graphics card".to_string())
 }
 
-fn build(path: &Path, on_gpu: bool) -> Result<Session, ort::Error> {
+fn build(path: &Path, on_gpu: bool, size: Option<(usize, usize)>) -> Result<Session, ort::Error> {
     let mut builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_intra_threads(threads())?
@@ -312,6 +388,12 @@ fn build(path: &Path, on_gpu: bool) -> Result<Session, ort::Error> {
         };
         let at = webgpu.iter().position(|device| !software(device)).unwrap_or(0);
         builder = builder.with_devices(vec![webgpu.swap_remove(at)], None)?;
+
+        builder = builder.with_dimension_override("batch_size", 1)?.with_dimension_override("batch", 1)?;
+
+        if let Some((height, width)) = size {
+            builder = builder.with_dimension_override("height", height as i64)?.with_dimension_override("width", width as i64)?;
+        }
     }
 
     #[cfg(target_os = "ios")]
@@ -354,6 +436,7 @@ fn build(path: &Path, on_gpu: bool) -> Result<Session, ort::Error> {
 }
 
 const LEAN: &[&str] = &[
+    "birefnet_f32.onnx",
     "birefnet.onnx",
     "birefnet_lite.onnx",
     "birefnet_lite_512.onnx",
@@ -411,6 +494,24 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn idle_models_are_let_go() {
+        static RECENT: super::Kept = super::Kept::new();
+        static LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let load = || {
+            LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        };
+        RECENT.get_or_init(load);
+        assert_eq!(RECENT.loaded(), Some(false));
+        super::release_idle(std::time::Duration::from_secs(600));
+        assert_eq!(RECENT.loaded(), Some(false), "asked for a moment ago");
+        super::release_idle(std::time::Duration::ZERO);
+        assert_eq!(RECENT.loaded(), None, "let go");
+        RECENT.get_or_init(load);
+        assert_eq!(LOADS.load(std::sync::atomic::Ordering::Relaxed), 2, "asked again");
+    }
+
+    #[test]
     fn the_shipped_plugin_comes_first() {
         let root = std::env::temp_dir().join("numa-gpu-plugin-test");
         let _ = std::fs::remove_dir_all(&root);
@@ -436,6 +537,7 @@ mod tests {
             "scunet_color_real_psnr.onnx",
             "isnet.onnx",
             "isnet-general-use.onnx",
+            "birefnet_f32.onnx",
             "birefnet.onnx",
             "vitmatte_small.onnx",
         ] {

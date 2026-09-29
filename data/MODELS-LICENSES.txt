@@ -24,6 +24,7 @@ isnet.onnx  (Linux only; never used by the paid Apple app)
   ONNX export from rembg by Daniel Gatis: https://github.com/danielgatis/rembg
   (published there as isnet-general-use.onnx)
   Licence: Apache License 2.0 (the model); rembg's export under the MIT Licence below
+  Its training set, DIS5K, is licensed for non-commercial use only.
 
 face_detection_yunet_2023mar.onnx
   YuNet, Wei Wu, Yuantao Feng, Shiqi Yu. OpenCV Zoo.
@@ -34,6 +35,7 @@ face_recognition_sface_2021dec.onnx
   SFace, Yaoyao Zhong, Weihong Deng et al. OpenCV Zoo.
   https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
   Licence: Apache License 2.0
+  Its training data, face datasets, is licensed for research use only.
 
 image_classification_ppresnet50_2022jan.onnx
   PP-ResNet50 on ImageNet-1k, PaddlePaddle / PaddleClas. OpenCV Zoo.

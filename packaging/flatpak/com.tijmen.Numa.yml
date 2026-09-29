@@ -61,12 +61,14 @@ modules:
       build-args:
         - --share=network
     build-commands:
-      - cargo build --release
-      - install -Dm755 target/release/numa /app/bin/numa
+      # PERF-060: the shipped profile, the whole program optimised as one
+      # unit (Cargo.toml, [profile.dist]).
+      - cargo build --profile dist
+      - install -Dm755 target/dist/numa /app/bin/numa
       # OPTICS-005: the LensFun database, read from beside the binary.
       - install -Dm644 -t /app/share/numa/lensfun data/lensfun/*
-      # RENDER-015: Numa's own camera profiles, which travel inside the app
-      # only; the public copy has no data/private-profiles and skips this.
+      # RENDER-015: Numa's own camera profiles, GPL-3.0 like the rest since
+      # 29 September.
       - if [ -d data/private-profiles ]; then
           install -Dm644 -t /app/share/numa/profiles/numa data/private-profiles/*;
         fi

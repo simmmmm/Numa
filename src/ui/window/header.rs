@@ -126,7 +126,11 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     let start = gtk::Stack::new();
     start.add_named(&library_actions, Some("library"));
     start.add_named(&folder_actions, Some("folders"));
-    start.add_named(&back, Some("editor"));
+
+    let editor_start = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    editor_start.append(&back);
+    editor_start.append(&state.editor_page.header_start);
+    start.add_named(&editor_start, Some("editor"));
     start.set_visible_child_name("library");
 
     start
@@ -337,10 +341,7 @@ fn show_text(over: &adw::AboutDialog, title: &str, text: &str) {
 
 fn add_legal_sections(about: &adw::AboutDialog) {
     about.set_copyright("© 2026 Tijmen");
-    about.set_license(
-        "PolyForm Noncommercial License 1.0.0: free for any noncommercial purpose. \
-         <a href=\"https://polyformproject.org/licenses/noncommercial/1.0.0\">Read the licence</a>",
-    );
+    about.set_license_type(gtk::License::Gpl30);
 
     about.add_legal_section(
         "rawler",
@@ -432,7 +433,7 @@ pub(super) fn debug_info(state: Option<&App>) -> String {
                 .borrow()
                 .values()
                 .take(40)
-                .filter_map(|(photo, _)| numa::io::raw::summary(&photo.path)?.camera)
+                .filter_map(|photo| numa::io::raw::summary(&photo.path)?.camera)
                 .collect();
             cameras.sort();
             cameras.dedup();

@@ -105,18 +105,12 @@ pub(super) fn displayed_size(state: &App) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-pub(super) fn open_in_editor(state: &App, child: &impl IsA<gtk::Widget>) {
-    let Ok(id) = child.widget_name().parse::<i64>() else { return };
-    open_photo(state, id);
-}
-
 pub(super) fn step_photo(state: &App, forward: bool) {
     let current = state.open.borrow().as_ref().and_then(|photo| match &photo.source {
         Source::Photo { id, .. } => Some(*id),
         Source::Bracket { .. } => None,
     });
     let Some(current) = current else { return };
-    prefetch::heading(state, forward);
 
     let next = {
         let order = state.grid.order.borrow();
@@ -126,7 +120,10 @@ pub(super) fn step_photo(state: &App, forward: bool) {
     };
 
     match next {
-        Some(id) => open_photo(state, id),
+        Some(id) => {
+            prefetch::heading(state, forward);
+            open_photo(state, id)
+        }
 
         None => state.toast(if forward { "Last photo" } else { "First photo" }),
     }
@@ -147,7 +144,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
     if refused_offline(state, [id], "editing") {
         return;
     }
-    let Some((photo, _)) = state.grid.cards.borrow().get(&id).cloned() else { return };
+    let Some(photo) = state.grid.cards.borrow().get(&id).cloned() else { return };
     let mut laps = raw::Laps::start();
     let asked = timing().then(std::time::Instant::now);
 
@@ -161,26 +158,32 @@ pub(super) fn open_photo(state: &App, id: i64) {
     laps.lap("catalog");
 
     let generation = begin_open(state);
-    state.render.opened_at.set(asked.map(|asked| (asked, false)));
+    state.render.opened_at.set(asked.map(|asked| (asked, false, raw::cpu_ms())));
+
+    state.render.coming.replace(Some(state.zooming.waiting.hold()));
     let edge = proxy_edge(state);
     let ahead = prefetch::take(&state.render.prefetch, &photo.path, photo.mtime, edge);
+    prefetch::opening(state);
     if !ahead.as_ref().is_some_and(|(_, ready)| *ready) {
         prefetch::stand_in(state, &photo, generation);
     }
     let ahead = ahead.map(|(decoded, _)| decoded);
+
+    let colour = (document.clone(), state.catalog.edits_json(photo.id).ok().flatten());
     let state = state.clone();
     let path = photo.path.clone();
     let ai_denoised = (document.ai_denoise > 0.0, document.ai_sharpen > 0.0);
     glib::spawn_future_local(async move {
-        let decoded = busy(&state, "Opening…", move || decode_for_open(path, edge, ai_denoised, ahead)).await;
+
+        let decoded = gio::spawn_blocking(move || decode_for_open(path, edge, ai_denoised, ahead, colour)).await;
         laps.lap("off thread");
 
         if state.open_generation.get() != generation {
             return;
         }
 
-        let (proxy, full_size, summary, lens_corrected, kept) = match decoded {
-            Ok(Ok(proxy)) => proxy,
+        let (proxy, full_size, summary, lens_corrected, (inputs, working, first)) = match decoded {
+            Ok(Ok(decoded)) => decoded,
             Ok(Err(err)) => {
                 state.toast(&format!("Could not open: {err}"));
                 close_editor(&state);
@@ -193,6 +196,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
             }
         };
 
+        prefetch::remember(&state.render.prefetch, &photo.path, photo.mtime, edge, &(proxy.clone(), full_size, summary.clone(), lens_corrected));
         let basic = document.basic();
 
         let as_shot = proxy
@@ -202,15 +206,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
         let document_balance = document.white_balance;
         let balance = document_balance.unwrap_or(as_shot);
 
-        let adjustable = proxy.profile.is_some();
-        state.sliders.balance.temperature.set_sensitive(adjustable);
-        state.sliders.balance.tint.set_sensitive(adjustable);
-
         let working_key = colour_key(&document);
-        let inputs = render_inputs(&document);
-        drop(kept);
-        let working = render::to_working_space(&document, &proxy, &inputs);
-        laps.lap("colour stage");
 
         *state.open.borrow_mut() = Some(OpenPhoto {
             source: Source::Photo { id: photo.id, path: photo.path.clone() },
@@ -225,11 +221,11 @@ pub(super) fn open_photo(state: &App, id: i64) {
             faces_pending: false,
             people: Vec::new(),
             segmenting: false,
-            animal: None,
+            chips: None,
             draft: None,
             full_size,
-            proxy: proxy.into(),
-            working: working.into(),
+            proxy,
+            working,
             working_key,
             full_working: None,
             full_working_key: None,
@@ -245,6 +241,7 @@ pub(super) fn open_photo(state: &App, id: i64) {
             edits_unreadable,
         });
 
+        prefetch::made_ahead(&state, generation, first);
         write_opened_sliders(&state, basic, balance);
         laps.lap("sliders");
         write_rest_of_panel(&state);
@@ -305,12 +302,14 @@ fn decode_for_open(
     path: PathBuf,
     edge: u32,
     (ai_denoised, ai_sharpened): (bool, bool),
-    ahead: Option<std::sync::mpsc::Receiver<Result<prefetch::Prepared, String>>>,
-) -> Result<(LinearImage, (u32, u32), Option<raw::Summary>, bool, Kept), String> {
-    let (proxy, full_size, summary, corrected) = match ahead.and_then(|decoded| decoded.recv().ok()) {
-        Some(prepared) => prepared?,
-        None => prefetch::prepare(&path, edge)?,
+    ahead: Option<std::sync::mpsc::Receiver<prefetch::Decoded>>,
+    (document, edits): (Document, Option<String>),
+) -> Result<(Arc<LinearImage>, (u32, u32), Option<raw::Summary>, bool, (render::RenderInputs, Arc<LinearImage>, Option<prefetch::First>)), String> {
+    let ((proxy, full_size, summary, corrected), coloured) = match ahead.and_then(|decoded| decoded.recv().ok()) {
+        Some(decoded) => decoded?,
+        None => (prefetch::prepare(&path, edge)?, None),
     };
+    let mut laps = raw::Laps::start();
 
     let mut kept = Kept::new();
     if ai_denoised {
@@ -326,7 +325,23 @@ fn decode_for_open(
             kept.push(stored);
         }
     }
-    Ok::<_, String>((proxy, full_size, summary, corrected, kept))
+    laps.lap("AI frames");
+    let colour = match coloured {
+        Some((ahead, inputs, working, first)) if ahead == edits => {
+            laps.lap("colour stage made ahead");
+            (inputs, working, first)
+        }
+        _ => {
+
+            let inputs = render_inputs(&document);
+            let working = render::to_working_space(&document, &*proxy, &inputs);
+            laps.lap("colour stage");
+            (inputs, Arc::new(working), None)
+        }
+    };
+    drop(kept);
+    laps.report("open (worker)", &path);
+    Ok::<_, String>((proxy, full_size, summary, corrected, colour))
 }
 
 type Kept = Vec<std::sync::Arc<numa::core::denoise::Denoised>>;
@@ -381,8 +396,11 @@ pub(super) fn write_rest_of_panel(state: &App) {
 
     let showing = state.panel.stack.visible_child_name();
     let showing = showing.as_deref().unwrap_or_default();
-    if showing == "masks" || state.open.borrow().as_ref().is_some_and(pending_masks) {
+
+    if state.open.borrow().as_ref().is_some_and(pending_masks) {
         ensure_segmentation(state);
+    } else if showing == "masks" {
+        ensure_found(state);
     }
     if showing == "retouch" {
         ensure_faces(state);
@@ -407,6 +425,12 @@ pub(super) fn close_editor(state: &App) {
     }
     begin_open(state);
     prefetch::forget(state);
+    card_render::let_go();
+
+    render::forget_kept();
+    state.render.camera_view.take();
+    state.render.draft_source.take();
+    state.render.coming.take();
     *state.open.borrow_mut() = None;
     state.stack.set_visible_child_name("library");
     if state.grid.stale.replace(false) {

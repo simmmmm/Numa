@@ -12,11 +12,12 @@ thread_local! {
     static SCREEN: RefCell<(Option<Rc<Display>>, String)> = RefCell::new((None, "Not looked for yet".to_string()));
 }
 
-pub fn texture(mut image: image::RgbImage) -> gdk::Texture {
-    if let Some(display) = SCREEN.with(|screen| screen.borrow().0.clone()) {
-        display.apply(&mut image);
-    }
-    unconverted(image)
+pub fn texture(image: &image::RgbImage) -> gdk::Texture {
+    let display = SCREEN.with(|screen| screen.borrow().0.clone());
+    let (width, height) = (image.width() as i32, image.height() as i32);
+    let bytes = numa::render::display::to_bgra(image, display.as_deref());
+    gdk::MemoryTexture::new(width, height, gdk::MemoryFormat::B8g8r8a8Premultiplied, &glib::Bytes::from_owned(bytes), width as usize * 4)
+        .upcast()
 }
 
 pub fn unconverted(image: image::RgbImage) -> gdk::Texture {

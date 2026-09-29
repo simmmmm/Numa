@@ -20,10 +20,10 @@ pub(super) fn add_library_dialog(state: &App, window: &adw::ApplicationWindow) {
         let Ok(file) = dialog.select_folder_future(Some(&window)).await else { return };
         let Some(path) = file.path() else { return };
 
-        let added = state
-            .catalog
-            .add_library(&path)
-            .and_then(|library| Ok((state.catalog.sync_library(&library)?, library)));
+        let added = match state.catalog.add_library(&path) {
+            Ok(library) => sync_library_beside(&state, &library, "Reading the folder…").await.map(|count| (count, library)),
+            Err(err) => Err(err),
+        };
 
         match added {
             Ok((count, library)) => {
@@ -70,33 +70,23 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
         })
         .max_by_key(|(library, _)| library.path.components().count());
 
-    let show = |state: &App, library: Library, path: &Path| {
-        if let Err(err) = state.catalog.sync_library(&library) {
-            state.toast(&format!("Could not read the library: {err}"));
-            return;
-        }
+    let show = |state: &App, library: Library, path: PathBuf| {
+        let state = state.clone();
+        glib::spawn_future_local(async move {
 
-        let sort = state.libraries.filter.borrow().sort;
-        state.libraries.filter.replace(Filter { sort, ..Filter::default() });
-        reload_libraries(state);
-        select_library(state, library.id);
-        let id = state.grid.cards.borrow().iter().find(|(_, (photo, _))| photo.path == path).map(|(id, _)| *id);
-        match id {
-            Some(id) => {
-                remember_recent(path);
-
-                if !show_in_loupe(state, id) {
-                    open_photo(state, id);
-                }
+            if let Err(err) = sync_library_beside(&state, &library, "Reading the library…").await {
+                state.toast(&format!("Could not read the library: {err}"));
+                return;
             }
-            None => state.toast("The photograph is not in the library"),
-        }
+            show_opened(&state, library, &path);
+        });
     };
 
     if let Some((library, path)) = holder {
-        show(state, library, &path);
+        show(state, library, path);
         return;
     }
+
     let Some(folder) = path.parent().map(Path::to_path_buf) else { return };
     let alert = adw::AlertDialog::new(
         Some("Add this folder as a library?"),
@@ -115,9 +105,36 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
             return;
         }
         match state.catalog.add_library(&folder) {
-            Ok(library) => show(&state, library, &path),
+            Ok(library) => show(&state, library, path.clone()),
             Err(err) => state.toast(&format!("Could not add the folder: {err}")),
         }
     });
     alert.present(Some(window));
+}
+
+fn show_opened(state: &App, library: Library, path: &Path) {
+    state.libraries.filter.borrow_mut().in_one_library();
+    reload_libraries(state);
+    select_library(state, library.id);
+    let find = || state.grid.cards.borrow().iter().find(|(_, photo)| photo.path == path).map(|(id, _)| *id);
+
+    let id = find().or_else(|| {
+        let (sort, reversed) = {
+            let filter = state.libraries.filter.borrow();
+            (filter.sort, filter.reversed)
+        };
+        state.libraries.filter.replace(Filter { sort, reversed, ..Filter::default() });
+        reload_grid(state);
+        find()
+    });
+    match id {
+        Some(id) => {
+            remember_recent(path);
+
+            if !show_in_loupe(state, id) {
+                open_photo(state, id);
+            }
+        }
+        None => state.toast("The photograph is not in the library"),
+    }
 }

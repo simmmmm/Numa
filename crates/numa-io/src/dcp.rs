@@ -405,6 +405,10 @@ fn scan(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
 
     let mut found = Vec::new();
     for path in installed() {
+
+        if !header_mentions(&path, |camera, _| camera.contains(&wanted), &wanted) {
+            continue;
+        }
         let Ok(profile) = read(&path) else { continue };
 
         let claimed = profile
@@ -453,6 +457,8 @@ pub fn by_name(name: &str) -> Option<std::sync::Arc<DngProfile>> {
         .or_insert_with(|| {
             installed()
                 .into_iter()
+
+                .filter(|path| header_mentions(path, |_, profile| profile.contains(name), name))
                 .find_map(|path| read(&path).ok().filter(|profile| profile.name == name))
                 .map(Arc::new)
         })
@@ -501,6 +507,61 @@ pub fn is_film_simulation(name: &str) -> bool {
     FILMS.iter().any(|film| name.contains(film))
 }
 
+fn header_mentions(path: &Path, test: impl Fn(&str, &str) -> bool, wanted: &str) -> bool {
+    let stem = path.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default();
+    if stem.contains(wanted) || normalise(&stem).contains(wanted) {
+        return true;
+    }
+    match header_tags(path) {
+        Some((camera, name)) => test(&normalise(&camera), &name),
+        None => true,
+    }
+}
+
+fn header_tags(path: &Path) -> Option<(String, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 8];
+    file.read_exact(&mut head).ok()?;
+    let little = match &head[..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_of = |b: &[u8]| if little { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) };
+    let u32_of = |b: &[u8]| {
+        let b = [b[0], b[1], b[2], b[3]];
+        if little { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+    };
+    file.seek(SeekFrom::Start(u32_of(&head[4..]) as u64)).ok()?;
+    let mut count = [0u8; 2];
+    file.read_exact(&mut count).ok()?;
+    let mut entries = vec![0u8; u16_of(&count) as usize * 12];
+    file.read_exact(&mut entries).ok()?;
+
+    let (mut camera, mut name) = (String::new(), String::new());
+    for entry in entries.chunks_exact(12) {
+        let text = match u16_of(entry) {
+            50708 => &mut camera,
+            50936 => &mut name,
+            _ => continue,
+        };
+        let length = u32_of(&entry[4..]) as usize;
+        let bytes = if length <= 4 {
+            entry[8..8 + length].to_vec()
+        } else if length > 1 << 16 {
+            return None;
+        } else {
+            let mut bytes = vec![0u8; length];
+            file.seek(SeekFrom::Start(u32_of(&entry[8..]) as u64)).ok()?;
+            file.read_exact(&mut bytes).ok()?;
+            bytes
+        };
+        text.push_str(&String::from_utf8_lossy(&bytes));
+    }
+    Some((camera, name))
+}
+
 fn installed() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for directory in search_paths() {
@@ -519,6 +580,20 @@ fn installed() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_header_names_what_the_file_does() {
+        let installed = installed();
+        for path in &installed {
+            let Ok(profile) = read(path) else { continue };
+            let (camera, name) = header_tags(path).unwrap();
+            assert_eq!(normalise(&camera), normalise(profile.camera.as_deref().unwrap_or("")), "{}", path.display());
+            if !name.is_empty() {
+                assert!(name.starts_with(&profile.name), "{}", path.display());
+            }
+        }
+        assert!(installed.is_empty() || installed.iter().any(|path| header_tags(path).is_some()));
+    }
 
     #[test]
     fn a_short_model_name_does_not_take_another_makes_profile() {

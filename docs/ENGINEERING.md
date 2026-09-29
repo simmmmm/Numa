@@ -2785,3 +2785,2282 @@ answer, so every stage needs a tolerance and a reference comparison instead of
 a hash; and the laptop this is for has to be measured first — the rule of the
 sliders' evening. Worth it for the jump and for 1:1 once the decoder's own
 single thread is looked at, not before.
+
+## Saying Numa is busy — 28 September
+
+The photographer: "Ik denk dat ondanks het allemaal sneller kan we voor de ux
+toch overal loaders toe moeten voegen zodat de gebruiker ziet dat Numa bezig
+is en even wacht." UX-015 had one loader for everything — a toast with a
+spinner after 400 ms. That stays the loader for work that belongs to no place.
+UX-025 adds the rules below, and a spinner in the place a wait belongs to.
+
+**The rules.**
+
+- Nothing for the first 400 ms (`BUSY_AFTER`), as before: most waits are
+  shorter, and are getting shorter.
+- Once up, up for at least 200 ms (`LINGER`), toast or spinner. A wait of
+  450 ms used to put a toast up for 50.
+- In place when the wait has a place: the photograph, the Masks tab's chip
+  row, the button that was pressed, the loupe's caption, the card being read.
+  The toast for what has none, and for the long passes that are started from
+  a menu and are worth naming (Refine edge, Refine hair, a merge).
+- A count and a bar when the total is known — export, import, thumbnails,
+  Analyse, downloads, AI denoise — with Stop where the job can stop between
+  items (PERF-003).
+- A spinner turns only while it is mapped: tied to map and unmap rather than
+  to being asked for, so one in a queued toast, on a page not shown or in a
+  row scrolled away costs nothing. Each has an accessible label, and the
+  region it speaks for is marked busy while it is up.
+- Nothing polls to drive feedback that was not polling already: a place's
+  spinner is two one-shot timers per wait, the thumbnail count is told by
+  the queue when it moves, the import's by the copy as each file lands.
+- Nothing moves the layout: Auto's spinner takes the word's place in a stack
+  as wide as the word, and the loupe's has a slot kept on both sides of the
+  caption. The badge is an overlay.
+
+**How a place is held.** `Waiting` is the spinner and a count of holds. A
+wait takes a `Hold`, and the place stays busy until the last is dropped — so
+two mask jobs over the photograph keep it up until both are done, and a job
+that ends any way at all, an early return or a panic in the worker, lets go.
+The photograph's is in the zoom badge, which is where the design system has
+the canvas say "loading"; the opening holds it until its own sharp frame is up
+(`render.coming`), the original at 1:1 until it has been rendered, not only
+decoded.
+
+**What waits, and what it shows.** Release build, the ten frames of the
+switching run and a 2 000-photograph library of hard links, under Xvfb;
+"two cores" is the same build under `taskset -c 0,1`, standing in for the
+laptop.
+
+| wait | how long | before | now |
+|---|---|---|---|
+| opening a photograph, not decoded ahead | 5DS 830 ms, 2.07 s on two cores; the thumbnail stands in at 10–15 ms | thumbnail, "Opening…" toast | thumbnail, spinner in the badge until the sharp frame |
+| stepping to the one decoded ahead | 37–60 ms | nothing | nothing |
+| 1:1, the original | 5DS 3.5 s on two cores | "…", and "Decoding the original…" | "…" and the spinner, until the full frame is up |
+| a slider | draft 7–30 ms, sharp 44–200 ms on two cores | nothing | nothing |
+| Masks: what is in the photograph | under a second, 1–2.5 s on two cores | the chip "Looking at the photograph…", and a toast saying it again | the chip with a spinner in it; on the photograph too only if a mask there waits |
+| a found mask's pixels, a click, a closer look, the click model | 0.5–2.6 s | a toast each | the badge |
+| Auto | ~0.5 s; its frame 824 ms on the main thread on two cores with a decode running | a toast at once, the window frozen | the spinner in the button; the frame on the worker |
+| Looks cards | up to 814 ms a card on two cores, on the main thread | empty cards, the window held 1.4 s | cards fill in one by one from a worker |
+| thumbnails of a new library | 10 raws ~3 s on two cores; an edit's render 0.5–1.8 s | "Making thumbnails — n of N" from a 100 ms poll | the same toast, told by the queue; the grid marked busy |
+| export | ~1 s a file | "Exporting 3 of 10…" as text, and a loader per file never seen | count, bar and Stop; one plain file the loader after 400 ms |
+| import from a card | 30 files, 1 GB, 1.5 s | text read every 250 ms; the walk after it on the main thread | count and bar moved by the copy; the walk beside it; "Reading the card…" turns |
+| Move to Trash | a rename locally; a copy per file on a share | on the main thread, nothing shown | beside it, the loader after 400 ms |
+| adding a folder, opening a file from outside, dropping files in | a new folder of 2 001: 3.9 s, reading every file's date | on the main thread, the dialog frozen on screen | beside it, "Reading the folder…" |
+| the loupe at 1:1 | 0.8–1.5 s on two cores | "developing at full size…" | the same, with a spinner |
+| AI denoise, downloads, Analyse | minutes | count, bar, Stop | unchanged |
+
+**What is still on the main thread**, found with a 10 ms watchdog on the main
+loop (not committed; it is a dozen lines):
+
+- The first frame a mask, a pipette or a retouch spot needs (`mask_frame`) is
+  still made where it is asked for — the colour stage and the geometry over
+  the proxy. Tens of milliseconds on sixteen quiet cores; on two with the
+  next photograph decoding, 824 ms, because it calls into the rayon pool the
+  decode is using. Auto's is on its worker now; the pipettes', retouch's and
+  a new mask's are not.
+- The colour stage of an opening (`to_working_space`), 3–74 ms, for the same
+  reason worth watching on a laptop.
+- Building the grid: 55 ms for 2 000 photographs, and 180 ms from building the
+  window to its first frame. On a network drive the thumbnail sizes it reads
+  are the network's.
+- Adding and removing a mask (`busy_sync`): a raster and an outline of about
+  9 ms each (UX-015's measurement), behind a toast put up first.
+
+**Kept as they were, and why.** The half-second tickers of AI denoise and an
+export's model passes, and the quarter-second ones of Analyse and downloads,
+run only during a job that holds every core or the network, which they cost
+nothing beside; downloads read curl's file as it grows, which has nothing to
+push. No spinner per thumbnail card: sixty spinners turning over a grid is
+the cost this round is against, and the count says more. No spinner per
+preset card, for the same reason. libadwaita 1.6's `AdwSpinner` does what
+`spinner()` does by itself, but the floor is 1.5 (`v1_5`, deliberately); the
+Flatpak's runtime and the AppImage both carry 1.9, so it is a one-line change
+the day that floor moves.
+
+**The Apple clients, planned, not built.** Read on 28 September from
+`Numa-mac-next` (`next-numa`) and `Numa-mac-port` (`mac`); the Mac draws the
+iPad's views, so the plan for one is the plan for both. Deployment target iOS
+and macOS 26, so every `ProgressView` style is there. One modifier in
+`Theme.swift`, the Linux rules in SwiftUI — a `ProgressView` in place after
+400 ms, up at least 200, `.accessibilityLabel` on it — used everywhere below
+instead of the delays each view has now (the mask loader's 300 ms, nothing at
+all elsewhere).
+
+- *Opening* (`EditorView` 870): a large spinner on black at once, and a step
+  in the filmstrip makes a new model, so every step is blank again. The
+  grid's thumbnail stands in, and the spinner goes to the zoom badge's place
+  at the top centre on `ground-hud`, until the sharp render — as here.
+- *Masks after an opening, a tile at zoom, Before*: nothing says a render is
+  coming (`rendering` is private), and Before shows the edited picture under
+  its badge until the original renders. The same badge; the loupe's
+  "Developing at full size" already does this for the tile.
+- *Auto* (`AutoNotice`, at once): in the Auto chip, in the word's place.
+- *Dust, Remove people*: a note and a live button; a spinner in the row and
+  the button off while it runs. *Photo info* says "No camera metadata in this
+  file." while it loads: a spinner, not a false empty state. The profile
+  picker is empty until its choices arrive: a spinner in its row.
+- *Counts*: a batch export has N and stops between items, so "n of N" with a
+  bar and Stop; a plain export's bar moves only during AI passes, so it stays
+  indeterminate but should not offer a Stop it ignores. "Saving to Photos"
+  has a `Work` it does not show: its fraction and Cancel. Copying into a
+  library: the file count. Downloads: Cancel.
+- *On the main actor*: `autoLevel`, `autoPerspective`, `pickNeutral`,
+  `nameAt`, `readValues`, `carryMasks`; paste, preset, Move to Trash and batch
+  from the grid (a catalog round trip each); the Mac's Share save copying
+  large TIFFs; `Catalog.openDefault` at launch. To detached tasks, with the
+  spinner of the button that started them. Two causes are in the FFI rather
+  than the views: the catalog is one worker thread, so a main-actor call
+  waits behind a rescan; and `masks` is locked for the whole of a model run,
+  so `name_at` on a click waits seconds for it.
+
+## Opening photographs faster, and with less energy — 28 September
+
+Picked up from "What is left" above, overnight, CPU side only (the GPU is a
+branch of its own). The photographer asked for speed and then, the same
+night, for no hot phones: "zorg dat het dus echt extreem efficiënt is". So
+every change was judged twice — wall time, and the processor time it costs
+(user + system, from `getrusage`; RAPL's joules are root-only on this
+machine) — and preferred when it does less work rather than the same work on
+more cores. The output is the rule it always is: decode, proxy and default
+render hash the same on the ten frames before and after, and every decoder
+change hashes the same mosaic on the 502 raws of every make from
+raw.pixls.us (`dev/fetch-corpus.sh`'s source, in `raws-cc0`).
+
+**Where the time went now** — rawler's decode alone, one frame, medians of
+three runs of five, wall / processor ms, before → after:
+
+| | 5D3 CR2 | 5DS CR2 | Z 6 NEF | Z 7 NEF | E-M1 ORF |
+|---|---|---|---|---|---|
+| rawler 0.8.0 | 99 / 98 | 239 / 239 | 88 / 87 | 168 / 168 | 138 / 138 |
+| one thread, PERF-021 | 76 / 76 | 177 / 176 | 54 / 54 | 106 / 106 | 104 / 104 |
+| four threads, PERF-022 | 20 / 76 | 53 / 174 | 23 / 85 | 48 / 169 | — |
+
+**The decoders (PERF-021, PERF-022, PERF-027).** rawler is carried in the tree
+now (`vendor/rawler`, LGPL-2.1, every change in its `NUMA-CHANGES.md`), as a
+path in the workspace's dependency table rather than a `[patch]`, so the Apple
+workspace, which reads that table, builds the same decoders. On one thread:
+the bit reader refills eight bytes at a time instead of four through an
+iterator, and the Huffman cache is a `u32` an entry over 12 bits — 16 KB
+where it was 48, measured against 11 and 13 bits. On four: CR2 and NEF have
+no restart markers, but a Huffman code resynchronises within a few codes, so
+the stream is cut into four parts, each read from its own first byte, and a
+join is where one part's reading meets a code boundary the next noted. From a
+shared boundary both readings are the same, so the codes are the single
+reader's exactly; a stream that does not join falls back to one reader. Two
+things decided the shape. The parts run on a pool of their own: in the global
+one every split woke all sixteen threads and the idle ones spun, a third more
+processor time for the same work. And four parts, not sixteen: eight were no
+faster and cost 40 % more, sixteen saved 5 ms for 2.3 times the processor
+time — past four the parts only compete for memory. A CR2 is decoded straight
+into its vertical fields, which drops a 100 MB frame and a serial copy of it;
+a NEF's dithering random number is a multiply-with-carry generator, which is a
+multiplication modulo 15700·2¹⁶ − 1, so each row's starting value is a power
+away. ORF's predictor and the PPG demosaic choose between candidates with
+selects rather than branches the noise keeps mispredicting (ORF 133 → 104 ms,
+PPG 15 % less processor time). A closed form for ORF's code-length loop was
+tried and was slower.
+
+**The profile scan (PERF-023).** Automatic's profile was found by reading
+every installed `.dcp` whole — 160 MB with RawTherapee's set both downloaded
+and installed, 105 ms on the first photograph of each body, measured again
+tonight at 104–141 ms (the note above had 54). The header names the camera
+and the profile in a few hundred bytes; only a file whose header could be the
+one is read whole, and the choice among those is made as before. 1–3 ms, so
+warming it at library open is no longer worth a thread.
+
+**The rest of the decode (PERF-028, PERF-029).** The lens geometry read its
+three tables at every pixel, finding the same window three times, and a pixel
+and its mirror across the centre line — exactly the same distance out — did
+it again: found once each now, geometry 20 % faster and falloff 40 %.
+Markesteijn works in tiles that compute a 24-pixel margin they throw away;
+at 64 pixels that was 2.6 times the pixels kept, at 128 it is 1.5, and a
+pixel depends only on its neighbourhood so the picture does not change
+(identical on 70 RAFs). Its green bounds, a single-threaded pass over the
+whole frame, now go row by row on all threads. The X-T5's demosaic 634 → 426
+ms.
+
+**Stepping (PERF-025, PERF-026).** The colour stage is made off the main
+thread on every opening, and by the decode ahead with the neighbour's stored
+edits; the opening takes it when the edits are still what they were (compared
+as the catalog holds them). The main thread's part of a step is the panel, 12
+ms. LensFun's database is read at startup, off the main thread.
+
+**Where it stands** (first frame / sharp frame after the photograph was asked
+for, ms, and the processor time of the whole process meanwhile; release build
+under Xvfb, one quiet pass, before = 030913c):
+
+| | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| jump, before | 436 | 717 | 812 | 367 | 544 | 442 | 706 | 480 | 477 | 1239 |
+| jump, after | 292 | 623 | 537 | 294 | 451 | 311 | 517 | 352 | 351 | 958 |
+| its processor time, after (s) | 2.7 | 5.9 | 5.9 | 3.2 | 5.0 | 3.1 | 5.6 | 2.7 | 2.8 | 12.5 |
+| decode + proxy + render, processor s, before → after | 2.5 → 2.2 | 5.6 → 5.1 | 5.9 → 5.3 | 2.6 → 2.3 | 4.8 → 4.3 | 2.7 → 2.5 | 5.3 → 4.8 | 2.2 → 1.9 | 2.2 → 1.9 | 13.3 → 11.7 |
+| step, before | — | 48 | 35 | 57 | 48 | 44 | 45 | 64 | 67 | 47 |
+| step, after | — | 49 | 48 | 44 | 50 | 45 | 50 | 45 | 46 | 46 |
+
+First and sharp frame are the same frame on every opening (PERF-020), so one
+number each. A step is the photograph after in capture order, decoded ahead;
+its time is the render and the texture, 44–50 ms either way (the 35 of the
+5DS before is one lucky run), and its processor time 0.2 s. The main thread's
+part of a step went from 15–40 ms to 12 (the colour stage left it). The row
+of processor-seconds is the same work outside the app (`rawbench full`),
+since the build before did not print it. A screenshot of a step reached
+through the new path and of a jump to the X-T5 differ from the old ones in
+nothing on the canvas; one card in the filmstrip differs by a fraction of a
+level at its focus ring, which is the animation's moment, not the picture.
+
+**The energy side (PERF-024).** `numa_core::power` holds one flag, `frugal`:
+on Linux the power-saver profile (GIO's monitor, the portal in a Flatpak) or
+running on battery (UPower, where the system bus is reachable); on Apple the
+bridge calls `set_frugal`, meant for Low Power Mode and a serious or critical
+thermal state. Frugal, nothing is decoded ahead until two steps the same way,
+nothing is warmed up (the lens database waits for the first raw), and
+background work runs on a quarter of the cores. The GPU branch and the
+"doing less" branch read the same flag.
+
+A decode ahead is speculative work, and what it costs when nobody steps to
+it is the number to watch: 2.0 processor-seconds for an E-M1 frame, 2.5–2.7
+for a 24 MP one, 4.5–5.7 for a 42–50 MP one, 12 for an X-T5. Before tonight a replaced decode ran on to the
+end beside the one that replaced it; now it is stopped at its next stage
+boundary (the longest stage is Markesteijn, 0.4 s) when another photograph is
+opened, when a newer one replaces it, or when the editor is left, and it
+runs on its own pool at nice 10 so nothing the photographer waits for queues
+behind it — which is what the loaders branch found on two cores, where the
+first mask of a photograph waited 824 ms behind the neighbour's decode.
+Pinned to two cores (`taskset -c 0,1`), opening the 5D3 and stepping: 1039
+ms and 195 ms before, 860 and 87 after; the Z 7 and a step to the Z 6: 1902
+and 578 before, 1590 and 84 after. The frugal path itself — the run of two
+steps, the quarter pool — is covered by a unit test for the run and was not
+run under a real power-saver profile tonight.
+
+What a decode ahead is worth in a session, from those numbers: stepping
+straight through a shoot wastes one decode at the end of the run; every jump
+that is not followed by a step wastes one; a turn back wastes one. Frugal,
+the jumps and turns cost nothing extra and the first two steps of every run
+decode as a jump would.
+
+**For the Apple apps.** Everything in the shared crates reaches them: the
+decoders through the workspace table (their `Cargo.lock` will see rawler move
+from the registry to a path, so `dev/check-apple.sh`'s `--locked` wants one
+unlocked build first, and the relink kit now copies `numa/vendor/rawler`,
+which is the modified source the LGPL asks for), the profile scan, the lens
+and demosaic work. The switch needs one line in the bridge —
+`#[uniffi::export] fn set_frugal(on: bool) { numa_core::power::set_frugal(on) }`
+— fed from `ProcessInfo.isLowPowerModeEnabled` and a `thermalState` of
+`.serious` or `.critical`, both of which post a notification when they
+change. The background pool's lower priority is Linux-only; on Apple the
+counterpart is a utility quality of service for those threads.
+
+**What is left**, with numbers:
+
+- *The global pool.* Sixteen threads on eight cores: the 5D3's whole decode
+  is 202 ms and 2.5 processor-seconds; on four threads 394 ms and 1.5, on
+  eight 243 ms and 1.7. The extra is the second thread of each core and idle
+  threads spinning between the many short parallel passes (the decoder's own
+  pool showed the second: a third more for the same work). A pool per stage, or the
+  global pool at the number of physical cores, would trade a little wall time
+  for a lot of processor time — the photographer's call, and to be measured
+  on the laptop, since joules are what matter and a sibling thread costs far
+  less than a core.
+- *The X-T5.* Its decode is still 0.87 s and 11.7 processor-seconds: the
+  Fuji decompressor 124 ms at ×9.8 (to try first: its `read_code` sits
+  behind `multiversion`, so it is dispatched per sample and never inlined),
+  Markesteijn 426 ms,
+  false colour 145 ms, geometry 110 ms.
+- *ORF thumbnails.* rawler reads no preview from an ORF, so every ORF
+  thumbnail is a full decode, lens correction included, at 2–11
+  processor-seconds each (two ran at every start of the harness until the
+  cache was warmed). The camera's JPEG is in the Olympus makernote
+  (CameraSettings 0x0101/0x0102). Reading it would change what an ORF's card
+  shows (the camera's rendering instead of Numa's), so it is left for the
+  photographer to decide.
+- *The step's render* is 42 ms and 0.2 processor-seconds for a 1920-pixel
+  proxy — worth a look with the same eye as the decode.
+
+## The decode on the graphics card — 28 September
+
+RENDER-010, started from the brief the section above ends with. Everything
+between rawler handing over the sensor's counts and the editor getting its
+proxy now runs on the card: black and white, the demosaic (PPG for Bayer,
+Markesteijn for X-Trans), the baseline lift, the lens's falloff and
+geometry, X-Trans false colour, the samples the exposure match reads, the
+turn and the shrink to the proxy. 1:1 and export get the whole frame the
+same way. It is `crates/numa-gpu` (wgpu 30, Vulkan; WGSL shaders), behind
+`numa-io`'s `gpu` feature, which only the Linux app turns on — the shared
+crates build for Apple unchanged, and nothing of wgpu is linked there.
+
+**The shape.** The mosaic goes up once, as the sensor's own 16-bit counts
+(half the bytes of floats); a pass scales it by a table of rawler's own
+black-and-white arithmetic, the demosaic writes three planes, the lens
+bends them into a second buffer, false colour cleans them back into the
+first, and only then does anything come back: every 37th pixel for the
+exposure match (the camera's JPEG is still read on the processor, beside
+the raw), then — lifted by the factor that match makes — the proxy, turned
+upright and box-averaged over exactly the boxes `downscaled` uses, or the
+whole frame. A 50 MP or 40 MP frame is about 1.8 GB on the card at the peak; between
+photographs the process holds 27.5 MB of it (amdgpu's fdinfo), 14 of which
+are the device and its compiled pipelines.
+
+**Measured** as the section above was: release build, the same ten frames,
+Xvfb, an isolated copy of the catalogue, the same binary with `NUMA_GPU=0`
+for the processor's path, interleaved runs, two passes, medians — on the
+RX 9070 XT (RADV, Mesa 26.2) this machine has, while two other sessions
+built and measured under the same machine lock.
+
+**Where the time went** (cold opening, ms, processor → card; the card's
+column is the whole develop, lock, upload and read back included):
+
+| stage | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|
+| demosaic (incl. black/white) | 74 | 146 | 169 | 76 | 143 | 79 | 151 | 67 | 641 |
+| flatten + baseline | 8 | 20 | 24 | 10 | 19 | 9 | 21 | 8 | 19 |
+| vignetting | 10 | 21 | 24 | 11 | 19 | 11 | 21 | 9 | 18 |
+| geometry (distortion + TCA) | 71 | 142 | 164 | 78 | 136 | 78 | 146 | 64 | 128 |
+| false colour | — | — | — | — | — | — | — | — | 140 |
+| exposure match | 12 | 26 | 30 | 13 | 25 | 13 | 26 | — | 23 |
+| downscale to the proxy | 10 | 16 | 24 | 11 | 16 | 11 | 20 | 8 | 16 |
+| **all of the above** | **184 → 20** | **372 → 30** | **433 → 32** | **198 → 20** | **358 → 32** | **200 → 20** | **386 → 30** | **156 → 19** | **985 → 62** |
+| of which upload | 6.2 | 7.3 | 8.7 | 6.3 | 8.3 | 6.2 | 8.6 | 5.2 | 8.2 |
+| of which the passes | 8.6 | 15.1 | 15.0 | 8.7 | 14.8 | 8.8 | 13.7 | 8.7 | 45.1 |
+| of which samples + match | 2.0 | 3.6 | 4.0 | 1.7 | 3.7 | 1.8 | 3.6 | 0.9 | 3.8 |
+| of which proxy + read back | 3.1 | 4.5 | 4.4 | 3.2 | 4.3 | 3.6 | 4.1 | 3.8 | 4.2 |
+| rawler decode (unchanged) | 100 | 189 | 239 | 8 | 13 | 88 | 169 | 141 | 130 |
+| **the whole decode** | **408 → 223** | **666 → 323** | **808 → 373** | **323 → 130** | **528 → 154** | **420 → 213** | **665 → 308** | **426 → 284** | **1209 → 266** |
+
+Inside the passes (`NUMA_GPU_PROFILE=1`, each waited for): a 5DS is
+scale 4.2, PPG 1.4 + 2.4, geometry 2.5, samples 1.1, proxy 2.2 ms; an X-T5
+is scale 4.2, Markesteijn 3.8 + 5.8 + 6.3 + 5.4 + 6.8 + 1.7 + 4.0 (green,
+solitary greens, red/blue, 2×2 greens, Lab gradients, votes, the average),
+geometry 1.9, false colour 2.7, samples 0.9, proxy 2.0.
+
+**Where it stands** (first frame / sharp frame after the photograph was
+asked for, ms; the two are one frame since PERF-020):
+
+| | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|
+| jump, processor | 453 | 719 | 852 | 385 | 595 | 471 | 720 | 494 | 1260 |
+| jump, card | **262** | **374** | **414** | **193** | **219** | **261** | **361** | **352** | **316** |
+| step (decoded ahead), processor | — | 46 | 35 | 59 | 50 | 46 | 44 | 64 | 50 |
+| step (decoded ahead), card | — | 47 | 37 | 56 | 49 | 43 | 48 | 65 | 48 |
+
+The brief's guess was a 5DS at about 500 ms and an X-T5 at about 320: 414
+and 316. Stepping is the colour stage and a render, as predicted, and does
+not move. What is left of a jump is now mostly rawler's decode — one
+thread on the CR2, NEF and ORF bitstreams — and, the first time a body is
+seen in a session, the camera profile's scan (54 ms).
+
+**1:1 and export** (`decode_linear_best`, the whole frame, outside the
+app, medians of three, ms): 5D3 277 → 159, R5 534 → 280, 5DS 650 → 358,
+A6000 200 → 72, A7R3 367 → 124, Z 6 284 → 154, Z 7 539 → 281, E-M1 292 →
+193, X-T5 1098 → 253. Here the read back is the largest piece on the card
+— 62 of a 5DS's 114 ms, 600 MB through a 64 MB window — because the frame
+has to become a vector of floats on the processor's side.
+
+**The same picture, within a tolerance.** A shader is not the processor's
+arithmetic, so each stage is compared rather than hashed:
+`the_card_develops_what_the_processor_does` runs both paths to the same
+point — the demosaic alone, then with the falloff, the geometry, the false
+colour, turned, and the proxy — and renders both proxies through the
+renderer's defaults. Over the ten frames and the nine makes of the corpus:
+
+| | Bayer (8 bodies, 9 corpus makes) | X-T5 |
+|---|---|---|
+| demosaic alone, max / mean | ≤ 4.8e-7 / ≤ 3e-10 (a few units in the last place) | 4.5e-2 / 6.8e-7 |
+| finished frame, max / mean | 4.4e-5 – 2.2e-3 / ≤ 1e-6 | 1.9e-2 / 1.7e-6 |
+| values more than 1e-3 apart | ≤ 0.0001 % | 0.027 % |
+| rendered proxy, 8-bit | at most 1 level, on 0.007–0.03 % of values | at most 2, on 0.048 % |
+
+(Scene-linear, where 1.0 is the sensor's white lifted by the baseline; a
+maximum of 2e-3 is one pixel of the geometry's bilinear weights rounding
+differently on a hard edge.)
+
+The tolerances the test holds: a mean difference under 1e-5 of the lifted
+white, under 0.1 % of values more than 1e-3 apart, and rendered proxies at
+most 2 levels apart on under 0.5 % of values. A screenshot of the editor on
+the same photograph through each path (X-T5, 5DS, A6000, 1920×1080):
+the photograph differs by at most 1 level, on 0.02–0.06 % of the screen's
+pixels; the histogram above it by up to 10 at a few bar edges, where a bin
+count one sample different moves an anti-aliased edge by a pixel.
+
+Two things made PPG the processor's to a few units in the last place, and
+both were found by the comparison rather than foreseen. PPG decides between
+directions on exact ties — flat areas of integer counts are full of them —
+so one bit of difference in a green is a different green. The first bit
+came from the black-and-white division, which the card does not round
+correctly: the counts go through a table of rawler's own arithmetic made on
+the processor (Markstein's correction, exact on the processor for every
+count and 197 million pairs of levels, was not on the card: the driver may
+split an `fma`). The second came from `a * 3.0 + b`, which the compiler
+fuses into one rounding where the processor rounds twice; `a + a + a` is
+the same number and cannot be fused. Markesteijn is not bit-exact — its
+homogeneity vote compares Lab gradients, and a near-tie can tip — but a
+tipped pixel is a single pixel, and at most one in six thousand values
+moves by more than 1e-3.
+
+**What stayed on the processor, and why.** rawler's decode itself — a
+bitstream, sequential by nature, and the other half of every jump now
+(90–240 ms on the CR2, CR3, NEF and ORF decoders); the camera profile, the
+lens lookup and the metadata, which are file parsing; the camera's JPEG and
+the median of the 1.3 million samples the exposure match takes (3–5 ms);
+thumbnails, culling and HDR merges, which decode in the background on the
+draft route — none is waited on, and one holding the card would send the
+photograph being opened to the processor; and anything the card does not
+take: a linear DNG, a four-colour or SuperCCD sensor, a frame that needs
+more than 3 GB of the card. Every pass in between moved, and none lost:
+the slowest, Markesteijn, is 45 ms of the card against 644 of eleven cores.
+
+**Keeping the desktop and the models whole.** The card that develops is the
+card that draws the photographer's desktop, so nothing is asked of it in
+one long piece: every pass runs over tiles of rows, one submission a tile,
+about 8 MP each (1 MP on an integrated GPU) — a few milliseconds.
+Markesteijn works in bands of about 8 MP with rawler's 12-row margins. Every loop a
+table drives is bounded; a frame that needs more than 3 GB of the card, or
+a larger buffer than it binds, stays on the processor; `develop` runs
+inside an out-of-memory and a validation error scope, and anything they
+catch, a panic, a ten-second wait, or a lost device (after which the card
+is not asked again that session) is the processor for that photograph. The
+develop takes the models' lock (`numa_infer::try_card`) without waiting, so
+it and a model are never on the card together — the rule the models keep
+with each other since two of them met in RADV on 21 September — and two
+develops queue rather than one falling to the processor. The device is made
+at start-up off the main thread with darktable's marker around it, the one
+the models use: a start that dies in the driver switches GPU acceleration
+off for the next, which says so, and Preferences' switch — now there
+without the models' download — turns both back on. No shader or GPU fault
+was logged by the kernel in any run tonight.
+
+**Energy.** The photographer, 28 September: speed, but no hot laptops —
+and energy is a goal equal to speed. Measured per jump over the ten
+frames, above idle: the card's board power (`power1_average`, sampled every
+50 ms) and the processor package's (the socket power the APU's SMU
+reports in `gpu_metrics`; RAPL needs root here, and this reads 33 W idle
+and 105–148 W under an all-core decode, as a 9800X3D does). Back to back
+is a photographer jumping through a shoot; 1.5 s apart is one jump at a
+time, where the card spends the second after it clocking down.
+
+| per jump | back to back | one at a time |
+|---|---|---|
+| processor path | 29.0 J (package), 4.9 core-seconds | 27.9 J |
+| discrete card (RX 9070 XT) | 3.4 J package + 5.6 J card = **9.0 J**, 0.42 core-seconds | 3.8 + 12.5 = **16.3 J** |
+| integrated GPU (frugal) | **7.5 J** package (the iGPU is in it) | **8.1 J** |
+
+Both paths on the card cost less energy than the processor's, so the card
+is the default. Frugal takes the integrated GPU: a third of the energy of
+the processor and not slower — jumps of 155–607 ms against 301–778 on the
+Bayer frames, the X-T5 level at 1.18 s, where Markesteijn's 954 ms on two
+compute units is most of it. A frugal machine without an integrated GPU,
+or a discrete card only, decodes on the processor; no discrete card is
+ever woken for frugal. The power switch that says frugal is not on this
+branch: `numa_gpu::warm_up` and `develop` take the flag, and until the
+switch is merged `NUMA_GPU=low` asks for it by hand. Nothing is submitted
+unless a photograph is being developed; the waits are the driver's fence,
+not a loop.
+
+**What the Apple apps would need.** wgpu's Metal backend and the same
+WGSL (naga translates it to MSL): the `metal` feature for Apple targets in
+`numa-gpu`, and numa-ffi turning `numa-io/gpu` on. Four things to settle
+there before it is the default, each a measurement on the device: Metal's
+largest buffer (`maxBufferLength`) is smaller on iPhones than a 50 MP
+frame's three planes (600 MB), so the planes need binding separately or
+storing as half floats; the 3 GB budget becomes a fraction of the device's
+memory, because iOS ends an app for its footprint; unified memory makes
+the upload and the read back unnecessary (the mosaic can be mapped where
+the card reads it — worth doing there, where it was not here); and a
+develop asked for while the app is in the background fails, which the
+fallback already turns into the processor. The comparison test runs on the
+self-hosted MacBook as it is. The licence question in the next paragraph
+applies to the closed Apple apps with more weight than to the open Linux
+one.
+
+**A licence question for the photographer.** `demosaic.wgsl` translates
+rawler's PPG and Markesteijn step for step — its borders, its tile-width
+quirk — because that is how the card's picture came to match the
+processor's. The algorithms are Chuan-kai Lin's and Frank Markesteijn's as
+dcraw published them, but a translation that close is rawler's code in
+another language, so the file says LGPL-2.1, as rawler does. Numa links
+rawler under the same licence already; whether a shader file changes what
+the licence audit has to say is for the audit (the Mac repository's
+`docs/LICENCES_AUDIT.md`).
+
+## Developing at the size that is shown — 28 September
+
+The photographer, the night after the switching measurements: faster, and
+"echt extreem efficiënt" — no hot iPhone, no drained battery. The switching
+work of the 27th made each stage cheaper; this looked for work that did not
+need doing at all. Doing less is the one speed-up that is also an energy
+saving.
+
+**The finding.** Every opening developed the whole frame — 24 to 50
+megapixels through demosaic, baseline, falloff, geometry, false colour and
+the exposure match — and then averaged it down to a proxy of 1920 × 1280 and
+threw the frame away. Nothing kept it: `prefetch::prepare` returned the proxy
+and the full size, and everything that wants the photosites (1:1, the
+export, the loupe's 1:1, tracing hair, AI denoise, an HDR merge) decodes
+again, on demand, as it always did. So each opening paid for twelve to twenty
+developed pixels per pixel it kept.
+
+**`raw::proxy_from_mosaic` (PERF-030; `decode_proxy` on its branch)**
+averages the mosaic straight into the proxy. For each proxy pixel and each
+colour:
+
+- the footprint is `LinearImage::downscaled`'s own — `[floor(x·r),
+  ceil((x+1)·r))`, whole photosites, so the proxy has the old size to the
+  pixel and its box is the old box;
+- it is read from where the lens profile says that colour landed:
+  `correct_geometry`'s pull-in (`lens::geometry_fit`, moved out for this),
+  and `source_radius` per channel, so lateral CA still comes out;
+- the falloff is the profile's gain at that radius;
+- and every photosite is spread by a tent before the box weighs it — two
+  photosites for red and blue, one for green.
+
+The tent is the part that took measuring. A bare box — the mean of the
+photosites of one colour in a footprint exactly `r` wide, the first
+version — came out 4 to 26 % *more* acute
+than the old proxy, and the extra was noise: on a flat grey wall the
+difference image was all grain. A demosaic interpolates each missing colour
+from its neighbours before the box ever sees it, so its box averages over
+more than the footprint. Swept on five bodies:
+
+| tent red/blue, green | acutance, new / old (5DS, E-M1, Z 7, A6000, X-T5) |
+|---|---|
+| none (box) | 1.16, 1.26, 1.12, 1.09, 1.11 |
+| 1, 0.75 | 1.02, 1.03, 1.02, 1.01, 1.01 |
+| **2, 1** | **0.99, 0.99, 1.00, 0.99, 1.00** |
+| 2, 1.5 | 0.97, 0.94, 0.98, 0.97, 0.98 |
+| 3, 2 | 0.94, 0.88, 0.95, 0.93, 0.95 |
+
+Two and one it is, for Bayer and X-Trans alike (acutance as FT-021 measured
+it: mean gradient magnitude of the rendered luminance over its mean). Nothing
+else is Bayer- or X-Trans-specific: the CFA's period and which of its sites
+are which colour are read from the file, so any three-colour mosaic goes
+this way; four colours, a linear DNG, a SuperCCD or a frame no larger than
+the proxy is handed back and developed as before. X-Trans loses nothing it
+had: Markesteijn and the false-colour step exist for what interpolation
+invents, and nothing is interpolated here.
+
+**The picture** (`examples/proxy_ab.rs` in the scratch folder: old =
+`decode_for_editing` + downscale, new = `decode_proxy`, both through the
+default render at the editor's detail scale, 1920 proxy):
+
+| 1920 proxy | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mean difference, 8-bit levels | 0.46 | 0.33 | 0.86 | 1.06 | 0.33 | 0.22 | 0.96 | 0.74 | 0.93 | 0.68 |
+| 99.9th percentile, levels | 8 | 5 | 6 | 12 | 11 | 4 | 22 | 9 | 14 | 10 |
+| ΔE mean / 99th percentile | 0.67 / 2.4 | 0.48 / 1.9 | 1.22 / 4.1 | 1.35 / 5.4 | 0.45 / 3.7 | 0.33 / 1.5 | 0.94 / 7.7 | 1.13 / 4.7 | 1.47 / 5.4 | 0.83 / 4.5 |
+| the same, both blurred 4× | 0.24 / 1.2 | 0.22 / 1.0 | 0.40 / 1.6 | 0.50 / 1.5 | 0.23 / 1.7 | 0.14 / 0.9 | 0.63 / 3.0 | 0.42 / 1.6 | 0.53 / 2.0 | 0.47 / 1.7 |
+| acutance, new / old | 1.008 | 0.998 | 0.993 | 0.988 | 1.002 | 1.001 | 1.002 | 1.002 | 1.004 | 0.994 |
+| linear level, green, new / old | 0.999 | 0.998 | 0.999 | 0.995 | 1.000 | 1.000 | 0.989 | 1.000 | 1.000 | 0.993 |
+
+At a 2400 proxy (a HiDPI screen) the same picture: acutance 0.982–1.012,
+mean difference 0.24–1.26 levels. And on the screen itself — the editor
+under Xvfb, fit view, before and after, cropped to the canvas — E-M1, X-T5,
+Z 7 and 5DS differ by 0.62, 0.52, 0.78 and 0.62 levels on average, ΔE 0.95,
+0.64, 0.74 and 0.89 (99th percentile 3.8, 3.5, 5.6, 3.2); the largest pixel
+difference on the Z 7, 51 levels, is one grain of a noisy patch that looks
+the same at four times on either side. Outside the canvas only the
+histogram differs.
+
+The mean differences are almost all noise texture — two filters over the
+same grain agree on its average and not on its pixels — which is why the
+4×-blurred difference is a fifth to a half of the sharp one. The one
+systematic part is the exposure match. `match_camera_exposure` takes the
+median of every 37th pixel, and on the proxy those are smoother pixels: the
+Z 7's factor came out 0.9656 instead of 0.9775, and that −1.2 % is its whole
+linear difference; the E-M1, which has no camera JPEG to match, differs by
+0.0000. A dark, noisy frame moves most. Under a fiftieth of a stop, and the
+export and 1:1 keep their own factor, as before.
+
+**What did not change.** `decode_for_editing`, `decode_linear_best` and
+`decode_linear` hash as before on all ten frames — full frame, proxy and
+default render — so 1:1, the export and the loupe are the same bytes. The
+old route stays in `prefetch::prepare` behind `PROXY_FROM_MOSAIC`.
+
+**Where the time went** (1920 proxy, one decode, ms and processor-seconds):
+
+| 1920 proxy | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| decode + proxy, before | 288 / 2.6 | 557 / 5.8 | 689 / 6.1 | 209 / 2.8 | 392 / 4.9 | 296 / 2.8 | 575 / 5.5 | 306 / 2.3 | 307 / 2.3 | 1 141 / 13.6 |
+| after | 147 / 0.85 | 224 / 1.5 | 298 / 1.2 | 63 / 0.87 | 80 / 0.94 | 143 / 0.90 | 228 / 1.1 | 203 / 0.99 | 203 / 0.99 | 195 / 2.2 |
+
+(ms / processor-seconds, medians of three, file in the page cache, the
+camera profile and lens database already read — what an opening costs once
+a session has seen the body.) What is left of the "after" is mostly rawler's
+decoder — 100–240 ms of one or two cores on the CR2s, NEFs and ORFs — and
+the develop-small stage itself, 45–65 ms on sixteen threads. The stages it
+replaces were 180 ms on the A6000, 410 on the 5DS and 990 on the X-T5.
+
+The RAPL energy counters are not readable on this machine (root only), so
+processor-seconds stand in for energy; on a laptop or a phone the two move
+together.
+
+**Not everywhere.** The stage costs per pixel of proxy, not per photosite,
+so it wins by how much smaller the proxy is than the frame. At a 4096-pixel
+long edge — what a 2048-pixel export develops at — it costs as much
+processor time as the full PPG develop on the Bayer bodies (the 5D3's 2.9 s
+became 3.3), and only the X-T5 still gains (13.8 → 5.1 s). So it is the
+editor's, the grid's and the thumbnails', and not the export's.
+
+The stage itself took three rounds, from 66–100 ms on sixteen threads to
+45–65. A `%` by the CFA's period — known only at run time, so a division —
+ran for every row and site; the period's phase is now found once per box and
+stepped (78 → 66 ms on the A6000). The tent weights were worked out afresh
+for every pixel and colour; the weights of every box a frame can ask for are
+now built once, at a sixteenth of a photosite (a fiftieth of a proxy pixel),
+and looked up (66 → 49). What is left is the averaging itself: with the
+tents every photosite is read three to five times by overlapping
+footprints, which only a two-pass separable warp would take out.
+
+It also goes where a full develop was made to be shrunk: the grid's preview
+of a raw that carries no camera JPEG (every ORF — the E-M1's grid thumbnails
+were a full develop each) and the thumbnail of an edited photograph.
+
+**Going back (PERF-031).** A step back after a step forward, or two frames
+of a burst compared back and forth, was a whole decode of a photograph
+decoded seconds earlier. The last three openings are kept — the proxy the
+open photograph already holds, and two more: 60 to 90 MB — keyed on the
+file, the proxy's size and what Automatic means (RENDER-016). `prefetch::take`
+answers from them before it looks at the decode ahead; the decode ahead
+skips a neighbour that is kept, and one that finished but was passed over
+by a change of direction is kept too. With the arrow keys under Xvfb (open,
+→, ←, →, ←), A7R III ⇄ 5DS went 623 / 46 / 439 / 711 / 443 ms →
+238 / 46 / 41 / 41 / 41, four decodes where there were seven, and the whole
+16-second session 44.8 → 6.3 processor-seconds; 5DS ⇄ Z 7 went
+807 / 50 / 713 / 610 / 712 → 432 / 47 / 41 / 39 / 38, 46.9 → 5.9.
+
+**Going back in (PERF-032).** Zooming back to fit dropped the decoded
+original at once, so every look at 1:1 somewhere else decoded it again —
+0.3 to 1.2 s and 2.6 to 13.6 processor-seconds each time. What was rendered
+from it still goes at once; the decode is kept for thirty seconds after the
+last look, unless another zoom in or another photograph has come since. On
+a 5DS frame (double-clicks: 1:1, fit, 1:1) the second 1:1 went straight to
+its tile instead of decoding again for 659 ms and 6.0 processor-seconds; the
+price is 576 MB held for the half minute.
+
+**Nothing speculative when frugal.** The decode ahead is the one piece of
+work nobody asked for. `prefetch::frugal()` is its switch, `false` for now:
+it is wired to `numa_core::power::frugal()` when speed-night is merged.
+
+**In the editor** (release build under Xvfb, open a photograph from the
+grid and step once with the decode ahead — the harness of the 27th; three
+passes each, before and after back to back on a quiet machine, medians):
+
+| | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| open: first frame, ms | 451 → 296 | 733 → 400 | 818 → 435 | 369 → 225 | 616 → 239 | 491 → 291 | 712 → 381 | 476 → 380 | 489 → 378 | 1243 → 324 |
+| open: decode, processor-s | 2.6 → 1.0 | 5.8 → 1.7 | 6.0 → 1.3 | 2.8 → 1.1 | 4.8 → 1.1 | 2.9 → 1.1 | 5.4 → 1.2 | 2.3 → 1.2 | 2.3 → 1.1 | 13.5 → 2.4 |
+| step: first frame, ms | — | 49 → 47 | 42 → 43 | 58 → 60 | 47 → 47 | 46 → 46 | 44 → 46 | 64 → 63 | 65 → 65 | 46 → 50 |
+| step: its decode ahead, processor-s | — | 5.6 → 1.6 | 5.9 → 1.3 | 2.7 → 0.9 | 4.8 → 1.0 | 2.8 → 0.9 | 5.3 → 1.1 | 2.2 → 1.0 | 2.2 → 1.0 | 13.4 → 2.3 |
+| the whole session, processor-s | 9.0 → 4.0 | 20.7 → 5.1 | 15.6 → 4.3 | 9.0 → 4.5 | 17.6 → 4.4 | 23.5 → 6.0 | 15.4 → 4.7 | 11.2 → 4.6 | 14.8 → 4.6 | 14.4 → 3.0 |
+
+A step was already a decode made ahead and stays at 40–60 ms; what it costs
+now is a third to a fifth of the processor behind it. The session row is the
+whole 12-second run — starting the application, the grid, the opening, the
+step and the next decode ahead.
+
+**What the Apple apps get.** `numa-ffi`'s `Editor::open` does what Linux
+did: `decode_for_editing`, downscale, drop. With `decode_proxy(path,
+max_edge)` it gets the same saving, and the peak goes with it — the full
+develop of a 45 MP frame is 540 MB of floats before the proxy exists, the
+proxy path's is the mosaic (100 MB) and the proxy. On an iPhone that is the
+difference the memory notes of 26 September were about.
+
+**1:1 develops what is on screen (PERF-033).** A zoom past the proxy
+developed the whole original — 0.6 to 1.4 s and 5 to 17 processor-seconds
+with its colour stage — to show two or three megapixels of it. The idea is
+Core Image's region of interest, and darktable's tiles: ask each stage what
+it reads of the stage before for the part that is wanted, and develop only
+that. `raw::region::Regions` opens the raw once — the same read, profile,
+orientation and demosaic as `decode_beside` — and develops any rectangle of
+it: baseline, falloff and geometry through `lens::Centre` and
+`lens::bilinear` (moved out of `correct_vignetting` and `correct_geometry`
+so both run the same arithmetic), FT-022's false colour through the same
+median of nine, the factor, the orientation. The one step that is not local
+is the exposure match's median, over every 37th pixel of the whole frame;
+those pixels are developed one by one — 17 to 35 ms on the Bayer bodies,
+168 on the X-T5, whose false colour needs nine developed neighbours each.
+
+Checked float for float against `decode_linear_best` on all ten bodies — a
+tile, the four corners and edges, odd sizes, the whole frame — and in a test
+on the corpus's Bayer and X-Trans frames. In the editor the part the view
+reads is `render::tile_box` (the tile's rectangle, or `cut_turned_tile`'s
+box, grown by what the bilinear sample reaches; tested by cutting from a
+frame that holds only that box), plus 128 pixels, developed into a working
+frame of the whole size whose other pages are never touched. The 1:1 canvas
+differs from main's in 0 pixels, both zoom-ins, on a 5DS and an X-T5.
+Anything that needs the whole frame — HDR, Clarity, Texture, Dehaze, AI
+frames, a spot whose source is elsewhere — still gets all of it.
+
+| first zoom-in | 5DS | A7R III | X-T5 |
+|---|---|---|---|
+| before: decode + colour stage of the whole frame | ~0.8 s, 6.5 s of processor | ~0.6 s | ~1.4 s, 16.8 |
+| after: open + the part on screen | 453 + 24 ms, ~3 s | 194 + 31 ms, ~2.1 | 984 + 38 ms, ~11 |
+| a pan to a part not developed yet | 24–44 ms | 31–62 ms | 38–69 ms |
+| held after the colour stage | 576 → 19–38 MB | | |
+
+**Previews kept beside the photographs (PERF-034).** With PERF-030 an
+opening is 0.2–0.45 s and a processor-second; kept, it is a 14 MB read. The
+proxy goes into the library's own `.numa/previews` — Lightroom keeps
+`Previews.lrdata` beside its catalogue, darktable its mipmaps in a cache of
+levels; here the level is the one proxy the screen asks for — with a
+`CACHEDIR.TAG` so backup and sync tools skip it. Half floats (`half`,
+already in the build): a rendered proxy moves by one level on 1–1.6 % of its
+values. Keyed on the path within the library, mtime and length, the proxy's
+size, what Automatic means and Numa's version; least recently used goes
+first. Nothing outside a library, on a drive that is away or read-only, or
+on one where the session's first read is slower than the last decode — a
+network share or an old stick, where 14 MB at 30 MB/s is half a second and
+decoding again is quicker.
+
+| | decode (page cache emptied) | read back |
+|---|---|---|
+| ten bodies | 189–444 ms, 1.0–2.3 processor-s | 10–19 ms, 7–15 processor-ms |
+| after a restart, first frame | 5DS 460 ms, X-T5 326 | 163, 143 |
+
+How much room each library gives it is Lightroom's "Camera Raw cache size"
+as a stock slider in Preferences › Storage: Off, 0.5, 1, 2 (default), 5,
+10, 20 GB, per library, trimmed at once when lowered.
+
+**The proxy's exposure (PERF-035).** The one systematic difference PERF-030
+left — the exposure match's median over the proxy's smoother pixels, up to
+−1.2 % on the Z 7 — is now taken over the full frame's one-in-37 pixels,
+each demosaicked on its own at the photosite the geometry reads: within
+0.36 % (Z 7) and 0.16 % (A6000), under 0.1 % elsewhere, for 5–15 ms.
+
+**Grid thumbnails for less: measured, not done.** The camera's JPEG is what
+the grid shows (Photo Mechanic's whole idea), but rawler hands out only the
+largest one a file carries: 5760–8688 pixels on the Canons and Nikons,
+34–82 ms of one core, to keep 320–1920 of it. The files carry smaller ones
+— a CR3's 1620 × 1080 `PRVW`, a NEF's and a CR2's small previews — and a
+JPEG can be decoded at an eighth in the DCT. Either needs the JPEG's bytes
+out of rawler (speed-night vendors it; that is where it belongs) and, for
+the second, a decoder that scales (`jpeg-decoder`'s `scale()`; zune-jpeg,
+which `image` uses, has none). For a thousand-frame import: about a minute
+of one core, once.
+
+**Measured, and left as proposals.**
+
+- *A reduced-size export from the mosaic.* Above: at the 4096 pixels a
+  2048-pixel export develops at, only the X-T5 gains (13.8 → 5.1
+  processor-seconds). It would also change the export's pixels, which this
+  work was not allowed to do; an X-Trans-only switch is the photographer's
+  call.
+- *A two-pass separable warp* for the develop-small stage, reading each
+  photosite once per pass: perhaps 45–65 ms → 15–20.
+
+## Four branches, one decode — 28 September
+
+The four sections above were written on four branches the same night, and
+merged in that order on `speed-merge`: loaders-night (UX-025), speed-night
+(PERF-021…029), gpu-night (RENDER-010), smart-night (PERF-030…035). Two of
+them had a `raw::decode_proxy` that meant different things, three had a
+switch for saving power, and two had a decode ahead. This is how they were
+made one, and what that measured.
+
+**Two routes to the editor's proxy, and a rule.** gpu-night's is the whole
+frame developed on the card and shrunk there — the processor's full develop
+within RENDER-010's tolerances; smart-night's averages the mosaic straight
+into the proxy on the processor (PERF-030). They are
+`raw::proxy_from_card` and `raw::proxy_from_mosaic` now, and the editor asks
+`raw::editor_proxy`, which is the rule: the card where one is ready for the
+power state and Numa is not frugal; otherwise the mosaic. A card that
+declines a frame (a model holding it, a sensor it does not do, more than
+3 GB) hands it to the mosaic, not to the processor's full develop. Grid
+previews and edited thumbnails take the mosaic and never the card, as
+gpu-night kept background decodes off it. 1:1 and the export are what they
+were on each branch: the card where it is ready — frugal, the integrated
+one — and the processor's full develop otherwise. One code path carries
+both: `Demosaic::Proxy(edge)` is the proxy, and `decode_beside` offers it to
+the card only when the caller allows.
+
+The three against each other, on the ten frames of the switching run (warm
+file cache, release build, ms; the card is the RX 9070 XT):
+
+| | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| processor, full develop | 259 | 530 | 458 | 192 | 363 | 226 | 410 | 251 | 248 | 872 |
+| card, whole frame (1:1, export) | 83 | 277 | 192 | 70 | 122 | 90 | 162 | 157 | 157 | 257 |
+| card, proxy | 47 | 195 | 105 | 27 | 47 | 45 | 86 | 123 | 123 | 185 |
+| mosaic, proxy | 71 | 236 | 116 | 61 | 79 | 82 | 111 | 162 | 164 | 199 |
+
+What each gives, against the processor's full develop: the card's whole
+frame a mean difference of 1.5e-7–1.2e-6 on the Bayer bodies and 2.5e-6 on
+the X-T5, where 0.023 % of values are more than 1e-3 apart (none on the
+others); its proxy, rendered, at most one level, on 0.007–0.077 % of values
+— all inside `the_card_develops_what_the_processor_does`. A 5DS exported
+from the editor as a JPEG, card against processor: 0.03 levels on average,
+0.17 % of values more than two apart, the largest 15 where a JPEG block
+quantises one step differently. The mosaic's proxy, rendered as
+smart-night rendered it, 0.21–1.03 levels on average and 4–22 at the 99.9th
+percentile: smart-night's own table, and with PERF-035 the Z 7's 0.96 is
+0.60 — the merge changed nothing in it.
+
+**Frugal: the mosaic, measured.** On a frugal machine the question was the
+low-power card's full develop against the mosaic on the processor. Measured
+on this machine's integrated GPU (the 9800X3D's two-CU Radeon), the power
+switch on, the package's power from the APU's `gpu_metrics` and the
+discrete card's from `power1_average` sampled every 50 ms, per jump above
+idle over the ten frames:
+
+| per proxy, frugal | card (integrated) | mosaic (processor) |
+|---|---|---|
+| back to back, as an opening runs | 7.0–7.2 J, 0.44 core-s | 8.1 J, 1.15 core-s |
+| one every 1.5 s | 7.8 J, 0.42 core-s | 8.1 J, 1.12 core-s |
+| as a decode ahead (the frugal pool, nice 10) | 7.2 J, 0.38 core-s | 7.6 J, 0.80 core-s |
+| time, per frame | 164–1 159 ms (X-T5 1.15 s) | 60–231 ms (X-T5 0.19 s) |
+| the discrete card | 0.00–0.02 J | 0.00–0.01 J |
+
+The card saves 0.3–1.1 J a photograph above idle — 4 to 14 per cent — and
+takes two and a half to six times as long. Over that extra wait the rest of
+the machine is not idle for free: a quarter of a second more per jump, on
+average, at this package's 33 W idle is about 8 J, and on a laptop at a few
+watts still more than the card saved. So the mosaic is the cheaper by
+energy as well as by time, and it is the rule. A laptop's integrated GPU
+has six times these compute units; if the photographer's measures otherwise,
+`card_makes_proxies` in `raw.rs` is the one place to change. The discrete
+card stayed at idle through all of it.
+
+**One power switch.** `numa_core::power::frugal()` is the only flag:
+gpu-night's (`NUMA_GPU=low`, kept for measuring) and smart-night's
+(`prefetch::frugal()`, a stub) read it now. It is read before the card is
+chosen — `power::watch` runs before `start_gpu`, and UPower's `OnBattery` is
+read synchronously, where the branch had it arrive later — so a laptop
+started on its battery makes a device on its integrated GPU only. A flip at
+run time makes the new state's device in the background
+(`raw::gpu_follows_power`); the photograph under way keeps the one it
+started on, and the next one asks again. `NUMA_FRUGAL=1` forces frugal, for
+measuring on a machine that is neither on battery nor saving power.
+
+**One decode ahead.** speed-night's: its own pool at nice 10, stopped at the
+next stage when it is let go, and frugal only after two steps the same way —
+smart-night's "nothing ahead when frugal" gave way to it. From smart-night:
+a neighbour already among the three kept is not decoded again, and a
+finished decode that a change of direction passed over is kept — now also
+when an opening elsewhere lets it go, which is where speed-night stops a
+running one.
+
+**1:1 and the previews.** PERF-033 came in after the rule: where a card
+is ready the original at 1:1 is its whole-frame develop and the part on
+screen is cut from it for the colour stage; elsewhere PERF-033's regions
+develop the part from the raw. PERF-034's previews keep whatever
+`editor_proxy` made, under the same key, so a frugal session reads what a
+full-speed one developed rather than decoding again.
+
+**In the app.** Release build under Xvfb, an isolated copy of the ten-frame
+library, the harness of the 27th (open from the grid, step once, the decode
+ahead); main and the three states of the merge back to back per frame, on a
+machine shared with other sessions (so main is slower here than in the
+sections above). First and sharp frame are one frame; ms:
+
+| jump | 5D3 | R5 | 5DS | A6000 | A7R3 | Z 6 | Z 7 | E-M1 | E-M1 b | X-T5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| main | 636 | 1185 | 1207 | 607 | 766 | 630 | 1113 | 679 | 697 | 1615 |
+| card | 144 | 410 | 329 | 281 | 311 | 306 | 338 | 350 | 377 | 419 |
+| no card (`NUMA_GPU=0`, the mosaic) | 313 | 439 | 409 | 346 | 341 | 344 | 369 | 390 | 392 | 438 |
+| frugal (`NUMA_FRUGAL=1`, the mosaic) | 333 | 479 | 426 | 351 | 368 | 363 | 402 | 390 | 396 | 456 |
+
+A step to the photograph decoded ahead is 45–54 ms on the card and without
+it (main 39–113); frugal, where nothing is decoded ahead before two steps
+the same way, the first step is a decode — 133–298 ms, the thumbnail
+standing in meanwhile. No stand-in and no blank frame on any of the 36
+steps with the card or without it. The whole 12-second session (start, grid,
+opening, step, the next decode ahead) took 16–31 processor-seconds on main,
+6.7–8.6 with the card, 8.0–10.9 without, 7.7–10.1 frugal.
+
+1:1 by double-click, until the tile is up, and the second zoom-in within
+half a minute (PERF-032), ms; the export's decode after it:
+
+| | 5DS 1:1 / again | X-T5 1:1 / again | export decode 5DS / X-T5 | session processor-s 5DS / X-T5 |
+|---|---|---|---|---|
+| main | 1282 / 1230 | 2111 / 2007 | 662 / 1198 | 47.7 / 79.9 |
+| card | 701 / 461 | 801 / 480 | 219 / 251 | 18.8 / 22.5 |
+| no card (PERF-033's part) | 800 / 493 | 1265 / 526 | 490 / 872 | 26.6 / 41.5 |
+| frugal (integrated card) | 1106 / 459 | 1749 / 475 | 451 / 1217 | 20.1 / 24.1 |
+
+The export with `NUMA_GPU=0` is main's file byte for byte on both; the
+discrete and the integrated card write the same file as each other, and
+against the processor's a 5DS differs by 0.03 levels on average. Frugal,
+the process held a file on the integrated GPU's render node only
+(`/proc/<pid>/fdinfo`), full speed on the discrete one only. No amdgpu
+fault, reset or timeout in the kernel's log through any of it.
+
+**What is left.**
+
+- The integrated GPU measured here is the smallest there is. The rule
+  should be measured once on the photographer's laptop (the same two
+  scripts; `NUMA_FRUGAL=1`). On this one it is also slower at 1:1 than
+  PERF-033's part on the processor (an X-T5 1.75 s against 1.27), for a
+  fifth of the processor time; whether that is the better trade on a
+  battery is the same measurement.
+- Vulkan lists every adapter when the device is made, and opening a
+  discrete card's render node to list it wakes it for a moment on a hybrid
+  laptop, even though no device is made on it. Not measurable here.
+- A flip from full speed to frugal leaves the discrete card's device made
+  (idle, its buffers handed back) until Numa restarts.
+
+## Built as one unit, and four ideas for the decoders — 28 September
+
+The build, runtime and decoder findings of `docs/EXPLORE_BUILD.md` (branch
+`explore-build`), carried out on `build-now` (PERF-060…065). Measured with
+that branch's `xbench` on the ten frames (medians; wall, processor time =
+user + sys, and a hash of every output), rawler alone over the 528 raws of
+raw.pixls.us in `raws-cc0` (the mosaic hashed, with its levels and
+geometry), and the APU's socket power above idle for energy. Every output
+hashes as it did before, everywhere below.
+
+**PERF-060: `[profile.dist]`.** Fat LTO and one codegen unit, for what is
+handed over: the Flatpak manifest, the AppImage's `bundle.sh` and
+`stage.sh` (`target/dist/numa`), and `publish.sh`'s check that the public
+copy builds. `packaging/flathub-reference` is the photographer's and still
+says `--release`; the public copy carries the profile, so switching it there
+is `--profile dist` and `target/dist/numa`. The same source, `release`
+against `dist`, two interleaved rounds:
+
+| path | processor time | wall | energy |
+|---|---|---|---|
+| raw decode | 0 % | 0 % | — |
+| jump (decode + proxy + render) | −1.5 to −1.8 % | −2.8 to −3.0 % | within noise (600 → 628 J for 20) |
+| slider tick | −6.4 % | −5 % | 1081 → 998 J for 400 (−8 %) |
+| full-size export | −3 % | +2 to +2.7 % | — |
+
+The export's wall time went the other way in both rounds, by little; its
+processor time did not. From nothing, as `flatpak-builder` runs it (all 16
+jobs, the app and `xbench`): 185 s, 557 processor-seconds, 4.9 GB peak for
+the whole build's cgroup and 2.2 GB for the largest process, the one link
+that does all the optimising — a machine with 8 GB free builds it. `release` from nothing
+at 8 jobs: 60 s, 3.9 GB. The Apple workspace (Numa-mac) reads its own
+profiles, so the same four lines go in its `Cargo.toml` and `app/build.sh`
+builds `--profile dist` (not done here: that repository is the Apple
+side's).
+
+**PERF-061: Fuji's `read_code` inlined.** It carried `#[multiversion]` for
+LZCNT; for a function with arguments that means a dispatch on every call and
+a clone that cannot be inlined into its caller, so every sample of an
+X-Trans frame paid a call. Inlined down to the strip instead. The explore
+branch's variant B also multiversioned the whole strip; measured again here
+it was slower than plain inlining on one core (933 against 890 ms) and on
+all (1086 against 1040 processor-ms), so A it is. X-T5, medians of three:
+one core 971 → 890 ms, sixteen threads 125 → 115 ms and 1151 → 1040
+processor-ms. All 70 RAFs hash the same.
+
+**PERF-062: a code's entry in the decode cache when its difference does not
+fit.** PERF-021's cache already held the whole decoded difference where code
+and difference fit in 12 bits — half of rawspeed's prefix-code decoder. The
+other half: where the code fits and its difference does not, the entry holds
+the code's length, shift and difference length, and only the difference is
+read. Before, such a code went back through `hufftable`, 64 K entries of
+three bytes for a 16-bit table, out of the first-level cache. Over the 184
+Huffman-coded raws of the corpus: processor time −2.3 % in all, −20 to −34 %
+on frames with long differences (PowerShot and Rebel CR2s, D3/D3S/D4S/D300S
+NEFs, Leica M DNGs), the 5D Mark III on one core 71.7 → 70.4 ms. The other
+rawspeed gap the exploration named, CR2 on one thread (52 against our 76 ms),
+is in the JPEG bit reader; CR2 and NEF are read on four threads now
+(PERF-022), where that reader is not used, so it was left.
+
+**PERF-063: uncompressed frames in two runs.** rawspeed's A7R3 took 9 ms to
+our 24 because it copies an uncompressed frame on one thread; rawler made a
+rayon task of every row. Measured on the A7R3's `raw_image`, sixteen
+threads: a task per row 10.8 ms and 78 processor-ms; one run 10.4 / 10.3;
+two 8.8 / 12.3; four 8.4 / 18; eight 9.2 / 35. Two it is, for the plain
+unpackers only (`packed.rs`); the decoders that do real work per row keep a
+task per row. Over the 123 uncompressed and 16-bit raws: processor time
+−24 %, wall within the noise. What is left of the 24 ms is the file's
+mapping, the data-now agent's part (`rawsource.rs`).
+
+**PERF-064: quality of service on Apple.** A thread made by
+`pthread_create` starts at the default QoS whatever Swift asked for, so
+rayon's threads never told the scheduler what they were. `power::background`
+now sets `QOS_CLASS_BACKGROUND` in its start handler, and
+`power::start_threads` builds the global pool with `QOS_CLASS_USER_INITIATED`
+— for the app to call first. Background, not utility: measured on the
+photographer's M3 Pro (`docs/MAC_BENCH.md`, branch mac-bench), utility still
+ran on the performance cores, and background kept work on the efficiency
+cores at 3.5–4 times less energy; waited-for work was fastest and cheapest at
+user-initiated on all cores. Linux keeps nice 10. Compiled for
+`aarch64-apple-ios` (std built from source) and not run.
+
+**PERF-065: the develop-small stage, and why not a two-pass warp.** The
+proposal was a separable warp, reading each photosite once per pass, for
+45–65 → 15–20 ms. Measured first, the premise does not hold: the stage costs
+the same per proxy pixel whatever the frame (single thread: 5D3, 22 MP, 429
+ms; X-T5, 40 MP, 647 ms), and a variant that reads at most one photosite per
+row and site was no cheaper than the real one. The time is in each box's
+setup — two weight lookups, the rows and sites, per pixel and colour, 220
+cycles or so a box — and the lens arithmetic around it (a sixth). A two-pass
+scheme only saves that setup where the geometry is separable, which with a
+lens profile it is not: its first pass would have to run unwarped (the
+mosaic box-filtered to an intermediate grid, then warped), which is a
+different filter, with its tents to be tuned again for the acutance of
+PERF-030's table. Estimated from the operation counts at 1.6× with an
+intermediate at twice the proxy, 3× at the proxy's own size and blurrier —
+a proposal, with its pixels to measure, not done. Done: the site's first
+column found by a subtraction instead of a `%` (−6 %, the same bits);
+removing `floor`/`ceil`/`round`'s libm calls and the weights' copies was
+measured and bought nothing, and was not kept. Sixteen threads buy little
+over eight here (55 → 46 ms on the 5D3 for 70 % more processor time).
+
+**Before and after, the ten frames** (base = speed-merge with smart-night's
+PERF-035, `release`; after = this branch at PERF-062, `dist`): raw decode −3.5 %
+processor time (X-T5 −10 %), jump −2 %, slider tick −6.7 %, export −2.5 %.
+## The render on the graphics card — 28 September
+
+RENDER-017 (the brief called it RENDER-011, which was taken), from
+explore-render's prototype: the editor's render of its proxy runs on the
+card that developed it, and the frame goes to GTK where it lies. Built,
+held to the processor's render on ten bodies — and **off by default**,
+because its first run in the app made the card log page faults in the
+hand-over to GTK. `NUMA_GPU_RENDER=1` asks for the render on the card,
+`NUMA_GPU_DMABUF=1` for the dmabuf; without them nothing changes.
+
+**The shape.** `numa_render::card::plan` turns a document into the numbers
+the card needs, each made by the processor's own code — the profile's
+tables resolved for the white point (`Rendering::resolve`), `ToneCurve`'s
+stops, the mixer's `Look`, the curves' lookups, the base curve at its
+quarter stops — or names the first stage the card does not have, and then
+the whole render stays on the processor: no stage goes back and forth.
+`numa-gpu`'s `render.wgsl` runs it in up to four passes over the proxy:
+the colour stage; the mirror, quarter turn, crop, straighten and
+perspective (`geometry_of`, with `LinearImage::cropped`'s bilinear sample);
+colour noise reduction's box along the rows; and everything after — the
+column box and the recolouring, exposure, contrast, the four tone regions,
+saturation and vibrance, the mixer in ProPhoto, the base curve or sRGB's
+encoding for a finished picture, the curves, eight bits, the histogram of
+every fourth pixel and the clipping overlay. The develop leaves the proxy
+it made on the card (`render::keep`; four at most, about 28–46 MB each,
+known by their size and every 997th value, so a copy of a proxy finds it
+too) and a proxy from anywhere else — the mosaic, the previews on disk, a
+JPEG — goes up once. Out comes a frame of RGBA and 770 counts: read back,
+or copied into a GBM buffer that GTK 4.14's `GdkDmabufTexture` samples
+where it is (`display.rs`; libgbm opened at run time, a pool of three).
+
+What stays on the processor, by the name `plan` gives it: spot removal,
+face retouching, dehaze, luminance noise reduction, sharpening where the
+proxy shows it (a body under about 4 800 pixels on its long edge; at fit
+the others' radius rounds to nothing), defringe and moiré, calibration,
+HDR, Clarity and Texture, point colour, masks, black and white, the grade,
+vignette and grain, a LUT, a working or output space other than sRGB,
+manual lens corrections, AI denoise, and a finished picture's white
+balance (TOOL-004). And 1:1 and the export, which render the full frame.
+(Since 29 September the card has the grade, point colour, black and white,
+the vignette, masks, luminance noise reduction and HDR, Clarity and Texture
+too: "The card's stages".)
+
+**In the app.** `card_render.rs` asks for the card in the render's plan
+and runs it on the render's worker; `Picture` carries either the
+processor's pixels, the card's RGBA or its dmabuf to `present` and
+`show`, which put the clipping overlay on the processor's pixels as before. While the hand moves, the card's frame
+needs no colour stage on the processor; the settled render still makes
+it, because the masks, Auto, the reference pane and the thumbnail read
+the working frame. The models' card lock became a read-write lock: the
+develop and the render share the card (one wgpu device) and neither ever
+runs beside a model; as a mutex, a render and a develop that met would
+have sent one of them to the processor for nothing.
+
+**The same picture, within a tolerance.**
+`the_card_renders_what_the_processor_does` renders twenty-one edits — each
+stage alone, then everything together, turns, crops, a straighten and a
+perspective among them — on the raw, and six of them on a finished
+picture made of it, through `apply_stack` and through the card, at the
+2 400 pixels of a 1440p screen (the ten bodies were run before the
+geometry was added, the corpus's three after):
+
+| | 8-bit, largest step | values that moved | histogram counts off |
+|---|---|---|---|
+| untouched, ten bodies | 1 level | 0.0008–0.0040 % | ≤ 0.006 % |
+| every case, ten bodies | 1 level | ≤ 0.017 % (X-T5, everything) | ≤ 0.016 % |
+| geometry, three corpus bodies | 1 level | ≤ 0.029 % (A6000, keystone) | ≤ 0.031 % |
+
+The test holds at most 2 levels on under 0.5 % of values and the
+histogram within 1 %, as RENDER-010's develop is held. The clipping
+overlay is held to `mark_clipping` over the card's own frame, exactly —
+against the processor's frame a level at 0 or 255 is a pixel painted or
+not, which is what the first version of the test tripped over. The
+integrated GPU passes the small frame; the whole comparison there was not
+run (below).
+
+**The page fault.** The first run in the app (Xvfb, cairo, the Z 6, an
+Exposure drag, the dmabuf on) logged forty lines of amdgpu `[gfxhub] page
+fault`, client CB, writes, from the render's worker — no ring timeout, no
+reset, the desktop untouched. The copy of the frame into the imported
+buffer: RADV does it through the colour block in whole tiles, and a
+buffer allocated at exactly 1920 × 1277 was written three rows past its
+end (the faulting pages are the 23 KB after it; explore-render's
+prototype used 1280 rows and never saw it). The compute passes and the
+read back had run some seven hundred renders in the tests without a
+fault. As the round's rules say, GPU work stopped there for the session:
+the buffer is now allocated padded to 64 pixels both ways, GTK told the
+frame's own size, **but that is not yet measured on the card**, so both
+switches are off. Two other things the run showed: under Xvfb GTK's cairo
+renderer accepts a dmabuf and copies it down on the processor, 220 ms a
+frame, so a dmabuf is now offered only where GSK draws with the card;
+and while the card faults, every render waits on it (220 ms).
+
+**Drags, the processor's side** (Xvfb, cairo, the Z 6 at 1920 × 1277,
+120 ticks 16 ms apart, `NUMA_GPU=0`, above idle, two runs):
+
+| drag | frames put up | processor | energy |
+|---|---|---|---|
+| Exposure | 118 of 120 | 2.2 cores, 4.5 CPU-s | 17.5–21.3 J/s, 0.30–0.36 J a frame |
+| Temperature | 117 of 120 | 5.3 cores, 10.7 CPU-s | 20.3–28.3 J/s, 0.35–0.49 J a frame |
+
+The card's side is explore-render's prototype, the same kernels for an
+untouched photograph: 1.5–1.9 ms and about 0.05–0.1 J a render with the
+proxy resident and the frame read back, the integrated GPU 6–15 ms and
+0.1 J; with a dmabuf the frame's hand-over was 0.16 ms of processor time
+against 1.28 for a read back and an upload. So the expectation is a
+Temperature drag at about a twentieth of the energy and none of the five
+cores — to be measured, not quoted, when the switches go on
+(`numa-scratch/speed-night/gpu-render/`: `xbatch.sh`, `run.sh`,
+`joules.py`, and `NUMA_DRAG=120 NUMA_DRAG_WHAT=temperature`, which now
+prints `DRAGCOST`: the window, CPU-s, paints, renders, and how many the
+card made).
+
+**Frugal.** The render takes the device the develop takes for the power
+state (`raw::card_frugal`): the integrated GPU, or none, never a discrete
+card woken. There the proxy comes from the mosaic and goes up once; the
+render must not cost more energy per frame than the processor's, which is
+the measurement above on `NUMA_FRUGAL=1` — not taken, for the same
+reason.
+
+**Where the frame can go to GTK as a dmabuf.** GTK 4.14 or later
+(`gtk4-rs` now builds against `v4_14`): the Flatpak's GNOME 50 runtime has
+4.22.5, and libgbm.so.1 is in both the runtime and its GL extension; the
+AppImage's Ubuntu 24.04 base has 4.14. The display has to list linear
+ABGR8888 among its dmabuf formats and GSK has to draw with the card;
+otherwise, and wherever GTK refuses the texture once, the frame is read
+back and handed over as a four-byte `MemoryTexture`. A hybrid laptop whose
+integrated GPU develops and draws imports its own buffer; a discrete card
+that renders while the integrated one draws would cross devices, which is
+GTK's to accept or refuse.
+
+**What the Apple apps get, and what changes there.** `card::plan` is
+portable Rust and ships there as it is; the WGSL goes through naga to MSL
+on wgpu's Metal backend like the develop's. Three things differ:
+
+- Display: no dmabuf and no GBM. The render writes into an `MTLTexture`
+  backed by an `IOSurface` (made once per size, a pool of three, like the
+  GBM buffers), and the view shows it as a `CALayer`'s contents or a
+  `CAMetalLayer`'s drawable — the Apple twin of `GdkDmabufTexture`,
+  through `wgpu::hal::metal` as `texture_from_dmabuf_fd` is here. SwiftUI
+  hosts it in the `UIViewRepresentable`/`NSViewRepresentable` the canvas
+  already is.
+- Unified memory: nothing needs a read back or an upload. The proxy can be
+  a buffer the processor wrote in place (`MAPPABLE_PRIMARY_BUFFERS`), the
+  histogram read where the card wrote it, and a read-back fallback is a
+  pointer, not a copy. MAC_BENCH measured 5–10 % from mapped buffers on
+  the develop.
+- Correctness: compile in safe math. MAC_BENCH (run 2) found Metal's
+  default fast math failing the develop's tolerance on five of nine bodies;
+  this shader compares for equality in `rgb_to_hsv` (which channel is the
+  largest) and leans on `pow` and `log2`, so the same patch — wgpu-hal's
+  `MTLCompileOptions.mathMode`, vendored on mac-bench — goes with it, and
+  `the_card_renders_what_the_processor_does` runs on the MacBook as it is.
+  One submission a render: a proxy is at most 3.8 M pixels, under the 8 M
+  MAC_BENCH found best per submission on the M3 Pro.
+
+**Next, in order.** Measure the padded buffer on the card (the tests,
+then the app on a headless Mutter with Vulkan GSK, where the dmabuf is
+real) and turn the switches on if the kernel's log stays clean — or, if it
+does not, write the frame from the compute pass straight into the imported
+image as a storage texture, which never goes through the colour block.
+Then the drags and frugal above. Then the stages in the order they are
+used: vignette, black and white, the grade and calibration (per pixel,
+small), Clarity/Texture/HDR and dehaze (a guided filter over the frame),
+sharpening and luminance noise reduction, point colour, masks.
+
+## Metal for the Apple apps — 28 September
+
+RENDER-018, from MAC_BENCH's measurements on the photographer's M3 Pro
+(`docs/MAC_BENCH.md`): Metal's full develop took a third of the
+processor's energy, and its proxy the least energy of any route, but
+Metal was only correct in safe math, and an iPhone's memory, not its
+energy, decides what may run there.
+
+**What was built** (branch `metal-now`, tested on Linux; the MacBook has
+not run it yet):
+
+- **Safe math.** wgpu 30 has no switch for Metal's math mode: not in the
+  shader module's descriptor, not in naga's MSL options, and an MSL
+  passthrough module is compiled with default options too. So
+  `vendor/wgpu-hal` is wgpu-hal 30.0.1 with one hunk in the Metal backend
+  (`mathMode = .safe`), trimmed to the backends Numa builds;
+  `vendor/wgpu-hal/NUMA-CHANGES.md` says how to carry it to the next wgpu.
+  The render on the card (RENDER-017) gets it too.
+- **Apple's defaults.** Unified-memory buffers (the mosaic written where
+  the card reads it, the frame read where it wrote it), 8 M-pixel
+  submissions, one device whatever the power state (frugal keeps Metal:
+  there is no second card), `numa_gpu::release` for a memory warning and
+  the background, and the card's limits as one line for the app's log.
+- **Frames that fit a phone** (`crates/numa-gpu/src/buffers.rs`). Each of
+  the six planes is a buffer of its own (16 bindings, Metal allows 29); a
+  plane takes a buffer the passes before it are done with — `lin` the
+  mosaic's once `scale` has read it, `bent` the demosaic's; the frame
+  comes back through one 64 MB buffer a chunk of rows at a time instead of
+  a whole frame of floats beside the planes; Markesteijn's bands are held
+  to the largest buffer and a quarter of the budget. The budget is 3 GB,
+  or on iOS a third of `os_proc_available_memory()`, read at each develop.
+  Where f32 still does not fit and the caller may round, the planes are
+  f16. What the nine MAC_BENCH bodies come to under the guessed iPhone
+  limits (256 MB a buffer, 1 GB in all; computed from the code's sizes,
+  not measured on a device — 832 to 1702 MB with a 274–575 MB largest
+  buffer before):
+
+  | | 5D3 | E-M1 | A6000 | Z 6 | X-T5 | A7R III | R5 | Z 7 | 5DS |
+  |---|---|---|---|---|---|---|---|---|---|
+  | f32, MB (largest) | 620 (84) | 570 (76) | 667 (91) | 675 (92) | 1168 | 1123 | 1188 | 1205 | 1328 |
+  | f16, MB (largest) | | | | | 788 (180) | 721 (160) | 761 (170) | 772 (173) | 848 (191) |
+
+  So every 20–24 MP body fits in f32, and the 40–50 MP ones only in f16.
+- **f16 rounds**, and is kept to what is shown: 1:1 on a device where f32
+  does not fit, never an export or the proxy. Measured on Linux
+  (`NUMA_GPU_HALF=1`, the tolerance test on the nine bodies): the linear
+  mean difference 1.0e-5 to 7.5e-5 (f32: under 1e-5), up to 0.43 % of
+  values more than 1e-3 apart (5DS), the rendered proxy 1 level apart (2
+  on the X-T5) on 0.32–0.61 % of its values (f32: 0.007–0.05 %). The test
+  holds f16 to its own bounds (1.5e-4, 1 %, 1.5 %); f32 keeps RENDER-010's.
+- **The policy per device** (`raw::card_makes_proxies`, one place): on a
+  Mac or iPad the editor's proxy on Metal, frugal or not; on an iPhone
+  (`numa_core::power::set_phone`) the mosaic's. A frame the device has no
+  room for is refused by the card and goes to the mosaic's proxy or the
+  processor. 1:1 (`raw::region::Regions`, what the Apple app zooms with)
+  is cut from a frame the card developed whole where the card takes it,
+  float for float the card's `decode_linear_best`, and demosaicked on the
+  processor otherwise. Export is Metal where it fits in f32.
+- **Linux is unchanged.** The card's whole frame and proxy hash bit for bit
+  the same as main's on the nine bodies (RADV, the RX 9070 XT), and the
+  tolerance test passes as before; f16 and the budget never apply there.
+
+**Left for later:**
+
+- The MacBook: the tolerance test in safe math on this code, the timing
+  and energy matrix Metal against the mosaic, and the `iphone` phase
+  (MAC_BENCH's workflow). Until then the Apple app builds without Metal
+  (numa-ffi's `metal` feature is off).
+- The real limits of an iPhone and an iPad (the app logs them once
+  Metal is on), and what `os_proc_available_memory` says at an open.
+- Geometry folded into the passes that read it, which would take the
+  third `bent` plane off a Bayer frame and bring the 42–46 MP bodies into
+  1 GB in f32. A zero-copy upload (`newBufferWithBytesNoCopy`).
+- Upstream: a math-mode option on wgpu's Metal shader modules, which would
+  retire the vendored wgpu-hal (a suggestion; nothing was filed).
+## Idle wake-ups, and a grid of fifty thousand — 28 September
+
+EXPLORE_DATA F5 and F4, the photographer's "do it now". Branch `grid-now`.
+
+**The wake-ups (PERF-050, landed).** When the editor opened before the grid
+had ever been laid out — a photograph handed over at start-up, or `NUMA_OPEN`
+— `cards::sweep` found the grid's cards unplaced and re-armed a tick
+callback, which scheduled a sweep 60 ms later, which re-armed the tick, for
+as long as the editor stayed open. A tick callback comes to any *realized*
+widget, mapped or not, so the frame clock ran the whole time. The re-arm now
+happens only for a mapped list, and the filmstrip, like the grid, is swept
+when it is mapped. Every other tick callback and repeating timer was read for
+the same pattern: the panel split's (breaks once allocated), the mask ants
+(check `is_mapped`), the loupe's band autoscroll, the render booking and
+the filmstrip's centring (one-shot or bounded), and the progress tickers of
+AI denoise, downloads, Analyse and export (removed when their work ends).
+None repeats for a widget that is not on screen.
+
+Measured with a per-thread census on Xvfb (`threads.py`, 30 s windows,
+release builds, lib10k):
+
+| | before | after |
+|---|---|---|
+| sweeps re-armed for an unmapped grid, editor opened at start-up | ≥ 900 in 60 s | 0 |
+| main-thread wake-ups/s, editor opened at start-up | 236 | 179 |
+| editor opened from the grid | 174 | 165 |
+| library, idle | 62–104 | 60–104 |
+
+The last three rows do not reach EXPLORE_DATA's 0.1/s because this rig has a
+floor of its own: with no dialog over the window, the main thread's `ppoll`
+is interrupted by a signal (ERESTARTNOHAND, gdb `catch syscall ppoll`)
+100–180 times a second in *every* build, the explore branch's binary
+included, with the frame clock doing nothing (0 update, layout or paint
+phases in 10 s, counted on the clock itself). x-data's 0.1/s was measured
+with the models dialog open over the grid. So the editor opened at start-up
+is now at the library's own level on this rig; the tick loop itself is gone.
+
+**The recycling grid and filmstrip (PERF-051, not landed).** Built on branch
+`grid-recycling` (f912a1e, 1b3e461, on top of this branch): the justified
+wall is its own `GtkScrollable` that recycles card widgets the way
+`GtkListView` does — the layout stays numbers for every photograph, only the
+cards in view and half a screen either side are widgets — and the filmstrip
+is a horizontal `GtkListView` over the grid's order. Each photograph's shape
+is a new catalog column (`photos.aspect`, a migration, filled from the
+thumbnail cache the first time a grid meets it and from every thumbnail that
+lands). Stars, flags and pixels moved from widgets into the grid's rows and
+`LazyThumb.texture`; the selection is by place. A `GtkListView` of justified
+rows was the first idea; it only measures rows it has seen and estimates the
+rest, so the scrollbar, the rubber band and the view held still under a
+resize would all have become approximate.
+
+First numbers, lib10k: filling the grid 250 ms → 1 ms on the main thread,
+shown 1.7 s → 0.4 s after start, wheel scrolling 149 frames with none over
+25 ms. The same screenful looks the same (`numa-scratch/speed-night/grid-now/
+runs/shot-diag-idle.png` before, `shot-diag-grid1.png` after).
+
+Left for later, in this order:
+
+- The gestures on the recycling grid are not yet driven one by one: click,
+  Shift and Ctrl, rubber band with autoscroll, arrow keys, stars and flags,
+  the right-click menu, the loupe and cull keys, compare, drag in, the
+  "Making thumbnails" loader. `interact.sh` in the scratch folder does them
+  with XTest and a screenshot after each.
+- The filmstrip's visible range was wrong in the first cut (a `GtkListView`
+  keeps frames bound that are not in sight; the sweep then asked for every
+  thumbnail, 217 processor-seconds in 30 s). Fixed in 1b3e461, not yet
+  measured again.
+- The before/after table at 1k, 10k and 50k (time to show, scroll frames,
+  main thread, RSS; today 50k: 1.2 s grid + 1.5 s filmstrip, 1.9 GB) —
+  `measure.sh` in the scratch folder.
+- The rig's own signal floor above, to rule out that it is Numa's.
+## The Masks tab stops running models — 28 September
+
+Branch `masks-now` (MASK-015 to MASK-019), from the explore-data findings
+(`docs/EXPLORE_DATA.md` on `explore-data`, F7). Release builds, every run
+under `machine.lock` and `dev/capped.sh`, processor-seconds from `getrusage`,
+energy above idle from the APU's socket power and the card's board power.
+Probe: `tests/masks_probe.rs`; logs in `numa-scratch/speed-night/masks-now/`.
+
+**A step with the Masks tab open (MASK-015).** Twelve of his frames, nine with
+nobody in them:
+
+| | per step | processor | energy |
+|---|---|---|---|
+| before, processor | 5.1 s | 50.7 cpu-s | ~213 J |
+| before, card | 0.92 s | 0.49 cpu-s | ~31 J |
+| after, a photograph seen before | 0.03 ms | — | — |
+| after, a new photograph, processor | 0.51 s | 2.1 cpu-s | |
+
+Most of "before" was not the segmenter (0.51 s, 2.1 cpu-s) but the subject
+matte that `classify::animal` ran on every frame with nobody in it — 5.8 s and
+64 cpu-s each on the processor, 0.58 s on the card — to name a chip that has
+not been renamed since 22 September (only the Animal group takes the name).
+It is gone. What the segmenter named — the groups, the animal's name and the
+model's grid of classes, one byte a cell, deflated — is kept in the library
+catalog's `found` table, filed under the framing and the model file, and read
+back on arrival: the chips, and the hover outlines from the grid. A chip
+pressed runs the model for the mask's pixels as before. The Apple apps get the
+same calls: `Catalog::found(photo_id, &Chips::asked(&framing))`, and after a
+run `Chips::of(&segmentation)` into `Catalog::save_found`; `framing` is the
+string both clients already key masks with.
+
+**SAM's embedding kept (MASK-016).** `numa_io::previews::embedding(path,
+framing, frame)`: the image embedding in half floats, 2 097 188 bytes, as
+`<hash>.sam` beside the previews, in their budget and their least-recently-used
+trim. The positional grid is the same for every photograph and is kept once per
+model in the cache. Encoding 1 001 ms, 11.0 cpu-s; reading back 41 ms,
+0.04 cpu-s (12 frames, processor; on the card the encoder is 196 ms). Held
+against a fresh encode, 108 clicks: mean IoU 0.99955, worst 0.9875, eight
+identical — the half floats move a handful of pixels across one half.
+
+**Models let go (MASK-017).** Loaded again after a release, on the processor:
+EfficientViT +53 ms, SAM encoder +275 ms, SAM decoder +51 ms, PP-ResNet 97 ms,
+BiRefNet 1.75 s (on the card 52, 218, 50 ms and 2.0 s). Released, glibc kept
+what the sessions freed — RSS did not move — so the release trims the arenas:
+397 + 262 + 222 + 578 + 275 MB back. The decoder loads with the embedding,
+off the main thread, so the first click after a release is 23 ms, not 74.
+
+**EfficientViT at 512 (MASK-018), not taken.** Exported with
+`dev/export-efficientvit.sh b2 512` (its repository now also imports triton
+from `nn/__init__.py`; wrapped the same way). On 108 frames, processor: 167 ms,
+0.35 cpu-s against 469 ms, 2.09 cpu-s — but 32 frames offer other chips, and
+the group masks agree at IoU 0.84 median, 0.68 mean (Sky 0.99, Greenery 0.90,
+Water 0.89, Person 0.86, Buildings 0.81, Ground 0.77).
+
+**A cheaper click encoder (MASK-019) — left for later.** Encoder alone, twelve
+frames, processor:
+
+| encoder | per photograph | processor | energy | file |
+|---|---|---|---|---|
+| SlimSAM-77 (shipped) | 1 037 ms | 11.1 cpu-s | 33 J | 23 + 17 MB |
+| MobileSAM (TinyViT, Apache-2.0) | 261 ms | 1.8 cpu-s | 8 J | 28 + 16 MB |
+| EfficientViT-SAM L0 (Apache-2.0) | 252 ms | 1.3 cpu-s | 7 J | 123 + 16 MB |
+
+MobileSAM and EfficientViT-SAM L0 (Apache-2.0, weights and code) are exported
+in SlimSAM's I/O by `numa-scratch/speed-night/masks-now/py/export_sam.py` —
+the prompt path as segment_anything's own ONNX export, checked equal to the
+model's own to the bit; L0 sees the frame at 512 through a 2 × 2 average, its
+prompts stay in the 1024 square. The click path takes SAM 2's and
+EfficientSAM's I/O too (from `sam-shootout` 48d8fa5). What is left, with
+everything in place: the 108-frame click survey (`tests/click_survey.rs`,
+`masks-now/sam/survey.sh <model>`) for slimsam, mobilesam, evsam-l0, esam and
+sam21-tiny, each held against SAM 2.1 Large (downloaded, Apache-2.0) and
+against the survey's own measures (hit, specks, holes, edge); then the chosen
+one on the card and through Core ML. From 26 September's shootout, on the
+older click code: SAM 2.1 tiny 0.63 s and EfficientSAM-Ti 0.43 s against
+SlimSAM's 1.30 s, with 15–17 clicks outside their own mask against 4. Nothing
+ships differently until the survey says so. EdgeSAM stays out (S-Lab,
+non-commercial).
+
+The card was only used where it was free. At 18:51, during the card run of the
+reload probe, the kernel logged `amdgpu` page faults from another session's
+`numa-a` (pid 399818, `gpu-render`/`x-render`), which was on the card beside
+it without the lock; no GPU work was done here after that.
+## Reading the head of a raw, not the file — 28 September
+
+IO-020 to IO-026, from `docs/EXPLORE_DATA.md` (explore-data) and the build
+explorer's lazy map. Release build, 9800X3D, NVMe; each file evicted from the
+page cache before it is read (`posix_fadvise(DONTNEED)`), bytes from
+`/proc/self/io`. Corpus: 560 files — every raw.pixls.us make (503), the ten
+test raws, the photographer's own (CR2, RAF, HIF, one JPEG). Probe and logs:
+`numa-scratch/speed-night/data-now/` (`tests/data_now_probe.rs` kept there,
+not committed).
+
+| per file, cold, 560 files | before | after |
+|---|---|---|
+| capture date (the first scan) | 34.7 MB, 14.1 ms | **5.4 MB, 2.3 ms** |
+| embedded preview | 44.2 MB, 49 ms, 0.034 cpu-s | **2.8 MB, 24 ms, 0.022 cpu-s** |
+| summary (info page, START-005's sample) | 44.1 MB, 29 ms, 0.024 cpu-s | **10.7 MB, 3.8 ms, 0.001 cpu-s** |
+| grid thumbnail, nothing cached | 44.2 MB, 66 ms, 0.110 cpu-s | **12.1 MB, 32 ms, 0.042 cpu-s** |
+
+The averages keep what could not shrink: TIFFs and HIFs are read whole
+because they are the picture, and a date a head does not hold falls back to
+the old paths. Per test raw (summary / preview, MB read): 5DS CR2 60.9 →
+0.5 / 4.5, R5 CR3 40.6 → 1.0 / 3.9, A7R3 ARW 85.6 → 0.4 / 0.8, Z 7 NEF 47.3
+→ 0.7 / 4.5, E-M1 ORF 17.3 → 1.8 / 1.8, X-T5 RAF 28.0 → 2.6 / 3.9, 645D PEF
+62.8 → 0.3 / 0.3. On a 40 MB/s share that is the difference between a
+second and a hundredth per file.
+
+**IO-020, dates.** `exif::from_head`: 256 KB, kamadak-exif's `read_raw` with
+`continue_on_error`, DateTimeOriginal by its number in any directory (a CR3's
+CMT2 box; ORF and RW2 with their magic set to TIFF's; an RW2 by the Exif of
+its embedded JPEG). The old chain stays behind it. All 558 dates the old paths
+found are the same; two RW2s (DC-FZ45, DMC-GM1S) that had none now have
+exiftool's. `the_head_agrees_with_the_whole_file` is the check.
+
+**IO-021, rawler reads lazily** (`vendor/rawler/NUMA-CHANGES.md`): no
+`populate`; padded views of data that runs to the end of the file (NEF, ORF,
+RAF, RW2) no longer copy it for a dummy decode; a dummy DNG decode does not
+decode; ARW's `as_vec` copies are slices. Previews: every one of the 491 the
+corpus had is the same, pixel for pixel (hashed). Summaries: all identical,
+and a Hasselblad L2D-20c DNG whose full decode fails now has one. The film
+mode is looked for only in a Fujifilm (a 2 MB read in every other raw).
+
+**IO-022, ORF.** The maker note's JPEG (`raw/orf.rs`): 23 of 25 ORFs, the two
+SP-5xxUZ without. Grid thumbnail: 221 ms, 1.28 cpu-s, 27 MB → 30 ms, 0.09
+cpu-s, 2.8 MB. It is `embedded_preview`, so the reference pane has a camera
+view for an ORF and the exposure match (RENDER-008) runs for the E-M1 as for
+every other make — that moves the E-M1's pixels. The median of the editor's
+decode, against a copy whose maker-note JPEG is disabled: the two E-M1 test
+frames **+0.28 and +0.27 EV**; the other 21 bodies −1.16 to +2.46 EV, most
+within ±0.5 (E-450 −1.16, E-510 −1.10, PEN-F +1.49, the E-M5 II high-res
+frame +2.46 — the 2.5 EV limit, worth a look). `previews::VERSION` 1 → 2, so no
+proxy kept from before the match is read as one made with it.
+
+**IO-023, the rescan.** 50 000 photographs, nothing changed: `apply_scan` on
+the main thread 65 → 0 ms (the comparison is on the worker, `Scan::unchanged`);
+`known_files` 12 ms stays. The minute timer is gone. A library on a local
+disk is watched (`gio::FileMonitor` per folder, 257 at 50 000); an event is a
+walk three seconds later. Coming back to the window stats the folders (257)
+rather than walking the files (50 000), and walks only if one moved. A remote
+or `/run/media` library has no monitors, only that. A drive plugged in or
+pulled out is followed through the volume monitor.
+
+**IO-024, JPEG export** (jpeg-encoder 0.6, MIT/Apache + IJG's notice; AVX2
+found at run time): 24 MP 293 → 171 ms, 0.284 → 0.171 cpu-s, 2.017 → 2.027
+MB; 50 MP 603 → 389 ms, 5.817 → 5.822 MB. Same quality tables, 4:4:4.
+
+**IO-025, JPEG XL** effort 7 → 3 (lossy only): 24 MP 730 → 161 ms, 6.00 →
+0.76 cpu-s, 1.064 → 1.026 MB; 50 MP 1 549 → 363 ms, 12.5 → 2.0 cpu-s, 3.39 →
+3.01 MB.
+
+**IO-026, the smallest preview.** `raw/embedded.rs`, thumbnails only
+(`load_thumbnail`; the models and measures keep `load_scaled`): a CR3's
+PRVW, or among two or more JPEGs in a TIFF-shaped raw the smallest framed as
+the largest is. Per format, thumbnail ms / cpu-s: CR3 92 → 27 / 0.18 → 0.13,
+NEF 85 → 18 / 0.073 → 0.017, DNG 80 → 37. Measured before the rule "two or
+more, framed alike" was added — without it a PEF took its full JPEG over the
+720-pixel one in its maker note and a Sigma DNG a 4:3 preview.
+
+**Apple.** Everything above is in `numa-io` and `vendor/rawler`, which the
+Apple workspace builds: its thumbnails (`thumbs::load`), rescans
+(`sync_library`), dates, summaries, the ORF previews and the JPEG export get
+the same. No JPEG XL there. jpeg-encoder runs its scalar code on ARM;
+ImageIO (`CGImageDestination`) is the system's own encoder if that is not
+enough — not measured.
+
+### Left for later
+
+- SSIMULACRA2 for IO-024/025 (a scorer is set up in
+  `data-now/ssim/`, not run); the sizes say the same quality settings.
+- Whether the match suits the older Olympus bodies and the E-M5 II's
+  high-res frames (above); a per-body switch if not.
+- IO-026's rule re-measured over the corpus, and the GUI rig for IO-023 (a
+  file copied into a watched folder while the window is open).
+- A cold decode from a USB disk with the lazy map (the explorer measured
+  NVMe only); `WillNeed` over the data range if it is slower.
+- CR2 has no mid-sized JPEG: jpeg-decoder's DCT scaling halves its thumbnail
+  (5DS 119 → 58 ms) — a new crate for one format.
+- `packaging/flathub-reference/cargo-sources.json` needs regenerating for
+  jpeg-encoder (the photographer's, not an agent's).
+## The render's last steps and the hand-over to GTK — 28 September
+
+Branch `render-now`, from explore-render's findings (`docs/EXPLORE_RENDER.md`
+on `explore-render`). Release builds, the ten raws of the switching set,
+under the machine lock; in the app a headless Mutter 50.5 with GTK's Vulkan
+renderer on the RX 9070 XT (`numa-scratch/speed-night/render-now/wl.sh`),
+isolated catalogue. Every change here is byte-identical: `render_bench HASH=1`
+gives the same 50 frames and histograms (plain, draft, edited, edited draft,
+warm white balance) and the same frames through an AdobeRGB display profile
+before and after, and after the merge of main the same as main's own.
+
+**Four bytes a pixel to GTK (PERF-040).** Vulkan has no 24-bit texture, so
+GTK converted every `R8g8b8` frame on the processor — 13 ms of CPU for
+1920 × 1280, 20 at 2400 × 1600, measured in explore-render's `gsk_upload`
+test; four bytes upload in 1 ms. `render::display::to_bgra` writes GDK's own
+B8G8R8A8 (native to Vulkan, GL and cairo) with the display profile in the
+same pass, so the one place a frame becomes a texture got cheaper rather than
+gaining a pass. The card's read-back path (RENDER-017) already hands four
+bytes.
+
+**The encode off a table (PERF-041).** Scene-linear to eight bits was a `log2`
+and two table reads per value, 7 of a 10–17 ms render. A table over the
+float's own bits — 1 024 buckets an octave from 2^-24 to 2^8 — holds a code
+wherever a whole bucket gives one, and says "work it out" for the one bucket
+in thirty that holds a step; below the first bucket and for a NaN it is
+worked out too. Exact by construction, and checked
+(`the_table_encode_is_the_exact_encode`: every 97th float from 2^-26 to 2^9,
+a plain and a steep curve, scene- and display-referred). Built once per set
+of curves and kept.
+
+| `render_bench`, 1920 px, ms / cores | before | after |
+|---|---|---|
+| first render of a photograph | 16.7–18.2 / 10 | 9.5–9.8 / 10 |
+| Exposure tick | 10.5–10.9 / 12.5 | 4.5–4.6 / 10.3 |
+| draft tick | 2.7–2.8 / 12.5 | 1.1–1.2 / 11 |
+| edited (Clarity, mask, vignette) tick | 31–35 / 12 | 24.2–24.5 / 12.8 |
+| a step's render, energy above idle | 2.6 J, 0.40 core-s | 2.0 J, 0.31 core-s |
+
+In the app, an Exposure drag at fit (240 ticks, 4 s, Vulkan GSK, run back to
+back): **18.8 CPU-s before, 9.4 after**, 238 of 240 renders put up either
+way; of that the RGBA hand-over alone was 18.8 → 17.0.
+
+**Leaving an edited photograph (PERF-042).** `save_edits` rendered the whole
+proxy again on the main thread for the card's picture, then shrank it and
+wrote the JPEG there: 36 ms in front of the next photograph. The last sharp
+whole frame from the proxy is kept with its document (`render.on_screen`);
+if the document is still that one it is the card's picture — at 1:1 the
+frame behind the tile is, keyed the same way — and the shrink, the JPEG and
+any render still needed run on a worker, the card asked for its picture once
+it is written. Stepping on from a Z 6 with stored edits: the next
+photograph's first frame 107–109 → 34–39 ms; the card's JPEG byte-identical.
+And `tone::curve(+inf)` indexed one past its table (an infinity's index is
+`usize::MAX`) — white now, asked before the index is made.
+
+**The worker in the tick (PERF-043).** `gio::spawn_blocking` sat inside the
+future, which the main loop runs after GTK's layout and paint of the frame
+that asked; called in the tick, the wait before the worker starts went from
+4.0–4.8 ms to nothing on eight steps (first frame 34–40 → 32–36 ms; the paint
+still waits for the next vblank).
+
+**What the Apple apps get.** The table encode is shared Rust: iPhone, iPad
+and Mac renders get it unchanged, a render's last step at a fifth of its
+cost; the `tone::curve` fix too. The rest is the GTK side.
+
+### Left for later (PERF-044…049)
+
+Stopped here on the photographer's word; measured, not done:
+
+- **Render ahead (PERF-044).** A step's render is 20–23 ms of stack after
+  the decode ahead and its colour stage (PERF-025); render the first frame in
+  `prefetch` beside them — not when frugal, stopped with them — and the step
+  is a swap and a paint. The frame has to match the rendered document
+  (fingerprint, no faces, no masks map) and the working frame it was made on.
+- **Temperature at 1:1 (PERF-045):** 12.3 cores and 40 of 120 frames today
+  (explore-render); colour only the tile while the hand is down.
+- **Histogram and backdrop from a small render at 1:1 (PERF-046):** the
+  backdrop is 1.5 of 2.7 ms a 1:1 drag frame.
+- **Display profile (PERF-047):** 3.3 ms and ~14 cores a frame through an
+  AdobeRGB profile (`render_bench ICC=`), per pixel a `roundf` call on the
+  x86-64 baseline; fold into the encode or make the pixel loop cheaper.
+  Mutter maps windows itself only in its sdr-native and HDR modes, where Numa
+  already converts nothing.
+- **A cache point at the dragged stage, the prefix cache keyed on frame
+  identity (PERF-048):** edited tick 24 ms when a late slider moves; the
+  prefix's hash and copy are ~2 of a 4.5 ms tick.
+- **f16 intermediates and AVX2 clones without FMA (PERF-049):** explore-build
+  measured −12 % CPU on a slider with an all-v3 build; per-function clones via
+  `multiversion`, no FMA so the bits match the Apple apps.
+
+## The card's stages — 29 September
+
+RENDER-019, RENDER-020, RENDER-021: the render on the card (RENDER-017)
+sent the whole render to the processor for any stage it lacked, and the
+photographer's log said so for point colour and masks. Which stages his
+edits need was read from copies of the sixteen catalogues under
+`Fotos/**/.numa/catalog.db` — 167 edited photographs, every one a Fuji RAF —
+and they were built in that order:
+
+| his edited photographs | on the card |
+|---|---|
+| before (0.30.2) | 46 of 167 |
+| + the grade, point colour, black and white, vignette (RENDER-019) and masks (RENDER-020) | 118 |
+| + luminance noise reduction and HDR, Clarity, Texture (RENDER-021) | **140** |
+
+What still sends one of the other 27 to the processor: a mask's HDR,
+Clarity or Texture (7), dehaze (8), spot removal (5), AI denoise (5), grain
+(4), defringe and moiré (3), calibration, another working space, and
+sharpening where the proxy shows it (at fit a 40 MP X-T5's radius rounds
+to nothing, so that is one photograph).
+
+**How.** Every number the card reads is still made by the processor's code,
+now including `Grading::tints`/`shape`, `effects::vignette_shape`,
+`local::ToneShape` and `detail::LumaShape`, which `apply_stack` itself uses
+— so the two cannot drift apart, and the processor's output is bit for bit
+main's (hashed over the refactored stages on the X-T5 and the E-M1 II).
+The per-pixel stages go into `finish`. A mask is one pass: the processor
+makes its field (`field_among`), the card keeps it in a slot while only the
+adjustments move (`Mask::field_key`: the mask with its adjustments at rest,
+and its pixels by address and every 997th cell), and the pass runs the
+mask's white balance, colour noise reduction, basic adjustments, mixer,
+point colours, curves (through the display and back, `scene_value_for` by
+halving the base curve's stops), black and white, grade and Color on its
+copy and fades it in. Which mask a pass is — and, for the planes, what it
+reads and writes — is a record per dispatch behind a dynamic offset.
+Luminance noise reduction and the local tone map read neighbourhoods, so
+they work on planes of one value: log luminance, box blurs along the rows
+and down the columns (a column's box slides down 64 rows), a guided filter's
+a and b, the quarter-size plane, the glow, Texture's band, and the pivot as
+two reductions.
+
+**The same picture.** `the_card_renders_what_the_processor_does` has 42
+edits now, 22 of them new, on three bodies raw and 13 of them finished: at
+most 1 level in 8 bits, on at most 0.056 % of values (HDR, Clarity, Texture
+and luminance noise reduction together), histograms within 0.033 %.
+
+**Found on the way, not changed** (the processor stays bit for bit):
+`LinearImage::oriented`, `cropped` and `downscaled` leave `white_point`
+behind, so a mask's Temperature and Tint do nothing on a turned, mirrored or
+cropped photograph, and nothing on the half-size draft while any slider is
+dragged. The card does what the processor does (`card.rs`, a ponytail note);
+the fix is one line in each of the three, and a changed export for those
+photographs. (Fixed later that day: "Which device renders a drag".)
+
+**A drag, measured** (`what_a_drag_costs`: the X-T5 at 2 400 px, 120 frames
+at 60 a second, joules above idle for the card and the package; the
+processor's frame is the half-size draft the app renders while a hand
+moves, the cards' the whole proxy):
+
+| edit | processor (draft) | RX 9070 | integrated GPU |
+|---|---|---|---|
+| untouched | 1.9 ms, 0.016 CPU-s, 0.08 J | 2.3 ms, 0.005 CPU-s, 1.25 J | 9.0 ms, 0.13 J |
+| grade | 7.7 ms, 0.10 CPU-s, 0.61 J | 2.3 ms, 1.21 J | 10.1 ms, 0.12 J |
+| point colour | 8.6 ms, 0.12 CPU-s, 0.59 J | 2.3 ms, 1.23 J | 12.0 ms, 0.17 J |
+| a painted mask | 4.4 ms, 0.05 CPU-s, 0.24 J | 2.5 ms, 1.27 J | 11.1 ms, 0.16 J |
+| three masks, one with colour NR | 139 ms, 2.16 CPU-s, 11.2 J | 3.2 ms, 1.41 J | 20.3 ms, 0.25 J |
+| luminance NR 30 | 2.2 ms, 0.02 CPU-s, 0.17 J | 2.9 ms, 1.32 J | 16.4 ms, 0.21 J |
+| HDR +50 | 4.2 ms, 0.04 CPU-s, 0.30 J | 2.9 ms, 1.27 J | 15.1 ms, 0.19 J |
+| Clarity +30, Texture +20 | 6.6 ms, 0.07 CPU-s, 0.50 J | 3.6 ms, 1.34 J | 27.8 ms, 0.35 J |
+
+Before the field was kept, one mask cost 11.5 ms on the RX 9070 and three
+36 ms (packing a field to sixteen bits was 6.6 ms a mask).
+
+In the app (Xvfb, cairo, 600 ticks, the steady last 8 s): DSCF3204 — two
+found masks, HDR 18, luminance NR 48, a grade — **8.5 cores on the
+processor, 2.3 on the card** (about 1 once the models had let go of it), and
+0.79 against 0.80 J a frame; an untouched photograph's Exposure drag 1.0
+core against 0.3, but **0.16 J a frame against 0.47**.
+
+**The energy, plainly.** At 60 renders a second the RX 9070 does not clock
+down between frames: it sits at 95 W in the bench and 31–48 W in the app
+against 8–18 W idle, whatever the edit, so about 0.5–1.3 J a frame is its
+floor. The processor's draft is cheaper than that for anything light, the
+card only pays for itself in energy on a heavy stack (masks with noise
+reduction: 11 J against 1.4), and the integrated GPU is the cheapest of the
+three throughout — at 9–28 ms a frame. What the card always buys is a whole
+proxy instead of a half one and the processor's cores back. Which device a
+drag should use is the photographer's decision; nothing here changed it (he
+made it the same day: "Which device renders a drag").
+
+**The card itself** (RADV `shaderstats`, Mesa 26.2.3, GFX1201): every
+render entry point uses 12–36 VGPRs and 108 SGPRs, no spills, no scratch,
+32 subgroups a SIMD — the most there is; nothing to win in registers.
+Timestamp queries per pass (a scratch patch, not kept) showed where the
+time went instead: on the RX 9070 an untouched frame's passes were 0.69 of
+2.4 ms, the rest the read back; on the integrated GPU 12.0 of 13.2 ms, and
+the colour stage — camera values through the profile's two tables, which
+only the white balance and the profile move — 5.7 ms of it, every frame.
+It is now kept on the card with a key, as the processor has kept its since
+PERF-006: 0.69 → 0.41 ms and 13.2 → 7.9 ms a frame. A mask's curves walked
+the base curve's 53 stops per channel (16 ms of an integrated-GPU frame; 6.8
+by halving), and Texture's column boxes summed 21 rows for every pixel (11.3
+→ 1.6 ms a pass by sliding). Half precision for the frames between passes
+(`enable f16`, where the device has it) was tried and dropped: all of them
+in f16 moved 0.62 % of an untouched frame's values, only the blur's rows
+0.61 % of the X-T5's "everything" — over the 0.5 % the test holds, for at
+most half a millisecond on the integrated GPU.
+
+**What is left, in the order his edits need it** (estimates for one agent):
+
+- **A mask's HDR, Clarity and Texture** (7 masks, 5 photographs): the mask
+  pass split in two around the local tone map's passes, pointed at the
+  mask's copy — half a day.
+- **Dehaze** (8): the dark channel and means per cell as reductions, the
+  airlight from the two darkest cells, the small transmission grid's blur
+  and the per-pixel stretch — half a day; a mask's dehaze with it.
+- **Spot removal** (5): the patches as a list the pass looks up — a day,
+  more if a heal blends.
+- **AI denoise** (5): the denoised proxy is already made on the processor;
+  hand the card that frame instead of the raw proxy — an hour or two.
+- **Grain** (4): value noise over a 64-bit hash, emulated in 32-bit halves;
+  a lattice cell chosen differently from the processor's is a grain of a
+  different value, so it needs the coordinates computed exactly as there —
+  half a day, and it may not hold the tolerance.
+- **Sharpening where the proxy shows it, defringe, moiré, calibration** (1–3
+  each): the plane passes carry sharpening in an hour or two once colour
+  noise reduction's recolouring is its own pass; the others half a day each.
+- **Rows by shared memory** on the integrated GPU and Apple: Texture's row
+  boxes are 4.7–5.0 ms of its 27.8 ms frame.
+
+## The processor's render, the rest of it — 29 September
+
+Branch `cpu-render`, PERF-044…049 as `render-now` left them, and PERF-067.
+The processor's render is still what an iPhone runs, what a laptop without a
+usable card runs, what frugal mode runs, and what any stage the card does not
+have yet runs, so everything here was measured with `NUMA_GPU=0`. Release
+builds, the ten raws of the switching set, under the machine lock: stages in
+`render_bench` (1920 px), drags and steps in the app under Xvfb (cairo) on an
+isolated catalogue, CPU-s from the process clock, energy from the APU's
+socket power (`gpu_metrics`) above an idle window taken just before.
+Scripts and logs: `numa-scratch/research-2/cpu-render/`.
+
+**Nothing on the settled screen or in a file moved.** `render_bench HASH=1`
+gives the same 90 frames and histograms before and after (plain, draft,
+edited, a warm balance, a late slider twice, an early one after it, the
+edited frame again — the new ones rendered through the kept stages), the
+same frames through an AdobeRGB display profile, and the colour stage's own
+floats bit for bit. The app's window at fit and at 1:1, settled, is the same
+screenshot to the pixel (`magick compare -metric AE`: 0). What changes is only
+what is on screen while a hand is down, measured below.
+
+**The display profile (PERF-047).** Its pixel was `(v * 4095).round() as
+usize` per channel: a libm call on the x86-64 baseline and a float-to-`usize`
+that is a branch. The whole part as `i32` and one more where the remainder is
+half or over is exact (the remainder is exact by Sterbenz; tested over every
+seventh float in 0..1 and both sides of every half). The BGRA hand-over with
+a profile 3.0 → 2.0 ms a frame, one thread 23.3 → 13.9 ms. It was not folded
+into the encode: the cost was the transform's own arithmetic, not a pass of
+memory, and the histogram, the clipping overlay and PERF-042's kept frame all
+read the sRGB frame the fold would have skipped.
+
+**The stages kept by the frame (PERF-048, `numa-render/src/kept.rs`).** A kept
+prefix was found by hashing the frame: a copy of the 30 MB, the hash, then a
+copy of the answer over the copy. `apply_stack_kept` and `apply_pixels_kept`
+take the frame's `Arc` and keep a `Weak` beside the answer — while it exists
+the address is that frame's and the frame cannot change in place — so a hit
+is one copy, and the geometry pass is skipped with it. A second point sits in
+front of the grade (darktable's in-focus cache line, Core Image's
+intermediates), kept once the same frame and settings are asked for twice in
+a row, so an early slider never pays for a copy nobody reads. Its key is the
+document with the late settings left out rather than the early ones named, so
+anything added to the stack later is in it; mask pixels by address. The
+editor's proxy, draft, backdrop and tile go through it; the Apple apps get it
+by calling the same two functions.
+
+| `render_bench`, ms a call | main | cpu-render |
+|---|---|---|
+| Exposure tick, sharp / draft | 4.4 / 1.2 | 3.2 / 0.9 |
+| a late slider (vignette) on an edited frame | 24.5 | 5.5 |
+| first render of a photograph | 10.1 | 8.9 |
+| edited frame, Exposure tick | 24.4 | 23.0 |
+| histogram (one core) | 0.9 | 0.6 |
+| the BGRA hand-over, AdobeRGB profile | 3.0 | 2.0 |
+| a step's render in an 8 s loop (colour, stack, histogram) | 0.28 core-s, 1.8–1.9 J | 0.26 core-s, 1.5 J |
+
+The same at 2400 px, the proxy of the photographer's 1440p desktop (median
+of the ten; ms a call / CPU-ms):
+
+| `render_bench EDGE=2400` | main | cpu-render |
+|---|---|---|
+| Exposure tick, sharp | 7.7 / 73 | 5.1 / 60 |
+| Exposure tick, draft | 1.7 / 19 | 1.3 / 16 |
+| a late slider on an edited frame | 41.0 / 489 | 9.0 / 115 |
+| first render | 20.4 / 217 | 17.2 / 175 |
+| the BGRA hand-over, AdobeRGB profile | 4.5 / 67 | 2.9 / 42 |
+| histogram | 1.5 | 0.9 |
+
+**A kept frame's buffer (PERF-068).** At 2400 px a frame is 46 MB of floats,
+over glibc's 32 MB ceiling for reusing freed memory, so the buffer each kept
+render copied its stage into was a fresh mapping the kernel zeroed and faulted
+in on every tick. The last render's buffer is kept as a spare (one; let go
+with `forget_kept`): at 2400 an Exposure tick 6.2 → 5.0–5.2 ms and a late
+slider 9.3 → 8.1 (twice each, alternating); at 1920 nothing moves. It holds
+one frame's buffer while editing. Raising glibc's mmap threshold instead
+(`GLIBC_TUNABLES=glibc.malloc.mmap_threshold`) changed nothing measurable:
+it is that one buffer, not the passes' temporaries.
+
+**1:1 while the hand moves (PERF-046, PERF-045).** The backdrop behind a
+tile was meant to come off the draft during a drag, but at 1:1 nothing made
+a draft — the tile is not the proxy's path — so every tick rendered the
+whole proxy behind the tile, 7 of its 9 ms; the draft is made there now, as
+at fit. And a colour change at 1:1 asked the tile's develop again for every
+tick of Temperature — a part of the raw and its colour stage, 0.8 CPU-s on a
+Z 6 — with the stretched proxy on screen meanwhile. Now the part on screen is
+cut from the original before its colour stage once, at the draft's size, and
+coloured afresh each tick; the develop is asked once, when the hand stops,
+and the settled view is the same path as before. What was left of such a
+drag was the draft's own colour stage, which at 1:1 is only the backdrop and
+the histogram, so there it is a quarter of the proxy's edge (darktable's
+preview pipe): the histogram while the hand moves has 3.4–4.6 % of its counts
+in another bin than the half-edge draft's would — the same order as the
+half-edge draft against the proxy, which every drag at fit shows, 2.0–6.2 %.
+Colouring after the
+reduction instead of before (`render_bench RECOLOUR=1`, the middle
+1400 × 900 of each raw at 700): mean 0.002–0.22 codes, at most 0.95 % of
+values over one code apart and 0.04 % over three, the worst single value 37
+(Z 7, a clipped edge) — on frames that were the soft proxy before.
+
+**The next photograph's first frame (PERF-044).** Where the processor renders
+and nothing asks it to go easy, the decode ahead renders the neighbour's first
+frame and histogram after its colour stage (stopped with it; not with a mask,
+whose pixels the opening works out). The opening's first render takes it if it
+is still that picture — the rendered document's fingerprint, the colour key,
+the working frame it was made with, fit — and puts it up on a high-priority
+idle that the opening's other requests fold into, not on the next tick. The
+render is not saved, it is moved: it is wasted on a turn back, as the decode is.
+
+**A colour drag's half proxy (PERF-067).** Every tick of Temperature, Tint or a
+profile reduced the 30 MB proxy to half before its colour stage — the same half
+each time. It is made once per proxy and kept (by the proxy's `Arc`).
+
+In the app (Z 6 unless said; 120 ticks 16 ms apart, CPU-s over the drag):
+
+| | main | cpu-render |
+|---|---|---|
+| Exposure at fit | 2.09 | 1.78 |
+| Exposure at 1:1 | 8.52 (4.3 cores) | 3.32 (1.7) |
+| Temperature at fit | 8.36 | 7.09 |
+| Temperature at fit, A6000 (DCP) | 13.9 | 12.6 |
+| **Temperature at 1:1** | **28.3 (14 cores), 43 of 120 frames** | **4.8 (2.4), 118 of 120** |
+| Temperature at 1:1, A6000 | 28.4, 25 of 120 frames | 7.7, 118 of 120 |
+| a step: first frame after the key | 31–39 ms | 12–13 ms |
+| a step: the process's CPU until then | 115–163 ms | 14–23 ms |
+
+Energy above idle over 600-tick drags (10 s; the first 3 s left out, the SMU's
+socket power is a running average), three runs each: Temperature at 1:1
+700–719 → 99 J, Exposure at 1:1 160–221 → 91–117 J. Below about four cores the
+socket power did not repeat from run to run (Temperature at fit: 176–211 J on
+main, 32–341 J here, at 4.1 against 3.5 cores), so those are not quoted; the
+CPU-s are.
+
+**AVX2 without FMA, and f16 (PERF-049).** A whole-binary AVX2 build (no FMA;
+hashes identical) is the ceiling a clone per pass could reach, and on this
+branch it is 0–5 %: a tick 3.2/3.1 ms, Clarity 7.7/7.7, Contrast 6.0/5.9, the
+tone sliders 7.3/7.3, a DCP colour stage −3 %, and only the histogram
+(0.9 → 0.6 ms) and Vibrance (−0.3 ms) worth naming. explore-build's −12.8 %
+was before the table encode took the encode's `log2` out. What a tick has left
+is `powf`, `log2` and `exp2` a pixel (Contrast, the tone regions, a DCP's
+value axis), which a clone does not vectorise and a vector version would give
+other bits — so no `multiversion` clones. Two portable changes instead, exact,
+the iPhone's too: the HSV lookup's `rem_euclid(6.0)` (`fmodf`, a library call
+on every platform) and `floor` (one on the x86-64 baseline) worked out
+directly where the answer is the library's bit for bit (tested over the whole
+range, zeros' signs and NaNs included) — a DCP colour stage 1–4 % quicker —
+and the histogram counted into two sets of bins in turn, so a count no longer
+waits on the one before (0.9 → 0.6 ms of a core a frame, the same counts).
+f16 was not used: every intermediate on the processor feeds a 1:1 tile or an
+export that has to stay bit for bit, and the kept stages would then differ
+between a first render and the next; on the card it is another question
+(RENDER-017's buffers).
+
+**What the Apple apps get.** PERF-048's kept stages and PERF-068's spare
+buffer by calling `apply_stack_kept`/`apply_pixels_kept` where they call
+`apply_stack` now, and `forget_kept` when the editor closes; PERF-049's colour
+stage and histogram with the shared code, as they are. The rest is the GTK side, and the same ideas carry: the frame made
+ahead (044), the view coloured alone at 1:1 (045), the draft behind (046), the
+kept half proxy (067).
+
+### Left
+
+- The step's first frame now waits on the opening's own hop to a worker and
+  back (`off thread` 7 ms for nothing when the decode ahead is ready); taking
+  a finished decode ahead on the main thread would halve it again.
+- ~~A mask's own Temperature and Tint do nothing on a cropped, turned or
+  flipped frame, nor on a draft made by `downscaled`~~ — fixed, "Which device
+  renders a drag".
+- The app's drags were measured at 1920 (Xvfb's screen); at 2400 the
+  per-stage table above is the evidence.
+
+## Which device renders a drag — 29 September
+
+RENDER-022, and MASK-004's white point. Branch `render-policy`; scripts and
+logs in `numa-scratch/research-2/render-policy/`.
+
+**The photographer's decision** ("slim kiezen per bewerking"): the card's
+stages above showed a discrete card costing three times the processor's
+energy for a light drag and the same for a heavy one, with a fraction of the
+cores. So a discrete card now renders only what would cost the processor
+more than it costs the card; the rest renders on the processor, as before
+RENDER-017. Integrated GPUs and Apple (unified memory: `numa_gpu::discrete`
+is false) keep the card for everything it has, and frugal mode takes the
+integrated lane, which is not discrete, so it keeps its choice too. The
+develop (RENDER-010) is not touched.
+
+**Where.** `card::Plan::heavy` — the rule, portable, beside the plan it
+reads — and one check in `card_render.rs` once the plan is made: a discrete
+card and not heavy, and the render goes to the processor. The same device
+settles the frame as dragged it, so the picture does not change by a level
+when the hand stops.
+
+**What a stage costs the processor.** `what_a_drag_costs` now drags the way
+the app does — the half-size draft through `apply_stack_kept`, Exposure a
+hundredth of a stop a frame, so the stages before the operations are kept —
+over the stages his edits use. The X-T5's 2 400-pixel proxy, 1 200-pixel
+draft, CPU-s a frame at 60 a second:
+
+| edit | CPU-s a frame | | edit | CPU-s a frame |
+|---|---|---|---|---|
+| untouched | 0.017 | | a mask: exposure | 0.028 |
+| tone regions / whites, blacks | 0.043 | | a mask: gradient (tone, contrast) | 0.059 |
+| contrast | 0.033 | | a mask: colour NR | 0.051 |
+| vibrance, saturation | 0.022 | | a mask: grade | 0.096 |
+| curves | 0.018 | | a mask: B&W, grade, Color | 0.180 |
+| mixer | 0.076 | | a mask: mixer, point colour | 0.188 |
+| black and white | 0.071 | | **a mask: one curve** | **1.565** |
+| vignette | 0.030 | | two masks | 0.094 |
+| grade | 0.105 | | luminance NR (kept) | 0.017 |
+| point colour | 0.119 | | HDR +50 / Clarity +30 / Texture +20 | 0.041 / 0.040 / 0.070 |
+| tone, contrast, vibrance, curves, mixer | 0.133 | | two masks, HDR 18, LNR 48, grade | **0.207** |
+
+They add up: the last row, his DSCF3204's kind, is 0.206 summed from its
+parts. So the rule sums them — CPU-ns a draft pixel per stage, a mask 12
+plus its own adjustments at the photograph's rates — rather than naming a
+stage: of his DSCF3204's four stages none is heavy alone. A mask's curves
+are the outlier: `finish_mask` takes each value through the display and back,
+and the way back is `scene_value_for`'s 48 halvings — 100 ms of wall a draft
+frame on sixteen threads, where the card searches the base curve's 53 stops.
+
+**The line.** At 60 frames a second the RX 9070 never clocks down: 0.47 J a
+frame in the app untouched, 0.80 with DSCF3204's masks, HDR and grade (card
+31–48 W above 8 W idle). The processor's package in the same app ran 0.16 J
+a frame at one core and 0.79 at 8.5, about 5 W a core; the two meet at about
+six cores, 0.1 CPU-s a draft frame — `CARD_FRAME_NS`. Below it the processor
+is cheaper; at and above it the energy is about even and the card gives the
+cores back and shows the whole proxy instead of half. The line is in CPU-s a
+frame, not per pixel: a smaller proxy (a 1080p screen's 1 920) makes the
+processor's draft cheaper while the card's frame costs what it did, so more
+stays on the processor there. It is one processor's numbers (sixteen
+threads, desktop); a laptop's discrete card would want its own.
+
+**Before and after, in the app** (Xvfb, cairo, isolated copies of his
+catalogues, 600 Exposure ticks 16 ms apart, the steady last 8 s, joules above
+idle from the card's `power1_average` and the APU's socket power):
+
+| | before (card) | after |
+|---|---|---|
+| DSCF1960, untouched | 0.46 J a frame, 0.3 cores | **processor: 0.15 J a frame, 0.9 cores** (card 8.9 W, idle 8.0) |
+| DSCF3204, two masks, HDR, LNR, grade | 0.74 J a frame, 1.5 cores | card: 0.75 J a frame, 0.4 cores |
+
+(Before, DSCF3204's first 66 frames went to the processor while a model
+held the card; after, all 599 on the card.)
+
+**A mask's Temperature and Tint on a turned, cropped or drafted frame.**
+`LinearImage::oriented`, `into_oriented`, `cropped` and `downscaled` now
+carry `white_point` on, as `lens::correct_geometry` and the 1:1 parts
+(`zooming.rs`) already did; `apply_masks` reads it only for a mask's
+Temperature and Tint, so nothing else moves. The card's plan dropped its
+copy of the bug. Exports of a mirrored, turned or cropped photograph with a
+mask that has Temperature or Tint change — the mask now warms or cools as it
+does on an untouched frame. No test in the tree held the old pixels: the
+fingerprint tests store no hashes, and `render_bench HASH=1`'s documents have
+no mask white balance. `a_masks_temperature_moves_a_turned_cropped_frame`
+fails on the old code (red over blue 116 → 116) and holds processor and card
+within a level; `the_card_renders_what_the_processor_does`'s five masks,
+turned and cropped, now warm on both, within 1 level on ≤ 0.020 % of values.
+
+### Left
+
+- On a discrete card the frame made ahead for the next photograph (PERF-044)
+  is still off, as it is wherever a card may render; a light edit's step
+  could now take it.
+- A mask's curves on the processor: 1.5 CPU-s a draft frame, 48 halvings a
+  value. Searching the 53 stops first, as the card does, and halving only
+  within one would be the same answer in a fraction of the steps — if it can
+  be shown bit for bit.
+
+## The click encoder on the card, and half precision — 29 September
+
+Branch `models-f16` (MASK-019, MASK-020, PERF-069). Release builds, every run
+under the machine lock and `dev/capped.sh`; processor-seconds from
+`getrusage`, energy above idle from the APU's socket power and the card's
+board power, VRAM from `mem_info_vram_used`. The clicks are
+`tests/click_survey.rs`'s: 219 of them on 60 frames — one raw from each of 50
+raw.pixls.us bodies (CC0, drawn with a fixed seed) and the ten of the
+switching set — each answered the editor's way, closer look and guided edge
+included. The reference is SAM 2.1 Large (onnx-community's export,
+Apache-2.0). Scripts, masks, sheets and logs:
+`numa-scratch/research-2/models-f16/` (`py/iou.py`, `paired.py`, `bycat.py`,
+`sameobj.py`, `layerdiff.py`; `PROGRESS.md` has every number).
+
+**The card was answering another question (MASK-020).** Run on the card, the
+survey's 219 masks agreed with the processor's at a mean IoU of 0.73; against
+SAM 2.1 Large the card's median was 0.78 where the processor's is 0.91. Every
+output of the encoder held against the processor's, layer by layer
+(`py/layerdiff.py`), parts at the first attention's relative-position index:
+the `Add` before it agrees to 8e-8, the `Cast` to int64 after it by 6 %.
+SAM works those indices out from the input's shape — `(q − k) + (k − 1) ·
+max(q / k, 1)`, whole numbers, cast to int64 — and with the batch dimension
+left symbolic ONNX Runtime could not fold that chain when the session was
+built, so it ran on the card, whose division is not exact: 14 / 14 came out a
+hair under one, and 13 was cut to 12. Every attention then looked up its
+neighbours' positions. Card sessions now fix `batch_size` and `batch` at one
+(`numa_infer::build`); the chain is folded on the processor, and the card's
+embedding is the processor's to 1.5e-4 of its mean. All 219 masks agree at IoU
+≥ 0.999 (mean 0.99999), and the card got cheaper with it:
+
+| SlimSAM encoder on the card, 12 frames | per photograph | processor | energy (socket + card) | VRAM peak |
+|---|---|---|---|---|
+| before | 225 ms | 0.35 cpu-s | 2.8 + 28.0 J | +11.0 GB |
+| after | 217 ms | 0.32 cpu-s | 3.3 + 14.5 J | +5.1 GB |
+
+`masks_probe::the_card_encodes_what_the_processor_does` holds the card
+against the processor (run once without `GPU`, once with): 7× the mean apart
+before, 1.5e-4 after. Kept embeddings (`NUMASAM2`) and kept click masks
+(`sam::ANSWERS`, sam-5) from before are made again, since one from the card
+cannot be told from one from the processor. ViTMatte has the same code with
+its height and width open as well: 0.0058 apart on a 1024 tile, 8e-6 with
+all four fixed — the "attention summed in another order" in "Inference
+runtime" is this. Its tiles are not all one size, so it is left for its own
+fix. SCUNet, EfficientViT and BiRefNet are unaffected (SCUNet's card answer
+is the processor's to 1e-6; the other two are exported at a fixed size).
+
+**A cheaper click encoder (MASK-019), not taken.** MobileSAM and
+EfficientViT-SAM L0 (both Apache-2.0, weights and code) exported in SlimSAM's
+I/O again — speed-night's scripts had gone: the prompt path is
+segment_anything's own ONNX export with HF's padding point, held against the
+model's own to 0.0; L0 sees the frame at 512 through a 2 × 2 average.
+
+| against SAM 2.1 Large, 219 clicks | mean IoU | median | < 0.5 | hit | specks | holes | on edge |
+|---|---|---|---|---|---|---|---|
+| SlimSAM (shipped) | 0.734 | 0.912 | 54 | 213 | 13 | 11 | 1.390 |
+| MobileSAM | 0.727 | 0.913 | 56 | 215 | 13 | 6 | 1.352 |
+| EfficientViT-SAM L0 | 0.682 | 0.910 | 70 | 215 | 20 | 13 | 1.385 |
+
+| encoder, 12 frames | processor | | | card | | | file |
+|---|---|---|---|---|---|---|---|
+| SlimSAM | 958 ms | 12.2 cpu-s | 36 J | 217 ms | 3.3 + 14.5 J | +5.1 GB | 23 + 17 MB |
+| MobileSAM | 223 ms | 1.6 cpu-s | 11 J | 138 ms | 2.8 + 6.9 J | +0.9 GB | 28 + 16 MB |
+| EfficientViT-SAM L0 | 237 ms | 1.3 cpu-s | 7 J | 121 ms | 1.9 + 4.8 J | +0.5 GB | 123 + 16 MB |
+
+The photographer's bar is equal or better. L0 is worse beyond noise on small
+things (−0.110 IoU, 95 % interval −0.198 to −0.027) and on buildings and
+structure (−0.087). MobileSAM ties on IoU with the reference (−0.006, −0.043
+to +0.030; every kind of click within noise) and has fewer holes, but where
+it and SlimSAM chose the same thing (129 clicks) its border lies on the
+photograph's edges less (on-edge −0.020, −0.036 to −0.004), and it takes the
+larger thing more often (9.6 % of the frame on average, against 6.7 % and the
+reference's 6.1): a car's bonnet for the car, a bicycle with the rider's arm
+(`sheets/vehicles.jpg`). So SlimSAM stays, and the 4× on the processor is
+left on the table. EfficientSAM and SAM 2.1 tiny were not surveyed again.
+
+**Half precision on the card (PERF-069), measured and not taken.** The
+WebGPU plugin has no precision option; it runs a model in the types the file
+has, and RADV gives Dawn `shader-f16` (the RX 9070 has `shaderFloat16`), so a
+float16 file runs in float16 throughout. Converted as SCUNet's was
+(`onnxconverter-common`, input and output kept float32):
+
+| on the card | time | energy (card) | VRAM | against float32 |
+|---|---|---|---|---|
+| EfficientViT-Seg B2 | 301 → 216 ms | 10.4 → 6.9 J | | "Buildings 100 %" on 26 of 30 frames: overflow |
+| the same, its linear attention kept float32 | → 242 ms | → 7.8 J | | still 16 of 30; the rest group IoU 0.82–0.999 |
+| SlimSAM encoder | 217 → 173 ms | 14.5 → 10.6 J | +5.1 → +1.4 GB | click IoU mean 0.979, ≥ 0.999 on 70 of 219 |
+| BiRefNet (float16 since 25 Sep) | 887 → 435 ms | ~185 → 96 J | +12.3 → +8.0 GB | matte IoU 0.22–0.9997, median 0.996 |
+| SCUNet (float16 since 21 Sep) | 200 → 108 s a 40 MP frame | | | 512 crop: max 2 codes, PSNR 60 dB |
+
+The bar for half precision is indistinguishable from float32 (IoU ≥ 0.999,
+nothing on the sheets). EfficientViT overflows float16 — its ReLU attention
+sums over thousands of positions, and something past the attention too — and
+SAM's click masks move on a fifth of the clicks, so neither is taken. SCUNet
+passes and stays. BiRefNet does not pass (a palm frond and a bare tree
+smaller in float16, `sheets/birefnet-f16-f32.jpg`), but float32 on the card
+takes twice the time and energy and 15.7 of the card's 16 GB at its peak with
+the desktop's share, which is no option; it stays float16, for the
+photographer to know. (The same day float32 did fit, and took its place:
+"BiRefNet in float32, a kernel row at a time" below.)
+
+### Left
+
+- ViTMatte on the card, the same index chain with its tile's size open —
+  fixed the same day (MASK-021, "The proxy's edge, ViTMatte on the card, a
+  mask's curves", below).
+- Two raws of the corpus panic in `editor_proxy` (`proxy.rs:260`, a slice
+  whose end is before its start): the ILME-FX2's and the GH5S's.
+- SlimSAM's 5 GB on the card is its four global attentions; the head-at-a-time
+  rewrite the iPhone gets would bring that down (at 197 → 235 ms, measured
+  26 September) if a card with less memory needs it.
+
+## The proxy's edge, ViTMatte on the card, a mask's curves — 29 September
+
+Branch `fixes-30` (PERF-030, MASK-021, PERF-070): the three things the two
+sections above left. Release builds, every run under the machine lock and
+`dev/capped.sh`; processor-seconds from `getrusage` or render_bench's
+cores × wall, energy above idle from the APU's socket power. Notes and logs:
+`numa-scratch/research-2/fixes-30/` (`PROGRESS.md`, `proto/inv.rs`).
+
+**The proxy's panic was a lens, not a body.** `editor_proxy`'s mosaic route
+panicked at `proxy.rs:260` on the GH5S frame (raw.pixls.us 2603, the M.Zuiko
+7-14 at 14 mm): a slice whose first column was past its last. The lens
+profile's correction bulges mid-radius, and `geometry_fit` only keeps the
+sources inside the circle through the corners, so a pixel near the middle of
+a side reads from past the frame's side; the box around it, cut to the
+frame, turned inside out. `Frame::mean`, which every proxy pixel goes
+through, now holds the box's centre inside the frame, as the full develop's
+bilinear holds the edge. The ILME-FX2 frame (8807) never panicked: rawler has
+no entry for the body, so it does not decode at all — an error, and a camera
+to add to rawler with a colour matrix one day.
+
+The whole corpus through the editor's route, card off (`NUMA_GPU=0`) and
+Numa frugal, at 2400, 1920 and 1024 (`raw::proxy`'s
+`every_frame_in_a_list_makes_a_proxy`, the 549 files of `raws-cc0` and the
+ten of the switching set, 176 s): 8 panics before, on three frames, all the
+same cause (2603 and 2607, GH5S with the 7-14; 5146, Z 9 with the Z 14-30 at
+18 mm, at 2400 and 1920); none after. 1 590 proxies made; 87 errors, all
+rawler's (bodies it does not know, NEF High Efficiency, truncated files). The
+ten's proxies and renders hash as before (`render_bench HASH=1`, 110 lines):
+none of them has a source outside its frame.
+
+**ViTMatte on the card (MASK-021).** The same fault MASK-020 fixed for SAM's
+batch: ViTMatte's relative positions come from its input's height and width
+through a division and a cast to whole numbers, and with those left open the
+chain ran on the card. One 1024 tile (models-f16's `cardcheck.py`): card
+against processor mean |d| 1.6e-3, max 0.38; with height and width fixed,
+5.9e-8 and 1.2e-5. Refine edge's tiles are 1024 unless the band's frame is
+smaller on a side, so `numa_infer::Model::load_sized` builds a card session
+for one height and width (on the processor the size stays open and nothing
+moves), and `matte::vitmatte` builds it again when a band wants another size.
+
+`masks_probe::the_card_refines_what_the_processor_does`, the ten frames
+whole (2400 px, tiles of 1024) and at 700 px (tiles of 448–512 by 672), an
+ellipse for the first look, all 20 kept from the processor and held against
+the card: before, 1.2e-3 to 4.0e-3 of alpha on average and up to 0.997; after,
+1.1e-8 to 5.6e-8 and up to 6.3e-5. The processor's 20 mattes are bit for bit
+the old code's. A band of another size costs one session build on the card
+(the 20 mattes with three builds, 7.8 s). Refined mattes are never kept on
+disk, so nothing old is read back.
+
+Two other ways were measured beside it, on one photograph's tiles of 1024²,
+1024 × 736, 512 × 1024 and 320 × 640 (Python onnxruntime 1.30 and the
+plugin; `numa-scratch/research-2/vitmatte-card/`). A Round before each of
+the 25 casts from float to int64 (of 162 to int64) is as exact — 7.5e-6 to
+1.4e-5, like the fixed size — and one session would take every size, but
+the file carries no types, so a rewrite would have to infer them, and the
+chain stays on the card: a 1024 tile 180–194 ms. Padding a smaller tile to
+1024 moves the processor's own answer by up to 0.99 (a 512 × 1024 tile
+against itself padded), so it is out. The fixed size is also the cheapest,
+because the folded chain no longer runs at all: a 1024 tile on the card
+151–172 ms and about 30 J above idle open, 128–138 ms and 25 J fixed
+(interleaved, 12 and 20 runs), 0.016 against 0.010 processor-seconds.
+
+**A mask's curves (PERF-070).** `finish_mask` takes every value of the frame
+up to the display, through the curves, and back with `scene_value_for`,
+which halved 48 times over the whole curve. The X-T5's 2400 proxy, its 1200
+draft, an Exposure drag with render_bench's `curved` sky (a curve and a red
+curve on the edited frame's graduated mask):
+
+| | ms a frame | CPU-s a frame | J a frame (socket, above idle) |
+|---|---|---|---|
+| before | 145.7 | 2.15 | 11.2–12.5 |
+| after | 30.0 | 0.43 | 1.8–2.0 |
+| the same frame, no curve | 9.5 | 0.12 | |
+
+The inverse has to be the halving's answer bit for bit — it decides the
+export — and the halving's answer is a float, not the real inverse. Where the
+curve is steep enough, it is the first float at which `at_stops` reaches the
+value, and the table says where that is: the closed-form inverse of the
+quarter-stop table (or of the toe's power law), then halvings over the floats
+in order from four either side of that guess, widened where the guess was
+further out (near zero, where floats are dense). Above `CAMERAS[48]` (0.986
+on the display, four stops over grey) the table's last steps rise less per
+float than a float's rounding, `at_stops` steps back here and there, and
+which crossing the halving lands on depends on the path it took — 15 080
+answers differed there. So the halving runs its whole path, but asks the
+curve only where the table's guesses for a few floats either side cannot say
+which way it goes. `at_stops` itself lost its `floor` and `fract` calls to
+libm: for a positive `at` the cast is the floor, and `fract` is defined as
+`at - trunc(at)`. Single-threaded: 590 → 50 ns a value below 0.986, 561 →
+114 above.
+
+Checked on every float `scene_value_for` can be handed — the 112 083 548 in
+[1e-4, 0.9999], and a NaN — against a verbatim copy of the old code, and
+`at_stops` on every float in its table's range: 0 differ
+(`the_inverse_is_the_halvings_on_every_float`, 7 s on sixteen threads; every
+61st float in the ordinary run). `render_bench HASH=1` on the ten, a curved
+frame included, hashes as before.
+
+### Left
+
+- The ILME-FX2 in rawler (no camera entry).
+- A mask's curves still cost 0.30 CPU-s a draft frame over the rest of the
+  mask: the round trip's `log2` and `exp2` and the guess. `Plan::heavy` now
+  counts them at 320 ns a draft pixel rather than 1 600, which still sends
+  a drag over any whole 3:2 proxy (1 400 px and up) to a discrete card; a
+  narrow crop's now stays on the processor.
+
+## BiRefNet in float32, a kernel row at a time — 29 September
+
+Branch `birefnet-f16` (PERF-071, MASK-008). Seventy-five frames: the 21 CC0
+JPEGs of models-f16 (the palm and the bare tree among them), 20 of the
+photographer's, 24 raw.pixls.us raws (half size through LibRaw) and 10
+portraits, each held against the model in float32 on the processor — its
+logits (`py/run.py`) and its subject through `matte::subject`, as the
+Subject chip asks it. Release builds, every run under the machine lock and
+`dev/capped.sh`; time, processor-seconds and energy above idle (APU socket,
+card board power) from `masks_probe::subject_cost`, VRAM from
+`mem_info_vram_used`. Scripts, sheets and every number:
+`numa-scratch/research-2/birefnet-f16/` (`PROGRESS.md`).
+
+**Why float16 is not the model's answer on the card.** Held against float32
+module by module (63 outputs, `py/tapcmp.py`), float16 drifts to 2 % through
+the backbone and then jumps where a convolution sums over many channels: 2 →
+8 % at the squeeze module's 3 × 3 over the 5 760-channel pyramid, 18 % after
+decoder_block1's 1 × 1 over 1 280. The WebGPU plugin adds up in float16 too:
+one Conv on its own, from the same float16 inputs, comes out 1.0e-3 off at 64
+channels, 4.6e-3 at 1 280 and 2.8e-2 at 5 760 × 3 × 3, where adding up in
+float32 would leave 1.8e-4 (`py/accum.py`). CUDA's float16 adds up in
+float32; this does not. Nothing mixed passes: the backbone in float32 changes
+nothing, the decoder's convolutions in float32 lift the worst frame to 0.93,
+the whole decoder to 0.92 with 25 of 75 still under 0.999, and even the
+float16 file on the processor, which adds up in float32, misses on five of
+six hard frames (0.9745 at worst). Mixed files also answered nothing at all
+through ONNX Runtime 1.28, the one Numa links, where Python's 1.30 ran them.
+
+**What makes float32 fit.** Its trouble was memory — 12.3 GB, 15.7 of the
+card's 16 with the desktop — and most of that is the exporter's deformable
+convolution, which gathers all K × K taps at once: in decoder_block1
+twenty-odd tensors of [1, 64, 49, 256, 256], 822 MB each. `numa_infer::rewrite`
+now works each of the ten (3 × 3 and 7 × 7) out a kernel row at a time:
+slices of the same indices and weights, put pixel-major first (they are the
+small tensors), so the gathered row is already [H·W, K·C] and meets
+W[:, :, row, :] in one MatMul; the rows are added. The same arithmetic in
+another order — on the processor the logits move by 1e-4 at most — and a
+miniature in `rewrite::tests` holds it to the exporter's to 1e-5. Not on
+Apple, where the lite model runs on the processor and it was not measured.
+
+| 75 frames, per photograph | time | processor | energy (socket + card) | VRAM | subject against float32 |
+|---|---|---|---|---|---|
+| float16 as shipped 25–29 Sep, card | 415 ms | 0.10 cpu-s | 0.2 + 75 J | +8.2 GB | ≥ 0.999 on 33, min 0.26 |
+| float16 by row, card | 370 ms | 0.11 cpu-s | 0.5 + 66 J | +5.6 GB | the same (min 0.27) |
+| float32 as exported, card (models-f16, 21 frames) | 887 ms | | ~185 J | +12.3 GB | |
+| **float32 by row, card** | **566 ms** | 0.11 cpu-s | 0.2 + 111 J | +8.1 GB | **1.0000 on all 75** |
+| float16, processor (6 frames) | 7.5 s | 43 cpu-s | | 6.0 GB | |
+| float32 by row, processor (6 frames) | 3.3 s | 36 cpu-s | 168 J | 4.4 GB | |
+
+On the card float32 by row is the processor's answer — one 8-bit code apart
+at most. Float16's subject lost part of a palm frond (IoU 0.26), a bare tree's
+branches (0.85), the end of a fence (0.86) (`sheets/f16-vs-f32.jpg`). So the
+Linux download is onnx-community's `model.onnx`, 973 MB, MIT as before, saved
+as `birefnet_f32.onnx`: a new name, so subject masks kept from float16 are
+made again. The float16 `birefnet.onnx` answers until the new file is fetched
+(Preferences › Downloads lists BiRefNet as not installed) and is deleted once
+it has. The price on the card is 150 ms and 36 J a Subject, with the card's
+memory as it was; on the processor float32 is the faster of the two.
+
+### Left
+
+- The mirror has the float16 file only; `birefnet_f32.onnx` is to be put
+  beside it (until then it comes from Hugging Face).
+- Nothing tells a photographer who has the float16 file that there is a new
+  one but the Downloads page.
+- Mixed float16/float32 files answer nothing through ONNX Runtime 1.28 on the
+  card; not chased, since nothing mixed passes.

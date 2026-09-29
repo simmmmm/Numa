@@ -144,11 +144,15 @@ pub(super) enum MaskKind {
 }
 
 pub(super) fn refresh_found(state: &App) {
-    let (found, looking, animal) = {
+
+    let (found, looking) = {
         let open = state.open.borrow();
         match open.as_ref() {
-            Some(photo) => (photo.segmentation.clone(), photo.segmenting, photo.animal.clone()),
-            None => (None, false, None),
+            Some(photo) => (
+                photo.chips.clone().or_else(|| photo.segmentation.as_deref().map(numa::io::masks::Chips::of)),
+                photo.segmenting,
+            ),
+            None => (None, false),
         }
     };
 
@@ -165,7 +169,17 @@ pub(super) fn refresh_found(state: &App) {
     };
     let Some(found) = found else {
         if looking {
-            note("Looking at the photograph…");
+
+            let label = "Looking at the photograph…";
+            let chip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            chip.set_halign(gtk::Align::Center);
+            chip.append(&spinner(label));
+            chip.append(&gtk::Label::new(Some(label)));
+            let button = gtk::Button::new();
+            button.set_child(Some(&chip));
+            button.set_sensitive(false);
+            button.set_hexpand(true);
+            row.append(&button);
         } else if !segment::is_installed() {
             note("No model installed");
         }
@@ -203,9 +217,7 @@ pub(super) fn refresh_found(state: &App) {
         return;
     }
 
-    let animal = animal
-        .filter(|(asked, _)| std::ptr::eq(asked.as_ptr(), Arc::as_ptr(&found)))
-        .map(|(_, guess)| guess);
+    let animal = found.animal.clone();
 
     for (thing, inverted, pair) in things {
         let mut tooltip = match (thing.share > 0.0, inverted) {
@@ -216,11 +228,11 @@ pub(super) fn refresh_found(state: &App) {
         let mut name = thing.name.clone();
 
         let is_animal_group = !pair && thing.classes.as_slice() == [126];
-        if let Some(guess) = animal.as_ref().filter(|_| is_animal_group) {
-            name = guess.name.to_string();
-            let noun = guess.name.to_lowercase();
+        if let Some((guess, confidence)) = animal.as_ref().filter(|_| is_animal_group) {
+            name = guess.clone();
+            let noun = guess.to_lowercase();
             let article = if noun.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
-            let sure = format!("Probably {article} {noun} — {:.0} %", guess.confidence * 100.0);
+            let sure = format!("Probably {article} {noun} — {:.0} %", confidence * 100.0);
 
             tooltip = match thing.share > 0.0 {
                 true => format!("{sure}. {tooltip}"),
@@ -259,11 +271,17 @@ pub(super) fn refresh_found(state: &App) {
 pub(super) fn preview_found(state: &App, classes: &[u16]) {
     let paths = {
         let open = state.open.borrow();
-        let Some(found) = open.as_ref().and_then(|photo| photo.segmentation.clone()) else {
-            return;
+        let Some(photo) = open.as_ref() else { return };
+
+        let (width, height, coarse) = match (&photo.segmentation, &photo.chips) {
+            (Some(found), _) => {
+                let coarse = found.coarse(classes);
+                (coarse.width, coarse.height, coarse.data)
+            }
+            (None, Some(chips)) => chips.coarse(classes),
+            (None, None) => return,
         };
-        let coarse = found.coarse(classes);
-        let alpha = numa::core::mask::Stored::new(&Alpha::new(coarse.width, coarse.height, coarse.data));
+        let alpha = numa::core::mask::Stored::new(&Alpha::new(width, height, coarse));
         let mut paths = numa::core::mask::outline(&alpha, OUTLINE_EDGE);
         paths.truncate(400);
         paths
@@ -387,31 +405,58 @@ pub(super) fn selected_shape(state: &App, index: usize) -> Option<Shape> {
 }
 
 pub(super) fn mask_frame(state: &App) -> Option<Arc<image::RgbImage>> {
-    let made = {
-        let open = state.open.borrow();
-        let photo = open.as_ref()?;
-        if let Some(found) = &photo.segmentation {
-            return Some(Arc::new(found.photo().clone()));
-        }
-        if let Some(frame) = &photo.mask_frame {
-            return Some(frame.clone());
-        }
-
-        let mut geometry = Document::new(photo.document.source.path.clone());
-        geometry.set_perspective(photo.document.perspective());
-        if let Some((rect, angle)) = photo.document.crop() {
-            geometry.set_crop(rect, angle);
-        }
-        geometry.set_rotation(photo.document.rotation());
-        geometry.set_mirrored(photo.document.mirrored());
-        let working = render::to_working_space(&geometry, &*photo.proxy, &photo.inputs);
-        Arc::new(render::apply_stack(&geometry, &working, 1.0))
+    let made = match mask_frame_job(state)? {
+        Ok(frame) => return Some(frame),
+        Err(job) => job.make(),
     };
-
     if let Some(photo) = state.open.borrow_mut().as_mut() {
         photo.mask_frame = Some(made.clone());
     }
     Some(made)
+}
+
+pub(super) fn mask_frame_job(state: &App) -> Option<Result<Arc<image::RgbImage>, MaskFrameJob>> {
+    let open = state.open.borrow();
+    let photo = open.as_ref()?;
+    if let Some(found) = &photo.segmentation {
+        return Some(Ok(Arc::new(found.photo().clone())));
+    }
+    if let Some(frame) = &photo.mask_frame {
+        return Some(Ok(frame.clone()));
+    }
+    let mut geometry = Document::new(photo.document.source.path.clone());
+    geometry.set_perspective(photo.document.perspective());
+    if let Some((rect, angle)) = photo.document.crop() {
+        geometry.set_crop(rect, angle);
+    }
+    geometry.set_rotation(photo.document.rotation());
+    geometry.set_mirrored(photo.document.mirrored());
+    Some(Err(MaskFrameJob { geometry, proxy: photo.proxy.clone(), inputs: photo.inputs.clone() }))
+}
+
+pub(super) struct MaskFrameJob {
+    geometry: Document,
+    proxy: Arc<LinearImage>,
+    inputs: render::RenderInputs,
+}
+
+impl MaskFrameJob {
+    pub(super) fn make(self) -> Arc<image::RgbImage> {
+        let working = render::to_working_space(&self.geometry, &*self.proxy, &self.inputs);
+        Arc::new(render::apply_stack(&self.geometry, &working, 1.0))
+    }
+}
+
+pub(super) fn keep_mask_frame(state: &App, frame: &Arc<image::RgbImage>, framing: &str) {
+    if let Some(photo) = state.open.borrow_mut().as_mut() {
+        if photo.mask_frame.is_none() && mask_framing(photo) == framing {
+            photo.mask_frame = Some(frame.clone());
+        }
+    }
+}
+
+pub(super) fn mask_framing(photo: &OpenPhoto) -> String {
+    serde_json::to_string(&render::mask_geometry(&photo.document).operations).unwrap_or_default()
 }
 
 pub(super) fn rebuild_mask_map(state: &App, index: usize) {
@@ -500,7 +545,8 @@ fn resolve_later(
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
-        let resolved = busy(&state, "Finding it in the photograph…", move || {
+
+        let resolved = busy_in(&state.zooming.waiting, move || {
             let started = std::time::Instant::now();
             render::resolve_mask(&mut mask, segmentation.as_deref(), embedding.as_deref(), None, width, height);
 
@@ -571,7 +617,7 @@ fn look_closer_later(state: &App, index: usize) {
     let state = state.clone();
     glib::spawn_future_local(async move {
         let asked = embedding.clone();
-        let landed = busy(&state, "Looking closer at what was clicked…", move || {
+        let landed = busy_in(&state.zooming.waiting, move || {
             owed.iter().filter(|at| asked.look_closer(at[0], at[1])).count() > 0
         })
         .await;

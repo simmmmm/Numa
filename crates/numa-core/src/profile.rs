@@ -129,6 +129,26 @@ pub fn prophoto_hue_of_srgb(degrees: f32) -> f32 {
     rgb_to_hsv(wide)[0] * 60.0
 }
 
+#[inline]
+fn floor_of(x: f32) -> f32 {
+    if x > 0.0 && x < 8_388_608.0 {
+        x as u32 as f32
+    } else {
+        x.floor()
+    }
+}
+
+#[inline]
+fn sixths(x: f32) -> f32 {
+    if (0.0..6.0).contains(&x) {
+        x
+    } else if x < 0.0 && x > -6.0 {
+        x + 6.0
+    } else {
+        x.rem_euclid(6.0)
+    }
+}
+
 pub fn rgb_to_hsv(rgb: [f32; 3]) -> [f32; 3] {
     let max = rgb[0].max(rgb[1]).max(rgb[2]);
     let min = rgb[0].min(rgb[1]).min(rgb[2]);
@@ -146,7 +166,7 @@ pub fn rgb_to_hsv(rgb: [f32; 3]) -> [f32; 3] {
         4.0 + (rgb[0] - rgb[1]) / range
     };
 
-    [hue.rem_euclid(6.0), range / max, max]
+    [sixths(hue), range / max, max]
 }
 
 fn hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
@@ -155,8 +175,8 @@ fn hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
         return [value; 3];
     }
 
-    let hue = hue.rem_euclid(6.0);
-    let sector = hue.floor();
+    let hue = sixths(hue);
+    let sector = floor_of(hue);
     let fraction = hue - sector;
 
     let p = value * (1.0 - saturation);
@@ -212,6 +232,15 @@ impl Table {
         }
     }
 
+    pub fn raw(&self) -> ([usize; 3], bool, bool, &[[f32; 3]]) {
+        (
+            [self.hue_divisions, self.sat_divisions, self.val_divisions],
+            matches!(self.value_encoding, ValueEncoding::Srgb),
+            self.scene_referred,
+            &self.entries,
+        )
+    }
+
     fn at(&self, hue: usize, saturation: usize, value: usize) -> [f32; 3] {
 
         self.entries[(value * self.hue_divisions + hue) * self.sat_divisions + saturation]
@@ -219,14 +248,14 @@ impl Table {
 
     fn lookup(&self, hsv: [f32; 3]) -> [f32; 3] {
         let hue = hsv[0] * self.hue_divisions as f32 / 6.0;
-        let hue_floor = hue.floor();
+        let hue_floor = floor_of(hue);
         let hue_fraction = hue - hue_floor;
         let hue0 = (hue_floor as isize).rem_euclid(self.hue_divisions as isize) as usize;
         let hue1 = (hue0 + 1) % self.hue_divisions;
 
         let saturation = (hsv[1] * (self.sat_divisions - 1) as f32)
             .clamp(0.0, (self.sat_divisions - 1) as f32);
-        let sat0 = saturation.floor() as usize;
+        let sat0 = floor_of(saturation) as usize;
         let sat1 = (sat0 + 1).min(self.sat_divisions - 1);
         let sat_fraction = saturation - sat0 as f32;
 
@@ -234,7 +263,7 @@ impl Table {
             let encoded = self.value_encoding.encode(hsv[2]);
             let value = (encoded * (self.val_divisions - 1) as f32)
                 .clamp(0.0, (self.val_divisions - 1) as f32);
-            let floor = value.floor() as usize;
+            let floor = floor_of(value) as usize;
             (floor, (floor + 1).min(self.val_divisions - 1), value - floor as f32)
         } else {
             (0, 0, 0.0)
@@ -271,7 +300,7 @@ impl Table {
 
         let [hue_shift, sat_scale, val_scale] = self.lookup(hsv);
 
-        hsv[0] = (hsv[0] + hue_shift / 60.0).rem_euclid(6.0);
+        hsv[0] = sixths(hsv[0] + hue_shift / 60.0);
         hsv[1] = (hsv[1] * sat_scale).clamp(0.0, 1.0);
         hsv[2] *= val_scale;
 
@@ -469,6 +498,10 @@ impl Look {
         }
     }
 
+    pub fn raw(&self) -> (&Table, Matrix3, Matrix3) {
+        (&self.table, self.into_prophoto, self.out_of_prophoto)
+    }
+
     pub fn apply(&self, pixel: [f32; 3]) -> [f32; 3] {
         let wide = multiply(&self.into_prophoto, pixel);
         let looked = self.table.apply(wide);
@@ -609,6 +642,31 @@ mod tests {
         for degrees in [0.0, 45.0, 137.0, 300.0, 359.0] {
             let hue = prophoto_hue_of_srgb(degrees);
             assert!((0.0..360.0).contains(&hue), "{degrees} produced {hue}");
+        }
+    }
+
+    #[test]
+    fn floor_and_sixths_are_the_library_ones() {
+        let same = |a: f32, b: f32| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        let mut check = |x: f32| {
+            assert!(same(floor_of(x), x.floor()), "floor {x:e}");
+            assert!(same(sixths(x), x.rem_euclid(6.0)), "sixths {x:e}");
+        };
+        for bits in (0..=16.0f32.to_bits()).step_by(61).chain((0..=16_777_216.0f32.to_bits()).step_by(1_000_003)) {
+            check(f32::from_bits(bits));
+            check(-f32::from_bits(bits));
+        }
+        for whole in -7..=7 {
+            let at = whole as f32;
+            let mut x = f32::from_bits(at.to_bits().saturating_sub(40));
+            for _ in 0..80 {
+                check(x);
+                x = f32::from_bits(x.to_bits() + 1);
+            }
+            check(at);
+        }
+        for x in [0.0, -0.0, 6.0, -6.0, 8_388_608.0, f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::MIN_POSITIVE, -f32::MIN_POSITIVE] {
+            check(x);
         }
     }
 

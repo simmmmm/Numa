@@ -74,10 +74,10 @@ pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") 
 ];
 
 #[cfg(not(target_os = "ios"))]
-const SUBJECT: (&str, &str, &[ModelFile]) = ("BiRefNet", "The subject, and its edges · MIT · 490 MB", &[(
-    "birefnet.onnx",
-    "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model_fp16.onnx",
-    489_666_272, "3654c741eb80bd926ada8fed1713b506ccf8d30eb1f6487e87eb9f234f33df09",
+const SUBJECT: (&str, &str, &[ModelFile]) = ("BiRefNet", "The subject, and its edges · MIT · 973 MB", &[(
+    "birefnet_f32.onnx",
+    "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model.onnx",
+    972_666_916, "58f621f00f5d756097615970a88a791584600dcf7c45b18a0a6267535a1ebd3c",
 )]);
 
 #[cfg(target_os = "ios")]

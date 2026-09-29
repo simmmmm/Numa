@@ -1,0 +1,4 @@
+Numa's own camera profiles. © 2026 Tijmen.
+
+Licensed under the GNU General Public License, version 3 or later, like the
+rest of Numa; see LICENSE at the top of the source tree.

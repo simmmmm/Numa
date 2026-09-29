@@ -13,11 +13,14 @@ artifact named in `docs/AGENT_GUIDE.md` (§5) after every round of docs.
 
 Needs python-markdown and Pillow, which this machine has.
 """
+import base64
+import hashlib
 import html
 import pathlib
 import re
 import shutil
 import sys
+import urllib.request
 
 import markdown
 from markdown.extensions.toc import slugify as plain_slug
@@ -84,6 +87,7 @@ def render(path: pathlib.Path) -> tuple[str, str, str, list]:
     body = re.sub(r'href="#(?!' + re.escape(slug) + r'--)([^"]+)"', lambda m: f'href="#{slug}--{m.group(1)}"', body)
     body = figures(body)
     body = local_images(body, path)
+    body = remote_images(body)
     body = chips(body)
     body = body.replace("<table>", '<div class="table"><table>').replace("</table>", "</table></div>")
     body = re.sub(r'<a href="(https?://[^"]+)">', r'<a href="\1" target="_blank" rel="noopener">', body)
@@ -128,6 +132,30 @@ def local_images(body: str, path: pathlib.Path) -> str:
             shutil.copy2(source, copy)
         return f'src="{where}"'
     return re.sub(r'src="(?!https?:|data:|shots/)([^"]+)"', local, body)
+
+
+def remote_images(body: str) -> str:
+    """A picture from another site — the README's badges — as a data: URI,
+    because the artifact's page may load no image from elsewhere. Fetched
+    once and kept in `.remote/`, which is not published; left as it was, with
+    a warning, when it cannot be fetched."""
+    def inline(match):
+        url = html.unescape(match.group(2))
+        kept = OUT / ".remote" / hashlib.sha1(url.encode()).hexdigest()
+        if not kept.exists():
+            try:
+                # Named: shields.io refuses Python's own User-Agent (403).
+                asked = urllib.request.Request(url, headers={"User-Agent": "numa-docs-site"})
+                with urllib.request.urlopen(asked, timeout=10) as response:
+                    kind, data = response.headers.get_content_type(), response.read()
+            except OSError as err:
+                print(f"{url}: not inlined ({err})", file=sys.stderr)
+                return match.group(0)
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            kept.write_bytes(kind.encode() + b"\n" + data)
+        kind, _, data = kept.read_bytes().partition(b"\n")
+        return f'{match.group(1)}"data:{kind.decode()};base64,{base64.b64encode(data).decode()}"'
+    return re.sub(r'(<img\b[^>]*?\bsrc=)"(https?://[^"]+)"', inline, body)
 
 
 def chips(body: str) -> str:

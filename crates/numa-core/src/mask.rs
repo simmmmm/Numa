@@ -999,6 +999,28 @@ impl Mask {
             && self.colour.is_identity()
     }
 
+    pub fn field_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let shape = Mask {
+            basic: Basic::local(),
+            curve: Curve::identity(),
+            channel_curves: Default::default(),
+            mixer: Mixer::default(),
+            point_colours: PointColours::default(),
+            grading: Grading::default(),
+            colour: Tint::default(),
+            name: None,
+            ..self.clone()
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_string(&shape).unwrap_or_default().hash(&mut hasher);
+        if let Some(stored) = &self.map.0 {
+            (Arc::as_ptr(stored) as usize, stored.width, stored.height).hash(&mut hasher);
+            stored.data.iter().step_by(997).for_each(|cell| cell.hash(&mut hasher));
+        }
+        hasher.finish()
+    }
+
     pub fn covers_nothing(&self) -> bool {
         !self.visible || self.opacity <= 0.0 || self.is_pending()
     }

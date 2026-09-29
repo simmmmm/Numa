@@ -45,28 +45,33 @@ impl Histogram {
 pub fn of(image: &RgbImage) -> Histogram {
     const STEP: usize = 4;
 
-    let mut histogram = Histogram {
-        channels: [[0; BINS]; 3],
-        shadow_clipped: 0,
-        highlight_clipped: 0,
-        total: 0,
-    };
-
-    for pixel in image.pixels().step_by(STEP) {
+    let mut bins = [[[0u32; BINS]; 3]; 2];
+    let mut ends = [0u32; 2];
+    let mut total = 0;
+    let mut tally = |bins: &mut [[u32; BINS]; 3], pixel: &[u8]| {
         for channel in 0..3 {
-            histogram.channels[channel][pixel[channel] as usize] += 1;
+            bins[channel][pixel[channel] as usize] += 1;
         }
 
-        if pixel.0.iter().any(|value| *value == 0) {
-            histogram.shadow_clipped += 1;
+        ends[0] += u32::from(pixel[0].min(pixel[1]).min(pixel[2]) == 0);
+        ends[1] += u32::from(pixel[0].max(pixel[1]).max(pixel[2]) == 255);
+        total += 1;
+    };
+    let [even, odd] = &mut bins;
+    let mut pixels = image.as_raw().chunks_exact(3).step_by(STEP);
+    while let Some(first) = pixels.next() {
+        tally(even, first);
+        if let Some(second) = pixels.next() {
+            tally(odd, second);
         }
-        if pixel.0.iter().any(|value| *value == 255) {
-            histogram.highlight_clipped += 1;
-        }
-        histogram.total += 1;
     }
 
-    histogram
+    Histogram {
+        channels: std::array::from_fn(|channel| std::array::from_fn(|bin| bins[0][channel][bin] + bins[1][channel][bin])),
+        shadow_clipped: ends[0],
+        highlight_clipped: ends[1],
+        total,
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

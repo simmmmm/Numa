@@ -327,7 +327,8 @@ scale highlight {
 /* IO-012: the arrow beside Export is an icon, not a word, and the padding that
    makes a labelled button comfortable makes this one look like a mistake. */
 .toolbar-row .linked button.suggested-action:not(:first-child),
-headerbar .linked button.suggested-action:not(:first-child) {
+headerbar .linked button.suggested-action:not(:first-child),
+headerbar .linked menubutton.before-more > button {
     padding-left: 4px;
     padding-right: 4px;
     min-width: 20px;
@@ -373,6 +374,23 @@ headerbar .linked button.suggested-action:not(:first-child) {
     background: alpha(black, 0.25);
 }
 
+/* PERF-052: the strip is a list view, which draws nothing of its own here:
+   the ground is the strip's, and the frames are 6 px apart with 8 px at
+   either end, as they were in a box. */
+listview.filmstrip-frames {
+    background: none;
+    color: inherit;
+    padding: 6px 5px;
+}
+
+listview.filmstrip-frames > row {
+    padding: 0;
+    margin: 0 3px;
+    background: none;
+    min-height: 0;
+    min-width: 0;
+}
+
 .filmstrip-frame {
     padding: 2px;
     min-height: 0;
@@ -402,6 +420,30 @@ headerbar .linked button.suggested-action:not(:first-child) {
 
 .strip-badge.rejected {
     color: #ff9a8a;
+}
+
+/* LIB-003, UX-024: the bar's stars and flags, RatingAndFlags. Quiet until
+   set; set, they are white — Numa's accent on every client, not the system's
+   — and a rejected frame's stars and its cross are the reject's red. */
+.bar-rating button {
+    padding-left: 4px;
+    padding-right: 4px;
+    opacity: 0.45;
+}
+
+.bar-rating button:hover {
+    opacity: 0.85;
+}
+
+.bar-rating button.rated {
+    opacity: 1;
+    color: @window_fg_color;
+}
+
+.bar-rating.rejected button.rated,
+.bar-rating button.rejected {
+    opacity: 1;
+    color: #ff7a66;
 }
 
 /* MASK-004: what the panel is currently about. Tinted rather than quiet: the

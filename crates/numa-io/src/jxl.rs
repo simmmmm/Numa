@@ -202,7 +202,8 @@ pub fn encode(pixels: &[u16], width: u32, height: u32, space: ColourSpace, quali
         }
 
         let settings = (library.settings)(encoder, std::ptr::null());
-        check((library.set_option)(settings, SETTING_EFFORT, 7), "the effort")?;
+
+        check((library.set_option)(settings, SETTING_EFFORT, if lossless { 7 } else { 3 }), "the effort")?;
         match lossless {
             true => check((library.set_lossless)(settings, 1), "lossless")?,
             false => check((library.set_distance)(settings, distance(quality as f32)), "the quality")?,

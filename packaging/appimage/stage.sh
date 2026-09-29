@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 APPDIR="$ROOT_DIR/packaging/appimage/AppDir"
-BIN="$ROOT_DIR/target/release/numa"
+BIN="$ROOT_DIR/target/dist/numa"
 ICON_SRC="$ROOT_DIR/data/icons/hicolor/256x256/apps/com.tijmen.Numa.png"
 DESKTOP_SRC="$ROOT_DIR/data/com.tijmen.Numa.desktop"
 
 if [[ ! -f "$BIN" ]]; then
-  echo "Release binary not found: $BIN" >&2
-  echo "Run: cargo build --release" >&2
+  echo "Shipped binary not found: $BIN" >&2
+  echo "Run: cargo build --profile dist" >&2
   exit 1
 fi
 

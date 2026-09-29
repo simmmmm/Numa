@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::borrow::Cow;
 
 use image::{ImageEncoder, RgbImage};
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use numa_core::image::LinearImage;
 use numa_render::{Frame, RenderInputs};
@@ -546,9 +545,15 @@ fn save_jpeg_or_png(
     let mut bytes: Vec<u8> = Vec::new();
     match settings.format {
         Format::Jpeg => {
-            let mut encoder = JpegEncoder::new_with_quality(&mut bytes, settings.quality.clamp(1, 100));
-            encoder.set_icc_profile(icc).map_err(|err| fail(err.to_string()))?;
-            encoder.encode_image(image).map_err(|err| fail(err.to_string()))?
+
+            let (width, height) = image.dimensions();
+            let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) else {
+                return Err(fail("a JPEG is at most 65 535 pixels a side".to_string()));
+            };
+            let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, settings.quality.clamp(1, 100));
+            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+            encoder.add_icc_profile(&icc).map_err(|err| fail(err.to_string()))?;
+            encoder.encode(image.as_raw(), width, height, jpeg_encoder::ColorType::Rgb).map_err(|err| fail(err.to_string()))?
         }
         Format::Png => {
             let mut encoder = PngEncoder::new(&mut bytes);

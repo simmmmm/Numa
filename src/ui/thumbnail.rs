@@ -4,6 +4,7 @@ use numa::io::thumbs;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 fn max_concurrent() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get().clamp(2, 8))
@@ -31,6 +32,18 @@ thread_local! {
     static DECODED: Cell<bool> = const { Cell::new(false) };
 
     static RENDERING: Cell<bool> = const { Cell::new(false) };
+
+    static WATCHER: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+pub fn watch(watcher: impl Fn() + 'static) {
+    WATCHER.set(Some(Rc::new(watcher)));
+}
+
+fn moved() {
+    if let Some(watcher) = WATCHER.with_borrow(|watcher| watcher.clone()) {
+        watcher();
+    }
 }
 
 pub fn progress() -> Option<(usize, usize, bool)> {
@@ -76,12 +89,14 @@ fn enqueue(
     });
     ASKED.set(ASKED.get() + 1);
     pump();
+    moved();
 }
 
 pub fn cancel_pending() {
     let dropped = QUEUE.with(|queue| queue.borrow_mut().drain(..).count());
     ASKED.set(ASKED.get().saturating_sub(dropped));
     settle();
+    moved();
 }
 
 fn pump() {
@@ -113,11 +128,12 @@ fn pump() {
 
             if let Ok(Ok(image)) = loaded {
 
-                (job.apply)(crate::ui::display::texture(image));
+                (job.apply)(crate::ui::display::texture(&image));
             }
 
             pump();
             settle();
+            moved();
         });
     }
 }

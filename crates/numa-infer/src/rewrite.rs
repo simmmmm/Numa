@@ -68,12 +68,11 @@ pub fn for_webgpu(model: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
     Ok(out)
 }
 
-fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
-    let graph_fields = fields(graph)?;
-    let nodes: Vec<Node> =
-        graph_fields.iter().filter(|field| field.number == 1).map(|field| Node::parse(field.bytes()?)).collect::<Result<_, _>>()?;
-    let producer: HashMap<&str, usize> =
-        nodes.iter().enumerate().flat_map(|(at, node)| node.outputs.iter().map(move |name| (*name, at))).collect();
+fn float_indices<'a>(
+    graph_fields: &[Field<'a>],
+    nodes: &[Node<'a>],
+    producer: &HashMap<&'a str, usize>,
+) -> Result<(HashMap<&'a str, i64>, HashMap<usize, Vec<u8>>), String> {
     let initializer_type: HashMap<&str, i64> = graph_fields
         .iter()
         .filter(|field| field.number == 5)
@@ -123,10 +122,24 @@ fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
             floatish.insert(name, to);
         }
     }
+    Ok((floatish, changed))
+}
+
+fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
+    let graph_fields = fields(graph)?;
+    let nodes: Vec<Node> =
+        graph_fields.iter().filter(|field| field.number == 1).map(|field| Node::parse(field.bytes()?)).collect::<Result<_, _>>()?;
+    let producer: HashMap<&str, usize> =
+        nodes.iter().enumerate().flat_map(|(at, node)| node.outputs.iter().map(move |name| (*name, at))).collect();
+    let (floatish, mut changed) = float_indices(&graph_fields, &nodes, &producer)?;
 
     let attentions = attentions(&graph_fields, &nodes, &producer);
     let folded: std::collections::HashSet<usize> =
         attentions.values().flat_map(|chain| chain[..chain.len() - 1].to_vec()).collect();
+
+    let deformables = if cfg!(target_vendor = "apple") { HashMap::new() } else { deformables(&nodes, &producer) };
+    let replaced: std::collections::HashSet<usize> = deformables.values().flat_map(|d| d.nodes.iter().copied()).collect();
+    let gone: std::collections::HashSet<&str> = replaced.iter().flat_map(|&at| nodes[at].outputs.iter().copied()).collect();
 
     let mut out: Vec<Cow<[u8]>> = Vec::new();
     let mut initializers: Vec<Vec<u8>> = Vec::new();
@@ -148,6 +161,10 @@ fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
                     for bytes in by_head(&nodes, chain) {
                         emit(&mut out, 1, bytes);
                     }
+                } else if let Some(deformable) = deformables.get(&at) {
+                    by_row(deformable, &floatish, &mut initializers).into_iter().for_each(|bytes| emit(&mut out, 1, bytes));
+                } else if replaced.contains(&at) {
+
                 } else if node.op == "Split" && node.outputs.len() > 8 {
                     let axis = node.int("axis").unwrap_or(0);
                     let sizes = node
@@ -186,7 +203,7 @@ fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
                 }
             }
 
-            13 if string(&fields(field.bytes()?)?, 1).is_some_and(|name| floatish.contains_key(name)) => {}
+            13 if string(&fields(field.bytes()?)?, 1).is_some_and(|name| floatish.contains_key(name) || gone.contains(name)) => {}
             _ => out.push(Cow::Borrowed(field.raw)),
         }
     }
@@ -194,6 +211,118 @@ fn rewrite_graph(graph: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
         emit(&mut out, 5, initializer);
     }
     Ok(out)
+}
+
+struct Deformable<'a> {
+
+    corners: Vec<[&'a str; 3]>,
+    modulator: &'a str,
+    weight: &'a str,
+    output: &'a str,
+
+    size: [i64; 4],
+
+    nodes: Vec<usize>,
+}
+
+fn deformables<'a>(nodes: &[Node<'a>], producer: &HashMap<&'a str, usize>) -> HashMap<usize, Deformable<'a>> {
+    let from = |name: &str, op: &str| producer.get(name).copied().filter(|&at| nodes[at].op == op);
+    let chain = |conv: usize| -> Option<Deformable<'a>> {
+        let reshape = from(nodes[conv].inputs[0], "Reshape")?;
+        let transpose = from(nodes[reshape].inputs[0], "Transpose")?;
+        let grid = from(nodes[transpose].inputs[0], "Reshape")?;
+        let modulated = from(nodes[grid].inputs[0], "Mul")?;
+        let sum = from(nodes[modulated].inputs[0], "Sum")?;
+        let shape = int64s(nodes[from(nodes[grid].inputs[1], "Constant")?].tensor("value")?);
+        let [1, channels, kernel, _, height, width] = shape[..] else { return None };
+        let mut replaced = vec![reshape, transpose, grid, modulated, sum, conv];
+        let mut corners = Vec::new();
+        for term in &nodes[sum].inputs {
+            let weighted = from(term, "Mul")?;
+            let rows = from(nodes[weighted].inputs[1], "Reshape")?;
+            let columns = from(nodes[rows].inputs[0], "Transpose")?;
+            let gather = from(nodes[columns].inputs[0], "GatherND")?;
+            corners.push([nodes[gather].inputs[0], nodes[gather].inputs[1], nodes[weighted].inputs[0]]);
+            replaced.extend([weighted, rows, columns, gather]);
+        }
+        (corners.len() == 4 && kernel > 1 && nodes[conv].inputs.len() == 2).then(|| Deformable {
+            corners,
+            modulator: nodes[modulated].inputs[1],
+            weight: nodes[conv].inputs[1],
+            output: nodes[conv].outputs[0],
+            size: [channels, kernel, height, width],
+            nodes: replaced,
+        })
+    };
+    nodes.iter().enumerate().filter(|(_, node)| node.op == "Conv").filter_map(|(at, _)| Some((at, chain(at)?))).collect()
+}
+
+fn by_row(d: &Deformable, floatish: &HashMap<&str, i64>, initializers: &mut Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    let [channels, kernel, height, width] = d.size;
+    let (pixels, base) = (height * width, d.output);
+    let mut constant = |what: String, values: &[i64]| {
+        let name = format!("{base}_{what}");
+        let raw: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        initializers.push(tensor(&name, &[values.len() as i64], INT64, &raw));
+        name
+    };
+    let taps = constant("taps".into(), &[kernel, pixels]);
+    let tap_pairs = constant("tap_pairs".into(), &[kernel, pixels, 2]);
+    let pixel_pairs = constant("pixel_pairs".into(), &[1, 1, pixels * kernel, 2]);
+    let pixel_weights = constant("pixel_weights".into(), &[1, 1, pixels * kernel, 1]);
+    let columns = constant("columns".into(), &[pixels, kernel * channels]);
+    let by_tap = constant("by_tap".into(), &[kernel * channels, -1]);
+    let image = constant("image".into(), &[1, -1, height, width]);
+    let (axis2, axis3) = (constant("axis2".into(), &[2]), constant("axis3".into(), &[3]));
+    let mut out = Vec::new();
+    let mut answers = Vec::new();
+    for row in 0..kernel {
+        let at = |what: &str| format!("{base}_row{row}_{what}");
+        let span = kernel * pixels;
+        let (i0, i1) = (constant(at("i0"), &[row * span]), constant(at("i1"), &[(row + 1) * span]));
+        let (k0, k1) = (constant(at("k0"), &[row * kernel]), constant(at("k1"), &[(row + 1) * kernel]));
+        let (r0, r1) = (constant(at("r0"), &[row]), constant(at("r1"), &[row + 1]));
+        let pixel_major = |out: &mut Vec<Vec<u8>>, from: &str, name: String| {
+            let slice = push(out, "Slice", format!("{name}_slice"), &[from, &k0, &k1, &axis3], &[]);
+            let grid = push(out, "Reshape", format!("{name}_grid"), &[&slice, &taps], &[]);
+            let turned = push(out, "Transpose", format!("{name}_turned"), &[&grid], &[ints_attribute("perm", &[1, 0])]);
+            push(out, "Reshape", format!("{name}_pixels"), &[&turned, &pixel_weights], &[])
+        };
+        let mut sum = String::new();
+        for (corner, [source, indices, weights]) in d.corners.iter().enumerate() {
+            let c = |what: &str| at(&format!("c{corner}_{what}"));
+            let slice = push(&mut out, "Slice", c("indices"), &[indices, &i0, &i1, &axis2], &[]);
+            let grid = push(&mut out, "Reshape", c("index_grid"), &[&slice, &tap_pairs], &[]);
+            let turned = push(&mut out, "Transpose", c("index_turned"), &[&grid], &[ints_attribute("perm", &[1, 0, 2])]);
+            let mut pairs = push(&mut out, "Reshape", c("index_pixels"), &[&turned, &pixel_pairs], &[]);
+            if floatish.contains_key(indices) {
+                pairs = push(&mut out, "Cast", c("index_i64"), &[&pairs], &[int_attribute("to", INT64)]);
+            }
+            let gathered = push(&mut out, "GatherND", c("gathered"), &[source, &pairs], &[int_attribute("batch_dims", 2)]);
+            let weight = pixel_major(&mut out, weights, c("weights"));
+            let term = push(&mut out, "Mul", c("weighted"), &[&weight, &gathered], &[]);
+            sum = if corner == 0 { term } else { push(&mut out, "Add", c("sum"), &[&sum, &term], &[]) };
+        }
+        let modulator = pixel_major(&mut out, d.modulator, at("modulator"));
+        let modulated = push(&mut out, "Mul", at("modulated"), &[&sum, &modulator], &[]);
+        let flat = push(&mut out, "Reshape", at("columns"), &[&modulated, &columns], &[]);
+        let kernel_row = push(&mut out, "Slice", at("kernel"), &[d.weight, &r0, &r1, &axis2], &[]);
+        let turned = push(&mut out, "Transpose", at("kernel_turned"), &[&kernel_row], &[ints_attribute("perm", &[2, 3, 1, 0])]);
+        let weights = push(&mut out, "Reshape", at("kernel_by_tap"), &[&turned, &by_tap], &[]);
+        answers.push(push(&mut out, "MatMul", at("answer"), &[&flat, &weights], &[]));
+    }
+    let mut total = answers[0].clone();
+    for (row, answer) in answers.iter().enumerate().skip(1) {
+        total = push(&mut out, "Add", format!("{base}_rows{row}"), &[&total, answer], &[]);
+    }
+    let turned = push(&mut out, "Transpose", format!("{base}_turned"), &[&total], &[ints_attribute("perm", &[1, 0])]);
+    out.push(new_node("Reshape", &format!("{base}_answer"), &[&turned, &image], &[d.output], &[]));
+    out
+}
+
+fn push(out: &mut Vec<Vec<u8>>, op: &str, name: String, inputs: &[&str], attributes: &[Vec<u8>]) -> String {
+    out.push(new_node(op, &name, inputs, &[&name], attributes));
+    name
 }
 
 const HEADS: usize = 12;
@@ -404,6 +533,16 @@ fn int_attribute(name: &str, value: i64) -> Vec<u8> {
     put_bytes(&mut out, 1, name.as_bytes());
     put_int(&mut out, 3, value);
     put_int(&mut out, 20, 2);
+    out
+}
+
+fn ints_attribute(name: &str, values: &[i64]) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_bytes(&mut out, 1, name.as_bytes());
+    for value in values {
+        put_int(&mut out, 8, *value);
+    }
+    put_int(&mut out, 20, 7);
     out
 }
 

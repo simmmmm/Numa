@@ -11,8 +11,7 @@ pub(super) fn render(path: &Path, max_edge: u32, edits: &str) -> Result<RgbImage
     let document: Document =
         serde_json::from_str(edits).map_err(|err| format!("{}: {err}", path.display()))?;
 
-    let linear = raw::decode_linear_any(path)?;
-    let proxy = linear.downscaled(max_edge.max(RENDER_EDGE)).unwrap_or(linear);
+    let (proxy, _) = raw::proxy_from_mosaic(path, max_edge.max(RENDER_EDGE))?;
 
     let document = numa_render::with_masks_resolved(&document, &proxy);
 

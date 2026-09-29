@@ -1,0 +1,25 @@
+[package]
+name = "numa-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+numa-core = { path = "../numa-core" }
+numa-render = { path = "../numa-render" }
+libc.workspace = true
+bytemuck = "1"
+log.workspace = true
+rayon.workspace = true
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "wgsl", "std"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["metal", "wgsl", "std"] }
+
+[dev-dependencies]
+numa-io = { path = "../numa-io" }
+env_logger.workspace = true
+image.workspace = true

@@ -9,7 +9,8 @@ older one it is not the lesser build any more.
 ./packaging/appimage/build.sh          # writes dist/Numa-<version>-x86_64.AppImage
 ```
 
-Needs Docker. Takes a few minutes; most of it is the release build.
+Needs Docker. Takes a few minutes; most of it is the release build
+(`--profile dist`, fat LTO: about three minutes on its own).
 
 ## Why it builds in a container
 
@@ -128,9 +129,9 @@ file to swap. Static linking does not, so a bare binary handed to someone is
 short of the obligation. The cheap way to satisfy it is to pass the source along
 with the AppImage; it is your code and any licence will do.
 
-**The application itself declares `LicenseRef-UNLICENSED`.** That is fine for
-giving a file to somebody — it only means they have no right to pass it on
-further. Publishing means choosing a licence.
+**The application itself is GPL-3.0-or-later.** Whoever passes the AppImage
+on passes on the source with it (or a written offer of it), and the tag the
+release was built from is that source.
 
 RawTherapee's camera profiles are GPL-3 and travel with their licence text and
 attribution; they are data files read at runtime rather than part of the

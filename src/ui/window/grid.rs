@@ -1,10 +1,39 @@
 use super::*;
 
+fn filter_of_this_place(state: &App, library: &Library) {
+    let key = {
+        let filter = state.libraries.filter.borrow();
+        match (&filter.album, &filter.person) {
+            _ if filter.all_libraries => "filter/everywhere".to_string(),
+            (Some(album), _) => format!("filter/album/{album}"),
+            (_, Some(person)) => format!("filter/person/{}", person.to_lowercase()),
+            _ => format!("filter/library/{}", library.id),
+        }
+    };
+
+    if state.libraries.shown.replace(Some(key.clone())).is_some_and(|shown| shown != key) {
+        let kept = state.catalog.recall::<Filter>(&key).unwrap_or_default();
+        let mut filter = state.libraries.filter.borrow_mut();
+        *filter = Filter {
+            sort: filter.sort,
+            reversed: filter.reversed,
+            all_libraries: filter.all_libraries,
+            album: filter.album.take(),
+            person: filter.person.take(),
+            ..kept
+        };
+    }
+
+    state.catalog.remember(GRID_FILTER, &*state.libraries.filter.borrow());
+    state.catalog.remember(&key, &*state.libraries.filter.borrow());
+    if let Some(show) = state.libraries.show_filter.borrow().as_ref() {
+        show();
+    }
+}
+
 pub(super) fn reload_grid(state: &App) {
 
     close_loupe(state);
-
-    state.catalog.remember(GRID_FILTER, &*state.libraries.filter.borrow());
 
     thumbnail::cancel_pending();
 
@@ -20,6 +49,7 @@ pub(super) fn reload_grid(state: &App) {
     state.grid.welcome.set_visible(false);
 
     refresh_picker(state);
+    filter_of_this_place(state, &library);
 
     let offline = state.catalog.is_offline(library.id) && !state.libraries.filter.borrow().spans_libraries();
     state.grid.offline.set_title(&format!(
@@ -33,6 +63,8 @@ pub(super) fn reload_grid(state: &App) {
         false => state.catalog.scale(library.id).unwrap_or_default(),
     });
 
+    let timed = std::time::Instant::now();
+    RELOADED.set(Some(timed));
     let filter = state.libraries.filter.borrow().clone();
     let photos = match filter.spans_libraries() {
         true => state.catalog.photos_everywhere(&filter),
@@ -58,28 +90,61 @@ pub(super) fn reload_grid(state: &App) {
     *state.grid.order.borrow_mut() = photos.iter().map(|photo| photo.id).collect();
 
     let edge = grid_edge(state);
-    let aspects: Vec<f32> = {
+    let found: Vec<(f32, bool)> = {
         use rayon::prelude::*;
         photos
             .par_iter()
-            .map(|photo| {
-                numa::io::thumbs::cached_size(&photo.path, photo.mtime, edge)
+            .map(|photo| match photo.aspect {
+                Some(aspect) => (aspect, false),
+                None => numa::io::thumbs::cached_size(&photo.path, photo.mtime, edge)
                     .or_else(|| numa::io::thumbs::cached_size(&photo.path, photo.mtime, GRID_THUMB_EDGE))
-                    .map_or(justified::UNKNOWN_ASPECT, |(width, height)| {
-                        width as f32 / height as f32
-                    })
+                    .map_or((justified::UNKNOWN_ASPECT, false), |(width, height)| {
+                        (width as f32 / height.max(1) as f32, true)
+                    }),
             })
             .collect()
     };
-    for (photo, aspect) in photos.iter().zip(aspects) {
-        state.grid.wall.append(&build_card(state, photo), aspect);
+    let learnt: Vec<(i64, f32)> =
+        photos.iter().zip(&found).filter(|(_, (_, read))| *read).map(|(photo, (aspect, _))| (photo.id, *aspect)).collect();
+    if !learnt.is_empty() {
+        if let Err(err) = state.catalog.set_aspects(&learnt) {
+            log::warn!("could not keep {} photographs' shapes: {err}", learnt.len());
+        }
+    }
+    let aspects_at = timed.elapsed();
+
+    let scale = state.libraries.scale.get();
+    let noted: Vec<bool> = photos.iter().map(|photo| !cull_note(photo, &scale).is_empty()).collect();
+    *state.grid.lazy.borrow_mut() = photos
+        .iter()
+        .map(|photo| LazyThumb::new(photo.id, photo.path.clone(), photo.mtime, photo.edited, edge))
+        .collect();
+    *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
+    state.grid.wall.fill(found.into_iter().map(|(aspect, _)| aspect).collect(), noted);
+    if timing() {
+        eprintln!(
+            "x-data: reload_grid {} cards: query+aspects {aspects_at:?}, cards {:?}",
+            state.grid.wall.len(),
+            timed.elapsed() - aspects_at
+        );
     }
 
-    let state = state.clone();
-    state.grid.scroller.clone().add_tick_callback(move |_, _| {
-        sweep_thumbnails(&state);
-        glib::ControlFlow::Break
-    });
+    sweep_thumbnails(state);
+}
+
+thread_local! {
+
+    static RELOADED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+pub(super) fn grid_shown(first: usize, last: usize, count: usize) {
+    if let Some(reloaded) = RELOADED.take().filter(|_| timing()) {
+        eprintln!(
+            "timing: grid shown, cards {first}..={last} of {count}, {:.0} ms after the reload, {:.0} ms after start",
+            reloaded.elapsed().as_secs_f64() * 1000.0,
+            since_start_ms()
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -90,11 +155,13 @@ pub(super) struct State {
 
     pub(super) welcome: adw::StatusPage,
 
-    pub(super) cards: Rc<RefCell<HashMap<i64, (Photo, gtk::Label)>>>,
+    pub(super) cards: Rc<RefCell<HashMap<i64, Photo>>>,
 
     pub(super) order: Rc<RefCell<Vec<i64>>>,
 
     pub(super) lazy: Rc<RefCell<Vec<LazyThumb>>>,
+
+    pub(super) learnt: Rc<RefCell<Vec<(i64, f32)>>>,
 
     pub(super) scroller: gtk::ScrolledWindow,
 
@@ -116,6 +183,7 @@ impl State {
             cards: Rc::new(RefCell::new(HashMap::new())),
             order: Rc::new(RefCell::new(Vec::new())),
             lazy: Rc::new(RefCell::new(Vec::new())),
+            learnt: Rc::default(),
             scroller: gtk::ScrolledWindow::new(),
             stale: Rc::new(Cell::new(false)),
             thumbnail_generation: Rc::new(Cell::new(0)),

@@ -44,7 +44,7 @@ fn library_path(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> 
     Some(root.join(LIBRARY_DIR).join("thumbs").join(key(within, mtime, max_edge, edits)))
 }
 
-fn library_root(path: &Path) -> Option<PathBuf> {
+pub(crate) fn library_root(path: &Path) -> Option<PathBuf> {
     static ROOTS: Mutex<Option<HashMap<PathBuf, Option<PathBuf>>>> = Mutex::new(None);
     let dir = path.parent()?;
     let mut roots = ROOTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -133,7 +133,7 @@ pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Resu
 
     let image = match edits {
         Some(edits) => edited::render(path, max_edge, edits)?,
-        None => raw::load_scaled(path, max_edge)?,
+        None => raw::load_thumbnail(path, max_edge)?,
     };
 
     let _ = candidates(path, mtime, max_edge, edits).find(|cached| {

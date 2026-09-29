@@ -103,6 +103,8 @@ pub struct Photo {
     pub suggested: Option<f32>,
 
     pub edited: bool,
+
+    pub aspect: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -448,6 +450,14 @@ impl Catalog {
             .unwrap_or(true);
         if !has_taken {
             conn.execute("ALTER TABLE photos ADD COLUMN taken INTEGER", []).map_err(text)?;
+        }
+
+        let has_aspect = conn
+            .prepare("SELECT * FROM photos LIMIT 0")
+            .map(|statement| statement.column_names().contains(&"aspect"))
+            .unwrap_or(true);
+        if !has_aspect {
+            conn.execute("ALTER TABLE photos ADD COLUMN aspect REAL", []).map_err(text)?;
         }
         back_up_weekly(&conn, &dir);
 
@@ -858,6 +868,7 @@ impl Catalog {
                     contrast: None,
                     suggested: None,
                     edited: false,
+                    aspect: None,
                 })
             })
             .map_err(text)?;
@@ -1481,6 +1492,9 @@ impl Catalog {
     pub fn apply_scan(&self, library: &Library, found: &Scan) -> Result<Changes, String> {
         let open = self.library(library.id)?;
         open.connected()?;
+        if found.unchanged {
+            return Ok(Changes::default());
+        }
 
         let tx = open.conn.unchecked_transaction().map_err(text)?;
         let mut changes = Changes::default();
@@ -1634,7 +1648,7 @@ impl Catalog {
                       ({best}) AS best_of_burst, \
                       a.faces, a.face_sharpness, a.suggested, p.edits IS NOT NULL AS edited, \
                       p.taken, a.burst, a.brightness, a.contrast, a.echo, a.exposure, a.focal35, \
-                      a.raw_clipped, a.raw_dark, a.eyes_closed \
+                      a.raw_clipped, a.raw_dark, a.eyes_closed, p.aspect \
                FROM photos p LEFT JOIN analysis a ON a.photo_id = p.id \
                WHERE p.rating >= ?1 \
                  AND (?2 IS NULL OR p.id IN (SELECT photo_id FROM album_photos WHERE album = ?2))"
@@ -1698,6 +1712,7 @@ impl Catalog {
                     raw_clipped: row.get(19)?,
                     raw_dark: row.get(20)?,
                     eyes_closed: row.get::<_, Option<i64>>(21)?.map(|closed| closed != 0),
+                    aspect: row.get::<_, Option<f64>>(22)?.map(|aspect| aspect as f32),
                 })
             })
             .map_err(text)?;
@@ -1705,6 +1720,32 @@ impl Catalog {
         rows.filter(|row| row.as_ref().map_or(true, |photo| filter.file_type.admits(&photo.path)))
             .collect::<Result<_, _>>()
             .map_err(text)
+    }
+
+    pub fn set_aspects(&self, aspects: &[(i64, f32)]) -> Result<(), String> {
+        let mut by_library: Vec<(i64, Vec<(i64, f64)>)> = Vec::new();
+        for &(id, aspect) in aspects {
+            let (library_id, local) = split_id(id);
+            match by_library.iter_mut().find(|(library, _)| *library == library_id) {
+                Some((_, rows)) => rows.push((local, aspect as f64)),
+                None => by_library.push((library_id, vec![(local, aspect as f64)])),
+            }
+        }
+        for (library_id, rows) in by_library {
+            let open = self.library(library_id)?;
+            if open.offline {
+                continue;
+            }
+            let tx = open.conn.unchecked_transaction().map_err(text)?;
+            {
+                let mut stmt = tx.prepare_cached("UPDATE photos SET aspect = ?1 WHERE id = ?2").map_err(text)?;
+                for (row, aspect) in rows {
+                    stmt.execute(params![aspect, row]).map_err(text)?;
+                }
+            }
+            tx.commit().map_err(text)?;
+        }
+        Ok(())
     }
 
     pub fn set_rating(&self, photo_id: i64, rating: u8) -> Result<(), String> {
@@ -1821,6 +1862,44 @@ impl Catalog {
                 "INSERT INTO history (photo_id, position, states) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(photo_id) DO UPDATE SET position = excluded.position, states = excluded.states",
                 params![local, position as i64, json],
+            )
+            .map_err(text)?;
+        Ok(())
+    }
+
+    pub fn found(&self, photo_id: i64, asked: &str) -> Option<crate::masks::Chips> {
+        let (open, local) = self.photo(photo_id).ok()?;
+        let (chips, grid): (String, Vec<u8>) = open
+            .conn
+            .query_row("SELECT chips, grid FROM found WHERE photo_id = ?1 AND asked = ?2", params![local, asked], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .ok()?;
+        let mut chips: crate::masks::Chips = serde_json::from_str(&chips).ok()?;
+        let (size, cells) = grid.split_at_checked(8)?;
+        let (width, height) = (u32::from_le_bytes(size[..4].try_into().ok()?), u32::from_le_bytes(size[4..].try_into().ok()?));
+        let mut raw = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(cells), &mut raw).ok()?;
+        if raw.len() != width as usize * height as usize {
+            return None;
+        }
+        chips.grid = (width as usize, height as usize, raw);
+        Some(chips)
+    }
+
+    pub fn save_found(&self, photo_id: i64, asked: &str, chips: &crate::masks::Chips) -> Result<(), String> {
+        let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
+        let (width, height, cells) = &chips.grid;
+        let mut grid = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut grid, cells).map_err(text)?;
+        let mut blob = [(*width as u32).to_le_bytes(), (*height as u32).to_le_bytes()].concat();
+        blob.extend(grid.finish().map_err(text)?);
+        open.conn
+            .execute(
+                "INSERT INTO found (photo_id, asked, chips, grid) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(photo_id) DO UPDATE SET asked = excluded.asked, chips = excluded.chips, grid = excluded.grid",
+                params![local, asked, serde_json::to_string(chips).map_err(text)?, blob],
             )
             .map_err(text)?;
         Ok(())
@@ -2040,6 +2119,10 @@ pub struct Scan {
 
     pub files: Vec<(PathBuf, i64, Option<i64>)>,
     pub complete: bool,
+
+    pub unchanged: bool,
+
+    pub folders: Vec<(PathBuf, Option<std::time::SystemTime>)>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2056,9 +2139,8 @@ impl Changes {
 }
 
 pub fn scan(root: &Path, known: &Known) -> Scan {
-    let (paths, complete) = walk_images(root);
-    Scan {
-        files: paths
+    let (paths, complete, folders) = walk_images(root);
+    let files: Vec<(PathBuf, i64, Option<i64>)> = paths
             .into_iter()
             .map(|path| {
                 let mtime = mtime_secs(&path);
@@ -2069,9 +2151,16 @@ pub fn scan(root: &Path, known: &Known) -> Scan {
                 };
                 (path, mtime, taken)
             })
-            .collect(),
-        complete,
-    }
+            .collect();
+
+    let unchanged = complete
+        && files.len() == known.len()
+        && files.iter().all(|(path, mtime, _)| known.get(path).is_some_and(|(was, _)| was == mtime));
+    Scan { files, complete, unchanged, folders }
+}
+
+pub fn moved(folders: &[(PathBuf, Option<std::time::SystemTime>)]) -> bool {
+    folders.iter().any(|(folder, was)| std::fs::metadata(folder).and_then(|meta| meta.modified()).ok() != *was)
 }
 
 fn mtime_secs(path: &Path) -> i64 {
@@ -2083,12 +2172,15 @@ fn mtime_secs(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-fn walk_images(root: &Path) -> (Vec<PathBuf>, bool) {
+fn walk_images(root: &Path) -> (Vec<PathBuf>, bool, Vec<(PathBuf, Option<std::time::SystemTime>)>) {
     let mut found = Vec::new();
     let mut complete = true;
     let mut pending = vec![root.to_path_buf()];
+    let mut folders = Vec::new();
 
     while let Some(dir) = pending.pop() {
+
+        folders.push((dir.clone(), std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok()));
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(err) => {
@@ -2125,7 +2217,7 @@ fn walk_images(root: &Path) -> (Vec<PathBuf>, bool) {
         }
     }
 
-    (found, complete)
+    (found, complete, folders)
 }
 
 #[cfg(test)]
@@ -2930,6 +3022,29 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
     }
 
     #[test]
+    fn an_unchanged_folder_is_seen_to_be() {
+        let root = temp_dir("unchanged");
+        std::fs::create_dir(root.join("day")).unwrap();
+        std::fs::write(root.join("day").join("a.jpg"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        let first = scan(&root, &Known::new());
+        assert!(!first.unchanged, "new to the catalog");
+        catalog.apply_scan(&library, &first).unwrap();
+
+        let again = scan(&root, &catalog.known_files(&library).unwrap());
+        assert!(again.unchanged);
+        assert_eq!(again.folders.len(), 2, "the library and its one folder");
+        assert!(!moved(&again.folders));
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("day").join("b.jpg"), b"x").unwrap();
+        assert!(moved(&again.folders), "a file added moves its folder");
+        assert!(!scan(&root, &catalog.known_files(&library).unwrap()).unchanged);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_selection_is_rated_at_once() {
         let (first, second) = (temp_dir("rate-first"), temp_dir("rate-second"));
         std::fs::write(first.join("a.RAF"), b"x").unwrap();
@@ -2998,6 +3113,28 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         let (states, position) = catalog.load_history(photo.id).unwrap().unwrap();
         assert_eq!((states.len(), position), (2, 0));
         assert_eq!(states[1].crop().map(|(rect, _)| rect), Some([0.1, 0.1, 0.8, 0.8]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn found_chips_come_back_for_the_same_question_only() {
+        let root = temp_dir("found");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap().remove(0);
+        assert!(catalog.found(photo.id, "framed").is_none());
+
+        let chips = crate::masks::Chips {
+            groups: vec![("Sky".into(), vec![2], 0.4), ("Animal".into(), vec![126], 0.02)],
+            animal: Some(("Bird".into(), 0.93)),
+            grid: (3, 2, vec![2, 2, 2, 126, 0, 149]),
+        };
+        catalog.save_found(photo.id, "framed", &chips).unwrap();
+        assert_eq!(catalog.found(photo.id, "framed"), Some(chips.clone()));
+        assert_eq!(catalog.found(photo.id, "cropped"), None, "asked about another frame");
+        assert_eq!(chips.coarse(&[2]), (3, 2, vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0]));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3436,6 +3573,33 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
     }
 
     #[test]
+    fn a_photographs_shape_is_kept() {
+        let root = temp_dir("aspect");
+        for name in ["a.RAF", "b.RAF"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+
+        let dir = root.join(LIBRARY_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        Connection::open(dir.join("catalog.db"))
+            .unwrap()
+            .execute_batch(&LIBRARY_SCHEMA.replace("edits  TEXT,", "edits  TEXT").replace("aspect REAL\n", ""))
+            .unwrap();
+
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert!(photos.iter().all(|photo| photo.aspect.is_none()));
+
+        catalog.set_aspects(&[(photos[0].id, 0.667)]).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert_eq!(photos[0].aspect, Some(0.667));
+        assert_eq!(photos[1].aspect, None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn the_order_is_the_shutter_and_not_the_copy() {
         let root = temp_dir("captured");
         for name in ["a.RAF", "b.RAF", "c.RAF"] {
@@ -3501,6 +3665,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
             contrast: None,
             suggested: None,
             edited: false,
+            aspect: None,
         };
         let photos = [photo(1, 30, 2, None), photo(2, 10, 5, Some(0.2)), photo(3, 20, 5, Some(0.9))];
         let order = |sort: Sort| {

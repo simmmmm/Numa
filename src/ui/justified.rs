@@ -12,6 +12,8 @@ const CHROME: f32 = 12.0;
 
 pub const UNKNOWN_ASPECT: f32 = 1.5;
 
+const PAD: f32 = 12.0;
+
 #[derive(Clone, Copy, Default)]
 struct Rect {
     x: f32,
@@ -29,6 +31,9 @@ struct Layout {
     rows: Vec<usize>,
 }
 
+type Make = Box<dyn Fn() -> gtk::Widget>;
+type Bind = Box<dyn Fn(&gtk::Widget, usize)>;
+
 mod imp {
     use super::*;
     use glib::subclass::Signal;
@@ -37,9 +42,21 @@ mod imp {
 
     #[derive(Default)]
     pub struct Justified {
-        pub(super) cards: RefCell<Vec<(gtk::Widget, f32)>>,
+
+        pub(super) aspects: RefCell<Vec<f32>>,
+        pub(super) noted: RefCell<Vec<bool>>,
         pub(super) selected: RefCell<Vec<bool>>,
         pub(super) layout: RefCell<Layout>,
+
+        pub(super) live: RefCell<Vec<(usize, gtk::Widget)>>,
+        pub(super) spare: RefCell<Vec<gtk::Widget>>,
+
+        pub(super) samples: RefCell<[Option<gtk::Widget>; 2]>,
+        pub(super) make: RefCell<Option<Make>>,
+        pub(super) bind: RefCell<Option<Bind>>,
+        pub(super) hadjustment: RefCell<Option<gtk::Adjustment>>,
+        pub(super) vadjustment: RefCell<Option<gtk::Adjustment>>,
+        pub(super) scrolled: RefCell<Option<glib::SignalHandlerId>>,
 
         pub(super) anchor: Cell<Option<usize>>,
         pub(super) cursor: Cell<Option<usize>>,
@@ -59,6 +76,7 @@ mod imp {
         const NAME: &'static str = "NumaJustified";
         type Type = super::Justified;
         type ParentType = gtk::Widget;
+        type Interfaces = (gtk::Scrollable,);
 
         fn class_init(klass: &mut Self::Class) {
             klass.set_accessible_role(gtk::AccessibleRole::Grid);
@@ -71,11 +89,51 @@ mod imp {
             SIGNALS.get_or_init(|| {
                 vec![
                     Signal::builder("selection-changed").build(),
-                    Signal::builder("card-activated")
-                        .param_types([gtk::Widget::static_type()])
-                        .build(),
+                    Signal::builder("card-activated").param_types([u64::static_type()]).build(),
                 ]
             })
+        }
+
+        fn properties() -> &'static [glib::ParamSpec] {
+            static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
+            PROPERTIES.get_or_init(|| {
+                ["hadjustment", "vadjustment", "hscroll-policy", "vscroll-policy"]
+                    .into_iter()
+                    .map(glib::ParamSpecOverride::for_interface::<gtk::Scrollable>)
+                    .collect()
+            })
+        }
+
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "hadjustment" => {
+                    let adjustment = value.get::<Option<gtk::Adjustment>>().ok().flatten();
+                    *self.hadjustment.borrow_mut() = Some(adjustment.unwrap_or_default());
+                }
+                "vadjustment" => {
+                    let adjustment = value.get::<Option<gtk::Adjustment>>().ok().flatten().unwrap_or_default();
+                    if let (Some(old), Some(handler)) = (self.vadjustment.take(), self.scrolled.take()) {
+                        old.disconnect(handler);
+                    }
+                    let handler = adjustment.connect_value_changed(glib::clone!(
+                        #[weak(rename_to = this)] self.obj(),
+                        move |_| this.queue_allocate()
+                    ));
+                    *self.scrolled.borrow_mut() = Some(handler);
+                    *self.vadjustment.borrow_mut() = Some(adjustment);
+                    self.obj().queue_allocate();
+                }
+
+                _ => {}
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "hadjustment" => self.hadjustment.borrow().to_value(),
+                "vadjustment" => self.vadjustment.borrow().to_value(),
+                _ => gtk::ScrollablePolicy::Minimum.to_value(),
+            }
         }
 
         fn constructed(&self) {
@@ -84,11 +142,14 @@ mod imp {
             self.spacing.set(SPACING);
             let obj = self.obj();
             obj.set_focusable(true);
+            obj.set_overflow(gtk::Overflow::Hidden);
             obj.install_input();
         }
 
         fn dispose(&self) {
-            self.cards.take();
+            self.live.take();
+            self.spare.take();
+            self.samples.take();
 
             while let Some(child) = self.obj().first_child() {
                 child.unparent();
@@ -96,46 +157,48 @@ mod imp {
         }
     }
 
+    impl ScrollableImpl for Justified {}
+
     impl WidgetImpl for Justified {
         fn request_mode(&self) -> gtk::SizeRequestMode {
-            gtk::SizeRequestMode::HeightForWidth
+            gtk::SizeRequestMode::ConstantSize
         }
 
-        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+
+            let row = self.row_height.get() as i32;
             match orientation {
-                gtk::Orientation::Horizontal => {
-                    let row = self.row_height.get() as i32;
-                    (row * 2, row * 6, -1, -1)
-                }
-                _ => {
-                    let width = if for_size > 0 { for_size } else { self.row_height.get() as i32 * 6 };
-                    let height = self.obj().height_for(width).ceil() as i32;
-                    (height, height, -1, -1)
-                }
+                gtk::Orientation::Horizontal => (row * 2, row * 6, -1, -1),
+                _ => (row, row * 4, -1, -1),
             }
         }
 
-        fn size_allocate(&self, width: i32, _height: i32, _baseline: i32) {
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
             let obj = self.obj();
-            obj.layout_for(width);
-            let layout = self.layout.borrow();
-            for ((card, _), rect) in self.cards.borrow().iter().zip(&layout.rects) {
-                card.size_allocate(
-                    &gtk::Allocation::new(
-                        rect.x.round() as i32,
-                        rect.y.round() as i32,
-                        (rect.width.round() as i32).max(1),
-                        (rect.height.round() as i32).max(1),
-                    ),
-                    -1,
-                );
+            obj.layout_for(obj.inner_width(width));
+            let content = self.layout.borrow().height as f64 + 2.0 * PAD as f64;
+            let (width, height) = (width as f64, height as f64);
+            if let Some(adjustment) = self.vadjustment.borrow().clone() {
+                let upper = content.max(height);
+                let value = adjustment.value().clamp(0.0, upper - height);
+                adjustment.configure(value, 0.0, upper, height * 0.1, height * 0.9, height);
             }
+            if let Some(adjustment) = self.hadjustment.borrow().clone() {
+                adjustment.configure(0.0, 0.0, width, width * 0.1, width * 0.9, width);
+            }
+            obj.place_cards(height as f32);
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             self.parent_snapshot(snapshot);
             let Some((x0, y0, x1, y1)) = self.band.get() else { return };
-            let rect = graphene::Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs());
+            let offset = self.obj().offset();
+            let rect = graphene::Rect::new(
+                x0.min(x1) + PAD,
+                y0.min(y1) + PAD - offset,
+                (x1 - x0).abs(),
+                (y1 - y0).abs(),
+            );
             let mut colour = self.obj().color();
             colour.set_alpha(0.12);
             snapshot.append_color(&colour, &rect);
@@ -152,7 +215,7 @@ mod imp {
 glib::wrapper! {
     pub struct Justified(ObjectSubclass<imp::Justified>)
         @extends gtk::Widget,
-        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
 }
 
 impl Default for Justified {
@@ -161,41 +224,77 @@ impl Default for Justified {
     }
 }
 
+const OVERSCAN: f32 = 0.5;
+
 impl Justified {
 
-    pub fn append(&self, card: &impl IsA<gtk::Widget>, aspect: f32) {
-        card.set_parent(self);
-        self.imp().cards.borrow_mut().push((card.clone().upcast(), aspect));
-        self.imp().selected.borrow_mut().push(false);
-        self.forget_layout();
+    pub fn set_factory(&self, make: impl Fn() -> gtk::Widget + 'static, bind: impl Fn(&gtk::Widget, usize) + 'static) {
+        *self.imp().make.borrow_mut() = Some(Box::new(make));
+        *self.imp().bind.borrow_mut() = Some(Box::new(bind));
     }
 
-    pub fn remove_all(&self) {
+    pub fn fill(&self, aspects: Vec<f32>, noted: Vec<bool>) {
         let imp = self.imp();
         let had_selection = imp.selected.borrow().contains(&true);
-        for (card, _) in imp.cards.take() {
-            card.unparent();
-        }
-        imp.selected.borrow_mut().clear();
+        let count = aspects.len();
+        *imp.aspects.borrow_mut() = aspects;
+        *imp.noted.borrow_mut() = noted;
+        *imp.selected.borrow_mut() = vec![false; count];
         imp.anchor.set(None);
         imp.cursor.set(None);
+
+        let live = imp.live.take();
+        for (_, card) in &live {
+            card.unset_state_flags(gtk::StateFlags::SELECTED);
+            card.set_child_visible(false);
+        }
+        imp.spare.borrow_mut().extend(live.into_iter().map(|(_, card)| card));
+        self.bind_samples();
+
         self.forget_layout();
         if had_selection {
             self.emit_by_name::<()>("selection-changed", &[]);
         }
     }
 
-    pub fn set_aspect(&self, card: &impl IsA<gtk::Widget>, aspect: f32) {
-        let imp = self.imp();
-        let card = card.as_ref();
-        {
-            let mut cards = imp.cards.borrow_mut();
-            let Some(entry) = cards.iter_mut().find(|(widget, _)| widget == card) else { return };
+    pub fn remove_all(&self) {
+        self.fill(Vec::new(), Vec::new());
+    }
 
-            if (entry.1 - aspect).abs() < 0.01 * aspect {
+    pub fn len(&self) -> usize {
+        self.imp().aspects.borrow().len()
+    }
+
+    pub fn aspect(&self, index: usize) -> Option<f32> {
+        self.imp().aspects.borrow().get(index).copied()
+    }
+
+    pub fn card(&self, index: usize) -> Option<gtk::Widget> {
+        self.imp().live.borrow().iter().find(|(at, _)| *at == index).map(|(_, card)| card.clone())
+    }
+
+    pub fn rebind(&self, index: usize) {
+        if let Some(card) = self.card(index) {
+            self.bind_card(&card, index);
+        }
+    }
+
+    pub fn rebind_all(&self) {
+        let live = self.imp().live.borrow().clone();
+        for (index, card) in live {
+            self.bind_card(&card, index);
+        }
+    }
+
+    pub fn set_aspect(&self, index: usize, aspect: f32) {
+        {
+            let mut aspects = self.imp().aspects.borrow_mut();
+            let Some(entry) = aspects.get_mut(index) else { return };
+
+            if (*entry - aspect).abs() < 0.01 * aspect {
                 return;
             }
-            entry.1 = aspect;
+            *entry = aspect;
         }
         self.relayout_holding_view();
     }
@@ -203,7 +302,7 @@ impl Justified {
     fn relayout_holding_view(&self) {
         let imp = self.imp();
 
-        let width = self.width();
+        let width = self.inner_width(self.width());
         let anchor = self.view().filter(|_| imp.layout.borrow().width == width).and_then(
             |(adjustment, top, _)| {
                 let layout = imp.layout.borrow();
@@ -217,47 +316,52 @@ impl Justified {
             self.layout_for(width);
             let now = imp.layout.borrow().rects[first].y;
             if now != was {
+
+                let content = imp.layout.borrow().height as f64 + 2.0 * PAD as f64;
+                adjustment.set_upper(adjustment.upper().max(content));
                 adjustment.set_value(adjustment.value() + (now - was) as f64);
             }
         }
     }
 
-    pub fn selected(&self) -> Vec<gtk::Widget> {
-        let imp = self.imp();
-        let selected = imp.selected.borrow();
-        imp.cards
-            .borrow()
-            .iter()
-            .zip(selected.iter())
-            .filter(|(_, on)| **on)
-            .map(|((card, _), _)| card.clone())
-            .collect()
+    pub fn selected(&self) -> Vec<usize> {
+        let selected = self.imp().selected.borrow();
+        selected.iter().enumerate().filter(|(_, on)| **on).map(|(index, _)| index).collect()
     }
 
-    pub fn card_at(&self, x: f64, y: f64) -> Option<gtk::Widget> {
-        let index = self.index_at(x as f32, y as f32)?;
-        Some(self.imp().cards.borrow()[index].0.clone())
+    pub fn index_at_point(&self, x: f64, y: f64) -> Option<usize> {
+        let (x, y) = self.to_layout(x, y);
+        self.index_at(x, y)
     }
 
-    pub fn is_selected(&self, card: &impl IsA<gtk::Widget>) -> bool {
-        self.index_of(card.as_ref()).is_some_and(|index| self.imp().selected.borrow()[index])
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.imp().selected.borrow().get(index).copied().unwrap_or(false)
     }
 
-    pub fn select_only(&self, card: &impl IsA<gtk::Widget>) {
-        if let Some(index) = self.index_of(card.as_ref()) {
+    pub fn select_only(&self, index: usize) {
+        if index < self.len() {
             self.select_only_index(index);
         }
     }
 
-    pub fn reveal(&self, card: &impl IsA<gtk::Widget>) {
-        if let Some(index) = self.index_of(card.as_ref()) {
-            self.scroll_to(index);
-        }
+    pub fn reveal(&self, index: usize) {
+        self.scroll_to(index);
     }
 
     pub fn unselect_all(&self) {
         let count = self.imp().selected.borrow().len();
         self.set_selection(vec![false; count]);
+    }
+
+    pub fn visible(&self) -> Option<(usize, usize)> {
+        let (width, height) = (self.width(), self.height());
+        if width <= 0 || height <= 0 || self.len() == 0 {
+            return None;
+        }
+        self.layout_for(self.inner_width(width));
+        let top = self.offset() - PAD;
+        let range = self.between(top, top + height as f32);
+        (!range.is_empty()).then(|| (range.start, range.end - 1))
     }
 
     pub fn connect_selection_changed<F: Fn(&Self) + 'static>(&self, f: F) {
@@ -268,17 +372,21 @@ impl Justified {
         );
     }
 
-    pub fn connect_card_activated<F: Fn(&Self, &gtk::Widget) + 'static>(&self, f: F) {
+    pub fn connect_card_activated<F: Fn(&Self, usize) + 'static>(&self, f: F) {
         self.connect_closure(
             "card-activated",
             false,
-            glib::closure_local!(move |this: &Self, card: &gtk::Widget| f(this, card)),
+            glib::closure_local!(move |this: &Self, index: u64| f(this, index as usize)),
         );
+    }
+
+    fn activate_card(&self, index: usize) {
+        self.emit_by_name::<()>("card-activated", &[&(index as u64)]);
     }
 
     fn forget_layout(&self) {
         self.imp().layout.borrow_mut().width = -1;
-        self.queue_resize();
+        self.queue_allocate();
     }
 
     pub fn row_height(&self) -> f32 {
@@ -296,12 +404,16 @@ impl Justified {
         self.relayout_holding_view();
     }
 
-    fn height_for(&self, width: i32) -> f32 {
-        let imp = self.imp();
-        if imp.layout.borrow().width == width {
-            return imp.layout.borrow().height;
-        }
-        self.justify(width).height
+    fn inner_width(&self, width: i32) -> i32 {
+        (width - 2 * PAD as i32).max(1)
+    }
+
+    fn offset(&self) -> f32 {
+        self.imp().vadjustment.borrow().as_ref().map_or(0.0, |adjustment| adjustment.value() as f32)
+    }
+
+    fn to_layout(&self, x: f64, y: f64) -> (f32, f32) {
+        (x as f32 - PAD, y as f32 + self.offset() - PAD)
     }
 
     fn layout_for(&self, width: i32) {
@@ -314,18 +426,105 @@ impl Justified {
 
     fn justify(&self, width: i32) -> Layout {
         let imp = self.imp();
-        let cards = imp.cards.borrow();
 
-        let captions: Vec<f32> = cards
-            .iter()
-            .map(|(card, _)| card.measure(gtk::Orientation::Vertical, -1).0 as f32)
-            .collect();
-        let aspects: Vec<f32> = cards.iter().map(|(_, aspect)| aspect.max(0.1)).collect();
+        let caption = self.caption_heights();
+        let captions: Vec<f32> = imp.noted.borrow().iter().map(|noted| caption[*noted as usize]).collect();
+        let aspects: Vec<f32> = imp.aspects.borrow().iter().map(|aspect| aspect.max(0.1)).collect();
         justify(&aspects, &captions, width as f32, imp.row_height.get(), imp.spacing.get())
     }
 
-    fn index_of(&self, card: &gtk::Widget) -> Option<usize> {
-        self.imp().cards.borrow().iter().position(|(widget, _)| widget == card)
+    fn bind_samples(&self) {
+        let imp = self.imp();
+        for noted in [false, true] {
+            let Some(index) = imp.noted.borrow().iter().position(|kind| *kind == noted) else { continue };
+            let sample = imp.samples.borrow()[noted as usize].clone();
+            let sample = match sample {
+                Some(sample) => sample,
+                None => {
+                    let Some(card) = self.make_card() else { return };
+                    imp.samples.borrow_mut()[noted as usize] = Some(card.clone());
+                    card
+                }
+            };
+            self.bind_card(&sample, index);
+        }
+    }
+
+    fn caption_heights(&self) -> [f32; 2] {
+        let samples = self.imp().samples.borrow();
+        [0, 1].map(|kind| {
+            samples[kind].as_ref().map_or(0.0, |card| card.measure(gtk::Orientation::Vertical, -1).0 as f32)
+        })
+    }
+
+    fn make_card(&self) -> Option<gtk::Widget> {
+        let card = self.imp().make.borrow().as_ref()?();
+        card.set_parent(self);
+        card.set_child_visible(false);
+        Some(card)
+    }
+
+    fn bind_card(&self, card: &gtk::Widget, index: usize) {
+        if let Some(bind) = self.imp().bind.borrow().as_ref() {
+            bind(card, index);
+        }
+        match self.is_selected(index) {
+            true => card.set_state_flags(gtk::StateFlags::SELECTED, false),
+            false => card.unset_state_flags(gtk::StateFlags::SELECTED),
+        }
+    }
+
+    fn between(&self, top: f32, bottom: f32) -> std::ops::Range<usize> {
+        let layout = self.imp().layout.borrow();
+        let (rows, count) = (&layout.rows, layout.rects.len());
+
+        let first = rows.partition_point(|start| layout.rects[*start].y <= top).saturating_sub(1);
+        let last = rows.partition_point(|start| layout.rects[*start].y <= bottom);
+        let start = rows.get(first).copied().unwrap_or(count);
+        let end = rows.get(last).copied().unwrap_or(count);
+        start..end.max(start)
+    }
+
+    fn place_cards(&self, height: f32) {
+        let imp = self.imp();
+        let offset = self.offset();
+        let reach = height * OVERSCAN;
+        let top = offset - PAD;
+        let wanted = self.between(top - reach, top + height + reach);
+
+        let (kept, gone): (Vec<_>, Vec<_>) = imp.live.take().into_iter().partition(|(index, _)| wanted.contains(index));
+        for (_, card) in gone {
+            card.set_child_visible(false);
+            imp.spare.borrow_mut().push(card);
+        }
+        let mut bound = vec![false; wanted.len()];
+        for (index, _) in &kept {
+            bound[index - wanted.start] = true;
+        }
+        *imp.live.borrow_mut() = kept;
+        for index in wanted.clone().filter(|index| !bound[index - wanted.start]) {
+            let card = imp.spare.borrow_mut().pop().or_else(|| self.make_card());
+            let Some(card) = card else { break };
+            self.bind_card(&card, index);
+            card.set_child_visible(true);
+            imp.live.borrow_mut().push((index, card));
+        }
+
+        let layout = imp.layout.borrow();
+        for (index, card) in imp.live.borrow().iter() {
+            let Some(rect) = layout.rects.get(*index) else { continue };
+
+            card.measure(gtk::Orientation::Horizontal, -1);
+            card.size_allocate(
+                &gtk::Allocation::new(
+                    (rect.x + PAD).round() as i32,
+                    (rect.y + PAD - offset).round() as i32,
+                    (rect.width.round() as i32).max(1),
+                    (rect.height.round() as i32).max(1),
+                ),
+                -1,
+            );
+        }
     }
 
     fn index_at(&self, x: f32, y: f32) -> Option<usize> {
@@ -343,8 +542,8 @@ impl Justified {
         if *imp.selected.borrow() == selection {
             return;
         }
-        for ((card, _), on) in imp.cards.borrow().iter().zip(&selection) {
-            if *on {
+        for (index, card) in imp.live.borrow().iter() {
+            if selection.get(*index).copied().unwrap_or(false) {
                 card.set_state_flags(gtk::StateFlags::SELECTED, false);
             } else {
                 card.unset_state_flags(gtk::StateFlags::SELECTED);
@@ -379,21 +578,22 @@ impl Justified {
     }
 
     fn view(&self) -> Option<(gtk::Adjustment, f32, f32)> {
-        let viewport = self.parent()?;
-        let scroller = self.ancestor(gtk::ScrolledWindow::static_type())?;
-        let adjustment = scroller.downcast::<gtk::ScrolledWindow>().ok()?.vadjustment();
-        let top = viewport.compute_point(self, &graphene::Point::new(0.0, 0.0))?.y();
-        Some((adjustment, top, top + viewport.height() as f32))
+        let adjustment = self.imp().vadjustment.borrow().clone()?;
+        let top = adjustment.value() as f32 - PAD;
+        Some((adjustment, top, top + self.height() as f32))
     }
 
     fn scroll_to(&self, index: usize) {
         let Some((adjustment, top, bottom)) = self.view() else { return };
+        self.layout_for(self.inner_width(self.width()));
         let Some(rect) = self.imp().layout.borrow().rects.get(index).copied() else { return };
 
         if rect.y < top {
-            adjustment.set_value(adjustment.value() - (top - rect.y + self.margin_top() as f32) as f64);
+            adjustment.set_value(adjustment.value() - (top - rect.y + PAD) as f64);
         } else if rect.y + rect.height > bottom {
-            let past = rect.y + rect.height - bottom + self.margin_bottom() as f32;
+            let past = rect.y + rect.height - bottom + PAD;
+            let content = self.imp().layout.borrow().height as f64 + 2.0 * PAD as f64;
+            adjustment.set_upper(adjustment.upper().max(content));
             adjustment.set_value(adjustment.value() + past as f64);
         }
     }
@@ -410,7 +610,7 @@ impl Justified {
                     modifiers.contains(gdk::ModifierType::CONTROL_MASK),
                     modifiers.contains(gdk::ModifierType::SHIFT_MASK),
                 );
-                let Some(index) = this.index_at(x as f32, y as f32) else {
+                let Some(index) = this.index_at_point(x, y) else {
                     if !ctrl && !shift {
                         this.unselect_all();
                     }
@@ -418,8 +618,7 @@ impl Justified {
                 };
 
                 if presses == 2 {
-                    let card = this.imp().cards.borrow()[index].0.clone();
-                    this.emit_by_name::<()>("card-activated", &[&card]);
+                    this.activate_card(index);
                 } else if shift {
                     this.select_run(index, ctrl);
                 } else if ctrl {
@@ -453,11 +652,20 @@ impl Justified {
             #[weak(rename_to = this)] self,
             move |gesture, dx, dy| {
                 let Some((x, y)) = gesture.start_point() else { return };
-                if this.imp().band.get().is_none() && dx.hypot(dy) < 6.0 {
-                    return;
-                }
-                let band = (x as f32, y as f32, (x + dx) as f32, (y + dy) as f32);
-                this.imp().band.set(Some(band));
+                let imp = this.imp();
+                let band = match imp.band.get() {
+                    None if dx.hypot(dy) < 6.0 => return,
+                    None => {
+                        let (x0, y0) = this.to_layout(x, y);
+                        let (x1, y1) = this.to_layout(x + dx, y + dy);
+                        (x0, y0, x1, y1)
+                    }
+                    Some((x0, y0, _, _)) => {
+                        let (x1, y1) = this.to_layout(x + dx, y + dy);
+                        (x0, y0, x1, y1)
+                    }
+                };
+                imp.band.set(Some(band));
                 this.select_band();
                 this.autoscroll();
             }
@@ -513,7 +721,7 @@ impl Justified {
                 })
                 .collect()
         };
-        if selection.len() == imp.cards.borrow().len() {
+        if selection.len() == self.len() {
             self.set_selection(selection);
         }
         self.queue_draw();
@@ -555,7 +763,7 @@ impl Justified {
 
     fn key(&self, key: gdk::Key, modifiers: gdk::ModifierType) -> glib::Propagation {
         let imp = self.imp();
-        let count = imp.cards.borrow().len();
+        let count = self.len();
         if count == 0 {
             return glib::Propagation::Proceed;
         }
@@ -577,8 +785,7 @@ impl Justified {
         let target = match key {
             gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter => {
                 if let Some(index) = cursor {
-                    let card = imp.cards.borrow()[index].0.clone();
-                    self.emit_by_name::<()>("card-activated", &[&card]);
+                    self.activate_card(index);
                 }
                 return glib::Propagation::Stop;
             }

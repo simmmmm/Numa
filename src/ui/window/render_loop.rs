@@ -104,6 +104,61 @@ pub(super) fn timing() -> bool {
     *ON.get_or_init(|| std::env::var_os("NUMA_TIMING").is_some())
 }
 
+pub(super) fn since_start_ms() -> f64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let started = stat.rsplit(')').next().and_then(|rest| rest.split_whitespace().nth(19)?.parse::<f64>().ok());
+    let uptime = std::fs::read_to_string("/proc/uptime").ok().and_then(|up| up.split_whitespace().next()?.parse::<f64>().ok());
+    match (started, uptime) {
+        (Some(ticks), Some(up)) => (up - ticks / 100.0) * 1000.0,
+        _ => 0.0,
+    }
+}
+
+pub(super) fn time_scrolling(widget: &impl IsA<gtk::Widget>, adjustment: &gtk::Adjustment, what: &'static str) {
+    if !timing() {
+        return;
+    }
+    fn main_thread_ms() -> f64 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap_or_default();
+        let fields: Vec<f64> = stat.rsplit(')').next().unwrap_or("").split_whitespace().filter_map(|f| f.parse().ok()).collect();
+        fields.get(11).zip(fields.get(12)).map_or(0.0, |(user, sys)| (user + sys) * 10.0)
+    }
+    let moved = Rc::new(Cell::new(std::time::Instant::now()));
+    let running = Rc::new(Cell::new(false));
+    let widget = widget.as_ref().clone();
+    adjustment.connect_value_changed(move |_| {
+        moved.set(std::time::Instant::now());
+        if running.replace(true) {
+            return;
+        }
+        let (moved, running) = (moved.clone(), running.clone());
+        let (gaps, previous, cpu) = (RefCell::new(Vec::<f64>::new()), Cell::new(None::<i64>), main_thread_ms());
+        widget.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            if let Some(previous) = previous.replace(Some(now)) {
+                gaps.borrow_mut().push((now - previous) as f64 / 1000.0);
+            }
+            if moved.get().elapsed() < std::time::Duration::from_millis(300) {
+                return glib::ControlFlow::Continue;
+            }
+            running.set(false);
+            let mut gaps = gaps.take();
+            gaps.sort_by(f64::total_cmp);
+            let at = |q: f64| gaps.get(((gaps.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(0.0);
+            eprintln!(
+                "timing: {what} scroll {} frames, median {:.1} ms, p95 {:.1} ms, max {:.1} ms, {} over 25 ms, main thread {:.0} cpu-ms",
+                gaps.len(),
+                at(0.5),
+                at(0.95),
+                at(1.0),
+                gaps.iter().filter(|gap| **gap > 25.0).count(),
+                main_thread_ms() - cpu
+            );
+            glib::ControlFlow::Break
+        });
+    });
+}
+
 pub(super) fn buffers(state: &App) -> String {
     let mut held = 0usize;
     let mut parts = Vec::new();
@@ -118,7 +173,7 @@ pub(super) fn buffers(state: &App) -> String {
         note("proxy", linear(&*photo.proxy));
         note("working", linear(&*photo.working));
         note("draft", photo.draft.as_deref().map_or(0, linear));
-        note("full", photo.full_working.as_deref().map_or(0, linear));
+        note("full", photo.full_working.as_deref().zip(photo.full_working_key.as_ref()).map_or(0, |(frame, (_, held))| held.bytes(frame)));
         note("tile", photo.view.as_ref().map_or(0, |view| linear(&view.image)));
         note("mask frame", photo.mask_frame.as_ref().map_or(0, |frame| frame.len()));
         note("denoised", photo.inputs.denoised.as_ref().map_or(0, |frame| frame.len() * 2));
@@ -175,13 +230,13 @@ pub(super) fn region_to_render(
 
 pub(super) fn present(
     state: &App,
-    mut rendered: image::RgbImage,
+    rendered: Picture,
     placement: Option<crate::ui::pixel_paintable::Placement>,
     backdrop: Option<image::RgbImage>,
     histogram: render::histogram::Histogram,
     wants_full: bool,
     have_full: bool,
-) {
+) -> Option<image::RgbImage> {
 
     write_zoom_label(state);
 
@@ -195,20 +250,16 @@ pub(super) fn present(
     state.info.histogram_area.queue_draw();
 
     if state.editor_page.before.is_active() {
-        return;
+        return match rendered {
+            Picture::Pixels(image) => Some(image),
+            _ => None,
+        };
     }
 
-    render::histogram::mark_clipping(
-        &mut rendered,
-        render::histogram::ClippingOverlay {
-            shadows: state.info.shadow_clip.is_active(),
-            highlights: state.info.highlight_clip.is_active(),
-        },
-    );
-
-    show(state, rendered, placement, backdrop);
+    let kept = show(state, rendered, placement, backdrop);
 
     refresh_render_info(state);
+    kept
 }
 
 pub(super) fn schedule_history_push(state: &App) {
@@ -339,27 +390,30 @@ pub(super) fn copy_image(state: &App) {
     });
 }
 
-pub(super) fn texture_from(image: image::RgbImage) -> gtk::gdk::Texture {
+pub(super) fn texture_from(image: &image::RgbImage) -> gtk::gdk::Texture {
     crate::ui::display::texture(image)
 }
 
 pub(super) fn show(
     state: &App,
-    image: image::RgbImage,
+    image: Picture,
     placement: Option<crate::ui::pixel_paintable::Placement>,
     backdrop: Option<image::RgbImage>,
-) {
-    let texture = texture_from(image);
+) -> Option<image::RgbImage> {
+
+    let (texture, kept) = image.texture(state);
+    let texture = texture?;
     let paintable = match placement {
         Some(placement) => crate::ui::pixel_paintable::PixelPaintable::with_placement(
             texture,
             placement,
-            backdrop.map(texture_from),
+            backdrop.as_ref().map(texture_from),
         ),
         None => crate::ui::pixel_paintable::PixelPaintable::new(texture),
     };
     state.canvas.set_paintable(Some(&paintable));
     apply_zoom(state);
+    kept
 }
 
 #[derive(Clone)]
@@ -400,9 +454,17 @@ pub(super) struct State {
     pub(super) planned: Rc<Cell<u64>>,
     pub(super) presented: Rc<Cell<u64>>,
 
-    pub(super) opened_at: Rc<Cell<Option<(std::time::Instant, bool)>>>,
+    pub(super) opened_at: Rc<Cell<Option<(std::time::Instant, bool, f32)>>>,
 
     pub(super) prefetch: super::prefetch::State,
+
+    pub(super) coming: Rc<RefCell<Option<Hold>>>,
+
+    pub(super) on_screen: Rc<RefCell<Option<(u64, Document, image::RgbImage)>>>,
+
+    pub(super) camera_view: Rc<RefCell<Option<(u64, ViewTile)>>>,
+
+    pub(super) draft_source: Rc<RefCell<Option<(std::sync::Weak<LinearImage>, u32, Arc<LinearImage>)>>>,
 }
 
 impl State {
@@ -429,6 +491,10 @@ impl State {
             presented: Rc::default(),
             opened_at: Rc::default(),
             prefetch: Default::default(),
+            coming: Rc::default(),
+            on_screen: Rc::default(),
+            camera_view: Rc::default(),
+            draft_source: Rc::default(),
         }
     }
 }

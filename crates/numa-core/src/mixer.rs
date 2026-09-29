@@ -17,7 +17,7 @@ const MAX_HUE_SHIFT: f32 = 30.0;
 
 const DIVISIONS: usize = 120;
 
-const MAX_GREY_STOPS: f32 = 2.0;
+pub const MAX_GREY_STOPS: f32 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]

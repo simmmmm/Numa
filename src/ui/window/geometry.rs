@@ -53,6 +53,7 @@ pub(super) fn forget_model_frames(state: &App) {
     let mut open = state.open.borrow_mut();
     let Some(photo) = open.as_mut() else { return };
     photo.segmentation = None;
+    photo.chips = None;
     photo.mask_frame = None;
     photo.segmenting = false;
     photo.embedding = None;
@@ -208,7 +209,8 @@ pub(super) const AUTO_EDGE: u32 = 900;
 
 pub(super) fn auto_tone(state: &App) {
 
-    let frame = mask_frame(state);
+    let frame = mask_frame_job(state);
+    let framing = state.open.borrow().as_ref().map(mask_framing).unwrap_or_default();
     let (width, height) = mask_raster_size(state);
     let (working, found) = {
         let open = state.open.borrow();
@@ -218,7 +220,13 @@ pub(super) fn auto_tone(state: &App) {
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
-        let measured = busy_until(&state, "Looking at the photograph…", std::time::Duration::ZERO, move || {
+
+        let measured = busy_in(&state.light.auto_waiting, move || {
+            let (frame, made) = match frame {
+                Some(Ok(frame)) => (Some(frame), false),
+                Some(Err(job)) => (Some(job.make()), true),
+                None => (None, false),
+            };
 
             let subject = frame.as_ref().and_then(|frame| {
                 let found = match found {
@@ -234,14 +242,18 @@ pub(super) fn auto_tone(state: &App) {
                 Some((found, alpha)) => (Some(found), alpha),
                 None => (None, None),
             };
-            (found, render::auto::tone(&working, alpha.as_deref()))
+            let kept = frame.filter(|_| made);
+            (found, render::auto::tone(&working, alpha.as_deref()), kept)
         })
         .await;
 
         if state.open_generation.get() != generation {
             return;
         }
-        let Ok((found, measured)) = measured else { return };
+        let Ok((found, measured, made)) = measured else { return };
+        if let Some(frame) = made {
+            keep_mask_frame(&state, &frame, &framing);
+        }
 
         if let (Some(found), Some(photo)) = (found, state.open.borrow_mut().as_mut()) {
             photo.segmentation = Some(found);

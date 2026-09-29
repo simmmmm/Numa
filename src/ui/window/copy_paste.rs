@@ -114,11 +114,10 @@ pub(super) fn copy_from_selection(state: &App) {
         return;
     }
 
-    let Some(child) = selected_cards(state).first().cloned() else {
+    let Some(id) = selected_ids(state).first().copied() else {
         state.toast("Select a photo to copy its settings");
         return;
     };
-    let Ok(id) = child.widget_name().parse::<i64>() else { return };
 
     match state.catalog.load_edits(id) {
         Ok(Some(document)) => {
@@ -256,10 +255,7 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
         return;
     }
 
-    let selected: Vec<i64> = selected_cards(state)
-        .iter()
-        .filter_map(|child| child.widget_name().parse::<i64>().ok())
-        .collect();
+    let selected = selected_ids(state);
 
     if selected.is_empty() {
         state.toast("Select photos first");
@@ -274,7 +270,7 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
         let existing = state.catalog.load_edits(*id).ok().flatten();
         let mut document = match (existing, state.grid.cards.borrow().get(id)) {
             (Some(document), _) => document,
-            (None, Some((photo, _))) => Document::new(photo.path.to_string_lossy().to_string()),
+            (None, Some(photo)) => Document::new(photo.path.to_string_lossy().to_string()),
             (None, None) => continue,
         };
         document.copy_from(source, parts);

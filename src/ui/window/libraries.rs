@@ -104,33 +104,40 @@ pub(super) fn refresh_folders(state: &App, library: &Library, photos: &[Photo]) 
 
 const SCAN_AT_MOST: std::time::Duration = std::time::Duration::from_secs(15);
 
-pub(super) fn rescan_in_background(state: &App) {
+pub(super) fn rescan_in_background(state: &App, changed: bool) {
     follow_drive(state);
     let Some(library) = state.libraries.current.borrow().clone() else { return };
 
     if folder_is_missing(&library.path) {
         return;
     }
-
+    let walked = state.libraries.walked.borrow().as_ref().filter(|(id, _)| *id == library.id).map(|(_, folders)| folders.clone());
     let now = std::time::Instant::now();
-    if state.libraries.scanned.get().is_some_and(|last| now.duration_since(last) < SCAN_AT_MOST) {
+    if !changed && walked.is_some() && state.libraries.scanned.get().is_some_and(|last| now.duration_since(last) < SCAN_AT_MOST) {
         return;
     }
     if state.libraries.scanning.replace(true) {
         return;
     }
     state.libraries.scanned.set(Some(now));
-    let known = state.catalog.known_files(&library).unwrap_or_default();
     let state = state.clone();
     glib::spawn_future_local(async move {
+        if let (false, Some(folders)) = (changed, walked) {
+            if matches!(gio::spawn_blocking(move || numa::io::catalog::moved(&folders)).await, Ok(false)) {
+                state.libraries.scanning.set(false);
+                return;
+            }
+        }
+        let known = state.catalog.known_files(&library).unwrap_or_default();
         let root = library.path.clone();
-        let found = gio::spawn_blocking(move || numa::io::catalog::scan(&root, &known)).await;
+        let found = gio::spawn_blocking(move || (numa::io::catalog::scan(&root, &known), far(&root))).await;
         state.libraries.scanning.set(false);
-        let Ok(found) = found else { return };
+        let Ok((found, far)) = found else { return };
 
         if state.libraries.current.borrow().as_ref().map(|open| open.id) != Some(library.id) {
             return;
         }
+        watch(&state, library.id, &found.folders, far);
         let changes = match state.catalog.apply_scan(&library, &found) {
             Ok(changes) => changes,
             Err(err) => {
@@ -158,6 +165,62 @@ pub(super) fn rescan_in_background(state: &App) {
     });
 }
 
+fn far(root: &Path) -> bool {
+    let remote = gio::File::for_path(root)
+        .query_filesystem_info("filesystem::remote", gio::Cancellable::NONE)
+        .map_or(true, |info| info.boolean("filesystem::remote"));
+    remote || root.starts_with("/run/media") || root.starts_with("/media")
+}
+
+fn watch(state: &App, library: i64, folders: &[(PathBuf, Option<std::time::SystemTime>)], far: bool) {
+    *state.libraries.walked.borrow_mut() = Some((library, folders.to_vec()));
+    let mut watching = state.libraries.watching.borrow_mut();
+    let wanted = if far { 0 } else { folders.len() };
+    let same = watching.0 == library
+        && watching.1.len() == wanted
+        && watching.1.iter().zip(folders).all(|((watched, _), (folder, _))| watched == folder);
+    if same {
+        return;
+    }
+
+    watching.1.clear();
+    watching.0 = library;
+    if far {
+        return;
+    }
+    for (folder, _) in folders {
+        let Ok(monitor) = gio::File::for_path(folder).monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE) else { continue };
+        monitor.connect_changed(glib::clone!(
+            #[strong] state,
+            move |_, file, _, event| {
+                use gio::FileMonitorEvent as Event;
+
+                let hidden = file.basename().is_some_and(|name| name.to_string_lossy().starts_with('.'));
+                let what = matches!(event, Event::Created | Event::Deleted | Event::MovedIn | Event::MovedOut | Event::Renamed | Event::ChangesDoneHint);
+                if what && !hidden {
+                    rescan_soon(&state);
+                }
+            }
+        ));
+        watching.1.push((folder.clone(), monitor));
+    }
+}
+
+fn rescan_soon(state: &App) {
+    if state.libraries.pending.replace(true) {
+        return;
+    }
+    let state = state.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+        if state.libraries.scanning.get() {
+            return glib::ControlFlow::Continue;
+        }
+        state.libraries.pending.set(false);
+        rescan_in_background(&state, true);
+        glib::ControlFlow::Break
+    });
+}
+
 pub(super) fn sync_in_background(state: &App, libraries: Vec<Library>, done: impl FnOnce(&App, usize) + 'static) {
     let state = state.clone();
     glib::spawn_future_local(async move {
@@ -173,6 +236,15 @@ pub(super) fn sync_in_background(state: &App, libraries: Vec<Library>, done: imp
         }
         done(&state, added);
     });
+}
+
+pub(super) async fn sync_library_beside(state: &App, library: &Library, label: &str) -> Result<usize, String> {
+    let known = state.catalog.known_files(library).unwrap_or_default();
+    let root = library.path.clone();
+    let found = busy(state, label, move || numa::io::catalog::scan(&root, &known))
+        .await
+        .map_err(|_| "the folder could not be read".to_string())?;
+    state.catalog.apply_scan(library, &found).map(|changes| changes.added)
 }
 
 pub(super) fn refused_offline(state: &App, ids: impl IntoIterator<Item = i64>, what: &str) -> bool {
@@ -279,6 +351,8 @@ pub(super) fn select_library_index(state: &App, index: u32) {
     *state.libraries.current.borrow_mut() = selected;
 
     reload_grid(state);
+
+    rescan_in_background(state, false);
 }
 
 pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<PathBuf>) {
@@ -286,11 +360,14 @@ pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<Path
         state.toast(&format!("{} is not connected — copying in waits until it is back", library.label()));
         return;
     }
+
+    let known = state.catalog.known_files(&library).unwrap_or_default();
     let state = state.clone();
     glib::spawn_future_local(async move {
         let folder = library.path.clone();
-        let Ok(copied) = busy(&state, "Copying into the library…", move || {
-            numa::io::catalog::copy_into(&dropped, &folder)
+        let Ok((copied, found)) = busy(&state, "Copying into the library…", move || {
+            let copied = numa::io::catalog::copy_into(&dropped, &folder);
+            (copied, numa::io::catalog::scan(&folder, &known))
         })
         .await
         else {
@@ -298,7 +375,7 @@ pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<Path
             return;
         };
 
-        if let Err(err) = state.catalog.sync_library(&library) {
+        if let Err(err) = state.catalog.apply_scan(&library, &found) {
             state.toast(&format!("Copied, but the library could not be rescanned: {err}"));
             return;
         }
@@ -328,6 +405,9 @@ pub(super) struct State {
     pub(super) all: Rc<RefCell<Vec<Library>>>,
     pub(super) filter: Rc<RefCell<Filter>>,
 
+    pub(super) shown: Rc<RefCell<Option<String>>>,
+    pub(super) show_filter: Rc<RefCell<Option<Box<dyn Fn()>>>>,
+
     pub(super) places: Rc<RefCell<Vec<Place>>>,
     pub(super) picker: gtk::DropDown,
 
@@ -340,6 +420,10 @@ pub(super) struct State {
     pub(super) scanning: Rc<Cell<bool>>,
 
     pub(super) scanned: Rc<Cell<Option<std::time::Instant>>>,
+
+    pub(super) walked: Rc<RefCell<Option<(i64, Vec<(PathBuf, Option<std::time::SystemTime>)>)>>>,
+    pub(super) watching: Rc<RefCell<(i64, Vec<(PathBuf, gio::FileMonitor)>)>>,
+    pub(super) pending: Rc<Cell<bool>>,
 
     pub(super) albums_menu: gio::Menu,
 
@@ -356,6 +440,8 @@ impl State {
             current: Rc::new(RefCell::new(None)),
             all: Rc::new(RefCell::new(Vec::new())),
             filter: Rc::new(RefCell::new(Filter::default())),
+            shown: Rc::default(),
+            show_filter: Rc::default(),
             places: Rc::new(RefCell::new(Vec::new())),
             shelves: gtk::Box::new(gtk::Orientation::Vertical, 0),
             picker: gtk::DropDown::from_strings(&[]),
@@ -365,6 +451,9 @@ impl State {
             switching: Rc::new(Cell::new(false)),
             scanning: Rc::new(Cell::new(false)),
             scanned: Rc::default(),
+            walked: Rc::default(),
+            watching: Rc::default(),
+            pending: Rc::default(),
             albums_menu: gio::Menu::new(),
             scale: Rc::new(Cell::new(cull::Scale::default())),
             analyse_button: Rc::default(),

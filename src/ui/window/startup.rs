@@ -11,6 +11,10 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
         #[strong] state,
         move || request_render(&state)
     ));
+
+    if !numa::core::power::frugal() {
+        std::thread::spawn(numa::io::lensfun::warm);
+    }
     reload_libraries(state);
 
     watch_cards(state);

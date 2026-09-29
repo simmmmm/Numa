@@ -214,7 +214,7 @@ pub(super) fn people_group(state: &App, photo: &OpenPhoto) -> Option<adw::Prefer
         }
         row.set_show_apply_button(true);
 
-        let picture = gtk::Image::from_paintable(Some(&texture_from(seen.portrait.clone())));
+        let picture = gtk::Image::from_paintable(Some(&texture_from(&seen.portrait)));
         picture.set_pixel_size(40);
         picture.set_valign(gtk::Align::Center);
         picture.add_css_class("face-portrait");
@@ -355,7 +355,10 @@ pub(super) fn refresh_render_info(state: &App) {
     let mut lines: Vec<String> = Vec::new();
     let (width, height) = (photo.full_size.0, photo.full_size.1);
     lines.push(match &photo.full_working {
-        Some(full) => format!("Loaded: {} × {} full", full.width, full.height),
+        Some(full) => match &photo.full_working_key {
+            Some((_, FullHeld::Parts(parts))) => format!("Loaded: {} × {} full, {} part{} of it", full.width, full.height, parts.len(), if parts.len() == 1 { "" } else { "s" }),
+            _ => format!("Loaded: {} × {} full", full.width, full.height),
+        },
         None => format!(
             "Loaded: {} × {} proxy of {width} × {height}",
             photo.proxy.width, photo.proxy.height
@@ -388,7 +391,7 @@ pub(super) fn refresh_render_info(state: &App) {
     let key = colour_key(&photo.document);
     if zoom > proxy_runs_out_at(photo) && !state.render.rendered_from_full.get() {
         let key_is_stale =
-            photo.full_working.is_some() && photo.full_working_key.as_ref() != Some(&key);
+            photo.full_working.is_some() && photo.full_working_key.as_ref().is_some_and(|(held_key, _)| *held_key != key);
         lines.push(
             match (state.render.loading_full.get(), state.render.failed_key.borrow().as_ref() == Some(&key)) {
                 (true, _) => "Waiting: the original is being decoded".to_string(),

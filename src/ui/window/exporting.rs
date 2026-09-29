@@ -91,7 +91,7 @@ impl Work {
         }
     }
 
-    fn describe(&self) -> Option<String> {
+    fn describe(&self) -> Option<(String, f64)> {
         use std::sync::atomic::Ordering::Relaxed;
         let (done, total) = (self.done.load(Relaxed), self.total.load(Relaxed));
         let name = match self.doing.load(Relaxed) {
@@ -101,8 +101,8 @@ impl Work {
             _ => return None,
         };
         Some(match total {
-            0 => name.to_string(),
-            total => format!("{name} {}%", done * 100 / total),
+            0 => (name.to_string(), 0.0),
+            total => (format!("{name} {}%", done * 100 / total), done as f64 / total as f64),
         })
     }
 }
@@ -133,17 +133,21 @@ fn develop_one(job: ExportJob, settings: &export::ExportSettings, work: &Work) -
     Ok((image, job.source.name(), raf))
 }
 
-fn follow(progress: &adw::Toast, work: &Work, title: String) -> glib::SourceId {
+fn follow(text: &gtk::Label, bar: &gtk::ProgressBar, work: &Work, title: String, (index, total): (usize, usize)) -> glib::SourceId {
     glib::timeout_add_local(
         std::time::Duration::from_millis(500),
         glib::clone!(
             #[strong] work,
-            #[weak] progress,
+            #[weak] text,
+            #[weak] bar,
             #[upgrade_or] glib::ControlFlow::Break,
             move || {
                 match work.describe() {
-                    Some(doing) => progress.set_title(&format!("{} — {doing}", title.trim_end_matches('…'))),
-                    None => progress.set_title(&title),
+                    Some((doing, part)) => {
+                        text.set_text(&format!("{} — {doing}", title.trim_end_matches('…')));
+                        bar.set_fraction((index as f64 + part) / total as f64);
+                    }
+                    None => text.set_text(&title),
                 }
                 glib::ControlFlow::Continue
             }
@@ -158,26 +162,22 @@ pub(super) fn run_export(
     directory: PathBuf,
 ) {
     let total = jobs.len();
-    let progress = adw::Toast::new(&format!("Exporting {total}…"));
-    progress.set_timeout(0);
 
     let cancel = Cancel::default();
 
     let work = Work::default();
     let has_models = settings.size == export::Size::Double
         || jobs.iter().any(|job| job.document.ai_denoise > 0.0 || job.document.ai_sharpen > 0.0);
-    if total > 1 || has_models {
-        progress.set_button_label(Some("Stop"));
-        progress.connect_button_clicked(glib::clone!(
-            #[strong] cancel,
+
+    let progress = (total > 1 || has_models).then(|| {
+        let (toast, text, bar) = progress_toast(state, &cancel);
+        toast.connect_button_clicked(glib::clone!(
             #[strong] work,
-            move |_| {
-                cancel.stop();
-                work.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+            move |_| work.stop.store(true, std::sync::atomic::Ordering::Relaxed)
         ));
-    }
-    state.toasts.add_toast(progress.clone());
+        text.set_text(&format!("Exporting {total}…"));
+        (toast, text, bar)
+    });
 
     let descriptions = descriptions(state, &jobs, &settings);
 
@@ -197,16 +197,25 @@ pub(super) fn run_export(
             }
             let title = match total {
                 1 => "Exporting…".to_string(),
-                _ => format!("Exporting {} of {total}…", index + 1),
+                _ => format!("Exporting {} of {total}", index + 1),
             };
-            progress.set_title(&title);
-            let ticker = follow(&progress, &work, title);
+            let ticker = progress.as_ref().map(|(_, text, bar)| {
+                text.set_text(&title);
+                bar.set_fraction(index as f64 / total as f64);
+                has_models.then(|| follow(text, bar, &work, title, (index, total)))
+            });
 
             let for_render = settings.clone();
             let job_source = job.source.clone();
             let worker = work.clone();
-            let result = busy(&state, "Exporting…", move || develop_one(job, &for_render, &worker)).await;
-            ticker.remove();
+            let develop = move || develop_one(job, &for_render, &worker);
+            let result = match &progress {
+                Some(_) => gtk::gio::spawn_blocking(develop).await,
+                None => busy(&state, "Exporting…", develop).await,
+            };
+            if let Some(ticker) = ticker.flatten() {
+                ticker.remove();
+            }
             if work.stopped() {
                 stopped = true;
                 collect(&mut written, &mut last, &mut failures, writing.take()).await;
@@ -243,7 +252,9 @@ pub(super) fn run_export(
         }
         collect(&mut written, &mut last, &mut failures, writing.take()).await;
 
-        progress.dismiss();
+        if let Some((toast, _, _)) = progress {
+            toast.dismiss();
+        }
         if stopped {
             state.toast(&format!(
                 "Stopped after {written} of {total} — those files are written"

@@ -5,14 +5,14 @@ export CARGO_TARGET_DIR=/tmp/target
 export PATH="/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0:$PATH"
 
 cd /src
-cargo build --release
+cargo build --profile dist
 
 APPDIR=/tmp/AppDir
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
-install -m 0755 "$CARGO_TARGET_DIR/release/numa" "$APPDIR/usr/bin/numa"
+install -m 0755 "$CARGO_TARGET_DIR/dist/numa" "$APPDIR/usr/bin/numa"
 install -m 0644 data/com.tijmen.Numa.desktop \
         "$APPDIR/usr/share/applications/com.tijmen.Numa.desktop"
 

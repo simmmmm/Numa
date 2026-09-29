@@ -134,6 +134,10 @@ pub fn seed_looks(folder: &Path) -> Result<(), String> {
 pub fn at_strength(base: &Document, preset: &Preset, amount: f32) -> Document {
     let mut target = base.clone();
     target.copy_from(&preset.document, preset.parts);
+
+    if !crate::raw::is_raw(Path::new(&base.source.path)) {
+        target.white_balance = base.white_balance;
+    }
     let t = amount.clamp(0.0, 1.0);
     if t >= 1.0 {
         return target;
@@ -455,6 +459,18 @@ mod tests {
         assert_eq!((grade.highlights.hue, grade.highlights.saturation), (200.0, 15.0), "no colour there to come from");
         let points: Vec<f32> = half.curve().points().iter().map(|p| p[1]).collect();
         assert!(points.iter().zip([0.05, 0.45, 1.0]).all(|(y, want)| (y - want).abs() < 1e-5), "{points:?}");
+    }
+
+    #[test]
+    fn a_presets_white_balance_is_for_raws() {
+        use numa_core::color::WhiteBalance;
+        let mut document = Document::new(String::new());
+        document.white_balance = Some(WhiteBalance { temperature: 3200.0, tint: 0.0 });
+        let preset = Preset { parts: EditParts { white_balance: true, ..EditParts::nothing() }, document };
+        let raw = at_strength(&Document::new("frame.RAF".into()), &preset, 1.0);
+        assert_eq!(raw.white_balance.map(|wb| wb.temperature), Some(3200.0));
+        let jpeg = at_strength(&Document::new("frame.jpg".into()), &preset, 1.0);
+        assert_eq!(jpeg.white_balance, None);
     }
 
     #[cfg(numa_looks)]

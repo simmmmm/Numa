@@ -5,7 +5,9 @@ for this memo, so every speed and memory figure below is either a published
 number (the source is named) or an estimate (it says so). This is not legal
 advice. It follows the rules in `Numa-mac-next/docs/LICENCES_AUDIT.md`: the
 paid Apple build needs weights **and** training data that allow commercial
-use; the free Linux build (PolyForm Noncommercial) can take NC models.
+use; the free Linux build can offer NC models as optional downloads, not in
+its packages. Since 29 September it is GPL-3.0, so its users may be
+commercial: an NC model says so where it is offered.
 
 | Feature | Recommendation | Apple | Linux | Effort |
 |---|---|---|---|---|
@@ -229,7 +231,7 @@ FFI + Swift (~150), writing the result to disk (~100). **8–12 days.**
    filled pixels on disk per spot, the way a model-made mask is already kept
    (commit 2b1d025), not re-run like LaMa. Licence: ComfyUI is GPL-3, but it is
    a separate process spoken to over HTTP; the model's licence is the user's
-   business, and Linux Numa is non-commercial anyway. Effort **4–6 days**.
+   business. Effort **4–6 days**.
    Risks: users without a GPU or without ComfyUI see nothing (hide it until a
    server answers); workflow JSON breaks when custom nodes change.
 3. **Apple: no prompt-based generation in v1.1.** Reasons: the only on-device

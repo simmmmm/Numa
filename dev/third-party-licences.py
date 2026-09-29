@@ -49,8 +49,10 @@ def main():
         for dep in nodes[at]["deps"]:
             if any(kind["kind"] in (None, "build") for kind in dep["dep_kinds"]):
                 todo.append(dep["pkg"])
-    # Numa's own crates, and path crates that are part of it.
-    crates = sorted((packages[i] for i in seen if i not in members and packages[i]["source"]), key=lambda p: (p["name"], p["version"]))
+    # Numa's own crates are the workspace's members. A path crate that is not
+    # one is third-party code carried in the tree (vendor/, PERF-021) and is
+    # listed like any other.
+    crates = sorted((packages[i] for i in seen if i not in members), key=lambda p: (p["name"], p["version"]))
 
     def files_of(package):
         folder = os.path.dirname(package["manifest_path"])

@@ -6,13 +6,19 @@ pub(super) struct State {
     pub(super) curve_area: gtk::DrawingArea,
 
     pub(super) curve_channel: Rc<Cell<usize>>,
+
+    pub(super) auto: gtk::Button,
+    pub(super) auto_waiting: Waiting,
 }
 
 impl State {
     pub(super) fn new() -> Self {
+        let auto = gtk::Button::new();
         Self {
             curve_area: gtk::DrawingArea::new(),
             curve_channel: Rc::new(Cell::new(0)),
+            auto_waiting: Waiting::new("Looking at the photograph", &auto),
+            auto,
         }
     }
 }
@@ -28,7 +34,20 @@ pub(super) fn build_light(
 
     light.append(&section_header("Tone"));
 
-    let auto_tone_button = gtk::Button::with_label("Auto");
+    let auto_tone_button = state.light.auto.clone();
+    let (word, spinner) = (gtk::Label::new(Some("Auto")), state.light.auto_waiting.spinner.clone());
+    let content = gtk::Stack::new();
+    content.add_child(&word);
+    content.add_child(&spinner);
+    spinner.connect_visible_notify(glib::clone!(
+        #[weak] content,
+        #[weak] word,
+        move |spinner| match spinner.get_visible() {
+            true => content.set_visible_child(spinner),
+            false => content.set_visible_child(&word),
+        }
+    ));
+    auto_tone_button.set_child(Some(&content));
     auto_tone_button.set_tooltip_text(Some(
         "Set exposure and the black and white points from this photograph",
     ));

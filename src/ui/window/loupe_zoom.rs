@@ -19,12 +19,18 @@ pub(super) struct State {
     busy: Rc<Cell<Option<i64>>>,
 
     pending: Rc<Cell<Option<((f64, f64), (f64, f64))>>>,
+
+    pub(super) waiting: Waiting,
+    held: Rc<RefCell<Option<Hold>>>,
 }
 
 impl State {
     pub(super) fn new() -> Self {
+        let scroller = gtk::ScrolledWindow::new();
         Self {
-            scroller: gtk::ScrolledWindow::new(),
+            waiting: Waiting::new("Developing at full size", &scroller),
+            held: Rc::default(),
+            scroller,
             level: Rc::new(Cell::new(0.0)),
             before: Rc::new(Cell::new(0.0)),
             long_edge: Rc::new(Cell::new(None)),
@@ -123,6 +129,15 @@ pub(super) fn full_for(state: &App, at: usize) -> Option<gtk::gdk::Texture> {
 
 pub(super) fn sharpening(state: &App) -> bool {
     zoomed(state) && state.loupe.at.get().is_some_and(|at| full_for(state, at).is_none())
+}
+
+pub(super) fn wait_while(state: &App, sharpening: bool) {
+    let mut held = state.loupe.zoom.held.borrow_mut();
+    match (sharpening, held.is_some()) {
+        (true, false) => *held = Some(state.loupe.zoom.waiting.hold()),
+        (false, true) => *held = None,
+        _ => {}
+    }
 }
 
 fn one_to_one(state: &App, x: f64, y: f64) {
@@ -280,6 +295,7 @@ pub(super) fn stepped(state: &App, centre: Option<(f64, f64)>) {
 }
 
 pub(super) fn reset(state: &App) {
+    state.loupe.zoom.held.take();
     state.loupe.zoom.level.set(0.0);
     state.loupe.zoom.pending.set(None);
     state.loupe.zoom.full.borrow_mut().clear();
@@ -312,7 +328,7 @@ fn develop_next(state: &App) {
                 if zoomed(&state) && near {
                     state.loupe.zoom.long_edge.set(Some(image.width().max(image.height())));
                     let centre = centre(&state);
-                    state.loupe.zoom.full.borrow_mut().insert(id, crate::ui::display::texture(image));
+                    state.loupe.zoom.full.borrow_mut().insert(id, crate::ui::display::texture(&image));
 
                     apply(&state);
                     if let Some(point) = centre {

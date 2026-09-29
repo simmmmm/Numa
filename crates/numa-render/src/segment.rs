@@ -25,6 +25,10 @@ pub fn model_path() -> PathBuf {
     numa_cull::faces::model_dir().join(file)
 }
 
+pub fn asked() -> String {
+    model_path().file_name().unwrap_or_default().to_string_lossy().to_string()
+}
+
 pub fn is_installed() -> bool {
     PLAN.loaded().unwrap_or_else(|| model_path().exists())
 }
@@ -99,6 +103,10 @@ impl Segmentation {
                 ((y / n as f64 + 0.5) / self.height as f64) as f32,
             ]
         })
+    }
+
+    pub fn winners(&self) -> (usize, usize, &[u16]) {
+        (self.width, self.height, &self.winner)
     }
 
     pub fn photo(&self) -> &RgbImage {
@@ -299,8 +307,10 @@ pub(crate) fn refine(guide: &Plane, coarse: &Plane) -> Alpha {
 pub fn of(image: &RgbImage) -> Option<Segmentation> {
     let plan = plan()?;
 
-    let square = imageops::resize(image, EDGE as u32, EDGE as u32, imageops::FilterType::Triangle);
-    let mut input = ndarray::Array4::<f32>::zeros((1, 3, EDGE, EDGE));
+    let edge = plan.side().unwrap_or(EDGE);
+
+    let square = imageops::resize(image, edge as u32, edge as u32, imageops::FilterType::Triangle);
+    let mut input = ndarray::Array4::<f32>::zeros((1, 3, edge, edge));
     for (x, y, pixel) in square.enumerate_pixels() {
         for channel in 0..3 {
             input[[0, channel, y as usize, x as usize]] =

@@ -115,6 +115,46 @@ pub fn guided_by(guide: &Plane, target: &Plane, radius: usize, epsilon: f32) -> 
     )
 }
 
+#[derive(Clone, Copy)]
+pub struct ToneShape {
+
+    pub small_radius: usize,
+
+    pub bloom_radius: Option<usize>,
+
+    pub texture: bool,
+    pub base_scale: f32,
+
+    pub detail_scale: f32,
+    pub glow: f32,
+    pub texture_scale: f32,
+}
+
+impl ToneShape {
+    pub const SUBSAMPLE: usize = SUBSAMPLE;
+    pub const EPSILON: f32 = EDGE_EPSILON;
+
+    pub fn new(width: usize, height: usize, [compress, clarity, texture]: [f32; 3]) -> Self {
+        let compress = compress.clamp(-1.0, 1.0) * MAX_COMPRESSION;
+        let clarity = clarity.clamp(-1.0, 1.0) * MAX_CLARITY;
+        let texture = texture.clamp(-1.0, 1.0) * MAX_TEXTURE;
+        let radius = ((width.max(height) as f32 * RADIUS_FRACTION) as usize).max(1);
+        Self {
+            small_radius: (radius / SUBSAMPLE).max(1),
+            bloom_radius: (clarity < 0.0).then(|| (((width.max(height) as f32 * BLOOM_FRACTION) as usize).max(1) / SUBSAMPLE).max(1)),
+            texture: texture != 0.0,
+            base_scale: 1.0 - compress,
+            detail_scale: 1.0 + clarity.max(0.0),
+            glow: (-clarity).max(0.0) * MAX_BLOOM,
+            texture_scale: 1.0 + texture,
+        }
+    }
+
+    pub fn texture_radius(frame_long: f32) -> usize {
+        ((frame_long * TEXTURE_FRACTION) as usize).max(1)
+    }
+}
+
 pub fn tone_map(
     data: &mut [f32],
     width: usize,
@@ -128,10 +168,7 @@ pub fn tone_map(
         return;
     }
     let settings = [compress, clarity, texture];
-
-    let compress = compress.clamp(-1.0, 1.0) * MAX_COMPRESSION;
-    let clarity = clarity.clamp(-1.0, 1.0) * MAX_CLARITY;
-    let texture = texture.clamp(-1.0, 1.0) * MAX_TEXTURE;
+    let shape = ToneShape::new(width, height, settings);
 
     let luminance: Vec<f32> = data
         .par_chunks_exact(3)
@@ -156,17 +193,12 @@ pub fn tone_map(
             (width as f32 / region[2]).max(height as f32 / region[3]),
         ),
         None => {
-            let radius = ((width.max(height) as f32 * RADIUS_FRACTION) as usize).max(1);
 
             let small = subsample(&log_luminance, SUBSAMPLE);
-            let small_radius = (radius / SUBSAMPLE).max(1);
-            let base_small = guided(&small, small_radius, EDGE_EPSILON);
+            let base_small = guided(&small, shape.small_radius, EDGE_EPSILON);
             let base = upsample(&base_small, width, height);
 
-            let bloom_small = (clarity < 0.0).then(|| {
-                let radius = ((width.max(height) as f32 * BLOOM_FRACTION) as usize).max(1);
-                blur(&small, (radius / SUBSAMPLE).max(1))
-            });
+            let bloom_small = shape.bloom_radius.map(|radius| blur(&small, radius));
             let bloom = bloom_small.as_ref().map(|glow| upsample(glow, width, height));
 
             let pivot = (base.data.iter().map(|v| *v as f64).sum::<f64>() / base.data.len() as f64) as f32;
@@ -184,16 +216,8 @@ pub fn tone_map(
         }
     };
 
-    let mid = (texture != 0.0).then(|| {
-        let radius = ((frame_long * TEXTURE_FRACTION) as usize).max(1);
-        guided(&log_luminance, radius, EDGE_EPSILON)
-    });
-
-    let base_scale = 1.0 - compress;
-
-    let detail_scale = 1.0 + clarity.max(0.0);
-    let glow = (-clarity).max(0.0) * MAX_BLOOM;
-    let texture_scale = 1.0 + texture;
+    let mid = shape.texture.then(|| guided(&log_luminance, ToneShape::texture_radius(frame_long), EDGE_EPSILON));
+    let ToneShape { base_scale, detail_scale, glow, texture_scale, .. } = shape;
 
     data.par_chunks_exact_mut(3)
         .enumerate()

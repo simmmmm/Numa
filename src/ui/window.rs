@@ -96,6 +96,7 @@ mod export_ui;
 mod panel;
 mod render_loop;
 mod render_job;
+mod card_render;
 mod zooming;
 mod geometry;
 mod overlays;
@@ -103,6 +104,7 @@ mod info;
 mod open;
 mod prefetch;
 use masks::*;
+use card_render::*;
 use colour::*;
 use effects::*;
 use filter::*;
@@ -308,8 +310,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let Some(catalog) = open_catalog_or_explain(app, &window) else { return window };
 
+    crate::ui::power::watch();
     downloads::start_gpu(&catalog);
     start_automatic_profile(&catalog);
+    start_preview_budget(&catalog);
 
     let canvas = gtk::Picture::new();
     canvas.set_can_shrink(true);
@@ -324,7 +328,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         libraries: libraries::State::new(),
         grid: grid::State::new(empty),
         open: Rc::new(RefCell::new(None)),
-        zooming: zooming::State::new(),
+        zooming: zooming::State::new(&canvas),
         stack: gtk::Stack::new(),
         canvas,
         colour: colour::State::new(),
@@ -435,25 +439,10 @@ fn install_window_lifecycle(state: &App, window: &adw::ApplicationWindow) {
         #[strong] state,
         move |window| {
             if window.is_active() {
-                rescan_in_background(&state);
+                rescan_in_background(&state, false);
             }
         }
     ));
-    glib::timeout_add_seconds_local(
-        60,
-        glib::clone!(
-            #[strong] state,
-            #[weak] window,
-            #[upgrade_or] glib::ControlFlow::Break,
-            move || {
-
-                if window.is_active() {
-                    rescan_in_background(&state);
-                }
-                glib::ControlFlow::Continue
-            }
-        ),
-    );
 
     window.connect_close_request(glib::clone!(
         #[strong] state,
@@ -507,14 +496,15 @@ struct OpenPhoto {
 
     segmenting: bool,
 
-    animal: Option<(std::sync::Weak<Segmentation>, numa::render::classify::Guess)>,
+    chips: Option<numa::io::masks::Chips>,
 
     full_size: (u32, u32),
 
     full_working: Option<Arc<LinearImage>>,
-    full_working_key: Option<ColourKey>,
 
-    full_native: Option<std::sync::Arc<LinearImage>>,
+    full_working_key: Option<(ColourKey, FullHeld)>,
+
+    full_native: Option<Native>,
 
     view: Option<ViewTile>,
 
