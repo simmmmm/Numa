@@ -1,3 +1,6 @@
+// Mostly DX12-only, but also compiled for Vulkan-on-Windows, which reuses
+// `dxgi::hdr` to query display HDR info. The DX12-only submodules stay gated
+// behind `dx12` in `dxgi/mod.rs`.
 #[cfg(any(dx12, all(vulkan, windows)))]
 pub(super) mod dxgi;
 
@@ -6,45 +9,53 @@ pub(super) mod renderdoc;
 
 pub mod db {
     pub mod amd {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x1002;
     }
     pub mod apple {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x106B;
     }
     pub mod arm {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x13B5;
     }
     pub mod broadcom {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x14E4;
     }
     pub mod imgtec {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x1010;
     }
     pub mod intel {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x8086;
         pub const DEVICE_KABY_LAKE_MASK: u32 = 0x5900;
         pub const DEVICE_SKY_LAKE_MASK: u32 = 0x1900;
     }
     pub mod mesa {
-
+        // Mesa does not actually have a PCI vendor id.
+        //
+        // To match Vulkan, we use the VkVendorId for Mesa in the gles backend so that lavapipe (Vulkan) and
+        // llvmpipe (OpenGL) have the same vendor id.
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x10005;
     }
     pub mod nvidia {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x10DE;
     }
     pub mod qualcomm {
-
+        /// cbindgen:ignore
         pub const VENDOR: u32 = 0x5143;
     }
 }
 
+/// Maximum binding size for the shaders that only support `i32` indexing.
+/// Interestingly, the index itself can't reach that high, because the minimum
+/// element size is 4 bytes, but the compiler toolchain still computes the
+/// offset at some intermediate point, internally, as i32.
 pub const MAX_I32_BINDING_SIZE: u32 = (1 << 31) - 1;
 
 pub use wgpu_naga_bridge::map_naga_stage;
@@ -69,6 +80,9 @@ impl crate::CopyExtent {
         }
     }
 
+    // Get the copy size at a specific mipmap level. This doesn't make most sense,
+    // since the copy extents are provided *for* a mipmap level to start with.
+    // But backends use `CopyExtent` more sparingly, and this piece is shared.
     pub fn at_mip_level(&self, level: u32) -> Self {
         Self {
             width: (self.width >> level).max(1),
@@ -108,20 +122,32 @@ impl crate::TextureCopy {
     }
 }
 
+/// Adjust `limits` to honor HAL-imposed maximums and comply with WebGPU's
+/// adapter capability guarantees.
 #[cfg_attr(not(any_backend), allow(dead_code))]
 pub(crate) fn adjust_raw_limits(mut limits: wgt::Limits) -> wgt::Limits {
-
+    // Apply hal limits.
     limits.max_bind_groups = limits.max_bind_groups.min(crate::MAX_BIND_GROUPS as u32);
     limits.max_vertex_buffers = limits
         .max_vertex_buffers
         .min(crate::MAX_VERTEX_BUFFERS as u32);
-
+    // Once we allow the 2 limits above to be higher than 24 we should use
+    // `cap_limits_to_be_under_the_sum_limit` to cap them under
+    // `max_bind_groups_plus_vertex_buffers`.
     const { assert!(crate::MAX_BIND_GROUPS + crate::MAX_VERTEX_BUFFERS == 24) };
     limits.max_bind_groups_plus_vertex_buffers = limits.max_bind_groups_plus_vertex_buffers.min(24);
     limits.max_color_attachments = limits
         .max_color_attachments
         .min(crate::MAX_COLOR_ATTACHMENTS as u32);
 
+    // Adjust limits according to WebGPU adapter capability guarantees.
+    // See <https://gpuweb.github.io/gpuweb/#adapter-capability-guarantees>.
+
+    // WebGPU requires maxBindingsPerBindGroup to be at least the sum of all
+    // per-stage limits multiplied with the maximum shader stages per pipeline.
+    //
+    // Since backends already report their maximum maxBindingsPerBindGroup,
+    // we need to lower all per-stage limits to satisfy this guarantee.
     const MAX_SHADER_STAGES_PER_PIPELINE: u32 = 2;
     let max_per_stage_resources =
         limits.max_bindings_per_bind_group / MAX_SHADER_STAGES_PER_PIPELINE;
@@ -138,6 +164,8 @@ pub(crate) fn adjust_raw_limits(mut limits: wgt::Limits) -> wgt::Limits {
         max_per_stage_resources,
     );
 
+    // Not required by the spec but dynamic buffers count
+    // towards non-dynamic buffer limits as well.
     limits.max_dynamic_uniform_buffers_per_pipeline_layout = limits
         .max_dynamic_uniform_buffers_per_pipeline_layout
         .min(limits.max_uniform_buffers_per_shader_stage);
@@ -172,6 +200,8 @@ pub(crate) fn adjust_raw_limits(mut limits: wgt::Limits) -> wgt::Limits {
     limits
 }
 
+/// Evenly allocates space to each limit,
+/// capping them only if strictly necessary.
 pub fn cap_limits_to_be_under_the_sum_limit<const N: usize>(
     mut limits: [&mut u32; N],
     sum_limit: u32,

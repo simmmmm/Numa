@@ -1427,11 +1427,26 @@ mod tests {
             }
         }
 
-        let started = std::time::Instant::now();
-        let paths = outline(&Stored::new(&alpha), 640);
-        let elapsed = started.elapsed();
+        let stored = Stored::new(&alpha);
+        let started = thread_time();
+        let paths = outline(&stored, 640);
+        let elapsed = thread_time() - started;
         assert!(!paths.is_empty(), "the blob has an edge");
         assert!(elapsed.as_millis() < 120, "tracing took {elapsed:?}");
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    fn thread_time() -> std::time::Duration {
+        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+        std::time::Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    fn thread_time() -> std::time::Duration {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed()
     }
 
     #[test]

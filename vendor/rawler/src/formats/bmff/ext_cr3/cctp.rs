@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use byteorder::{BigEndian, ReadBytesExt};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -33,6 +36,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for CctpBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 

@@ -16,23 +16,43 @@ use super::{conv, descriptor::DescriptorCounts, RawTlasInstance};
 use crate::TlasInstance;
 
 impl super::DeviceShared {
-
+    /// Set the name of `object` to `name`.
+    ///
+    /// If `name` contains an interior null byte, then the name set will be truncated to that byte.
+    ///
+    /// # Safety
+    ///
+    /// This method inherits the safety contract from [`vkSetDebugUtilsObjectName`]. In particular:
+    ///
+    /// - `object` must be a valid handle for one of the following:
+    ///   - An instance-level object from the same instance as this device.
+    ///   - A physical-device-level object that descends from the same physical device as this
+    ///     device.
+    ///   - A device-level object that descends from this device.
+    /// - `object` must be externally synchronized—only the calling thread should access it during
+    ///   this call.
+    ///
+    /// [`vkSetDebugUtilsObjectName`]: https://registry.khronos.org/vulkan/specs/latest/man/html/vkSetDebugUtilsObjectNameEXT.html
     pub(super) unsafe fn set_object_name(&self, object: impl vk::Handle, name: &str) {
         let Some(extension) = self.extension_fns.debug_utils.as_ref() else {
             return;
         };
 
+        // Keep variables outside the if-else block to ensure they do not
+        // go out of scope while we hold a pointer to them
         let mut buffer: [u8; 64] = [0u8; 64];
         let buffer_vec: Vec<u8>;
 
+        // Append a null terminator to the string
         let name_bytes = if name.len() < buffer.len() {
-
+            // Common case, string is very small. Allocate a copy on the stack.
             buffer[..name.len()].copy_from_slice(name.as_bytes());
-
+            // Add null terminator
             buffer[name.len()] = 0;
             &buffer[..name.len() + 1]
         } else {
-
+            // Less common case, the string is large.
+            // This requires a heap allocation.
             buffer_vec = name
                 .as_bytes()
                 .iter()
@@ -192,6 +212,7 @@ impl super::DeviceShared {
                 if let Some(multiview_mask) = multiview_mask {
                     mask = [multiview_mask.get()];
 
+                    // On Vulkan 1.1 or later, this is an alias for core functionality
                     multiview_info = vk::RenderPassMultiviewCreateInfoKHR::default()
                         .view_masks(&mask)
                         .correlation_masks(&mask);
@@ -263,7 +284,15 @@ impl MemoryProperties {
 }
 
 impl super::Device {
-
+    /// # Safety
+    ///
+    /// - `vk_image` must be created respecting `desc`
+    /// - If `drop_callback` is [`None`], wgpu-hal will take ownership of `vk_image`. If
+    ///   `drop_callback` is [`Some`], `vk_image` must be valid until the callback is called.
+    /// - If the `ImageCreateFlags` does not contain `MUTABLE_FORMAT`, the `view_formats` of `desc` must be empty.
+    /// - If `memory` is not [`super::TextureMemory::External`], wgpu-hal will take ownership of the
+    ///   memory (which is presumed to back `vk_image`). Otherwise, the memory must remain valid until
+    ///   `drop_callback` is called.
     pub unsafe fn texture_from_raw(
         &self,
         vk_image: vk::Image,
@@ -300,6 +329,7 @@ impl super::Device {
                 .get_physical_device_memory_properties(self.shared.physical_device)
         };
 
+        // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceMemoryProperties.html
         for (i, mem_ty) in mem_properties.memory_types_as_slice().iter().enumerate() {
             let types_bits = 1 << i;
             let is_required_memory_type = type_bits_req & types_bits != 0;
@@ -392,7 +422,8 @@ impl super::Device {
 
         let raw = unsafe { self.shared.raw.create_image(&vk_info, None) }.map_err(map_err)?;
         fn map_err(err: vk::Result) -> crate::DeviceError {
-
+            // We don't use VK_EXT_image_compression_control
+            // VK_ERROR_COMPRESSION_EXHAUSTED_EXT
             super::map_host_device_oom_and_ioca_err(err)
         }
         let mut req = unsafe { self.shared.raw.get_image_memory_requirements(raw) };
@@ -413,6 +444,11 @@ impl super::Device {
         })
     }
 
+    /// # Safety
+    ///
+    /// - Vulkan (with VK_KHR_external_memory_win32)
+    /// - The `d3d11_shared_handle` must be valid and respecting `desc`
+    /// - `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` flag is used because we need to hold a reference to the handle
     #[cfg(windows)]
     pub unsafe fn texture_from_d3d11_shared_handle(
         &self,
@@ -434,13 +470,15 @@ impl super::Device {
         let image =
             self.create_image_without_memory(desc, Some(&mut external_memory_image_info))?;
 
+        // Some external memory types require dedicated allocation
+        // https://docs.vulkan.org/guide/latest/extensions/external.html#_importing_memory
         let mut dedicated_allocate_info =
             vk::MemoryDedicatedAllocateInfo::default().image(image.raw);
 
         let mut import_memory_info = vk::ImportMemoryWin32HandleInfoKHR::default()
             .handle_type(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE)
             .handle(d3d11_shared_handle.0 as _);
-
+        // TODO: We should use `push_next` instead, but currently ash does not provide this method for the `ImportMemoryWin32HandleInfoKHR` type.
         #[allow(clippy::unnecessary_mut_passed)]
         {
             import_memory_info.p_next = <*const _>::cast(&mut dedicated_allocate_info);
@@ -473,6 +511,16 @@ impl super::Device {
         })
     }
 
+    /// Import a DMA-buf as a texture. Currently only supports single-plane DMA-bufs.
+    ///
+    /// # Safety
+    ///
+    /// - Requires `VULKAN_EXTERNAL_MEMORY_DMA_BUF` feature (implies VK_EXT_external_memory_dma_buf
+    ///   and VK_EXT_image_drm_format_modifier)
+    /// - The `fd` must be a valid DMA-buf file descriptor matching `desc`
+    /// - On success, Vulkan takes ownership of the file descriptor. On failure,
+    ///   the file descriptor is closed.
+    /// - The `drm_modifier`, `stride`, and `offset` must match the DMA-buf layout
     #[cfg(unix)]
     pub unsafe fn texture_from_dmabuf_fd(
         &self,
@@ -527,6 +575,8 @@ impl super::Device {
             Some(&mut drm_modifier_info),
         )?;
 
+        // Convert to raw fd. We must close it ourselves if any operation below
+        // fails, since Vulkan only takes ownership on successful vkAllocateMemory.
         let fd_raw = fd.into_raw_fd();
 
         let result = self.import_dmabuf_memory(
@@ -546,13 +596,17 @@ impl super::Device {
                 )
             }),
             Err(e) => {
-
+                // Clean up the VkImage on failure.
                 unsafe { self.shared.raw.destroy_image(image.raw, None) };
                 Err(e)
             }
         }
     }
 
+    /// Import DMA-buf memory and bind it to the image.
+    ///
+    /// On failure, the raw fd is closed (if not yet consumed by Vulkan) and the
+    /// caller is responsible for destroying the VkImage.
     #[cfg(unix)]
     fn import_dmabuf_memory(
         &self,
@@ -596,12 +650,15 @@ impl super::Device {
             .push_next(&mut import_memory_info)
             .push_next(&mut dedicated_allocate_info);
 
+        // vkAllocateMemory takes ownership of the fd on success.
+        // On failure, the fd is NOT consumed and we must close it.
         let memory = unsafe { self.shared.raw.allocate_memory(&memory_allocate_info, None) }
             .map_err(|e| {
                 unsafe { libc::close(fd_raw) };
                 super::map_host_device_oom_err(e)
             })?;
 
+        // From this point, the fd is consumed. Only VkDeviceMemory needs cleanup on error.
         unsafe { self.shared.raw.bind_image_memory(image, memory, 0) }.map_err(|e| {
             unsafe { self.shared.raw.free_memory(memory, None) };
             super::map_host_device_oom_err(e)
@@ -627,7 +684,8 @@ impl super::Device {
                 .map_err(map_err)?
         };
         fn map_err(err: vk::Result) -> crate::DeviceError {
-
+            // We don't use VK_NV_glsl_shader
+            // VK_ERROR_INVALID_SHADER_NV
             super::map_host_device_oom_err(err)
         }
 
@@ -739,6 +797,7 @@ impl super::Device {
             .stage(conv::map_shader_stage(stage_flags))
             .module(vk_module);
 
+        // Circumvent struct lifetime check because of a self-reference inside CompiledStage
         create_info.p_name = entry_point.as_ptr();
 
         Ok(CompiledStage {
@@ -751,6 +810,11 @@ impl super::Device {
         })
     }
 
+    /// Returns the queue family index of the device's internal queue.
+    ///
+    /// This is useful for constructing memory barriers needed for queue family ownership transfer when
+    /// external memory is involved (from/to `VK_QUEUE_FAMILY_EXTERNAL_KHR` and `VK_QUEUE_FAMILY_FOREIGN_EXT`
+    /// for example).
     pub fn queue_family_index(&self) -> u32 {
         self.shared.family_index
     }
@@ -819,6 +883,14 @@ impl super::Device {
         })
     }
 
+    /// Predict whether a proposed allocation will result in an OOM condition.
+    ///
+    /// If so, returns `Err(crate::DeviceError::OutOfMemory)`. If not, returns
+    /// `Ok(())`.
+    ///
+    /// The prediction quality depends on accurately selecting the heap that
+    /// [`gpu_allocator`] will use for the allocation, and is subject to
+    /// deteriorate if the logic in [`gpu_allocator`] changes.
     fn error_if_would_oom_on_resource_allocation(
         &self,
         location: gpu_allocator::MemoryLocation,
@@ -839,6 +911,7 @@ impl super::Device {
             return Ok(());
         };
 
+        // memory types not used by gpu-allocator
         let invalid_flags =
             vk::MemoryPropertyFlags::LAZILY_ALLOCATED | vk::MemoryPropertyFlags::PROTECTED;
 
@@ -950,7 +1023,7 @@ impl crate::Device for super::Device {
             .usage
             .contains(wgt::BufferUses::ACCELERATION_STRUCTURE_SCRATCH)
         {
-
+            // There is no way to specify this usage to Vulkan so we must make sure the alignment requirement is large enough.
             requirements.alignment = requirements
                 .alignment
                 .max(self.shared.private_caps.scratch_buffer_alignment as u64);
@@ -966,7 +1039,7 @@ impl crate::Device for super::Device {
                     ..requirements
                 },
                 location,
-                linear: true,
+                linear: true, // Buffers are always linear
                 allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             })
             .inspect_err(|_| {
@@ -1019,7 +1092,8 @@ impl crate::Device for super::Device {
                 unsafe { self.shared.raw.destroy_buffer(buffer.raw, None) };
             }
             super::BufferOwnership::External(_drop_guard) => {
-
+                // The caller owns the `vk::Buffer` and its memory. Dropping
+                // `_drop_guard` at the end of this arm runs the cleanup callback.
             }
         }
 
@@ -1060,7 +1134,7 @@ impl crate::Device for super::Device {
     unsafe fn unmap_buffer(&self, buffer: &super::Buffer) {
         match buffer.ownership {
             super::BufferOwnership::Managed(_) => {
-
+                // gpu-allocator maps the buffer when allocated and unmaps it when free'd
             }
             super::BufferOwnership::RawHandle | super::BufferOwnership::External(_) => {
                 crate::hal_usage_error("tried to unmap external buffer")
@@ -1255,7 +1329,8 @@ impl crate::Device for super::Device {
         }
 
         if desc.anisotropy_clamp != 1 {
-
+            // We only enable anisotropy if it is supported, and wgpu-hal interface guarantees
+            // the clamp is in the range [1, 16] which is always supported if anisotropy is.
             create_info = create_info
                 .anisotropy_enable(true)
                 .max_anisotropy(desc.anisotropy_clamp as f32);
@@ -1269,8 +1344,12 @@ impl crate::Device for super::Device {
 
         let raw = sampler_cache_guard.create_sampler(&self.shared.raw, create_info)?;
 
+        // Note: Cached samplers will just continually overwrite the label
+        //
+        // https://github.com/gfx-rs/wgpu/issues/6867
         if let Some(label) = desc.label {
-
+            // SAFETY: we are holding a lock on the sampler cache,
+            // so we can only be setting the name from one thread.
             unsafe { self.shared.set_object_name(raw, label) };
         }
 
@@ -1328,7 +1407,10 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::BindGroupLayoutDescriptor,
     ) -> Result<super::BindGroupLayout, crate::DeviceError> {
-
+        // Iterate through the entries and accumulate our Vulkan
+        // DescriptorSetLayoutBindings and DescriptorBindingFlags, as well as
+        // our binding map and our descriptor counts.
+        // Note: not bothering with on stack arrays here as it's low frequency
         let mut vk_bindings = Vec::new();
         let mut binding_flags = Vec::new();
         let mut binding_map = Vec::new();
@@ -1479,14 +1561,20 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::PipelineLayoutDescriptor<super::BindGroupLayout>,
     ) -> Result<super::PipelineLayout, crate::DeviceError> {
-
+        //Note: not bothering with on stack array here as it's low frequency
         let vk_set_layouts = desc
             .bind_group_layouts
             .iter()
             .map(|bgl| match bgl {
                 Some(bgl) => bgl.raw,
                 None => {
-
+                    // `VUID-VkPipelineLayoutCreateInfo-pSetLayouts-parameter`
+                    // says `VK_NULL_HANDLE` is allowed but
+                    // `VUID-VkPipelineLayoutCreateInfo-graphicsPipelineLibrary-06753`
+                    // says it's not, unless the `graphicsPipelineLibrary`
+                    // feature is enabled.
+                    //
+                    // We use an empty descriptor set layout to work around this.
                     self.shared.empty_descriptor_set_layout
                 }
             })
@@ -1574,6 +1662,12 @@ impl crate::Device for super::Device {
             unsafe { self.shared.set_object_name(set.raw(), label) };
         }
 
+        /// Helper for splitting off and initializing a given number of elements on a pre-allocated
+        /// stack, based on items returned from an [`ExactSizeIterator`].  Typically created from a
+        /// [`MaybeUninit`] slice (see [`Vec::spare_capacity_mut()`]).
+        /// The updated [`ExtensionStack`] of remaining uninitialized elements is returned, safely
+        /// representing that the initialized and remaining elements are two independent mutable
+        /// borrows.
         struct ExtendStack<'a, T> {
             remainder: &'a mut [MaybeUninit<T>],
         }
@@ -1601,8 +1695,15 @@ impl crate::Device for super::Device {
                     to_init.write(value);
                 }
 
-                let init = {
+                // we can't use the safe (yet unstable) MaybeUninit::write_slice() here because of having an iterator to write
 
+                let init = {
+                    // SAFETY: The loop above has initialized exactly as many items as to_init is
+                    // long, so it is safe to cast away the MaybeUninit<T> wrapper into T.
+
+                    // Additional safety docs from unstable slice_assume_init_mut
+                    // SAFETY: similar to safety notes for `slice_get_ref`, but we have a
+                    // mutable reference which is also guaranteed to be valid for writes.
                     unsafe { mem::transmute::<&mut [MaybeUninit<T>], &mut [T]>(to_init) }
                 };
                 (Self { remainder }, init)
@@ -1614,7 +1715,10 @@ impl crate::Device for super::Device {
         let mut buffer_infos = ExtendStack::from_vec_capacity(&mut buffer_infos);
         let mut image_infos = Vec::with_capacity(desc.samplers.len() + desc.textures.len());
         let mut image_infos = ExtendStack::from_vec_capacity(&mut image_infos);
-
+        // TODO: This length could be reduced to just the number of top-level acceleration
+        // structure bindings, where multiple consecutive TLAS bindings that are set via
+        // one `WriteDescriptorSet` count towards one "info" struct, not the total number of
+        // acceleration structure bindings to write:
         let mut acceleration_structure_infos =
             Vec::with_capacity(desc.acceleration_structures.len());
         let mut acceleration_structure_infos =
@@ -2197,7 +2301,7 @@ impl crate::Device for super::Device {
                 .closest_hit_shader(vk::SHADER_UNUSED_KHR)
                 .any_hit_shader(vk::SHADER_UNUSED_KHR)
                 .intersection_shader(vk::SHADER_UNUSED_KHR)
-                .general_shader(0)
+                .general_shader(0) // stages is empty so next index is 0.
                 .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL),
         );
 
@@ -2214,12 +2318,14 @@ impl crate::Device for super::Device {
                 .closest_hit_shader(vk::SHADER_UNUSED_KHR)
                 .any_hit_shader(vk::SHADER_UNUSED_KHR)
                 .intersection_shader(vk::SHADER_UNUSED_KHR)
-                .general_shader(1)
+                .general_shader(1) // stages always has one element so next index is 1.
                 .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL),
         );
 
         stages.push(compiled_miss.create_info);
 
+        // This is to keep alive the CStrings, as the ones in the loop would be deallocated
+        // causing UB otherwise.
         let mut compiled_stages = Vec::new();
 
         for group in desc.intersection {
@@ -2369,7 +2475,10 @@ impl crate::Device for super::Device {
         &self,
         desc: &wgt::QuerySetDescriptor<crate::Label>,
     ) -> Result<super::QuerySet, crate::DeviceError> {
-
+        // Assume each query is 256 bytes. This is the case for occlusion
+        // queries on an AMD W6800 with driver version 32.0.12030.9. The
+        // size and allocation policy may vary; this is an approximate
+        // check only.
         self.error_if_would_oom_on_resource_allocation(
             gpu_allocator::MemoryLocation::GpuToCpu,
             &vk::MemoryRequirements {
@@ -2485,7 +2594,7 @@ impl crate::Device for super::Device {
     unsafe fn start_graphics_debugger_capture(&self) -> bool {
         #[cfg(feature = "renderdoc")]
         {
-
+            // Renderdoc requires us to give us the pointer that vkInstance _points to_.
             let raw_vk_instance =
                 vk::Handle::as_raw(self.shared.instance.raw.handle()) as *mut *mut _;
             let raw_vk_instance_dispatch_table = unsafe { *raw_vk_instance };
@@ -2500,7 +2609,7 @@ impl crate::Device for super::Device {
     unsafe fn stop_graphics_debugger_capture(&self) {
         #[cfg(feature = "renderdoc")]
         {
-
+            // Renderdoc requires us to give us the pointer that vkInstance _points to_.
             let raw_vk_instance =
                 vk::Handle::as_raw(self.shared.instance.raw.handle()) as *mut *mut _;
             let raw_vk_instance_dispatch_table = unsafe { *raw_vk_instance };
@@ -2559,7 +2668,15 @@ impl crate::Device for super::Device {
                             .vertex_format(conv::map_vertex_format(triangles.vertex_format))
                             .max_vertex(triangles.vertex_count)
                             .vertex_stride(triangles.vertex_stride)
-
+                            // The vulkan spec suggests we could pass a non-zero invalid address here if fetching
+                            // the real address has significant overhead, but we pass the real one to be on the
+                            // safe side for now.
+                            // from https://registry.khronos.org/vulkan/specs/latest/man/html/vkGetAccelerationStructureBuildSizesKHR.html
+                            // > The srcAccelerationStructure, dstAccelerationStructure, and mode members
+                            // > of pBuildInfo are ignored. Any VkDeviceOrHostAddressKHR or VkDeviceOrHostAddressConstKHR
+                            // > members of pBuildInfo are ignored by this command, except that the hostAddress
+                            // > member of VkAccelerationStructureGeometryTrianglesDataKHR::transformData will
+                            // > be examined to check if it is NULL.
                             .transform_data(vk::DeviceOrHostAddressConstKHR {
                                 device_address: if desc
                                     .flags
@@ -2727,7 +2844,7 @@ impl crate::Device for super::Device {
                     name,
                     requirements,
                     location: gpu_allocator::MemoryLocation::GpuOnly,
-                    linear: true,
+                    linear: true, // Buffers are always linear
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })
                 .inspect_err(|_| {
@@ -2966,7 +3083,7 @@ impl super::DeviceShared {
                 } else {
                     match active.iter().find(|&&(value, _)| value >= wait_value) {
                         Some((_, fence)) => {
-
+                            // clone to show we are using this fence while the pool is unlocked.
                             let fence = fence.clone();
                             drop(pool);
                             match unsafe {

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2025 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use crate::imgop::{
   matrix::{multiply, multiply_row1},
   xyz::*,
@@ -26,13 +29,15 @@ fn illuminant_to_XYZ_tristimulus(illuminant: &Illuminant) -> [f32; 3] {
   match illuminant {
     Illuminant::Unknown => todo!(),
     Illuminant::Daylight => {
-
+      // There is no official CIE XYZ tristimulus white point for "Daylight" illuminants.
+      // We use D65 as an approximation
       CIE_1931_TRISTIMULUS_D65
     }
     Illuminant::Fluorescent => todo!(),
     Illuminant::Tungsten => todo!(),
     Illuminant::Flash => {
-
+      // There is no official CIE XYZ tristimulus white point for "Flash" illuminants.
+      // We use D55 as an approximation assuming flash CCT ≈ 5500 K
       CIE_1931_TRISTIMULUS_D55
     }
     Illuminant::FineWeather => todo!(),
@@ -53,6 +58,7 @@ fn illuminant_to_XYZ_tristimulus(illuminant: &Illuminant) -> [f32; 3] {
   }
 }
 
+// See http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
 pub fn bradford_adaption_matrix(src_illu: &Illuminant, dst_illu: &Illuminant) -> [[f32; 3]; 3] {
   let tristimulus_src = illuminant_to_XYZ_tristimulus(src_illu);
   let tristimulus_dst = illuminant_to_XYZ_tristimulus(dst_illu);
@@ -61,9 +67,9 @@ pub fn bradford_adaption_matrix(src_illu: &Illuminant, dst_illu: &Illuminant) ->
   let lms_dst = whitepoint_to_lms(&tristimulus_dst, &BRADFORD_ADAPTION);
 
   let diag = [
-    [lms_dst[0] / lms_src[0], 0.0, 0.0],
-    [0.0, lms_dst[1] / lms_src[1], 0.0],
-    [0.0, 0.0, lms_dst[2] / lms_src[2]],
+    [lms_dst[0] / lms_src[0], 0.0, 0.0], //
+    [0.0, lms_dst[1] / lms_src[1], 0.0], //
+    [0.0, 0.0, lms_dst[2] / lms_src[2]], //
   ];
 
   multiply(&multiply(&BRADFORD_ADAPTION_INVERSE, &diag), &BRADFORD_ADAPTION)

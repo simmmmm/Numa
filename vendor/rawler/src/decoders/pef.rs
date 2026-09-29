@@ -44,7 +44,7 @@ pub struct PefDecoder<'a> {
   rawloader: &'a RawLoader,
   tiff: GenericTiffReader,
   makernote: IFD,
-
+  /// Offset of makernote, needed to correct offsets of preview image
   makernote_offset: u32,
 }
 
@@ -68,6 +68,11 @@ impl<'a> PefDecoder<'a> {
       .and_then(|entry| entry.offset().map(|o| o as u32))
       .unwrap_or(0);
 
+    //eprintln!("IFD makernote:");
+    //for line in makernote.dump::<PefMakernote>(10) {
+    //  eprintln!("{}", line);
+    //}
+
     Ok(PefDecoder {
       camera,
       tiff,
@@ -78,6 +83,7 @@ impl<'a> PefDecoder<'a> {
   }
 }
 
+/// PEF format encapsulation for analyzer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PefFormat {
@@ -90,6 +96,12 @@ impl<'a> Decoder for PefDecoder<'a> {
   }
 
   fn raw_image(&self, file: &RawSource, _params: &RawDecodeParams, dummy: bool) -> Result<RawImage> {
+    //for (i, ifd) in self.tiff.chains().iter().enumerate() {
+    //  eprintln!("IFD {}", i);
+    //  for line in ifd.dump::<crate::tags::LegacyTiffRootTag>(10) {
+    //    eprintln!("{}", line);
+    //  }
+    //}
 
     let raw = self
       .tiff
@@ -141,7 +153,7 @@ impl<'a> Decoder for PefDecoder<'a> {
           match image::load_from_memory_with_format(buf, image::ImageFormat::Jpeg) {
             Ok(img) => Some(img),
             Err(_) => {
-
+              // Test offset without correction
               let buf = file.subview(offset as u64, len as u64)?;
               let img = image::load_from_memory_with_format(buf, image::ImageFormat::Jpeg)
                 .map_err(|err| RawlerError::DecoderFailed(format!("Failed to read JPEG: {:?}", err)))?;
@@ -156,7 +168,8 @@ impl<'a> Decoder for PefDecoder<'a> {
     };
 
     if let Some(image) = image {
-
+      // This tag contains the border definitions for the preview image.
+      // We cut away these black borders.
       if let Some(Entry {
         value: Value::Byte(borders), ..
       }) = self.makernote.get_entry(PefMakernote::PreviewImageBorders)
@@ -203,7 +216,7 @@ impl<'a> PefDecoder<'a> {
           let levels = [data.force_u16(0), data.force_u16(1), data.force_u16(2), data.force_u16(3)];
           Ok(Some(BlackLevel::new(&levels, self.camera.cfa.width, self.camera.cfa.height, 1)))
         } else {
-
+          // Monochrome PEF like K-3
           let levels = [data.force_u16(0)];
           Ok(Some(BlackLevel::new(&levels, 1, 1, 1)))
         }
@@ -212,6 +225,7 @@ impl<'a> PefDecoder<'a> {
     }
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     if let Some(Entry {
       value: Value::Byte(settings), ..
@@ -220,7 +234,9 @@ impl<'a> PefDecoder<'a> {
       let lens_id = (settings[0] as u32, settings[1] as u32);
       debug!("LensRec tag: {:?}", lens_id);
       if [0, 1, 2].contains(&lens_id.0) {
-
+        // 0 = M-42 or no lens
+        // 1 = K or M lens
+        // 2 = A Series lens
         return Ok(None);
       } else {
         let resolver = LensResolver::new()
@@ -237,7 +253,7 @@ impl<'a> PefDecoder<'a> {
     if let Some(huff) = self.makernote.get_entry(PefMakernote::HuffmanTable) {
       match &huff.value {
         Value::Undefined(data) => Self::do_decode(src, Some((data, self.tiff.get_endian())), width, height, dummy),
-        _ => todo!(),
+        _ => todo!(), // should not happen!
       }
     } else {
       Self::do_decode(src, None, width, height, dummy)
@@ -248,6 +264,7 @@ impl<'a> PefDecoder<'a> {
     let mut out = alloc_image_ok!(width, height, dummy);
     let mut htable = HuffTable::empty();
 
+    /* Attempt to read huffman table, if found in makernote */
     if let Some((huff, endian)) = huff {
       debug!("Use in-file Huffman table");
       let mut stream = ByteStream::new(huff, endian);
@@ -265,12 +282,14 @@ impl<'a> PefDecoder<'a> {
         v1[i] = stream.get_u8() as u32;
       }
 
+      // Calculate codes and store bitcounts
       let mut v2: [u32; 16] = [0; 16];
       for c in 0..depth {
         v2[c] = v0[c] >> (12 - v1[c]);
         htable.bits[v1[c] as usize] += 1;
       }
 
+      // Find smallest
       for i in 0..depth {
         let mut sm_val: u32 = 0xfffffff;
         let mut sm_num: u32 = 0xff;
@@ -285,7 +304,7 @@ impl<'a> PefDecoder<'a> {
       }
     } else {
       debug!("Fallback to standard Huffman table");
-
+      // Initialize with legacy data
       let pentax_tree: [u8; 29] = [0, 2, 3, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 3, 4, 2, 5, 1, 6, 0, 7, 8, 9, 10, 11, 12];
       let mut acc: usize = 0;
       for i in 0..16 {
@@ -325,7 +344,8 @@ impl<'a> PefDecoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("PEF raw wb: {:?}", raw_wb);
-
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
   let div = raw_wb[1];
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {

@@ -87,7 +87,7 @@ impl<'a> MosDecoder<'a> {
   fn get_wb(&self) -> Result<[f32; 4]> {
     let meta = fetch_tiff_tag!(self.tiff, TiffCommonTag::LeafMetadata).get_data();
     let mut pos = 0;
-
+    // We need at least 16+45+10 bytes for the NeutObj_neutrals section itself
     while pos + 70 < meta.len() {
       if meta[pos..pos + 16] == b"NeutObj_neutrals"[..] {
         let data = &meta[pos + 44..];

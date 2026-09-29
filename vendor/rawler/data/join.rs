@@ -38,6 +38,7 @@ fn join_cameras() {
     out.write_all(b"\n").expect("Failed to write");
   }
 
+  // Check for a minimum version
   if version().expect("version failed") < Version::parse("1.31.0").expect("version parse failed") {
     println!("cargo:rustc-cfg=needs_chunks_exact");
   }
@@ -65,6 +66,7 @@ fn join_lenses() {
     out.write_all(b"\n").expect("Failed to write");
   }
 
+  // Check for a minimum version
   if version().expect("version failed") < Version::parse("1.31.0").expect("version parse failed") {
     println!("cargo:rustc-cfg=needs_chunks_exact");
   }

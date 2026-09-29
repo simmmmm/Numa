@@ -103,7 +103,7 @@ impl<'a> Decoder for CrwDecoder<'a> {
   }
 
   fn raw_metadata(&self, _file: &RawSource, __params: &RawDecodeParams) -> Result<RawMetadata> {
-
+    // TODO: Add EXIF info
     let exif = Exif::default();
     Ok(RawMetadata::new(&self.camera, exif))
   }
@@ -128,7 +128,7 @@ impl<'a> CrwDecoder<'a> {
       if let Some(cinfo) = self.ciff.find_entry(CiffTag::ColorInfo2) {
         return Ok(if cinfo.get_u32(0) > 512 {
           [cinfo.get_f32(62), cinfo.get_f32(63), cinfo.get_f32(60), cinfo.get_f32(61)]
-
+        // RGBE???
         } else {
           [cinfo.get_f32(51), cinfo.get_f32(50), cinfo.get_f32(53), cinfo.get_f32(52)]
         });
@@ -136,7 +136,7 @@ impl<'a> CrwDecoder<'a> {
     }
     if let Some(cinfo) = self.ciff.find_entry(CiffTag::ColorInfo1) {
       if cinfo.count == 768 {
-
+        // D30
         return Ok([
           1024.0 / (cinfo.get_force_u16(36) as f32),
           1024.0 / (cinfo.get_force_u16(37) as f32),
@@ -196,7 +196,7 @@ impl<'a> CrwDecoder<'a> {
     let mut base = [0_i32; 2];
     let mut pnum = 0;
     for pixout in out.pixels_mut().chunks_exact_mut(64) {
-
+      // Decode a block of 64 differences
       let mut diffbuf = [0_i32; 64];
       let mut i: usize = 0;
       while i < 64 {
@@ -227,8 +227,9 @@ impl<'a> CrwDecoder<'a> {
       diffbuf[0] += carry;
       carry = diffbuf[0];
 
+      // Save those differences to 64 pixels adjusting the predictor as we go
       for i in 0..64 {
-
+        // At the start of lines reset the predictor to 512
         if pnum % width == 0 {
           base[0] = 512;
           base[1] = 512;
@@ -241,7 +242,7 @@ impl<'a> CrwDecoder<'a> {
 
     if lowbits {
       let buffer = file.as_vec()?;
-
+      // Add the uncompressed 2 low bits to the decoded 8 high bits
       for (i, o) in out.pixels_mut().chunks_exact_mut(4).enumerate() {
         let c = buffer[26 + i] as u16;
         o[0] = (o[0] << 2) | (c) & 0x03;
@@ -249,7 +250,7 @@ impl<'a> CrwDecoder<'a> {
         o[2] = (o[2] << 2) | (c >> 4) & 0x03;
         o[3] = (o[3] << 2) | (c >> 6) & 0x03;
         if width == 2672 {
-
+          // No idea why this is needed, probably some broken camera
           if o[0] < 512 {
             o[0] += 2
           }
@@ -271,7 +272,8 @@ impl<'a> CrwDecoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("CRW raw wb: {:?}", raw_wb);
-
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
   let div = raw_wb[1];
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {

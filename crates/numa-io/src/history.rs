@@ -9,7 +9,7 @@ use numa_core::point::PointColours;
 use numa_core::retouch::Retouch;
 use numa_core::space::ColourSpace;
 
-use crate::masks::mask_label;
+use crate::masks::{mask_label_parts, MaskLabel};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditState {
@@ -177,19 +177,105 @@ impl History {
     }
 
     pub fn steps(&self) -> Vec<String> {
+        self.step_parts().iter().map(Step::to_string).collect()
+    }
 
-        let first = if self.states[0] == EditState::untouched() { "Original" } else { "Opened" };
-        let mut steps = vec![first.to_string()];
+    pub fn step_parts(&self) -> Vec<Step> {
+
+        let first = if self.states[0] == EditState::untouched() { Step::Original } else { Step::Opened };
+        let mut steps = vec![first];
         for (pair, name) in self.states.windows(2).zip(&self.names[1..]) {
-            steps.push(name.clone().unwrap_or_else(|| pair[1].difference_from(&pair[0])));
+            steps.push(match name {
+                Some(name) => Step::Named(name.clone()),
+                None => Step::Changed(pair[1].changes_from(&pair[0])),
+            });
         }
         steps
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    Original,
+    Opened,
+
+    Named(String),
+
+    Changed(Vec<Change>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+
+    Word(&'static str),
+
+    Mask(MaskDone, MaskLabel),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskDone {
+    Added,
+    Adjusted,
+    Inverted,
+    Showed,
+    Hid,
+    Renamed,
+    SetStrength,
+    DrewOn,
+    PointedAt,
+    Changed,
+}
+
+impl MaskDone {
+
+    pub fn english(self) -> &'static str {
+        match self {
+            MaskDone::Added => "Added",
+            MaskDone::Adjusted => "Adjusted",
+            MaskDone::Inverted => "Inverted",
+            MaskDone::Showed => "Showed",
+            MaskDone::Hid => "Hid",
+            MaskDone::Renamed => "Renamed",
+            MaskDone::SetStrength => "Set the strength of",
+            MaskDone::DrewOn => "Drew on",
+            MaskDone::PointedAt => "Pointed at",
+            MaskDone::Changed => "Changed",
+        }
+    }
+}
+
+impl std::fmt::Display for Change {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Change::Word(word) => f.write_str(word),
+            Change::Mask(done, label) => write!(f, "{} {label}", done.english()),
+        }
+    }
+}
+
+impl std::fmt::Display for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Step::Original => f.write_str("Original"),
+            Step::Opened => f.write_str("Opened"),
+            Step::Named(name) => f.write_str(name),
+            Step::Changed(changed) => match changed.as_slice() {
+                [] => f.write_str("No change"),
+                [one] => one.fmt(f),
+                [one, two] => write!(f, "{one} and {two}"),
+                [one, rest @ ..] => write!(f, "{one} and {} more", rest.len()),
+            },
+        }
     }
 }
 
 impl EditState {
 
     pub fn difference_from(&self, previous: &EditState) -> String {
+        Step::Changed(self.changes_from(previous)).to_string()
+    }
+
+    pub fn changes_from(&self, previous: &EditState) -> Vec<Change> {
         let sliders: [(&str, fn(&Basic) -> f32); 37] = [
             ("Exposure", |b| b.tone.exposure),
             ("Contrast", |b| b.tone.contrast),
@@ -230,87 +316,85 @@ impl EditState {
             ("Lens vignetting", |b| b.optics.lens_vignetting),
         ];
 
-        let mut changed: Vec<String> = sliders
+        let mut changed: Vec<Change> = sliders
             .iter()
             .filter(|(_, read)| read(&self.basic) != read(&previous.basic))
-            .map(|(name, _)| name.to_string())
+            .map(|(name, _)| Change::Word(name))
             .collect();
 
         if self.white_balance != previous.white_balance {
-            changed.push("White balance".to_string());
+            changed.push(Change::Word("White balance"));
         }
         if self.crop != previous.crop {
-            changed.push("Crop".to_string());
+            changed.push(Change::Word("Crop"));
         }
         if self.rotation != previous.rotation {
-            changed.push("Rotation".to_string());
+            changed.push(Change::Word("Rotation"));
         }
         if self.mirrored != previous.mirrored {
-            changed.push("Flip".to_string());
+            changed.push(Change::Word("Flip"));
         }
         if self.curves != previous.curves {
-            changed.push("Tone curve".to_string());
+            changed.push(Change::Word("Tone curve"));
         }
         if self.mixer != previous.mixer {
-            changed.push("Colour mixer".to_string());
+            changed.push(Change::Word("Colour mixer"));
         }
         if self.point_colours != previous.point_colours {
-            changed.push("Point colour".to_string());
+            changed.push(Change::Word("Point colour"));
         }
         if self.grading != previous.grading {
-            changed.push("Colour grading".to_string());
+            changed.push(Change::Word("Colour grading"));
         }
         if self.retouch != previous.retouch {
             let (now, was) = (self.retouch.spots.len(), previous.retouch.spots.len());
-            changed.push(match now.cmp(&was) {
-                std::cmp::Ordering::Greater => "Retouched".to_string(),
-                std::cmp::Ordering::Less => "Removed a retouch".to_string(),
-                std::cmp::Ordering::Equal => "Moved a retouch".to_string(),
-            });
+            changed.push(Change::Word(match now.cmp(&was) {
+                std::cmp::Ordering::Greater => "Retouched",
+                std::cmp::Ordering::Less => "Removed a retouch",
+                std::cmp::Ordering::Equal => "Moved a retouch",
+            }));
         }
         if self.film_simulation != previous.film_simulation {
-            changed.push("Film simulation".to_string());
+            changed.push(Change::Word("Film simulation"));
         }
         if self.colour_profile != previous.colour_profile {
-            changed.push("Camera profile".to_string());
+            changed.push(Change::Word("Camera profile"));
         }
         if self.working_space != previous.working_space {
-            changed.push("Colour space".to_string());
+            changed.push(Change::Word("Colour space"));
         }
         if self.perspective != previous.perspective {
-            changed.push("Perspective".to_string());
+            changed.push(Change::Word("Perspective"));
         }
         if self.beautify != previous.beautify {
-            changed.push("Face".to_string());
+            changed.push(Change::Word("Face"));
         }
         if self.ai_denoise != previous.ai_denoise {
-            changed.push("AI denoise".to_string());
+            changed.push(Change::Word("AI denoise"));
         }
         if self.ai_sharpen != previous.ai_sharpen {
-            changed.push("AI sharpen".to_string());
+            changed.push(Change::Word("AI sharpen"));
         }
         if self.lut != previous.lut {
-            changed.push("LUT".to_string());
+            changed.push(Change::Word("LUT"));
         }
-        if let Some(mask) = masks_changed(&self.masks, &previous.masks) {
+        if let Some(mask) = mask_change(&self.masks, &previous.masks) {
             changed.push(mask);
         }
-
-        match changed.len() {
-            0 => "No change".to_string(),
-            1 => changed.remove(0),
-            2 => changed.join(" and "),
-            many => format!("{} and {} more", changed.remove(0), many - 1),
-        }
+        changed
     }
 }
 
 pub fn masks_changed(now: &[Mask], before: &[Mask]) -> Option<String> {
+    mask_change(now, before).map(|change| change.to_string())
+}
+
+pub fn mask_change(now: &[Mask], before: &[Mask]) -> Option<Change> {
     if now.len() > before.len() {
-        return Some(format!("Added {}", mask_label(now, now.len() - 1)));
+        return Some(Change::Mask(MaskDone::Added, mask_label_parts(now, now.len() - 1)));
     }
     if now.len() < before.len() {
-        return Some("Removed a mask".to_string());
+        return Some(Change::Word("Removed a mask"));
     }
 
     let (index, mask) = now
@@ -320,23 +404,81 @@ pub fn masks_changed(now: &[Mask], before: &[Mask]) -> Option<String> {
         .map(|index| (index, &now[index]))?;
 
     let was = &before[index];
-    let what = if mask.basic != was.basic {
-        "Adjusted"
+    let done = if mask.basic != was.basic {
+        MaskDone::Adjusted
     } else if mask.inverted != was.inverted {
-        "Inverted"
+        MaskDone::Inverted
 
     } else if mask.visible != was.visible {
-        if mask.visible { "Showed" } else { "Hid" }
+        if mask.visible { MaskDone::Showed } else { MaskDone::Hid }
     } else if mask.name != was.name {
-        "Renamed"
+        MaskDone::Renamed
     } else if mask.opacity != was.opacity {
-        "Set the strength of"
+        MaskDone::SetStrength
     } else if mask.strokes.len() != was.strokes.len() {
-        "Drew on"
+        MaskDone::DrewOn
     } else if mask.points.len() != was.points.len() {
-        "Pointed at"
+        MaskDone::PointedAt
     } else {
-        "Changed"
+        MaskDone::Changed
     };
-    Some(format!("{what} {}", mask_label(now, index)))
+    Some(Change::Mask(done, mask_label_parts(now, index)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::masks::MaskName;
+    use numa_core::mask::Shape;
+
+    fn state(change: impl FnOnce(&mut Document)) -> EditState {
+        let mut document = Document::new("x".into());
+        change(&mut document);
+        EditState::of(&document)
+    }
+
+    fn radial(change: impl FnOnce(&mut Mask)) -> Vec<Mask> {
+        let mut mask = Mask::new(Shape::radial());
+        change(&mut mask);
+        vec![mask]
+    }
+
+    #[test]
+    fn a_step_in_parts_reads_as_the_step() {
+        let before = EditState::untouched();
+        let one = state(|d| d.set_basic(Basic::with(|b| b.tone.exposure = 1.0)));
+        assert_eq!(one.changes_from(&before), [Change::Word("Exposure")]);
+        assert_eq!(one.difference_from(&before), "Exposure");
+        let two = state(|d| d.set_basic(Basic::with(|b| (b.tone.exposure, b.tone.contrast) = (1.0, 10.0))));
+        assert_eq!(two.difference_from(&before), "Exposure and Contrast");
+        let three = state(|d| {
+            d.set_basic(Basic::with(|b| (b.tone.exposure, b.tone.contrast) = (1.0, 10.0)));
+            d.set_crop([0.1, 0.1, 0.8, 0.8], 0.0);
+        });
+        assert_eq!(three.difference_from(&before), "Exposure and 2 more");
+        assert_eq!(before.difference_from(&before), "No change");
+
+        let added = state(|d| d.set_masks(radial(|_| {})));
+        let radial_one = MaskLabel { name: MaskName::Kind("Radial"), number: None };
+        assert_eq!(added.changes_from(&before), [Change::Mask(MaskDone::Added, radial_one.clone())]);
+        assert_eq!(added.difference_from(&before), "Added Radial");
+        let hidden = state(|d| d.set_masks(radial(|mask| mask.visible = false)));
+        assert_eq!(hidden.difference_from(&added), "Hid Radial");
+        let weaker = state(|d| d.set_masks(radial(|mask| mask.opacity = 0.5)));
+        assert_eq!(weaker.changes_from(&added), [Change::Mask(MaskDone::SetStrength, radial_one)]);
+        assert_eq!(weaker.difference_from(&added), "Set the strength of Radial");
+        assert_eq!(before.difference_from(&added), "Removed a mask");
+    }
+
+    #[test]
+    fn a_history_in_parts() {
+        let mut history = History::new(EditState::untouched());
+        history.push(state(|d| d.set_crop([0.1, 0.1, 0.8, 0.8], 0.0)));
+        history.push_named(state(|d| d.set_basic(Basic::with(|b| b.tone.exposure = 0.7))), "Before the sky");
+        assert_eq!(
+            history.step_parts(),
+            [Step::Original, Step::Changed(vec![Change::Word("Crop")]), Step::Named("Before the sky".into())]
+        );
+        assert_eq!(history.steps(), ["Original", "Crop", "Before the sky"]);
+    }
 }

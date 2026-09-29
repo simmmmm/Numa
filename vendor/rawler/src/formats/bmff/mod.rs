@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::{
   fmt,
   fs::File,
@@ -55,9 +59,11 @@ pub struct BoxHeader {
   pub size: u64,
   pub typ: FourCC,
   pub uuid: Option<BoxUuid>,
-  pub offset: u64,
+  pub offset: u64, // File offset
   pub header_len: u64,
-
+  // Full Box fields
+  //pub version: Option<u8>,
+  //pub flags: Option<u32>,
 }
 
 impl BoxHeader {
@@ -141,8 +147,11 @@ impl FileBox {
     let mut cr3xpacket = None;
 
     while current < size {
+      // get box?
 
       let header = BoxHeader::parse(&mut file)?;
+
+      //let ftyp = Some(FtypBox::read_box(&mut file, header)?);
 
       match header.typ {
         FtypBox::TYP => {
@@ -176,7 +185,7 @@ impl FileBox {
       if file.stream_position()? != current {
         current = file.stream_position()?;
       } else {
-
+        // If parsing has not moved cursor, we probably have a corrupt file or it's not a BMFF at all.
         return Err(BmffError::Parse("Unable to find valid BMFF box, corrupt file?".into()));
       }
     }
@@ -197,7 +206,7 @@ pub fn parse_file(file: &mut File) -> Result<FileBox> {
 }
 
 pub fn parse_buffer(buf: &[u8]) -> Result<FileBox> {
-
+  // TODO: add AsRef<u8>
   let mut cursor = Cursor::new(buf);
   let filebox = FileBox::parse(&mut cursor)?;
   Ok(filebox)

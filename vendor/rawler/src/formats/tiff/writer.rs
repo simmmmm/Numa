@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::{
   collections::BTreeMap,
   io::{Seek, SeekFrom, Write},
@@ -54,7 +57,7 @@ where
       if dim.h > 256 {
         strip_lines = 256;
       } else {
-        strip_lines = dim.h;
+        strip_lines = dim.h; // Use single strip
       }
     }
     let mut tag_data = Vec::with_capacity(dim.h / strip_lines + 1);
@@ -131,13 +134,13 @@ where
   W: Seek,
 {
   pub fn position(&mut self) -> Result<u32> {
-    Ok(self.writer.stream_position().map(|v| v as u32)?)
+    Ok(self.writer.stream_position().map(|v| v as u32)?) // TODO: try_from?
   }
 }
 
 #[derive(Default)]
 pub struct DirectoryWriter {
-
+  // We use BTreeMap to make sure tags are written in correct order
   entries: BTreeMap<u16, Entry>,
   next_ifd: u32,
 }
@@ -191,7 +194,8 @@ impl DirectoryWriter {
 
   pub fn add_tag_undefined<T: TiffTag>(&mut self, tag: T, data: Vec<u8>) {
     let tag: u16 = tag.into();
-
+    //let data = data.as_ref();
+    //let offset = self.write_data(data)?;
     self.entries.insert(
       tag,
       Entry {
@@ -263,11 +267,16 @@ impl DirectoryWriter {
         .writer
         .write_u32::<NativeEndian>(entry.embedded.expect("embedded attribute must contain a value"))?;
     }
-    tiff.writer.write_u32::<NativeEndian>(self.next_ifd)?;
+    tiff.writer.write_u32::<NativeEndian>(self.next_ifd)?; // Next IFD
 
     Ok(offset)
   }
 
+  /*
+  pub fn add_entry(&mut self, entry: Entry) {
+    self.ifd.insert(tag.into(), entry);
+  }
+   */
 }
 
 impl crate::decoders::RawMetadata {
@@ -321,6 +330,7 @@ impl crate::decoders::RawMetadata {
     transfer_entry(exif_ifd, ExifTag::LensMake, &exif.lens_make)?;
     transfer_entry(exif_ifd, ExifTag::LensModel, &exif.lens_model)?;
     transfer_entry(exif_ifd, ExifTag::UserComment, &exif.user_comment)?;
+    //transfer_entry(exif_ifd, ExifTag::MakerNotes, &exif.makernotes.as_ref().map(|x| Value::Undefined(x.clone())))?;
 
     Ok(())
   }

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{
   super::{BmffError, BoxHeader, FourCC, ReadBox, Result, read_box_header_ext},
   iad1::Iad1Box,
@@ -27,6 +30,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for Cdi1Box {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 

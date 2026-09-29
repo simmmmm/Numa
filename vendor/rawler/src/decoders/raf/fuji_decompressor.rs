@@ -1,3 +1,11 @@
+///
+/// Original code by libraw and rawspeed, licensed under LGPL-2
+///
+/// Copyright (C) 2016 Alexey Danilchenko
+/// Copyright (C) 2016 Alex Tutubalin
+/// Copyright (C) 2017 Uwe Müssel
+/// Copyright (C) 2017 Roman Lebedev
+/// Copyright (C) 2022 Daniel Vogelbacher
 use rayon::prelude::*;
 use std::{fmt::Display, mem::size_of};
 
@@ -11,6 +19,7 @@ use crate::{
   pumps::{BitPump, BitPumpMSB, ByteStream},
 };
 
+/// A single gradient with two points
 type Gradient = (i32, i32);
 
 #[derive(Clone, Debug)]
@@ -22,6 +31,7 @@ struct Strip {
   cfa: [[CFAColor; 6]; 6],
 }
 
+/// Quantization table
 #[derive(Debug, Clone, Default)]
 struct QTable {
   q_base: i32,
@@ -34,7 +44,7 @@ struct QTable {
 
 #[derive(Debug, Clone)]
 struct Params {
-
+  /// Quantization table
   qtables: Vec<QTable>,
   max_bits: usize,
   min_value: i32,
@@ -55,10 +65,10 @@ struct Colors {
 
 #[derive(Clone, Debug)]
 struct GradientList {
-
-  lossless_grads: Vec<Gradient>,
-
-  lossy_grads: [Vec<Gradient>; 3],
+  /// Gradients for lossless mode
+  lossless_grads: Vec<Gradient>, // 41 elements
+  /// Gradients for lossy mode
+  lossy_grads: [Vec<Gradient>; 3], // 5 elements
 }
 
 impl Strip {
@@ -66,25 +76,29 @@ impl Strip {
     6
   }
 
+  // how many vertical lines does this block encode?
   fn height(&self) -> u16 {
     self.header.total_lines
   }
 
+  // how many horizontal pixels does this block encode?
   fn width(&self) -> usize {
-
+    // if this is not the last block, we are good.
     if (self.n + 1) != (self.header.blocks_in_row as usize) {
       return self.header.block_size as usize;
     }
-
+    // ok, this is the last block...
     debug_assert!(self.header.block_size as usize * self.header.blocks_in_row as usize >= self.header.raw_width as usize);
     self.header.raw_width as usize - self.offset_x()
   }
 
+  // where vertically does this block start?
   fn offset_y(&self, line: usize) -> usize {
     debug_assert!(line < (self.height() as usize));
     Self::line_height() as usize * line
   }
 
+  // where horizontally does this block start?
   fn offset_x(&self) -> usize {
     self.header.block_size as usize * self.n
   }
@@ -122,7 +136,7 @@ impl Header {
 
   fn is_valid(&self) -> bool {
     !(self.signature != 0x4953
-
+      //|| self.lossless != 1
       || self.raw_height > 0x3000
       || (self.raw_height as usize) < Strip::line_height()
       || (self.raw_height as usize) % Strip::line_height() != 0
@@ -153,7 +167,7 @@ impl Strip {
     log::debug!("Fuji strip offset: {}, len: {}", self.offset, self.size);
 
     let mut pump = if self.offset + self.size == src.len() {
-      BitPumpMSB::new(&src[self.offset..])
+      BitPumpMSB::new(&src[self.offset..]) // use extra bytes from PaddedBuf
     } else {
       let extra_bytes = 16;
       BitPumpMSB::new(&src[self.offset..self.offset + self.size + extra_bytes])
@@ -174,14 +188,16 @@ impl Strip {
 
     for cur_line in 0..self.height() as usize {
       debug_assert_eq!(header.is_lossless(), q_bases.is_none());
-
+      // init grads and main qtable
       if !header.is_lossless() {
         let q_base = q_bases.as_ref().expect("q_bases must be Some for lossy compression")[cur_line] as i32;
         if cur_line == 0 || q_base != params.qtables[0].q_base {
-          let max_value = (1 << header.raw_bits) - 1;
+          let max_value = (1 << header.raw_bits) - 1; // todo: put into header as function?
           let main_qtable = Params::new_main_qtable(header, max_value, q_base);
           params.qtables[0] = main_qtable;
 
+          // update grads
+          // total_values depends on q_base for QTable
           let max_diff = 2.max((params.qtables[0].total_values + 0x20) >> 6);
 
           for j in 0..3 {
@@ -203,11 +219,12 @@ impl Strip {
         info_block.fuji_bayer_decode_block(&mut pump, &params);
       }
 
+      // copy data from line buffers and advance
       for i in mtable.iter() {
         debug_assert!(i.0 < i.1);
         let (dest, src) = info_block.linebuf.split_at_mut(i.0 + 1);
         dest[i.0].copy_from_slice(&src[i.1 - (i.0 + 1)]);
-
+        //info_block.linebuf[i.0] = info_block.linebuf[i.1].clone();
       }
 
       if header.raw_type == 16 {
@@ -217,13 +234,13 @@ impl Strip {
       }
 
       for i in ztable.iter() {
-
+        // Rest all lines
         for line in i.0..i.0 + i.1 {
           for p in info_block.linebuf[line].iter_mut() {
             *p = 0;
           }
         }
-
+        // Initialize extra pixels
         info_block.linebuf[i.0][0] = info_block.linebuf[i.0 - 1][1];
         info_block.linebuf[i.0][params.line_width + 1] = info_block.linebuf[i.0 - 1][params.line_width];
       }
@@ -231,6 +248,11 @@ impl Strip {
   }
 }
 
+/// We need PaddedBuf here, because the buffer is divided
+/// into multiple strips and each strip is feed into a BitPump.
+/// Each pump need as little bit more overhead at the end.
+/// For the final strip, we need the extra bytes from PaddedBuf
+/// to prevent out-of-range errors in BitPump.
 pub(super) fn decompress_fuji(buf: &PaddedBuf, width: usize, height: usize, _bps: usize, corrected_cfa: &CFA) -> Result<PixU16> {
   let mut stream = ByteStream::new(buf, Endian::Big);
   let header = Header {
@@ -274,6 +296,7 @@ pub(super) fn decompress_fuji(buf: &PaddedBuf, width: usize, height: usize, _bps
   let raw_offset_padded = (raw_offset + 0xF) & !0xF;
   stream.consume_bytes(raw_offset_padded - raw_offset);
 
+  // Global Q bases for all strips
   let q_bases: Option<Vec<u8>> = if !header.is_lossless() {
     let total_q_bases = block_sizes.len() * ((header.total_lines as usize + 0xF) & !0xF);
     Some(stream.get_bytes(total_q_bases))
@@ -281,6 +304,10 @@ pub(super) fn decompress_fuji(buf: &PaddedBuf, width: usize, height: usize, _bps
     None
   };
 
+  //eprintln!("q_bases: {:?}", q_bases);
+  //eprintln!("First block: {}", stream.get_pos());
+
+  // calculating raw block offsets
   let strips: Vec<Strip> = block_sizes
     .iter()
     .enumerate()
@@ -301,11 +328,13 @@ pub(super) fn decompress_fuji(buf: &PaddedBuf, width: usize, height: usize, _bps
 
   let out = SharedPix2D::new(PixU16::new(width, height));
 
+  // Process each strip
   strips.par_iter().for_each(|strip| {
     let line_step = (header.total_lines as usize + 0xF) & !0xF;
-
+    // Each strip has it's own q_bases
     let q_bases_strip = q_bases.as_ref().map(|buf| &buf[strip.n * line_step..]);
-
+    // DANGEROUS: We need multiple mut refs here. This should be
+    // safe as be only write pixels to pre-allocated memory.
     let outbuf = unsafe { out.inner_mut() };
     strip.decompress_strip(buf, &header, &params, q_bases_strip, outbuf);
   });
@@ -361,15 +390,16 @@ impl Default for GradientList {
   }
 }
 
+/// A compressed block
 struct CompressedBlock {
-
+  // tables of gradients
   grad_even: [GradientList; 3],
   grad_odd: [GradientList; 3],
   linebuf: Vec<Vec<u16>>,
 }
 
 impl CompressedBlock {
-
+  /// Create and initialize new compression block.
   fn new(header: &Header, params: &Params) -> Self {
     let linebuf = vec![vec![0; params.line_width + 2]; XT_LINE_TOTAL];
 
@@ -389,7 +419,7 @@ impl CompressedBlock {
         }
       }
     } else {
-
+      // init static grads for lossy only - main ones are done per line
       for k in 0..3 {
         let max_diff = 2.max((params.qtables[k + 1].total_values + 0x20) >> 6) as i32;
 
@@ -407,6 +437,7 @@ impl CompressedBlock {
     Self { grad_even, grad_odd, linebuf }
   }
 
+  /// Copy line from decoding buffer to output
   fn copy_line<F>(&self, strip: &Strip, cur_line: usize, index_f: F, out: &mut PixU16)
   where
     F: Fn(usize) -> usize,
@@ -436,16 +467,19 @@ impl CompressedBlock {
     }
   }
 
+  /// Copy line by Bayer pattern
   fn copy_line_to_bayer(&self, strip: &Strip, cur_line: usize, out: &mut PixU16) {
     let index = |pixel_count: usize| -> usize { pixel_count >> 1 };
     self.copy_line(strip, cur_line, index, out);
   }
 
+  /// Copy line by X-Trans pattern
   fn copy_line_to_xtrans(&self, strip: &Strip, cur_line: usize, out: &mut PixU16) {
     let index = |pixel_count: usize| -> usize { (((pixel_count * 2 / 3) & 0x7FFFFFFE) | ((pixel_count % 3) & 1)) + ((pixel_count % 3) >> 1) };
     self.copy_line(strip, cur_line, index, out);
   }
 
+  /// Decode Bayer pattern (RGGB and the like) from block
   #[inline(always)]
   fn fuji_bayer_decode_block(&mut self, pump: &mut BitPumpMSB, params: &Params) {
     let line_width = params.line_width;
@@ -503,6 +537,7 @@ impl CompressedBlock {
     pass_green_blue(&mut colors, pump, self, XT_LINE_G7, XT_LINE_B4, 2);
   }
 
+  /// A single X-Trans decoding pass for the given control colors C0 and C1
   fn fuji_xtrans_pass<F, const C0: usize, const C1: usize>(
     &mut self,
     params: &Params,
@@ -521,7 +556,7 @@ impl CompressedBlock {
         let mut c0_pos = *colors.at(C0);
         let mut c1_pos = *colors.at(C1);
         even_func(self, pump, c0, c1, grad, &mut c0_pos, &mut c1_pos);
-        *colors.at(C0) = c0_pos;
+        *colors.at(C0) = c0_pos; // Write back
         *colors.at(C1) = c1_pos;
       }
       if colors.g().even > 8 {
@@ -531,11 +566,13 @@ impl CompressedBlock {
     }
   }
 
+  /// Decode X-Trans pattern from block
   #[inline(always)]
   fn fuji_xtrans_decode_block(&mut self, pump: &mut BitPumpMSB, params: &Params) {
     let mut colors = Colors::new();
     let line_width = params.line_width;
 
+    // Pass 1
     self.fuji_xtrans_pass::<_, { Colors::R }, { Colors::G }>(
       params,
       &mut colors,
@@ -552,6 +589,7 @@ impl CompressedBlock {
     self.fuji_extend_green(line_width);
     colors.g().reset();
 
+    // Pass 2
     self.fuji_xtrans_pass::<_, { Colors::G }, { Colors::B }>(
       params,
       &mut colors,
@@ -569,6 +607,7 @@ impl CompressedBlock {
     colors.r().reset();
     colors.g().reset();
 
+    // Pass 3
     self.fuji_xtrans_pass::<_, { Colors::R }, { Colors::G }>(
       params,
       &mut colors,
@@ -590,6 +629,7 @@ impl CompressedBlock {
     colors.g().reset();
     colors.b().reset();
 
+    // Pass 4
     self.fuji_xtrans_pass::<_, { Colors::G }, { Colors::B }>(
       params,
       &mut colors,
@@ -612,6 +652,7 @@ impl CompressedBlock {
     colors.r().reset();
     colors.g().reset();
 
+    // Pass 5
     self.fuji_xtrans_pass::<_, { Colors::R }, { Colors::G }>(
       params,
       &mut colors,
@@ -634,6 +675,7 @@ impl CompressedBlock {
     colors.g().reset();
     colors.b().reset();
 
+    // Pass 6
     self.fuji_xtrans_pass::<_, { Colors::G }, { Colors::B }>(
       params,
       &mut colors,
@@ -686,11 +728,13 @@ impl Display for QTable {
 }
 
 impl QTable {
-
+  /// Lookup gradient in q_table. The absolute value of this
+  /// is used as an index into the gradients vector.
   fn lookup_gradient(&self, params: &Params, v1: i32, v2: i32) -> i32 {
     self.q_gradient_multi * self.q_table[(params.max_value + (v1)) as usize] + self.q_table[(params.max_value + (v2)) as usize]
   }
 
+  /// Build a quantization table based on 5 quantization points.
   fn build_table(header: &Header, qp: &[i32; 5]) -> Vec<i32> {
     let mut qtable = vec![0; 2 * (1 << (header.raw_bits as usize))];
     let mut cur_val = -(qp[4] as i32);
@@ -717,7 +761,7 @@ impl QTable {
 }
 
 impl Params {
-
+  /// Construct new main quantization table.
   fn new_main_qtable(header: &Header, max_value: i32, q_base: i32) -> QTable {
     let mut qp = [0; 5];
     qp[0] = q_base;
@@ -751,6 +795,7 @@ impl Params {
     }
   }
 
+  /// Create new parameter
   fn new(header: &Header) -> crate::Result<Self> {
     if (header.block_size % 3 != 0 && header.raw_type == 16) || (header.block_size & 1 != 0 && header.raw_type == 0) {
       return Err("Invalid FUJI header: block_size is incompatible with raw_type".into());
@@ -764,19 +809,26 @@ impl Params {
       header.block_size as usize >> 1
     };
 
+    // Build quantization tables.
+    // For lossless, only one table is required.
+    // For lossy, the main table is created on each iteration
+    // while 3 static extra tables are required.
     let qtables = if header.is_lossless() {
-
+      // Only a single table is needed for lossless mode
       let q_base = 0;
       let main_qtable = Self::new_main_qtable(header, max_value, q_base);
       vec![main_qtable]
     } else {
       let mut qtables = vec![QTable::default(); 4];
 
+      // The main table is left uninitialized here as
+      // the table is setup for each iteration.
       qtables[0].q_base = -1;
 
       let mut qp = [0_i32; 5];
-      qp[4] = max_value;
+      qp[4] = max_value; // identical for all tables
 
+      // table 0
       qtables[1].q_base = 0;
       qtables[1].max_grad = 5;
       qtables[1].q_gradient_multi = 3;
@@ -788,6 +840,7 @@ impl Params {
       qp[3] = if qp[4] >= 0x114 { 0x114 } else { qp[2] };
       qtables[1].q_table = QTable::build_table(header, &qp);
 
+      // table 1
       qtables[2].q_base = 1;
       qtables[2].max_grad = 6;
       qtables[2].q_gradient_multi = 3;
@@ -799,6 +852,7 @@ impl Params {
       qp[3] = if qp[4] >= 0x11B { 0x11B } else { qp[2] };
       qtables[2].q_table = QTable::build_table(header, &qp);
 
+      // table 2
       qtables[3].q_base = 2;
       qtables[3].max_grad = 7;
       qtables[3].q_gradient_multi = 3;
@@ -823,14 +877,17 @@ impl Params {
   }
 }
 
+/// Count and consume all zero bits
+/// Additionally, consume the first 1 bit.
 #[inline(always)]
 fn fuji_zerobits(pump: &mut BitPumpMSB) -> u32 {
   let count = pump.consume_zerobits();
   debug_assert_eq!(pump.peek_bits(1), 1);
-  pump.consume_bits(1);
+  pump.consume_bits(1); // consume the next bit which is 0b1
   count
 }
 
+/// Calculate bit difference between two values
 fn bit_diff(v1: i32, v2: i32) -> u32 {
   if v2 >= v1 {
     0
@@ -846,6 +903,11 @@ fn bit_diff(v1: i32, v2: i32) -> u32 {
   }
 }
 
+/// Read a single code from bitstream and ajust gradient.
+// Numa (PERF-061): inlined into its callers, down to the strip. It carried
+// `#[multiversion]` for LZCNT, which for a function with arguments means a
+// dispatch on every call and a clone that cannot be inlined, so every sample
+// paid a call and a dispatch; without them the X-T5 decodes 9 % faster.
 #[inline(always)]
 fn read_code(pump: &mut BitPumpMSB, params: &Params, gradient: &mut Gradient, q_table: &QTable) -> i32 {
   let sample = fuji_zerobits(pump);
@@ -856,17 +918,17 @@ fn read_code(pump: &mut BitPumpMSB, params: &Params, gradient: &mut Gradient, q_
   } else {
     1 + pump.get_bits(q_table.raw_bits as u32) as i32
   };
-
+  // Validate code
   if code < 0 || code >= q_table.total_values as i32 {
     panic!("Invalid code: {}", code);
   }
-
+  // Adjust code
   if (code & 1) != 0 {
     code = -1 - code / 2;
   } else {
     code /= 2;
   }
-
+  // Update gradient
   gradient.0 += code.abs();
   if gradient.1 == params.min_value {
     gradient.0 >>= 1;
@@ -876,18 +938,21 @@ fn read_code(pump: &mut BitPumpMSB, params: &Params, gradient: &mut Gradient, q_
   code
 }
 
+/// Decode samples for even positions
 #[inline(always)]
 fn fuji_decode_sample_even(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut [Vec<u16>], line: usize, pos: &mut usize, grads: &mut GradientList) {
-
+  // Line -2 |   | f |   |
+  // Line -1 | c | b | d |
+  // Line  0 | a | x | g |
   let rb = linebuf[line - 1][1 + *pos + 0] as i32;
   let rc = linebuf[line - 1][1 + *pos - 1] as i32;
   let rd = linebuf[line - 1][1 + *pos + 1] as i32;
   let rf = linebuf[line - 2][1 + *pos + 0] as i32;
-
+  // Calculate horiz/vert. gradients around current sample x
   let diff_rc_rb = (rc - rb).abs();
   let diff_rf_rb = (rf - rb).abs();
   let diff_rd_rb = (rd - rb).abs();
-
+  // Quantization table and Gradients to use
   let mut qtable = &params.qtables[0];
   let mut gradients = &mut grads.lossless_grads;
   for i in 1..4 {
@@ -900,7 +965,7 @@ fn fuji_decode_sample_even(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut
       break;
     }
   }
-
+  // Determine gradient
   let grad = qtable.lookup_gradient(params, rb - rf, rc - rb);
 
   let mut interp_val = if diff_rc_rb > diff_rf_rb && diff_rc_rb > diff_rd_rb {
@@ -913,12 +978,14 @@ fn fuji_decode_sample_even(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut
 
   let code = read_code(pump, params, &mut gradients[grad.unsigned_abs() as usize], qtable);
 
+  // Adjustments specific to even positions
   if grad < 0 {
     interp_val = (interp_val >> 2) - code * (2 * qtable.q_base as i32 + 1);
   } else {
     interp_val = (interp_val >> 2) + code * (2 * qtable.q_base as i32 + 1);
   };
 
+  // Generic adjustments
   if interp_val < -(qtable.q_base as i32) {
     interp_val += (qtable.total_values * (2 * qtable.q_base + 1)) as i32;
   } else if interp_val > qtable.q_base as i32 + params.max_value {
@@ -934,18 +1001,21 @@ fn fuji_decode_sample_even(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut
   *pos += 2;
 }
 
+/// Decode samples for odd positions
 #[inline(always)]
 fn fuji_decode_sample_odd(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut [Vec<u16>], line: usize, pos: &mut usize, grads: &mut GradientList) {
-
+  // Line -2 |   | f |   |
+  // Line -1 | c | b | d |
+  // Line  0 | a | x | g |
   let ra = linebuf[line + 0][1 + *pos - 1] as i32;
   let rb = linebuf[line - 1][1 + *pos + 0] as i32;
   let rc = linebuf[line - 1][1 + *pos - 1] as i32;
   let rd = linebuf[line - 1][1 + *pos + 1] as i32;
   let rg = linebuf[line + 0][1 + *pos + 1] as i32;
-
+  // Calculate horiz/vert. gradients around current sample x
   let diff_rc_ra = (rc - ra).abs();
   let diff_rb_rc = (rb - rc).abs();
-
+  // Quantization table and Gradients to use
   let mut qtable = &params.qtables[0];
   let mut gradients = &mut grads.lossless_grads;
   for i in 1..4 {
@@ -958,7 +1028,7 @@ fn fuji_decode_sample_odd(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut 
       break;
     }
   }
-
+  // Determine gradient
   let grad = qtable.lookup_gradient(params, rb - rc, rc - ra);
 
   let mut interp_val = if (rb > rc && rb > rd) || (rb < rc && rb < rd) {
@@ -969,12 +1039,14 @@ fn fuji_decode_sample_odd(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut 
 
   let code = read_code(pump, params, &mut gradients[grad.unsigned_abs() as usize], qtable);
 
+  // Adjustments specific to odd positions
   if grad < 0 {
     interp_val -= code * (2 * qtable.q_base as i32 + 1);
   } else {
     interp_val += code * (2 * qtable.q_base as i32 + 1);
   }
 
+  // Generic adjustments
   if interp_val < -(qtable.q_base as i32) {
     interp_val += (qtable.total_values * (2 * qtable.q_base + 1)) as i32;
   } else if interp_val > qtable.q_base as i32 + params.max_value {
@@ -990,8 +1062,11 @@ fn fuji_decode_sample_odd(pump: &mut BitPumpMSB, params: &Params, linebuf: &mut 
   *pos += 2;
 }
 
+/// Interpolate x value from surrounding pixels
 fn fuji_decode_interpolation_even(block: &mut CompressedBlock, line: usize, pos: &mut usize) {
-
+  // Line -2 |   | f |   |
+  // Line -1 | c | b | d |
+  // Line  0 | a | x | g |
   let rb = block.linebuf[line - 1][1 + *pos + 0] as i32;
   let rc = block.linebuf[line - 1][1 + *pos - 1] as i32;
   let rd = block.linebuf[line - 1][1 + *pos + 1] as i32;

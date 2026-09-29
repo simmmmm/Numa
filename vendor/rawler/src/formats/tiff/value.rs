@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use byteorder::{NativeEndian, WriteBytesExt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{convert::Infallible, ffi::CString, fmt::Display, io::Write, num::TryFromIntError};
 
 use super::{Result, TiffError};
 
+/// Type to represent tiff values of type `RATIONAL`
 #[derive(Clone, Debug, Default, Copy)]
 pub struct Rational {
   pub n: u32,
@@ -53,7 +57,7 @@ impl TryFrom<Rational> for usize {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as usize)
+    Ok(((value.n as f32) / (value.d as f32)) as usize) // TODO
   }
 }
 
@@ -61,7 +65,7 @@ impl TryFrom<Rational> for u8 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u8)
+    Ok(((value.n as f32) / (value.d as f32)) as u8) // TODO
   }
 }
 
@@ -69,7 +73,7 @@ impl TryFrom<Rational> for u16 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u16)
+    Ok(((value.n as f32) / (value.d as f32)) as u16) // TODO
   }
 }
 
@@ -77,7 +81,7 @@ impl TryFrom<Rational> for u32 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u32)
+    Ok(((value.n as f32) / (value.d as f32)) as u32) // TODO
   }
 }
 
@@ -85,7 +89,7 @@ impl TryFrom<Rational> for u64 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u64)
+    Ok(((value.n as f32) / (value.d as f32)) as u64) // TODO
   }
 }
 
@@ -93,7 +97,7 @@ impl TryFrom<Rational> for i8 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i8)
+    Ok(((value.n as f32) / (value.d as f32)) as i8) // TODO
   }
 }
 
@@ -101,7 +105,7 @@ impl TryFrom<Rational> for i16 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i16)
+    Ok(((value.n as f32) / (value.d as f32)) as i16) // TODO
   }
 }
 
@@ -109,7 +113,7 @@ impl TryFrom<Rational> for i32 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i32)
+    Ok(((value.n as f32) / (value.d as f32)) as i32) // TODO
   }
 }
 
@@ -117,7 +121,7 @@ impl TryFrom<Rational> for i64 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i64)
+    Ok(((value.n as f32) / (value.d as f32)) as i64) // TODO
   }
 }
 
@@ -125,7 +129,7 @@ impl TryFrom<Rational> for f32 {
   type Error = TryFromIntError;
 
   fn try_from(value: Rational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as f32)
+    Ok(((value.n as f32) / (value.d as f32)) as f32) // TODO
   }
 }
 
@@ -133,7 +137,7 @@ impl TryFrom<SRational> for usize {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as usize)
+    Ok(((value.n as f32) / (value.d as f32)) as usize) // TODO
   }
 }
 
@@ -141,7 +145,7 @@ impl TryFrom<SRational> for u8 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u8)
+    Ok(((value.n as f32) / (value.d as f32)) as u8) // TODO
   }
 }
 
@@ -149,7 +153,7 @@ impl TryFrom<SRational> for u16 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u16)
+    Ok(((value.n as f32) / (value.d as f32)) as u16) // TODO
   }
 }
 
@@ -157,7 +161,7 @@ impl TryFrom<SRational> for u32 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u32)
+    Ok(((value.n as f32) / (value.d as f32)) as u32) // TODO
   }
 }
 
@@ -165,7 +169,7 @@ impl TryFrom<SRational> for u64 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as u64)
+    Ok(((value.n as f32) / (value.d as f32)) as u64) // TODO
   }
 }
 
@@ -173,7 +177,7 @@ impl TryFrom<SRational> for i8 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i8)
+    Ok(((value.n as f32) / (value.d as f32)) as i8) // TODO
   }
 }
 
@@ -181,7 +185,7 @@ impl TryFrom<SRational> for i16 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i16)
+    Ok(((value.n as f32) / (value.d as f32)) as i16) // TODO
   }
 }
 
@@ -189,7 +193,7 @@ impl TryFrom<SRational> for i32 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i32)
+    Ok(((value.n as f32) / (value.d as f32)) as i32) // TODO
   }
 }
 
@@ -197,7 +201,7 @@ impl TryFrom<SRational> for i64 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as i64)
+    Ok(((value.n as f32) / (value.d as f32)) as i64) // TODO
   }
 }
 
@@ -205,7 +209,7 @@ impl TryFrom<SRational> for f32 {
   type Error = TryFromIntError;
 
   fn try_from(value: SRational) -> std::result::Result<Self, Self::Error> {
-    Ok(((value.n as f32) / (value.d as f32)) as f32)
+    Ok(((value.n as f32) / (value.d as f32)) as f32) // TODO
   }
 }
 
@@ -233,7 +237,7 @@ impl From<f32> for Rational {
       panic!("Can not convert {} to Rational type", value);
     }
     let ratio = num::rational::Ratio::from_float(value).expect("Failed to convert float");
-
+    // TODO: This is a workaround, need to implement better routine
     Self::new(
       ratio.numer().try_into().expect("Rational numerator overflows u32"),
       ratio.denom().try_into().expect("Rational denominator overflows u32"),
@@ -288,6 +292,7 @@ impl<'de> Deserialize<'de> for Rational {
   }
 }
 
+/// Type to represent tiff values of type `SRATIONAL`
 #[derive(Clone, Debug, Default, Copy)]
 pub struct SRational {
   pub n: i32,
@@ -372,31 +377,31 @@ impl From<Infallible> for ValueConvertError {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
-
+  /// 8-bit unsigned integer
   Byte(Vec<u8>),
-
+  /// 8-bit byte that contains a 7-bit ASCII code; the last byte must be zero
   Ascii(TiffAscii),
-
+  /// 16-bit unsigned integer
   Short(Vec<u16>),
-
+  /// 32-bit unsigned integer
   Long(Vec<u32>),
-
+  /// Fraction stored as two 32-bit unsigned integers
   Rational(Vec<Rational>),
-
+  /// 8-bit signed integer
   SByte(Vec<i8>),
-
+  /// 8-bit byte that may contain anything, depending on the field
   Undefined(Vec<u8>),
-
+  /// 16-bit signed integer
   SShort(Vec<i16>),
-
+  /// 32-bit signed integer
   SLong(Vec<i32>),
-
+  /// Fraction stored as two 32-bit signed integers
   SRational(Vec<SRational>),
-
+  /// 32-bit IEEE floating point
   Float(Vec<f32>),
-
+  /// 64-bit IEEE floating point
   Double(Vec<f64>),
-
+  /// Unknown type, wrapped in u8
   Unknown(u16, Vec<u8>),
 }
 
@@ -844,7 +849,7 @@ impl Value {
             | ((*v.get(3).unwrap_or(&0) as u32) << 24),
         ),
         Self::Ascii(v) => {
-
+          //let cstr = CString::new(v.as_str()).unwrap();
           let v = v.as_vec_with_nul();
           Ok(
             (*v.get(0).unwrap_or(&0) as u32)
@@ -889,7 +894,7 @@ impl Value {
         w.write_all(val)?;
       }
       Self::Ascii(val) => {
-
+        //let cstr = CString::new(val.as_str()).unwrap();
         let bytes = val.as_vec_with_nul();
         w.write_all(&bytes)?;
       }
@@ -1039,9 +1044,13 @@ impl TiffAscii {
     let mut strings = Vec::new();
     let mut nul_range_end = 0;
 
-    nul_range_end = raw[nul_range_end..].iter().position(|&c| c == b'\0').unwrap_or(raw.len());
+    // TODO: fixme multiple strings
+    //while nul_range_end < raw.len() {
+    nul_range_end = raw[nul_range_end..].iter().position(|&c| c == b'\0').unwrap_or(raw.len()); // default to length if no `\0` present
     let s = ::std::str::from_utf8(&raw[0..nul_range_end]).unwrap_or("!!!INVALID UTF8!!!");
     strings.push(String::from(s));
+    //nul_range_end += 1;
+    // }
 
     Self {
       strings,

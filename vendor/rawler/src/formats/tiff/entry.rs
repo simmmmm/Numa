@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::io::{Read, Seek};
 
 use log::debug;
@@ -27,8 +30,9 @@ const TYPE_DOUBLE: u16 = 12;
 pub struct Entry {
   pub tag: u16,
   pub value: Value,
-
-  pub embedded: Option<u32>,
+  // Embedded value for writer, offset for reader
+  // This is only None when building an IFD for writing.
+  pub embedded: Option<u32>, // TODO: rename it
 }
 
 impl std::ops::Deref for Entry {
@@ -55,6 +59,7 @@ impl<'a> RawEntry<'a> {
   }
 }
 
+// 0-1-2-3-4-5-6-7-8-9-10-11-12-13
 const DATASHIFTS: [u8; 14] = [0, 0, 0, 1, 2, 3, 0, 0, 1, 2, 3, 2, 3, 2];
 
 impl Entry {
@@ -66,16 +71,20 @@ impl Entry {
     self.value.count() as u32
   }
 
+  /// Returns the offset
+  /// It is already corrected by `corr` but needs to be summed
+  /// with `base` offset.
   pub fn offset(&self) -> Option<usize> {
     self.embedded.map(|v| v as usize)
   }
 
   pub fn parse<R: Read + Seek>(reader: &mut EndianReader<R>, base: u32, corr: i32, tag: u16) -> Result<Entry> {
-    let pos = reader.position()? - 2;
+    let pos = reader.position()? - 2; // TODO -2 because tag is already read
 
     let typ = reader.read_u16()?;
     let count = reader.read_u32()?;
 
+    // If we don't know the type assume byte data (undefined)
     let compat_typ = if typ == 0 || typ > 12 { 7 } else { typ };
 
     let bytesize: usize = (count as usize) << DATASHIFTS[compat_typ as usize];
@@ -91,7 +100,8 @@ impl Entry {
     );
 
     if offset == u32::MAX || base.checked_add(offset).is_none() {
-
+      // We hit an invalid offset, ignoring this tag
+      // This happens for Olympus E-P2 images in ImageProc IFD for example.
       return Err(TiffError::Overflow(format!("Offset {} is invalid for tag 0x{:X}", offset, tag)));
     }
 
@@ -134,7 +144,7 @@ impl Entry {
         }
       }
       TYPE_RATIONAL => {
-        let mut tmp = vec![0; count as usize * 2];
+        let mut tmp = vec![0; count as usize * 2]; // Rational is 2x u32
         reader.read_u32_into(&mut tmp)?;
 
         let mut v = Vec::with_capacity(count as usize);
@@ -184,7 +194,7 @@ impl Entry {
         }
       }
       TYPE_SRATIONAL => {
-        let mut tmp = vec![0; count as usize * 2];
+        let mut tmp = vec![0; count as usize * 2]; // SRational is 2x i32
         reader.read_i32_into(&mut tmp)?;
 
         let mut v = Vec::with_capacity(count as usize);
@@ -225,7 +235,7 @@ impl Entry {
         }
       }
     };
-    reader.goto(pos + 12)?;
+    reader.goto(pos + 12)?; // Size of IFD entry
     Ok(entry)
   }
 

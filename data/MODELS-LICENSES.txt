@@ -35,7 +35,9 @@ face_recognition_sface_2021dec.onnx
   SFace, Yaoyao Zhong, Weihong Deng et al. OpenCV Zoo.
   https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
   Licence: Apache License 2.0
-  Its training data, face datasets, is licensed for research use only.
+  Its training data, face datasets, is licensed for research use only, so
+  Numa offers SFace for non-commercial use only (Linux only; not in the paid
+  Apple app).
 
 image_classification_ppresnet50_2022jan.onnx
   PP-ResNet50 on ImageNet-1k, PaddlePaddle / PaddleClas. OpenCV Zoo.
@@ -84,6 +86,7 @@ vitmatte_small.onnx  (Linux only; not offered by the paid Apple app)
   Matting dataset, whose licence says models trained on it "can only be used
   and distributed for noncommercial purposes and may not be sold". Credit:
   N. Xu, B. Price, S. Cohen, T. Huang, "Deep Image Matting", CVPR 2017.
+  Numa offers it for non-commercial use only.
 
 lama_fp32.onnx
   LaMa (big-lama), Roman Suvorov et al. https://github.com/advimman/lama

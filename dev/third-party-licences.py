@@ -49,10 +49,13 @@ def main():
         for dep in nodes[at]["deps"]:
             if any(kind["kind"] in (None, "build") for kind in dep["dep_kinds"]):
                 todo.append(dep["pkg"])
-    # Numa's own crates are the workspace's members. A path crate that is not
-    # one is third-party code carried in the tree (vendor/, PERF-021) and is
+    # Numa's own crates: the workspace's members, and this repository's crates/
+    # when another workspace (the Apple app's) builds them. A path crate that is
+    # neither is third-party code carried in the tree (vendor/, PERF-021) and is
     # listed like any other.
-    crates = sorted((packages[i] for i in seen if i not in members), key=lambda p: (p["name"], p["version"]))
+    ours = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "crates") + os.sep
+    own = {i for i in seen if i in members or packages[i]["manifest_path"].startswith(ours)}
+    crates = sorted((packages[i] for i in seen if i not in own), key=lambda p: (p["name"], p["version"]))
 
     def files_of(package):
         folder = os.path.dirname(package["manifest_path"])
@@ -77,18 +80,30 @@ def main():
     for c in crates:
         if len(texts[c["id"]]) == 1 and c.get("license") and " " not in c["license"]:
             canonical.setdefault(c["license"], texts[c["id"]][0])
+    # An own crate with a part under another licence than Numa's — numa-gpu's
+    # demosaic.wgsl, rawler's LGPL-2.1 — is listed under that licence's text.
+    for i in sorted(own):
+        if set(re.findall(r"[A-Za-z0-9.\-]+", packages[i].get("license") or "")) - {"GPL-3.0-or-later", "AND", "OR", "WITH"}:
+            crates.append(packages[i])
+            texts[i] = []
     missing = []
     for c in crates:
         if texts[c["id"]]:
             continue
         spdx = re.findall(r"[A-Za-z0-9.\-]+", c.get("license") or "")
         spdx = [s for s in spdx if s not in ("OR", "AND", "WITH")]
-        chosen = [canonical[s] for s in spdx if s in canonical][:1]
+        if c["id"] in own:
+            spdx = [s for s in spdx if s != "GPL-3.0-or-later"]
+        # LGPL-2.1-only is the newer name of LGPL-2.1.
+        chosen = [canonical.get(s) or canonical.get(s.removesuffix("-only")) for s in spdx]
+        chosen = [text for text in chosen if text][:1]
         if not chosen:
             missing.append(f"{c['name']} {c['version']} ({c.get('license')})")
             continue
         authors = ", ".join(c.get("authors") or []) or f"the {c['name']} authors"
-        texts[c["id"]] = [f"{c.get('license')} — the crate ships no licence file; its authors: {authors}.\n\n{chosen[0]}"]
+        # An own crate's part shares the text it came with (numa-gpu beside rawler).
+        texts[c["id"]] = [chosen[0] if c["id"] in own else
+                          f"{c.get('license')} — the crate ships no licence file; its authors: {authors}.\n\n{chosen[0]}"]
     if missing:
         sys.exit("no licence text for: " + "; ".join(missing))
 

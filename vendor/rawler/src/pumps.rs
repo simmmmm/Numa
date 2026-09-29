@@ -18,14 +18,19 @@ impl<'a> BitPumpLSB<'a> {
     }
   }
 
+  /// Refill internal bit buffer - Little-Endian
+  ///
+  /// For fast refill, we can simply take a whole u32 value out.
+  /// For slow refill, there may be 1, 2 or 3 bytes left in buffer. We need
+  /// to collect them manually.
   fn refill(&mut self) -> (u32, u32) {
     if let Some(chunk) = self.buffer.next() {
       if chunk.len() == 4 {
-
+        // Fast refill
         let bits: u32 = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         (bits, u32::BITS)
       } else {
-
+        // Slow refill
         chunk
           .into_iter()
           .rev()
@@ -37,16 +42,22 @@ impl<'a> BitPumpLSB<'a> {
   }
 }
 
+/// Numa (PERF-021): the bits are kept at the top of a 64-bit word and refilled
+/// with as many whole bytes as fit, eight read at once, rather than one
+/// 32-bit chunk at a time through an iterator. The same bits come out in the
+/// same order; a refill with nothing left to read panics as before.
 #[derive(Debug, Clone)]
 pub struct BitPumpMSB<'a> {
   buffer: &'a [u8],
   pos: usize,
-
+  /// The next `nbits` bits of the stream, most significant first. Below them
+  /// may sit the start of the bytes not yet counted, which the next refill
+  /// writes over with the same bits.
   bits: u64,
   nbits: u32,
-
+  /// Past the end, zeros rather than a panic.
   zeros: bool,
-
+  /// Zero bits made up past the end, so the position keeps counting.
   pad: usize,
 }
 
@@ -62,15 +73,19 @@ impl<'a> BitPumpMSB<'a> {
     }
   }
 
+  /// Numa (PERF-022): a pump that reads zeros past the end of `src`, as
+  /// [`BitPumpJPEG`] does after the last marker.
   pub fn new_zero_padded(src: &'a [u8]) -> Self {
     Self { zeros: true, ..Self::new(src) }
   }
 
+  /// How many bits have been consumed.
   #[inline(always)]
   pub fn bit_pos(&self) -> usize {
     self.pos * 8 + self.pad - self.nbits as usize
   }
 
+  /// Refill internal bit buffer - Big-Endian
   #[inline(always)]
   fn refill(&mut self, num: u32) {
     debug_assert!(self.nbits < num && num <= 32);
@@ -85,9 +100,10 @@ impl<'a> BitPumpMSB<'a> {
     }
   }
 
+  /// The last few bytes, one at a time.
   #[cold]
   fn refill_tail(&mut self, num: u32) {
-
+    // Only the counted bits are kept; the rest is filled byte by byte.
     self.bits &= !(u64::MAX.checked_shr(self.nbits).unwrap_or(0));
     if self.pos >= self.buffer.len() && !self.zeros {
       panic!("Can't refill bitpump, buffer exhausted");
@@ -97,7 +113,7 @@ impl<'a> BitPumpMSB<'a> {
       self.pos += 1;
       self.nbits += 8;
     }
-
+    // Short at the very end: what is missing reads as zeros.
     if self.nbits < num {
       self.pad += (num - self.nbits) as usize;
       self.nbits = num;
@@ -123,14 +139,19 @@ impl<'a> BitPumpMSB32<'a> {
     }
   }
 
+  /// Refill internal bit buffer - MSB32 (bytes read in little-endian order)
+  ///
+  /// For fast refill, we can simply take a whole u32 value out.
+  /// For slow refill, there may be 1, 2 or 3 bytes left in buffer. We need
+  /// to collect them manually.
   fn refill(&mut self) -> (u32, u32) {
     if let Some(chunk) = self.buffer.next() {
       if chunk.len() == 4 {
-
+        // Fast refill
         let bits: u32 = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         (bits, u32::BITS)
       } else {
-
+        // Slow refill
         chunk
           .into_iter()
           .rev()
@@ -194,18 +215,23 @@ pub trait BitPump {
     self.get_bits(num) as i32
   }
 
+  // Sign extend ibits
   #[inline(always)]
   fn get_ibits_sextended(&mut self, num: u32) -> i32 {
     let val = self.get_ibits(num);
     val.wrapping_shl(32 - num).wrapping_shr(32 - num)
   }
 
+  /// Count the leading zeroes block-wise in 31 bits
+  /// per block and returns the count.
+  /// All zero bits are consumed.
   #[inline(always)]
   fn consume_zerobits(&mut self) -> u32 {
-
+    // Take one bit less because leading_zeros() is undefined
+    // when all bits in register are zero.
     const BITS_PER_LOOP: u32 = u32::BITS - 1;
     let mut count = 0;
-
+    // Count-and-skip all the leading `0`s.
     loop {
       let batch: u32 = (self.peek_bits(BITS_PER_LOOP) << 1) | 0x1;
       let n = batch.leading_zeros();
@@ -243,7 +269,7 @@ impl<'a> BitPump for BitPumpMSB<'a> {
     if num > self.nbits {
       self.refill(num);
     }
-
+    // `num` is at most 32, so the shift is 32 or more and never 64 but for 0.
     (self.bits.checked_shr(64 - num).unwrap_or(0)) as u32
   }
 
@@ -289,7 +315,7 @@ impl<'a> BitPump for BitPumpJPEG<'a> {
         self.pos += 4;
         self.nbits += 32;
       } else {
-
+        // Read 32 bits the hard way
         let mut read_bytes = 0;
         while read_bytes < 4 && !self.finished {
           let byte = {
@@ -301,7 +327,7 @@ impl<'a> BitPump for BitPumpJPEG<'a> {
               if nextbyte != 0xff {
                 nextbyte
               } else if self.buffer[self.pos + 1] == 0x00 {
-                self.pos += 1;
+                self.pos += 1; // Skip the extra byte used to mark 255
                 nextbyte
               } else {
                 self.finished = true;
@@ -317,7 +343,7 @@ impl<'a> BitPump for BitPumpJPEG<'a> {
       }
     }
     if num > self.nbits && self.finished {
-
+      // Stuff with zeroes to not fail to read
       self.bits <<= 32;
       self.nbits += 32;
     }
@@ -419,6 +445,15 @@ impl<'a> ByteStream<'a> {
     val
   }
 
+  //  #[inline(always)]
+  //  pub fn peek_u32(&self) -> u32 { self.endian.ru32(self.buffer, self.pos) }
+  //  #[inline(always)]
+  //  pub fn get_u32(&mut self) -> u32 {
+  //    let val = self.peek_u32();
+  //    self.pos += 4;
+  //    val
+  //  }
+
   #[inline(always)]
   pub fn consume_bytes(&mut self, num: usize) {
     self.pos += num
@@ -434,11 +469,17 @@ impl<'a> ByteStream<'a> {
         return Err("No marker found inside rest of buffer".to_string());
       }
     }
-    self.pos += 1;
+    self.pos += 1; // Make the next byte the marker
     Ok(skip_count + 1)
   }
 }
 
+/// This pump is for bitstreams where values are stored in LSB bit order.
+/// During refill, bits are converted from LSB to MSB so peaking
+/// is done by reading in MSB mode.
+///
+/// Input bitstream is:     1011 0101 0010 1110...
+/// Output for peek(10) is: 1010 1101 01
 #[derive(Debug, Copy, Clone)]
 pub struct BitPumpReverseBitsMSB<'a> {
   buffer: &'a [u8],

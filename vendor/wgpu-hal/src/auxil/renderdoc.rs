@@ -1,9 +1,11 @@
+//! RenderDoc integration - <https://renderdoc.org/>
 #![cfg_attr(not(any(feature = "gles", feature = "vulkan")), allow(dead_code))]
 
 use alloc::format;
 use alloc::string::String;
 use core::{ffi, ptr};
 
+/// The dynamically loaded RenderDoc API function table
 #[repr(C)]
 #[derive(Debug)]
 pub struct RenderDocApi {
@@ -14,20 +16,22 @@ pub struct RenderDocApi {
 unsafe impl Send for RenderDocApi {}
 unsafe impl Sync for RenderDocApi {}
 
+/// RenderDoc API type
 #[derive(Debug)]
 pub enum RenderDoc {
-
+    /// RenderDoc functionality is available
     Available {
-
+        /// RenderDoc API with function pointers
         api: RenderDocApi,
     },
-
+    /// RenderDoc functionality is _not_ available
     NotAvailable {
-
+        /// A description why renderdoc functionality is not available
         reason: String,
     },
 }
 
+// TODO: replace with libloading API once supported
 #[cfg(unix)]
 const RTLD_NOLOAD: i32 = 0x4;
 
@@ -105,11 +109,11 @@ impl Default for RenderDoc {
         unsafe { Self::new() }
     }
 }
-
+/// An implementation specific handle
 pub type Handle = *mut ffi::c_void;
 
 impl RenderDoc {
-
+    /// Start a RenderDoc frame capture
     pub unsafe fn start_frame_capture(&self, device_handle: Handle, window_handle: Handle) -> bool {
         match *self {
             Self::Available { api: ref entry } => {
@@ -123,6 +127,7 @@ impl RenderDoc {
         }
     }
 
+    /// End a RenderDoc frame capture
     pub unsafe fn end_frame_capture(&self, device_handle: Handle, window_handle: Handle) {
         match *self {
             Self::Available { api: ref entry } => {

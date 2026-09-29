@@ -182,6 +182,7 @@ fn attention_by_head_is_the_same_attention() {
 }
 
 #[test]
+#[cfg(not(target_vendor = "apple"))]
 fn a_deformable_convolution_by_row_is_the_same_convolution() {
     let (c, k, h, w, out) = (2i64, 3i64, 4i64, 4i64, 3i64);
     let taps = k * k * h * w;

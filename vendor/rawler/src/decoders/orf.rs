@@ -56,42 +56,51 @@ pub fn parse_makernote<R: Read + Seek>(reader: &mut R, exif_ifd: &IFD) -> Result
     match &exif.value {
       Value::Undefined(data) => {
         let mut off = 0;
-
+        // Olympus starts the makernote with their own name, sometimes truncated
         if data[0..5] == b"OLYMP"[..] {
           off += 8;
           if data[0..7] == b"OLYMPUS"[..] {
             off += 4;
           }
         }
-
+        // OM Digital Solutions put their name in front of the TIFF structure, too
         if data[0..9] == b"OM SYSTEM"[..] {
           off += 16;
           assert_eq!(data[12..14], b"II"[..]);
         }
         let endian = exif_ifd.endian;
+        //assert!(data[off..off + 2] == b"II"[..] || data[off..off + 2] == b"MM"[..], "ORF: must contain endian marker in makernote IFD");
+        //let endian = if data[off..off + 2] == b"II"[..] { Endian::Little } else { Endian::Big };
+        //off += 4;
 
         let mut mainifd = IFD::new(reader, offset + off as u32, exif_ifd.base, exif_ifd.corr, endian, &[0x3000])?;
 
+        // Parse the Olympus Equipment section if it exists
         if let Some(entry) = mainifd.get_entry_raw_with_len(OrfMakernotes::EquipmentIFD, reader, 4)? {
-
+          // The entry is of type UNDEFINED and count = 1. This tag contains a single 32 bit
+          // offset to the IFD.
           let ioff = entry.get_force_u32(0);
           log::debug!("Found EquipmentIFD at offset: {}", ioff);
-
+          // The IFD start at offset+ioff, but all offsets inside the IFD a relative to the main makernote IFD offset.
+          // So we use the main IFD as base offset, but start parsing IFD at ioff.
           let ifd = IFD::new(reader, ioff, offset, 0, endian, &[])?;
           mainifd.sub.insert(OrfMakernotes::EquipmentIFD.into(), vec![ifd]);
         }
 
+        // For Olympus or OM-System models
         if off == 12 || off == 16 {
-
+          // Parse the Olympus ImgProc section if it exists
           let ioff = if let Some(entry) = mainifd.get_entry_raw_with_len(OrfMakernotes::ImageProcessingIFD, reader, 4)? {
-
+            // The entry is of type UNDEFINED and count = 1. This tag contains a single 32 bit
+            // offset to the IFD.
             entry.get_force_u32(0)
           } else {
             0
           };
           if ioff != 0 {
             log::debug!("Found ImageIFD at offset: {}", ioff);
-
+            // The IFD start at offset+ioff, but all offsets inside the IFD a relative to the main makernote IFD offset.
+            // So we use the main IFD as base offset, but start parsing IFD at ioff.
             let iprocifd = IFD::new(reader, ioff, offset, 0, endian, &[])?;
             mainifd.sub.insert(OrfMakernotes::ImageProcessingIFD.into(), vec![iprocifd]);
           } else {
@@ -118,6 +127,8 @@ impl<'a> OrfDecoder<'a> {
       None
     }
     .ok_or("File has not makernotes")?;
+
+    //makernote.dump::<ExifTag>(0).iter().for_each(|line| eprintln!("DUMP: {}", line));
 
     Ok(OrfDecoder {
       tiff,
@@ -170,6 +181,10 @@ impl<'a> Decoder for OrfDecoder<'a> {
       counts.count()
     );
 
+    // These conditions are sorted in descending order.
+    // All ORF files comes with no hints about the used compression.
+    // But we need to differentiate between 12be-interlaced and
+    // 12be-msb32 because they are in the same size range.
     let image = if size >= width * height * 2 {
       let src = file.subview(offset as u64, size as u64)?;
       if self.tiff.little_endian() {
@@ -186,10 +201,12 @@ impl<'a> Decoder for OrfDecoder<'a> {
     } else if size >= width * height * 12 / 8 {
       if self.camera.find_hint("interlaced") {
         log::debug!("ORF: decompress_12be_interlaced");
-
+        // If interlaced, there is a gap between the strips.
+        // To prevent reassembly of strips, we calculate the gap
+        // and increase the src buffer.
         let gap = {
           let half = (height + 1) >> 1;
-
+          // Second field is 2048 byte aligned
           let second_field_offset = (((half * width * 3 / 2) >> 11) + 1) << 11;
           let second_field_offset_unaligned = half * width * 3 / 2;
           second_field_offset - second_field_offset_unaligned
@@ -216,7 +233,8 @@ impl<'a> Decoder for OrfDecoder<'a> {
       img.crop_area = Some(crop);
     }
     if bps == 14 {
-
+      // Blacklevel is already corrected, only required for whitelevel.
+      // Encoded for 12 bps, whitelevel must be multiplied by 4.
       img.whitelevel.0.iter_mut().for_each(|level| *level = *level << 2);
     }
 
@@ -239,10 +257,17 @@ impl<'a> Decoder for OrfDecoder<'a> {
 }
 
 impl<'a> OrfDecoder<'a> {
+  /* This is probably the slowest decoder of them all.
+   * I cannot see any way to effectively speed up the prediction
+   * phase, which is by far the slowest part of this algorithm.
+   * Also there is no way to multithread this code, since prediction
+   * is based on the output of all previous pixel (bar the first four)
+   */
 
   pub fn decode_compressed(buf: &PaddedBuf, width: usize, height: usize, bps: usize, dummy: bool) -> PixU16 {
     let mut out = alloc_image!(width, height, dummy);
 
+    /* Build a table to quickly look up "high" value */
     let mut bittable: [u8; 4096] = [0; 4096];
     for i in 0..4096 {
       let mut b = 12;
@@ -266,7 +291,7 @@ impl<'a> OrfDecoder<'a> {
       for c in 0..width / 2 {
         let col: usize = c * 2;
         for s in 0..2 {
-
+          // Run twice for odd and even pixels
           let i = if acarry[s][2] < 3 { 2 } else { 0 };
           let mut nbits = 2 + i;
           while ((acarry[s][0] >> (nbits + i)) & 0xffff) > 0 {
@@ -279,6 +304,7 @@ impl<'a> OrfDecoder<'a> {
           let low: i32 = (b >> 12) & 3;
           let mut high: i32 = bittable[(b & 4095) as usize] as i32;
 
+          // Skip bytes used above or read bits
           if high == 12 {
             pump.consume_bits(15);
             high = pump.get_ibits(16 - nbits) >> 1;
@@ -292,15 +318,15 @@ impl<'a> OrfDecoder<'a> {
           acarry[s][2] = if acarry[s][0] > 16 { 0 } else { acarry[s][2] + 1 };
 
           if row < 2 || col < 2 {
-
+            // We're in a border, special care is needed
             let pred = if row < 2 && col < 2 {
-
+              // We're in the top left corner
               0
             } else if row < 2 {
-
+              // We're going along the top border
               left[s]
             } else {
-
+              // col < 2, we're at the start of a line
               nw[s] = out[(row - 2) * width + (col + s)] as i32;
               nw[s]
             };
@@ -310,7 +336,12 @@ impl<'a> OrfDecoder<'a> {
             let up: i32 = out[(row - 2) * width + (col + s)] as i32;
             let left_minus_nw: i32 = left[s] - nw[s];
             let up_minus_nw: i32 = up - nw[s];
-
+            // Check if sign is different, and one is not zero
+            //
+            // Numa (PERF-027): every candidate worked out and one chosen, so
+            // the choice is a select rather than a branch the noise in the
+            // picture keeps mispredicting. The same arithmetic, wrapping
+            // where the release build always wrapped.
             let (a, b) = (left_minus_nw.wrapping_abs(), up_minus_nw.wrapping_abs());
             let across = if a > 32 || b > 32 { left[s].wrapping_add(up_minus_nw) } else { (left[s].wrapping_add(up)) >> 1 };
             let along = if a > b { left[s] } else { up };
@@ -336,7 +367,7 @@ impl<'a> OrfDecoder<'a> {
     let blacks = fetch_tiff_tag!(ifd[0], OrfImageProcessing::OrfBlackLevels);
     let mut levels = [blacks.force_u16(0), blacks.force_u16(1), blacks.force_u16(2), blacks.force_u16(3)];
     if bps == 14 {
-
+      // Blacklevel is encoded for 12 bits
       levels.iter_mut().for_each(|level| *level = *level << 2);
     }
     Ok(Some(BlackLevel::new(&levels, self.camera.cfa.width, self.camera.cfa.height, 1)))
@@ -362,6 +393,7 @@ impl<'a> OrfDecoder<'a> {
     Ok(Some(Rect::new(Point::new(crop_left, crop_top), Dim2::new(crop_width, crop_height))))
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     if let Some(ifd) = self.makernote.get_sub_ifd(OrfMakernotes::EquipmentIFD) {
       match ifd.get_entry(OrfEquipmentTags::LensType) {

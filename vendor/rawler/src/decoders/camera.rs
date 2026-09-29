@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use super::BlackLevel;
 use super::WhiteLevel;
 
+/// Contains sanitized information about the raw image's properties
 #[derive(Debug, Clone, Default)]
 pub struct Camera {
   pub make: String,
@@ -21,7 +22,7 @@ pub struct Camera {
   pub filesize: usize,
   pub raw_width: usize,
   pub raw_height: usize,
-
+  //pub orientation: Orientation,
   pub whitelevel: Option<Vec<u32>>,
   pub blacklevel: Option<Vec<u32>>,
   pub blackareah: Option<(usize, usize)>,
@@ -30,13 +31,13 @@ pub struct Camera {
   pub color_matrix: HashMap<Illuminant, FlatColorMatrix>,
   pub cfa: CFA,
   pub plane_color: PlaneColor,
-
+  // Active area relative to sensor size
   pub active_area: Option<[usize; 4]>,
-
+  // Recommended area relative to sensor size
   pub crop_area: Option<[usize; 4]>,
-
+  // Hint/Replacement for EXIF BITDEPTH info
   pub bps: Option<usize>,
-
+  // The BPS of the output after decoding
   pub real_bps: usize,
   pub highres_width: usize,
   pub default_scale: DefaultScale,
@@ -239,7 +240,7 @@ impl Camera {
           }
         }
         "model_aliases" => {}
-        "modes" => {}
+        "modes" => {} // ignore
         key => {
           panic!("Unknown key: {}", key);
         }
@@ -275,7 +276,7 @@ impl Camera {
       best_quality_scale: BestQualityScale::default(),
       hints: Vec::new(),
       params: HashMap::new(),
-
+      //orientation: Orientation::Unknown,
     }
   }
 }

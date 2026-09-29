@@ -1,0 +1,73 @@
+{
+  "parts": {
+    "white_balance": false,
+    "tone": true,
+    "colour": true,
+    "curve": true,
+    "detail": false,
+    "geometry": false
+  },
+  "document": {
+    "source": {
+      "path": ""
+    },
+    "operations": [
+      {
+        "type": "Basic",
+        "contrast": -12,
+        "highlights": -25,
+        "shadows": 15,
+        "saturation": -10,
+        "vibrance": 8,
+        "grain": 15,
+        "grain_size": 20
+      },
+      {
+        "type": "Curve",
+        "points": [
+          [
+            0,
+            0.05
+          ],
+          [
+            0.25,
+            0.26
+          ],
+          [
+            0.75,
+            0.76
+          ],
+          [
+            1,
+            0.97
+          ]
+        ]
+      },
+      {
+        "type": "Grading",
+        "shadows": {
+          "hue": 200,
+          "saturation": 8,
+          "luminance": 0
+        },
+        "midtones": {
+          "hue": 0,
+          "saturation": 0,
+          "luminance": 0
+        },
+        "highlights": {
+          "hue": 45,
+          "saturation": 12,
+          "luminance": 0
+        },
+        "global": {
+          "hue": 0,
+          "saturation": 0,
+          "luminance": 0
+        },
+        "blending": 50,
+        "balance": 0
+      }
+    ]
+  }
+}

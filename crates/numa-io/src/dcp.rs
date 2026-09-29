@@ -702,12 +702,12 @@ mod tests {
             eprintln!("no private profiles in this tree; skipping");
             return;
         }
-        let names = names_for_camera("Canon", "Canon EOS R5");
-        assert!(names.contains(&("Numa EOS R5".to_string(), Source::Numa)), "{names:?}");
-        let ranked = ranked("Canon", "Canon EOS R5");
+        let names = names_for_camera("Canon", "Canon EOS R");
+        assert!(names.contains(&("Numa EOS R".to_string(), Source::Numa)), "{names:?}");
+        let ranked = ranked("Canon", "Canon EOS R");
         let name = |automatic| choose(&ranked, automatic).map(|profile| profile.name.as_str());
-        assert_eq!(name(Automatic::default()), Some("Numa EOS R5"));
-        assert_ne!(name(Automatic::Standard), Some("Numa EOS R5"));
+        assert_eq!(name(Automatic::default()), Some("Numa EOS R"));
+        assert_ne!(name(Automatic::Standard), Some("Numa EOS R"));
         assert_eq!(name(Automatic::Matrix), None);
     }
 
@@ -813,5 +813,16 @@ mod tests {
         std::fs::write(&path, b"this is not a TIFF").unwrap();
         assert!(read(&path).is_err());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn cold_lookup() {
+        println!("{} profiles installed", installed().len());
+        for (make, model) in [("Fujifilm", "X-T30"), ("Sony", "ILCE-7M4"), ("Canon", "EOS R6"), ("Nikon", "Z 6_2"), ("Panasonic", "DC-G9")] {
+            let start = std::time::Instant::now();
+            let found = for_camera(make, model).len();
+            println!("{make} {model}: {found} profiles in {:.1} ms", start.elapsed().as_secs_f64() * 1e3);
+        }
     }
 }

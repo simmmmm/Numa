@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use image::DynamicImage;
 use log::{debug, warn};
 use num::Zero;
@@ -24,21 +27,22 @@ const CANON_CN_MOUNT: &str = "cn-mount";
 const CANON_EF_MOUNT: &str = "ef-mount";
 const CANON_RF_MOUNT: &str = "rf-mount";
 
+/// Decoder for CR3 and CRM files
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Cr3Decoder<'a> {
   camera: Camera,
   rawloader: &'a RawLoader,
   bmff: Bmff,
-
+  // Basic EXIF information
   cmt1: GenericTiffReader,
-
+  // EXIF
   cmt2: GenericTiffReader,
-
+  // Makernotes
   cmt3: GenericTiffReader,
-
+  // GPS
   cmt4: GenericTiffReader,
-
+  // Metadata cache
   md_cache: DecoderCache<Cr3Metadata>,
 }
 
@@ -49,7 +53,7 @@ struct Cr3Metadata {
   ctmd_focallen: Option<Rational>,
   ctmd_rec7_exif: Option<GenericTiffReader>,
   ctmd_rec7_makernotes: Option<GenericTiffReader>,
-
+  // CTMD Makernotes: COLORDATA
   ctmd_rec8: Option<GenericTiffReader>,
   ctmd_rec9: Option<GenericTiffReader>,
   xpacket: Option<Vec<u8>>,
@@ -66,6 +70,7 @@ struct Cr3Metadata {
 const CR3_CTMD_BLOCK_EXIFIFD: u16 = 0x8769;
 const CR3_CTMD_BLOCK_MAKERNOTES: u16 = 0x927c;
 
+/// Type values for CCTP records
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 enum Cr3ImageType {
@@ -77,7 +82,7 @@ enum Cr3ImageType {
 }
 
 impl<'a> Cr3Decoder<'a> {
-
+  /// Construct new CR3 or CRM deocder
   pub fn new(_rawfile: &RawSource, bmff: Bmff, rawloader: &'a RawLoader) -> Result<Cr3Decoder<'a>> {
     if let Some(Cr3DescBox { cmt1, cmt2, cmt3, cmt4, .. }) = bmff.filebox.moov.cr3desc.as_ref() {
       let mode = Self::get_mode(cmt3.tiff.root_ifd())?;
@@ -98,6 +103,8 @@ impl<'a> Cr3Decoder<'a> {
     }
   }
 
+  // Search for quality tag inside makernotes and derive
+  // our mode string for configuration.
   fn get_mode(makernotes: &IFD) -> Result<&str> {
     Ok(if let Some(entry) = makernotes.get_entry(0x0001) {
       match entry.force_u16(3) {
@@ -112,24 +119,29 @@ impl<'a> Cr3Decoder<'a> {
     })
   }
 
+  /// Get trak from moov box
   fn moov_trak(&self, trak_id: usize) -> Option<&TrakBox> {
     self.bmff.filebox.moov.traks.get(trak_id)
   }
 
+  /// Get IAD1 box for specific trak
   fn iad1_box(&self, trak_idx: usize) -> Option<&Iad1Box> {
     let trak = &self.bmff.filebox.moov.traks[trak_idx];
     let craw = trak.mdia.minf.stbl.stsd.craw.as_ref();
     craw.and_then(|craw| craw.cdi1.as_ref()).map(|cdi1| &cdi1.iad1)
   }
 
+  /// Get CMP1 box for specific trak
   fn cmp1_box(&self, trak_idx: usize) -> Option<&Cmp1Box> {
     let trak = &self.bmff.filebox.moov.traks[trak_idx];
     let craw = trak.mdia.minf.stbl.stsd.craw.as_ref();
     craw.and_then(|craw| craw.cmp1.as_ref())
   }
 
+  /// Read CTMD records for given sample
+  /// Each sample (for movie files) have their own CTMD records
   fn read_ctmd(&self, rawfile: &RawSource, sample_idx: u32) -> Result<Option<Ctmd>> {
-
+    // Search for a trak which has a CTMD box (there should be only one)
     if let Some(ctmd_trak_index) = self
       .bmff
       .filebox
@@ -153,6 +165,7 @@ impl<'a> Cr3Decoder<'a> {
         .subview(offset as u64, size as u64)
         .map_err(|e| RawlerError::with_io_error("CR3: failed to read CTMD", rawfile.path(), e))?;
 
+      //dump_buf("/tmp/ctmd.buf", &buf);
       let mut substream = ByteStream::new(buf, Endian::Little);
       let ctmd = Ctmd::new(&mut substream);
       Ok(Some(ctmd))
@@ -191,7 +204,11 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     if let Some(gps) = &mut exif.gps {
       for (tag, entry) in self.cmt4.root_ifd().entries() {
         match tag {
-
+          // Special handling for Exif.GPSInfo.GPSLatitude and Exif.GPSInfo.GPSLongitude.
+          // Exif.GPSInfo.GPSTimeStamp is wrong, too and can be fixed with the same logic.
+          // Canon CR3 contains only two rationals, but these tags are specified as a vector
+          // of three reationals (degrees, minutes, seconds).
+          // We fix this by extending with 0/1 as seconds value.
           0x0002 | 0x0004 | 0x0007 => match &entry.value {
             Value::Rational(v) => {
               let fixed_value = if v.len() == 2 { vec![v[0], v[1], Rational::new(0, 1)] } else { v.clone() };
@@ -214,7 +231,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     let mut mdata = RawMetadata::new_with_lens(&self.camera, exif, cr3md.lens_description.cloned());
 
     if let Some(unique_id) = &cr3md.image_unique_id {
-
+      // For CR3, we use the already included Makernote tag with unique image ID
       mdata.unique_image_id = Some(u128::from_le_bytes(*unique_id));
     }
 
@@ -226,6 +243,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     Ok(cr3md.xpacket)
   }
 
+  /// CR3 can store multiple samples in trak
   fn raw_image_count(&self) -> Result<usize> {
     let raw_trak_id = rawler_crx_raw_trak()
       .or_else(|| self.get_trak_index(Cr3ImageType::CrxBix))
@@ -234,6 +252,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     Ok(moov_trak.mdia.minf.stbl.stsz.sample_count as usize)
   }
 
+  /// Decode raw image
   fn raw_image(&self, file: &RawSource, params: &RawDecodeParams, dummy: bool) -> Result<RawImage> {
     let sample_idx = params.image_index;
     if sample_idx >= self.raw_image_count()? {
@@ -256,6 +275,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
       .or_else(|| self.get_trak_index(Cr3ImageType::CrxBix))
       .ok_or("Unable to find trak index")?;
 
+    // Load trak with raw MDAT section
     let moov_trak = self.moov_trak(raw_trak_id).ok_or(format!("Unable to get MOOV trak {}", raw_trak_id))?;
     let (offset, size) = moov_trak
       .mdia
@@ -264,7 +284,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
       .get_sample_offset(sample_idx as u32 + 1)
       .ok_or_else(|| RawlerError::DecoderFailed(format!("stbl sample not found")))?;
     debug!("RAW mdat offset: {}, len: {}", offset, size);
-
+    // Raw data buffer
     let buf = file
       .subview(offset as u64, size as u64)
       .map_err(|e| RawlerError::with_io_error("CR3: failed to read raw data", file.path(), e))?;
@@ -273,19 +293,21 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     debug!("cmp1 mdat hdr size: {}", cmp1.mdat_hdr_size);
 
     let mut wb = cr3md.wb.unwrap_or_else(|| {
-
+      // This is known for R5 C CRM Standard-Raw files
       log::warn!("No WB info in CR3 metadata found, fallback to 1.0 coefficients");
       [1.0, 1.0, 1.0, f32::NAN]
     });
     let whitelevel = cr3md.whitelevel.unwrap_or(((1_u32 << self.camera.bps.unwrap_or(16)) - 1) as u16);
 
+    // Special handling for CRM movie files
     if let Some(entry) = self.cmt3.get_entry(0x0001) {
       if 130 == entry.force_u16(3) {
-
+        // Light Raw
+        // WB is already applied, use 1.0
         wb = [1.0, 1.0, 1.0, f32::NAN];
       }
-      if 131 == entry.force_u16(3) {
-
+      if 131 == entry.force_u16(3) { // Standard Raw
+        // Nothing special for Standard raw
       }
     }
 
@@ -307,10 +329,14 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     let photometric = RawPhotometricInterpretation::Cfa(CFAConfig::new_from_camera(&self.camera));
     let mut img = RawImage::new(self.camera.clone(), image, cpp, wb, photometric, blacklevel, Some(whitelevel), dummy);
 
+    // IAD1 box contains sensor information
+    // We use the sensor crop from IAD1 as recommended image crop.
+    // The same crop is used as ActiveArea, because black areas in IAD1 are not
+    // correct (they differs like 4-6 pixels from real values).
     match self.iad1_box(raw_trak_id) {
       Some(iad1) => {
         match &iad1.iad1_type {
-
+          // IAD1 (small, used for CRM movie files)
           Iad1Type::Small(small) => {
             img.crop_area = Some(Rect::new_with_points(
               Point::new(small.crop_left_offset as usize, small.crop_top_offset as usize),
@@ -318,7 +344,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
             ));
             img.active_area = img.crop_area;
           }
-
+          // IAD1 (big, used for full size raws)
           Iad1Type::Big(big) => {
             let rect_crop = Rect::new_with_points(
               Point::new(big.crop_left_offset as usize, big.crop_top_offset as usize),
@@ -329,8 +355,12 @@ impl<'a> Decoder for Cr3Decoder<'a> {
 
             img.crop_area = Some(rect_crop);
 
+            // For uncropped files this is fine, but for 1.6 crop files, the dimension is wrong.
+            // For example, R5 crop is total height of 3510, but active_area_bottom_offset is 3512.
             let rect_active = {
-
+              // Limit the offsets to image bounds.
+              // Probably broken firmware, glitches in sensor size calculation or I'm just making
+              // wrong asumptions...
               let right = usize::min(cmp1.f_width as usize, (big.active_area_right_offset - 1) as usize);
               let bottom = usize::min(cmp1.f_height as usize, (big.active_area_bottom_offset - 1) as usize);
               Rect::new_with_points(
@@ -344,9 +374,11 @@ impl<'a> Decoder for Cr3Decoder<'a> {
             assert!(rect_crop.width() <= rect_active.width());
             assert!(rect_crop.height() <= rect_active.height());
 
+            // Check if after apply of active_area the crop is out of bounds.
+            // This is know to happen with R5II 1.6 crop raw files.
             let overflow = (rect_crop.x() - rect_active.x()) + rect_crop.width() > rect_active.width();
             if self.camera.find_hint("activearea_bug") && overflow {
-
+              // In this case, we ignore the active_area in IAD1 and use the crop instead.
               log::debug!("Raw file has invalid active_area parameters in IAD1, using crop_area instead");
               img.active_area = Some(rect_crop);
             } else {
@@ -359,14 +391,16 @@ impl<'a> Decoder for Cr3Decoder<'a> {
               Point::new((big.lob_right_offset - 1) as usize, (big.lob_bottom_offset - 1) as usize),
             );
             if !blackarea_h.is_empty() {
-
+              // Areas are sometimes wrong, don't add them!
+              //img.blackareas.push(blackarea_h);
             }
             let blackarea_v = Rect::new_with_points(
               Point::new(big.tob_left_offset as usize, big.tob_top_offset as usize),
               Point::new((big.tob_right_offset - 1) as usize, (big.tob_bottom_offset - 1) as usize),
             );
             if !blackarea_v.is_empty() {
-
+              // Areas are sometimes wrong, don't add them!
+              //img.blackareas.push(blackarea_v);
             }
           }
         }
@@ -382,6 +416,7 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     Ok(img)
   }
 
+  /// Extract preview image embedded in CR3
   fn preview_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     if rawler_ignore_previews() {
       return Err(RawlerError::DecoderFailed("Unable to extract preview image".into()));
@@ -528,11 +563,25 @@ impl<'a> Cr3Decoder<'a> {
       if let Some(rec8) = ctmd.get_as_tiff(8, CR3_CTMD_BLOCK_MAKERNOTES)? {
         if let Some(colordata) = rec8.get_entry(Cr3MakernoteTag::ColorData) {
           let colordata = cr2::parse_colordata(colordata)?;
-
+          //rec8.root_ifd().dump::<TiffCommonTag>(10).iter().for_each(|line| eprintln!("MKD: {}", line));
           md.wb = Some(normalize_wb(colordata.wb));
           md.blacklevels = colordata.blacklevel;
           md.whitelevel = colordata.specular_whitelevel;
-
+          /*
+          if let crate::formats::tiff::Value::Short(v) = &levels.value {
+            if let Some(offset) = self.camera.param_usize("colordata_wbcoeffs") {
+              let raw_wb = [v[offset] as f32, v[offset + 1] as f32, v[offset + 2] as f32, v[offset + 3] as f32];
+              md.wb = Some(normalize_wb(raw_wb));
+            }
+            if let Some(offset) = self.camera.param_usize("colordata_blacklevel") {
+              debug!("Blacklevel offset: {:x}", offset);
+              md.blacklevels = Some([v[offset], v[offset + 1], v[offset + 2], v[offset + 3]]);
+            }
+            if let Some(offset) = self.camera.param_usize("colordata_whitelevel") {
+              md.whitelevel = Some(v[offset]);
+            }
+          }
+           */
         }
         md.ctmd_rec8 = Some(rec8);
       }
@@ -543,7 +592,7 @@ impl<'a> Cr3Decoder<'a> {
 
     let resolver = LensResolver::new()
       .with_lens_keyname(self.read_lens_name()?)
-      .with_camera(&self.camera)
+      .with_camera(&self.camera) // must follow with_lens_keyname() as it my override key
       .with_lens_id(self.read_lens_id()?)
       .with_aperture(md.ctmd_exposure.as_ref().map(|x| x.fnumber.clone()))
       .with_focal_len(md.ctmd_focallen.clone())
@@ -569,11 +618,13 @@ impl<'a> Cr3Decoder<'a> {
   }
 }
 
+/// CTMD section with multiple records
 #[derive(Clone, Debug)]
 struct Ctmd {
   pub records: HashMap<u16, CtmdRecord>,
 }
 
+/// Record inside CTMD section
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct CtmdRecord {
@@ -611,7 +662,7 @@ impl Ctmd {
         "CTMD Rec {:02}:  {}, {}, {}, {}, {}, {}",
         rec.rec_type, rec.reserved1, rec.reserved2, rec.reserved3, rec.reserved4, rec.reserved5, rec.reserved6
       );
-
+      //dump_buf(&format!("/tmp/ctmd_rec{}.bin", rec.rec_type), rec.payload.as_slice());
       if [7, 8, 9, 10, 11, 12].contains(&rec.rec_type) {
         let mut bs = ByteStream::new(rec.payload.as_slice(), Endian::Little);
         let mut _block_id = 0;
@@ -622,7 +673,7 @@ impl Ctmd {
           if sz >= 8 && bs.remaining_bytes() >= (sz - 8) {
             log::debug!("CTMD BLOCK: size {}, tag {}, remaining: {}", sz, tag, bs.remaining_bytes());
             let data = bs.get_bytes(sz as usize - 8);
-
+            //dump_buf(&format!("/tmp/ctmd_rec{}_block{}_tag0x{:X}_uk{:X}.bin", rec.rec_type, block_id, tag, uk), data.as_slice());
             if [CR3_CTMD_BLOCK_EXIFIFD, CR3_CTMD_BLOCK_MAKERNOTES].contains(&tag) {
               assert_eq!(rec.blocks.contains_key(&tag), false, "Double tag found?!");
               rec.blocks.insert(tag, data);
@@ -640,7 +691,7 @@ impl Ctmd {
         }
       } else {
         log::debug!("CTMD record type {} unknown, ignoring.", rec.rec_type);
-
+        //dump_buf(&format!("/tmp/ctmd_rec{}.bin", rec.rec_type), rec.payload.as_slice());
       }
       records.insert(rec.rec_type, rec);
     }
@@ -682,7 +733,7 @@ impl Ctmd {
       let mut buf = ByteStream::new(rec.payload.as_slice(), Endian::Little);
       let focal_len = Rational::new(buf.get_u16().into(), buf.get_u16().into());
       if focal_len.d.is_zero() {
-
+        // Canon EOS R_RAW_ISO_100_nocrop_nodual.CR3 has an invalid Rational value
         return Ok(None);
       }
       Ok(Some(focal_len))
@@ -694,8 +745,9 @@ impl Ctmd {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("CR3 raw wb: {:?}", raw_wb);
-
-  let div = raw_wb[1];
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
+  let div = raw_wb[1]; // G1 should be 1024 and we use this as divisor
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
     if v.is_normal() {

@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+/// Buffer to hold an image in memory with enough extra space at the end for speed optimizations
 pub struct PaddedBuf<'a> {
   buf: PaddedBufImpl<'a>,
   size: usize,

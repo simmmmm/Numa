@@ -295,6 +295,7 @@ pub(super) fn show_about(parent: Option<&gtk::Window>, state: Option<&App>) {
 
     about.add_link("Third-Party Licences", LICENCES_LINK);
     about.add_link("Model Licences", MODELS_LINK);
+    about.add_link("Source Code", "https://github.com/simmmmm/Numa");
     about.connect_activate_link(|about, link| {
         let (title, text) = match link {
             LICENCES_LINK => ("Third-Party Licences", include_str!("../../../data/THIRD_PARTY_LICENSES.txt")),
@@ -391,11 +392,15 @@ fn add_legal_sections(about: &adw::AboutDialog) {
 
     for (name, description, _) in numa::io::models::MODELS {
         let author = numa::io::models::AUTHORS.iter().find(|(model, _)| *model == name).map_or("", |(_, author)| author);
-        let licence = match numa::io::models::licence(description) {
-            "MIT" => gtk::License::MitX11,
-            _ => gtk::License::Apache20,
+        let (licence, terms) = match numa::io::models::licence(description) {
+            "MIT" => (gtk::License::MitX11, None),
+            numa::io::models::NONCOMMERCIAL => (
+                gtk::License::Custom,
+                Some("For non-commercial use only: its weights or their training data do not allow commercial use. See Model Licences."),
+            ),
+            _ => (gtk::License::Apache20, None),
         };
-        about.add_legal_section(&format!("{name} model"), Some(&format!("{author} · downloaded separately")), licence, None);
+        about.add_legal_section(&format!("{name} model"), Some(&format!("{author} · downloaded separately")), licence, terms);
     }
 }
 

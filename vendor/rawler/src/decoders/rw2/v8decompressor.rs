@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2024 Daniel Vogelbacher <daniel@chaospixel.com>
+
+// Originally written by LibRaw LLC
+// Copyright (C) 2022-2024 Alex Tutubalin, LibRaw LLC
+// Ported from C++ to Rust by Daniel Vogelbacher
+
 use itertools::Itertools;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -11,6 +18,7 @@ use crate::{
   rawsource::RawSource,
 };
 
+/// Defines the offsets for the start of a strip.
 #[derive(Clone, Debug)]
 struct StripLineOffset {
   cols: u16,
@@ -19,42 +27,68 @@ struct StripLineOffset {
 
 #[derive(Clone, Debug)]
 struct CF2Params {
-
+  /// Unknown value, it's labeled as strip_height but don't match any height
   #[allow(dead_code)]
   strip_height: u32,
 
+  /// Unknown value, it's labeled as strip_width but don't match any width
   #[allow(dead_code)]
   strip_width: u32,
 
+  /// Gamma point and slope value.
   gamma_point: Vec<u32>,
   gamma_slope: Vec<u32>,
 
+  /// Max data value
   gamma_clip_val: u16,
 
+  /// Initial values (base) for huffman coding
   huf_init_val0: u16,
 
+  /// Initial values (base) for huffman coding
   huf_init_val1: u16,
 
+  /// Initial values (base) for huffman coding
   huf_init_val2: u16,
 
+  /// Initial values (base) for huffman coding
   huf_init_val3: u16,
 
+  /// Stored huffman table, usually 17 entries
+  ///
+  /// This is a pair of (bitcnt, symbol).
+  ///
+  /// Example table:
+  /// 0000000     10   1022     11   2046      8    254      9    510
+  /// 0000020      7    126      4     14      4     12      3      4
+  /// 0000040      3      2      2      0      3      3      3      5
+  /// 0000060      4     13      5     30      6     62     12   4094
+  /// 0000100     12   4095
+  /// 0000104
   huf_table: Vec<(u16, u16)>,
 
+  /// Shift down (0 in all samples...)
   huf_shift_down: Vec<u16>,
 
+  /// Number of H strips
   num_of_strips_h: u16,
 
+  /// Number of V strips
   num_of_strips_v: u16,
 
+  /// Offset to bitstream
   strip_byte_offsets: Vec<u32>,
 
+  /// Starting column offset in a output line
   strip_line_offsets: Vec<StripLineOffset>,
 
+  /// Size in bits of compressed bitstream
   strip_data_size: Vec<u32>,
 
+  /// Strip widths in pixels
   strip_widths: Vec<u16>,
 
+  /// Strip heights in pixels
   strip_heights: Vec<u16>,
 }
 
@@ -145,11 +179,11 @@ impl CF2Params {
 
 #[derive(Clone, Debug, Default)]
 struct HuffmanSymbol {
-
+  /// Length of the symbol in bits
   bitcnt: u8,
-
+  /// Actual Huffman symbol, right-padded with 0 bits
   symbol: u16,
-
+  /// Pre-calculated bitmask, actually (-1) << (16-bits)
   mask: u16,
 }
 
@@ -158,6 +192,9 @@ struct HuffmanDecoder {
   #[allow(dead_code)]
   huff_symbols: [HuffmanSymbol; 17],
 
+  /// Lookup cache for all possible u16 values.
+  /// If a 16 bit input value is invalid (the symbol is undefined), the
+  /// value is None, otherwise it's (bitcnt, ssss)
   cache: Vec<Option<(u8, u8)>>,
 }
 
@@ -168,7 +205,7 @@ impl HuffmanDecoder {
       let symbol = symbols.next().expect("symbol iterator is shorter than symlens iterator");
       let bitmask = 0xFFFFu16 >> (16 - symlen);
       debug_assert_eq!(symbol, symbol & bitmask);
-
+      // Left-align symbol and mask
       huff_symbols[i] = HuffmanSymbol {
         bitcnt: symlen,
         symbol: (symbol) << (16 - symlen),
@@ -176,12 +213,14 @@ impl HuffmanDecoder {
       };
     }
 
+    // Generate lookup cache for all possible 16 bit input values.
     let cache = (0..=0xFFFFu16)
       .map(|x| Self::slow_lookup(&huff_symbols, x).map(|ssss| (huff_symbols[ssss as usize].bitcnt, ssss)))
       .collect_vec();
     Self { huff_symbols, cache }
   }
 
+  /// Slow lookup into Huffman symbol table
   fn slow_lookup(huff_symbols: &[HuffmanSymbol; 17], bits: u16) -> Option<u8> {
     for i in 0..17 {
       if (bits & huff_symbols[i].mask) == huff_symbols[i].symbol {
@@ -191,6 +230,8 @@ impl HuffmanDecoder {
     None
   }
 
+  /// Extract Huffman symbol from bitstream pump and
+  /// return index into symbol table.
   fn get_next(&self, pump: &mut dyn BitPump) -> u8 {
     let next_bits = pump.peek_bits(16);
     debug_assert_eq!(self.cache.len(), u16::MAX as usize + 1);
@@ -203,6 +244,7 @@ impl HuffmanDecoder {
   }
 }
 
+/// Internal decoder state
 struct State {
   huffdec: HuffmanDecoder,
   gamma_table: Option<Vec<u16>>,
@@ -251,8 +293,8 @@ impl CoeffBase {
 
 fn calc_gamma(params: &CF2Params, idx: u32) -> u16 {
   let gamma_base = 0;
-  let gamma_points = &params.gamma_point;
-  let gamma_slopes = &params.gamma_slope;
+  let gamma_points = &params.gamma_point; // [65536, 65536, 65536, 65536, 65536, 65536]
+  let gamma_slopes = &params.gamma_slope; // 0
   let clipping = params.gamma_clip_val;
 
   let mut x = {
@@ -322,6 +364,7 @@ fn make_gammatable(params: &CF2Params) -> Option<Vec<u16>> {
   }
 }
 
+/// Decode Panasonic V8 bitstreams
 pub(crate) fn decode_panasonic_v8(rawfile: &RawSource, width: usize, height: usize, _bps: u32, ifd: &IFD, dummy: bool) -> Result<PixU16> {
   let out = alloc_image_ok!(width, height, dummy);
 
@@ -333,6 +376,7 @@ pub(crate) fn decode_panasonic_v8(rawfile: &RawSource, width: usize, height: usi
     width
   );
 
+  // Shared output buffer, we need to write from multiple rayon threads to output image.
   let shared_pix = SharedPix2D::new(out);
 
   let total_strip_count = (params.num_of_strips_h * params.num_of_strips_v) as usize;
@@ -341,6 +385,7 @@ pub(crate) fn decode_panasonic_v8(rawfile: &RawSource, width: usize, height: usi
     bitstreams.push(rawfile.subview(params.strip_byte_offsets[strip_id] as u64, (params.strip_data_size[strip_id] as u64 + 7) / 8)?);
   }
 
+  // Parallel decode multiple strips
   (0..total_strip_count).into_par_iter().for_each(|strip_id| {
     let buf = &bitstreams[strip_id];
     decode_strip(buf, &params, strip_id, unsafe { shared_pix.inner_mut() });
@@ -348,6 +393,7 @@ pub(crate) fn decode_panasonic_v8(rawfile: &RawSource, width: usize, height: usi
   Ok(shared_pix.into_inner())
 }
 
+/// Decode a single strip
 fn decode_strip(buf: &[u8], params: &CF2Params, strip_id: usize, out: &mut PixU16) {
   let mut pump = BitPumpReverseBitsMSB::new(buf);
   let width = params.strip_widths[strip_id] as usize;
@@ -357,24 +403,34 @@ fn decode_strip(buf: &[u8], params: &CF2Params, strip_id: usize, out: &mut PixU1
   let doublewidth = halfwidth * 4;
   let mut linebuf = vec![0_u16; doublewidth];
 
+  // for (i, item) in params.huf_table.iter().enumerate() {
+  //   let fmt = format!("{:#032b}", item.1);
+  //   log::debug!("Pana8 huf_table {i}: {} (bits: {})", fmt.split_at((32 - item.0) as usize).1, item.0);
+  //   //log::debug!("Pana8: huf_table {:02}: {}, {}", i, item.0, item.1);
+  // }
+
   let mut state = State::new(params);
 
+  // Data is encoded in RGRGRG..GBGBGB in a single line (like LJPEG92 4-7 predictors)
   for curr_row in 0..halfheight {
     state.current_base = state.line_base;
     for col in 0..doublewidth {
-
+      // Calculate index
       let ssss = state.huffdec.get_next(&mut pump);
 
+      // Shiftdown seems to be the count of bits shifted to right during encoding.
+      // It's 0 for all existing samples so far, highly interested in samples that has
       let shift_down: u8 = (params.huf_shift_down[ssss as usize] & 0x1F) as u8;
       assert_eq!(shift_down, 0, "CF2HufShiftDown samples required");
 
+      // Calculate total required bits to read from bitstream.
       let req_bits: u32 = ssss.saturating_sub(shift_down as u8) as u32;
       let delta1: i32 = if req_bits == 0 {
         0
       } else {
         debug_assert_ne!(req_bits, 0);
-        let rawbits: u32 = pump.get_bits(req_bits as u32);
-        let sign = rawbits >> (req_bits - 1);
+        let rawbits: u32 = pump.get_bits(req_bits as u32); // Get additional bits
+        let sign = rawbits >> (req_bits - 1); // Get leading sign bit
         let val = (rawbits << (params.huf_shift_down[ssss as usize] & 0xFF)) as i32;
 
         if sign == 1 {
@@ -389,6 +445,7 @@ fn decode_strip(buf: &[u8], params: &CF2Params, strip_id: usize, out: &mut PixU1
       let delta2 = if shift_down != 0 { 1 << (shift_down - 1) } else { 0 };
       let delta = delta1 + delta2;
 
+      // For each col iteration, we write to ONE pixel of of 4-pixel group.
       let destpixel = &mut linebuf[col & !0x3..];
 
       if col & 3 == 2 {
@@ -409,11 +466,13 @@ fn decode_strip(buf: &[u8], params: &CF2Params, strip_id: usize, out: &mut PixU1
         state.current_base.update(destpixel);
       }
       if col == 3 {
-
+        // base for next line (col == 3 -> first 4 pixels are complete in current row)
         state.line_base.update(&linebuf);
       }
     }
 
+    // Copy line buffer into output image.
+    // Line buffer contains two rows packed into one row with double width.
     assert_eq!(linebuf.len(), 2 * width);
     for col in (0..width).step_by(2) {
       let row_offset = params.strip_line_offsets[strip_id].rows as usize;

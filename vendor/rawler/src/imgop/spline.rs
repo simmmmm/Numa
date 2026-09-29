@@ -1,5 +1,8 @@
 use super::Point;
 
+// These are the constant factors for each segment of the curve.
+// Each segment i will have the formula:
+// f(x) = a[i] + b[i]*(x - x[i]) + c[i]*(x - x[i])^2 + d[i]*(x - x[i])^3
 #[derive(Clone, Debug, Default)]
 struct Segment {
   a: f32,
@@ -8,6 +11,9 @@ struct Segment {
   d: f32,
 }
 
+// This is a Natural Cubic Spline. The second derivative at curve ends are zero.
+// See https://en.wikipedia.org/wiki/Spline_(mathematics)
+// section "Algorithm for computing natural cubic splines"
 pub struct Spline {
   num_coords: usize,
   num_segments: usize,
@@ -17,7 +23,7 @@ pub struct Spline {
 
 impl Spline {
   fn prepare(&mut self) {
-
+    // Extra values used during computation
     let mut h = vec![0.0; self.num_segments];
     let mut alpha = vec![0.0; self.num_segments];
     let mut mu = vec![0.0; self.num_coords];
@@ -46,6 +52,8 @@ impl Spline {
       s.d = (sn.c - s.c) / (3. * h[i]);
     }
 
+    // The last segment is nonsensical, and was only used to temporarily store
+    // the a and c to simplify calculations, so drop that 'segment' now
     self.segments.pop();
 
     assert_eq!(self.num_segments, self.segments.len());
@@ -63,6 +71,9 @@ impl Spline {
       }
       prev = p.x;
     }
+
+    // TODO: "The X coordinates must all be strictly increasing"
+    // TODO: The Y coords must be limited to the range of value_type
 
     let num_coords = control_points.len();
     let num_segments = num_coords - 1;

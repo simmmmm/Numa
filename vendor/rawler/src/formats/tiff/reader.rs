@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{Entry, IFD, Result, TiffError, apply_corr, entry::RawEntry, file::TiffFile};
 use crate::{
   bits::Endian,
@@ -19,6 +22,7 @@ pub trait TiffReader {
     self.root_ifd().endian
   }
 
+  /// Returns a list of well-known tags representing SubIFDs.
   fn wellknown_sub_ifd_tags(&self) -> Vec<u16> {
     vec![
       TiffCommonTag::SubIFDs.into(),
@@ -63,7 +67,7 @@ pub trait TiffReader {
       if ifd.has_entry(tag) {
         ifds.push(ifd);
       }
-
+      // Now search in all sub IFDs
       for subs in ifd.sub_ifds() {
         for ifd in subs.1 {
           if ifd.has_entry(tag) {
@@ -81,7 +85,7 @@ pub trait TiffReader {
       if filter(ifd) {
         ifds.push(ifd);
       }
-
+      // Now search in all sub IFDs
       for subs in ifd.sub_ifds() {
         for ifd in subs.1 {
           if filter(ifd) {
@@ -101,6 +105,7 @@ pub trait TiffReader {
       .copied()
   }
 
+  // TODO: legacy wrapper
   fn find_first_ifd<T: TiffTag>(&self, tag: T) -> Option<&IFD> {
     self.find_first_ifd_with_tag(tag)
   }
@@ -112,7 +117,12 @@ pub trait TiffReader {
 
   fn get_first_entry(&self, _tag: u16) -> Option<Entry> {
     unimplemented!();
-
+    /*
+    Some(Entry {
+      value: (32 as u16).into(),
+      embedded: None,
+    })
+     */
   }
 
   fn read_data<R: Read + Seek>(&self, file: &mut R, uncorr_offset: u32, buffer: &mut [u8]) -> Result<()> {
@@ -125,6 +135,10 @@ pub trait TiffReader {
     IFD::new(reader, offset, base, corr, endian, sub_tags)
   }
 
+  /// Construct a TIFF reader from Read capable objects
+  ///
+  /// `corr` is a correction value that should be applied to offsets received
+  /// from file structure.
   fn parse_file<R: Read + Seek>(&mut self, file: &mut R, max_chained: Option<usize>, sub_tags: &[u16]) -> Result<()> {
     let endian = match file.read_u16::<LittleEndian>()? {
       0x4949 => Endian::Little,
@@ -137,10 +151,10 @@ pub trait TiffReader {
     let magic = reader.read_u16()?;
     if !matches!(
       magic,
-      42
-      | 85
-      | 21330
-      | 20306
+      42 // TIFF Magic
+      | 85 // Panasonic
+      | 21330 // Olympus
+      | 20306 // Olympus / OM
     ) {
       return Err(TiffError::General(format!("Invalid magic marker for TIFF: {}", magic)));
     }
@@ -154,7 +168,7 @@ pub trait TiffReader {
     next_ifd = apply_corr(next_ifd, self.file().corr);
     let mut chain = Vec::new();
     while next_ifd != 0 {
-
+      // TODO: check if offset is in range
       let mut multi_sub_tags = self.wellknown_sub_ifd_tags();
       multi_sub_tags.extend_from_slice(sub_tags);
       let ifd = IFD::new(reader, next_ifd, self.file().base, self.file().corr, endian, &multi_sub_tags)?;
@@ -178,6 +192,7 @@ pub trait TiffReader {
   }
 }
 
+/// Reader for TIFF files
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GenericTiffReader {
   file: TiffFile,
@@ -194,22 +209,33 @@ impl TiffReader for GenericTiffReader {
 }
 
 impl GenericTiffReader {
-
+  /// Check if buffer looks like a TIFF file
   pub fn is_tiff<T: AsRef<[u8]>>(buffer: T) -> bool {
     let buffer = buffer.as_ref();
-    buffer[0] == 0x49 || buffer[0] == 0x4d
+    buffer[0] == 0x49 || buffer[0] == 0x4d // TODO
   }
 
   pub fn little_endian(&self) -> bool {
     self.file.chain.first().map_or(true, |f| f.endian == Endian::Little)
   }
 
+  /// Construct a TIFF reader from a byte buffer
+  ///
+  /// Byte buffer must be a full TIFF file structure, endianess is detected from TIFF
+  /// header.
+  ///
+  /// `corr` is a correction value that should be applied to offsets received
+  /// from file structure.
   pub fn new_with_buffer<T: AsRef<[u8]>>(buffer: T, base: u32, corr: i32, max_chained: Option<usize>) -> Result<Self> {
     let mut cursor = Cursor::new(buffer.as_ref());
     cursor.seek(SeekFrom::Start(base as u64))?;
     Self::new(&mut cursor, base, corr, max_chained, &[])
   }
 
+  /// Construct a TIFF reader from Read capable objects
+  ///
+  /// `corr` is a correction value that should be applied to offsets received
+  /// from file structure.
   pub fn new<R: Read + Seek>(file: &mut R, base: u32, corr: i32, max_chained: Option<usize>, sub_tags: &[u16]) -> Result<Self> {
     let mut ins = Self {
       file: TiffFile::new(base, corr),
@@ -265,10 +291,13 @@ impl<'a, R: Read + Seek + 'a> EndianReader<'a, R> {
     Ok(self.inner.stream_position().map(|v| v as u32)?)
   }
 
+  // TODO: try_from?
+
   pub fn goto(&mut self, offset: u32) -> Result<()> {
     self.inner.seek(SeekFrom::Start(offset as u64))?;
     Ok(())
 
+    // TODO: try_from?
   }
 }
 

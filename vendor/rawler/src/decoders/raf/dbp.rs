@@ -1,3 +1,8 @@
+///
+/// Original code by libraw and rawspeed, licensed under LGPL-2
+///
+/// Copyright (C) 2016 Alexey Danilchenko
+/// Copyright (C) 2016 Alex Tutubalin
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::Cursor;
 

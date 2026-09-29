@@ -4,6 +4,7 @@ use core::ops::Range;
 
 use super::{Api, Buffer, DeviceResult, Resource};
 
+/// Command buffer type, which performs double duty as the command encoder type too.
 #[derive(Debug)]
 pub struct CommandBuffer {
     commands: Vec<Command>,
@@ -23,7 +24,10 @@ enum Command {
 }
 
 impl CommandBuffer {
-
+    /// # Safety
+    ///
+    /// Must be called with appropriate synchronization for the resources affected by the command,
+    /// such as ensuring that buffers are not accessed by a command while aliasing references exist.
     pub(crate) unsafe fn execute(&self) {
         for command in &self.commands {
             unsafe { command.execute() };
@@ -103,11 +107,11 @@ impl crate::CommandEncoder for CommandBuffer {
         dst: &Resource,
         regions: T,
     ) {
-
+        // TODO: consider implementing this and other texture manipulation
     }
 
     unsafe fn copy_buffer_to_texture<T>(&mut self, src: &Buffer, dst: &Resource, regions: T) {
-
+        // TODO: consider implementing this and other texture manipulation
     }
 
     unsafe fn copy_texture_to_buffer<T>(
@@ -117,7 +121,7 @@ impl crate::CommandEncoder for CommandBuffer {
         dst: &Buffer,
         regions: T,
     ) {
-
+        // TODO: consider implementing this and other texture manipulation
     }
 
     unsafe fn begin_query(&mut self, set: &Resource, index: u32) {}
@@ -139,6 +143,8 @@ impl crate::CommandEncoder for CommandBuffer {
         stride: wgt::BufferSize,
     ) {
     }
+
+    // render
 
     unsafe fn begin_render_pass(
         &mut self,
@@ -254,6 +260,8 @@ impl crate::CommandEncoder for CommandBuffer {
     ) {
     }
 
+    // compute
+
     unsafe fn begin_compute_pass(&mut self, desc: &crate::ComputePassDescriptor<Resource>) {}
     unsafe fn end_compute_pass(&mut self) {}
 
@@ -314,11 +322,15 @@ impl crate::CommandEncoder for CommandBuffer {
 }
 
 impl Command {
-
+    /// # Safety
+    ///
+    /// Must be called with appropriate synchronization for the resources affected by the command,
+    /// such as ensuring that buffers are not accessed by a command while aliasing references exist.
     unsafe fn execute(&self) {
         match self {
             Command::ClearBuffer { ref buffer, range } => {
-
+                // SAFETY:
+                // Caller is responsible for ensuring this does not alias.
                 let buffer_slice: &mut [u8] = unsafe { &mut *buffer.get_slice_ptr(range.clone()) };
                 buffer_slice.fill(0);
             }
@@ -330,7 +342,8 @@ impl Command {
                     size,
                 } in regions
                 {
-
+                    // SAFETY:
+                    // Caller is responsible for ensuring this does not alias.
                     let src_region: &[u8] =
                         unsafe { &*src.get_slice_ptr(src_offset..src_offset + size.get()) };
                     let dst_region: &mut [u8] =

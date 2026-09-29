@@ -1,3 +1,5 @@
+//! Lossless JPEG (LJPEG) decompressor.
+
 use crate::bits::Endian;
 use crate::decompressors::Decompressor;
 use crate::decompressors::LineIteratorMut;
@@ -9,9 +11,10 @@ use crate::pumps::ByteStream;
 
 mod decompressors;
 pub mod huffman;
-
+// Numa (PERF-022).
 pub(crate) mod parallel;
 
+/// Decompressor for lossless JPEG (LJPEG)
 pub struct LJpegDecompressor {}
 
 impl LJpegDecompressor {
@@ -21,7 +24,15 @@ impl LJpegDecompressor {
 }
 
 impl<'a> Decompressor<'a, u16> for LJpegDecompressor {
-
+  /// Decodes a lossless JPEG buffer into `u16` pixel lines.
+  ///
+  /// Decodes the entire LJPEG segment into a temporary [`PixU16`] buffer,
+  /// then copies the requested rows — starting after `skip_rows` — into
+  /// `lines`. The copy uses `line_width` to slice the decoded buffer, so
+  /// `line_width` must not exceed the decoded image width.
+  ///
+  /// # Errors
+  /// Returns `Err` if the LJPEG stream cannot be parsed or decoded.
   fn decompress(&self, src: &[u8], skip_rows: usize, lines: impl LineIteratorMut<'a, u16>, line_width: usize) -> std::result::Result<(), String> {
     let decompressor = LjpegDecompressor::new(src)?;
     let mut pixbuf = PixU16::new(decompressor.width(), decompressor.height());
@@ -42,12 +53,12 @@ impl<'a> Decompressor<'a, u16> for LJpegDecompressor {
 
 enum Marker {
   Stuff = 0x00,
-  SOF3 = 0xc3,
-  DHT = 0xc4,
-  SOI = 0xd8,
-  EOI = 0xd9,
-  SOS = 0xda,
-  DQT = 0xdb,
+  SOF3 = 0xc3, // lossless
+  DHT = 0xc4,  // huffman tables
+  SOI = 0xd8,  // start of image
+  EOI = 0xd9,  // end of image
+  SOS = 0xda,  // start of scan
+  DQT = 0xdb,  // quantization tables
   Fill = 0xff,
 }
 
@@ -57,14 +68,16 @@ fn m(marker: Marker) -> u8 {
 
 #[derive(Debug, Copy, Clone)]
 struct JpegComponentInfo {
-
-  id: usize,
+  // These values are fixed over the whole image, read from the SOF marker.
+  id: usize, // identifier for this component (0..255)
   #[allow(dead_code)]
-  index: usize,
+  index: usize, // its index in SOF or cPtr->compInfo[]
 
+  // Huffman table selector (0..3). The value may vary between scans.
+  // It is read from the SOS marker.
   dc_tbl_num: usize,
-  super_h: usize,
-  super_v: usize,
+  super_h: usize, // Horizontal Supersampling
+  super_v: usize, // Vertical Supersampling
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +122,7 @@ impl SOFInfo {
     for i in 0..self.cps {
       let id = input.get_u8() as usize;
       let subs = input.get_u8() as usize;
-      input.get_u8();
+      input.get_u8(); // Skip info about quantized
 
       self.components.push(JpegComponentInfo {
         id,
@@ -126,13 +139,13 @@ impl SOFInfo {
     if self.width == 0 {
       return Err("ljpeg: Trying to parse SOS before SOF".to_string());
     }
-    input.get_u16();
+    input.get_u16(); //skip header length
     let soscps = input.get_u8() as usize;
     if self.cps != soscps {
       return Err("ljpeg: component number mismatch in SOS".to_string());
     }
     for cs in 0..self.cps {
-
+      // At least some MOS cameras have this broken
       let readcs = input.get_u8() as usize;
       let cs = if self.csfix { cs } else { readcs };
       let component = match self.components.iter_mut().find(|&&mut c| c.id == cs) {
@@ -146,8 +159,8 @@ impl SOFInfo {
       component.dc_tbl_num = td;
     }
     let pred = input.get_u8() as usize;
-    input.get_u8();
-    let pt = (input.get_u8() as usize) & 0xf;
+    input.get_u8(); // Se + Ah Not used in LJPEG
+    let pt = (input.get_u8() as usize) & 0xf; // Point Transform
     Ok((pred, pt))
   }
 }
@@ -181,22 +194,22 @@ impl<'a> LjpegDecompressor<'a> {
     loop {
       let marker = LjpegDecompressor::get_next_marker(&mut input, true)?;
       if marker == m(Marker::SOF3) {
-
+        // Start of the frame, giving us the basic info
         sof.parse_sof(&mut input)?;
         if sof.precision > 16 || sof.precision < 10 {
           return Err(format!("ljpeg: sof.precision {}", sof.precision));
         }
       } else if marker == m(Marker::DHT) {
-
+        // Huffman table settings
         LjpegDecompressor::parse_dht(&mut input, &mut dht_init, &mut dht_bits, &mut dht_huffval)?;
       } else if marker == m(Marker::SOS) {
-
+        // Start of the actual stream, we can decode after this
         let (a, b) = sof.parse_sos(&mut input)?;
         pred = a;
         pt = b;
         break;
       } else if marker == m(Marker::EOI) {
-
+        // Should never be reached as we stop at SOS
         return Err("ljpeg: reached EOI before SOS".to_string());
       } else if marker == m(Marker::DQT) {
         return Err("ljpeg: not a valid raw file, found DQT".to_string());
@@ -299,6 +312,7 @@ impl<'a> LjpegDecompressor<'a> {
     Ok(())
   }
 
+  /// Handle special SONY YUV 4:2:0 encoding in ILCE-7RM5
   pub fn decode_sony(&self, out: &mut [u16], x: usize, stripwidth: usize, width: usize, height: usize, dummy: bool) -> Result<(), String> {
     if dummy {
       return Ok(());
@@ -377,6 +391,8 @@ impl<'a> LjpegDecompressor<'a> {
     )
   }
 
+  /// Numa (PERF-022): a CR2's frame decoded straight into its picture, the
+  /// stream's vertical fields in their places (`parallel::decode_cr2_fields`).
   pub fn decode_cr2_fields(&self, fields: &[usize], width: usize, height: usize) -> Option<Vec<u16>> {
     parallel::decode_cr2_fields(self, fields, width, height)
   }

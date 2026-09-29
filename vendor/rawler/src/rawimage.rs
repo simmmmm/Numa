@@ -1,3 +1,5 @@
+//! Raw image
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -140,6 +142,7 @@ impl BlackLevel {
     self.cpp * self.width * self.height
   }
 
+  // TODO: write test
   pub fn shift(&self, x: usize, y: usize) -> Self {
     if self.sample_count() == 1 {
       self.clone()
@@ -163,7 +166,7 @@ impl BlackLevel {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RawPhotometricInterpretation {
   BlackIsZero,
-
+  // Defined by DNG
   Cfa(CFAConfig),
   LinearRaw,
 }
@@ -193,59 +196,67 @@ impl CFAConfig {
   }
 }
 
+/// All the data needed to process this raw image, including the image data itself as well
+/// as all the needed metadata
 #[derive(Debug, Clone)]
 pub struct RawImage {
-
+  /// Camera definition
   pub camera: Camera,
-
+  /// camera make as encoded in the file
   pub make: String,
-
+  /// camera model as encoded in the file
   pub model: String,
-
+  /// make cleaned up to be consistent and short
   pub clean_make: String,
-
+  /// model cleaned up to be consistent and short
   pub clean_model: String,
-
+  /// width of the full image
   pub width: usize,
-
+  /// height of the full image
   pub height: usize,
-
+  /// number of components per pixel (1 for bayer, 3 for RGB images)
   pub cpp: usize,
-
+  /// Bits per pixel
   pub bps: usize,
-
+  /// whitebalance coefficients encoded in the file in RGBE order
   pub wb_coeffs: [f32; 4],
-
+  /// image whitelevels in RGBE order
   pub whitelevel: WhiteLevel,
-
+  /// image blacklevels in RGBE order
   pub blacklevel: BlackLevel,
-
-  pub xyz_to_cam: [[f32; 3]; 4],
-
+  /// matrix to convert XYZ to camera RGBE
+  pub xyz_to_cam: [[f32; 3]; 4], // TODO: deprecated, use color_matrix
+  /// Photometric interpretation
   pub photometric: RawPhotometricInterpretation,
-
+  /// how much to crop the image to get all the usable (non-black) area
   pub active_area: Option<Rect>,
-
+  /// how much to crop the image to get all the recommended area
   pub crop_area: Option<Rect>,
 
+  /// Areas of the sensor that is masked to prevent it from receiving light. Used to calculate
+  /// black levels and noise.
   pub blackareas: Vec<Rect>,
 
+  /// orientation of the image as indicated by the image metadata
   pub orientation: Orientation,
-
+  /// image data itself, has `width`\*`height`\*`cpp` elements
   pub data: RawImageData,
 
   pub color_matrix: HashMap<Illuminant, FlatColorMatrix>,
 
   pub dng_tags: HashMap<u16, Value>,
 
+  /// For Fuji rotated sensors: the split point T used to compute the
+  /// inscribed rectangle after 45° rotation (equivalent to dcraw's fuji_width).
   pub fuji_rotation_width: Option<usize>,
 }
 
+/// The actual image data, after decoding
 #[derive(Debug, Clone)]
 pub enum RawImageData {
-
+  /// The most usual u16 output of almost all formats
   Integer(Vec<u16>),
-
+  /// Some formats are directly encoded as f32, most notably some DNGs
   Float(Vec<f32>),
 }
 
@@ -287,7 +298,7 @@ impl RawImage {
       for area in blackareas {
         for row in area.p.y..area.p.y + area.d.h {
           for col in area.p.x..area.p.x + area.d.w {
-
+            //let color = cfa.color_at(row, col);
             let color = (row % cfa.height) * cfa.width + (col % cfa.width);
             samples[color].avg += image[row * width + col].as_f32();
             samples[color].count += 1;
@@ -298,7 +309,7 @@ impl RawImage {
       let blacklevels: Vec<f32> = samples.into_iter().map(|s| s.avg / s.count as f32).collect();
 
       debug!("Calculated blacklevels: {:?}", blacklevels);
-
+      // TODO: support other then RGGB levels
       assert_eq!(cfa.width * cfa.height, 4);
       Some(BlackLevel::new(&[blacklevels[0], blacklevels[1], blacklevels[2], blacklevels[3]], 2, 2, 1))
     } else {
@@ -328,8 +339,11 @@ impl RawImage {
 
     let blackarea_base = active_area.unwrap_or_else(|| Rect::new(Point::zero(), Dim2::new(sample_width, image.height)));
 
+    // For now, we only use masked areas when cpp is 1. For color images (RGB)
+    // like Canon SRAW, we ignore it (it isn't provided anyway).
     if cpp == 1 {
-
+      // Build black areas
+      // First value (.0) is start and (.1) is length!
       if let Some(ah) = cam.blackareah {
         blackareas.push(Rect::new_with_points(
           Point::new(blackarea_base.p.x, ah.0),
@@ -382,7 +396,7 @@ impl RawImage {
       active_area,
       crop_area,
       blackareas,
-      orientation: Orientation::Normal,
+      orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
       fuji_rotation_width: None,
@@ -402,7 +416,8 @@ impl RawImage {
     whitelevel: Option<WhiteLevel>,
     dummy: bool,
   ) -> RawImage {
-
+    //assert_eq!(image.width % cpp, 0);
+    //assert_eq!(dummy, !image.is_initialized());
     let pixel_width = sample_width / cpp;
 
     let mut blackareas: Vec<Rect> = Vec::new();
@@ -411,8 +426,11 @@ impl RawImage {
 
     let blackarea_base = active_area.unwrap_or_else(|| Rect::new(Point::zero(), Dim2::new(sample_width, height)));
 
+    // For now, we only use masked areas when cpp is 1. For color images (RGB)
+    // like Canon SRAW, we ignore it (it isn't provided anyway).
     if cpp == 1 {
-
+      // Build black areas
+      // First value (.0) is start and (.1) is length!
       if let Some(ah) = cam.blackareah {
         blackareas.push(Rect::new_with_points(
           Point::new(blackarea_base.p.x, ah.0),
@@ -468,7 +486,7 @@ impl RawImage {
       active_area,
       crop_area,
       blackareas,
-      orientation: Orientation::Normal,
+      orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
       fuji_rotation_width: None,
@@ -495,6 +513,9 @@ impl RawImage {
     }
   }
 
+  /// Apply blacklevel and whitelevel scaling, replacing raw image data
+  /// with floating point values in range 0.0 .. 1.0.
+  /// Internal blacklevel and whitelevel is reset to 0.0 and 1.0 to match image data.
   pub fn apply_scaling(&mut self) -> crate::Result<()> {
     let mut pixels = self.data.as_f32();
     match &self.photometric {
@@ -521,14 +542,14 @@ impl RawImage {
 
   pub fn develop_params(&self) -> Result<DevelopParams> {
     let mut xyz2cam: [[f32; 3]; 4] = [[0.0; 3]; 4];
-
+    //let color_matrix = self.color_matrix.get(&Illuminant::D65).unwrap(); // TODO fixme
     let color_matrix = self
       .color_matrix
       .values()
       .next()
       .cloned()
-      .unwrap_or(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
-    assert_eq!(color_matrix.len() % 3, 0);
+      .unwrap_or(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]); // TODO: invalid
+    assert_eq!(color_matrix.len() % 3, 0); // this is not so nice...
     let components = color_matrix.len() / 3;
     for i in 0..components {
       for j in 0..3 {
@@ -536,6 +557,12 @@ impl RawImage {
       }
     }
 
+    /*
+    let active_area = Rect::new(
+      Point::new(self.crops[3], self.crops[0]),
+      Dim2::new(self.width - self.crops[3] - self.crops[1], self.height - self.crops[0] - self.crops[2]),
+    );
+    */
     debug!("RAW developing active area: {:?}", self.active_area);
 
     let wb_coeff = if self.wb_coeffs[0].is_nan() { [1.0, 1.0, 1.0, 1.0] } else { self.wb_coeffs };
@@ -544,23 +571,24 @@ impl RawImage {
       width: self.width,
       height: self.height,
       color_matrices: vec![ColorMatrix {
-        illuminant: Illuminant::D65,
+        illuminant: Illuminant::D65, // TODO: need CAT
         matrix: xyz2cam,
       }],
       whitelevel: self.whitelevel.clone(),
       blacklevel: self.blacklevel.clone(),
-
+      //pattern,
       photometric: self.photometric.clone(),
       wb_coeff,
       cpp: self.cpp,
       active_area: self.active_area,
       crop_area: self.crop_area,
-
+      //gamma: 2.4,
     };
 
     Ok(params)
   }
 
+  /// Add a DNG tag override
   pub fn add_dng_tag<T: TiffTag, V: Into<Value>>(&mut self, tag: T, value: V) {
     let tag: u16 = tag.into();
     self.dng_tags.insert(tag, value.into());
@@ -570,13 +598,17 @@ impl RawImage {
     todo!()
   }
 
+  /// Outputs the inverted matrix that converts pixels in the camera colorspace into
+  /// XYZ components.
   pub fn cam_to_xyz(&self) -> [[f32; 4]; 3] {
     self.pseudoinverse(self.xyz_to_cam)
   }
 
+  /// Outputs the inverted matrix that converts pixels in the camera colorspace into
+  /// XYZ components normalized to be easily used to convert to Lab or a RGB output space
   pub fn cam_to_xyz_normalized(&self) -> [[f32; 4]; 3] {
     let mut xyz_to_cam = self.xyz_to_cam;
-
+    // Normalize xyz_to_cam so that xyz_to_cam * (1,1,1) is (1,1,1,1)
     for i in 0..4 {
       let mut num = 0.0;
       for j in 0..3 {
@@ -590,14 +622,17 @@ impl RawImage {
     self.pseudoinverse(xyz_to_cam)
   }
 
+  /// Not all cameras encode a whitebalance so in those cases just using a 6500K neutral one
+  /// is a good compromise
   pub fn neutralwb(&self) -> [f32; 4] {
     let rgb_to_xyz = [
-
+      // sRGB D65
       [0.412453, 0.357580, 0.180423],
       [0.212671, 0.715160, 0.072169],
       [0.019334, 0.119193, 0.950227],
     ];
 
+    // Multiply RGB matrix
     let mut rgb_to_cam = [[0.0; 3]; 4];
     for i in 0..4 {
       for j in 0..3 {
@@ -669,17 +704,23 @@ impl RawImage {
     out
   }
 
+  /// Returns the CFA pattern after the crop has been applied (and thus the pattern
+  /// potentially shifted)
   pub fn cropped_cfa(&self) -> CFA {
-
+    //self.cfa.shift(self.crops[3], self.crops[0])
     todo!()
-
+    // Need to specify which crop, active or DefaultCrop
   }
 
+  /// Checks if the image is monochrome
   pub fn is_monochrome(&self) -> bool {
     self.photometric == RawPhotometricInterpretation::BlackIsZero
-
+    //self.cpp == 1 && !self.cfa.is_valid()
   }
 
+  /// Find the first matching color matrix by illumninat
+  ///
+  /// First item in iterator has highest prio
   pub fn color_matrix_find_first(&self, illuminants: impl IntoIterator<Item = Illuminant>) -> Option<(Illuminant, FlatColorMatrix)> {
     for illu in illuminants.into_iter() {
       if let Some(matrix) = self.color_matrix.get(&illu) {

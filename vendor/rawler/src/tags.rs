@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::convert::TryFrom;
 use std::fmt::Debug;
 
@@ -20,6 +23,7 @@ macro_rules! tiff_tag_enum {
 }
 pub(crate) use tiff_tag_enum;
 
+/// A TIFF compatible tag identifier
 pub trait TiffTag: Into<u16> + TryFrom<u16> + Debug + Sized + Copy {}
 
 impl TiffTag for u16 {}
@@ -29,16 +33,20 @@ tiff_tag_enum!(ExifTag);
 tiff_tag_enum!(ExifGpsTag);
 tiff_tag_enum!(DngTag);
 
+/// Common tags, generally used in root IFD or SubIFDs
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum TiffCommonTag {
   PanaWidth = 0x0002,
   PanaLength = 0x0003,
   NefWB0 = 0x000C,
-
+  //PanaWBsR = 0x0011,
+  //PanaWBsB = 0x0012,
   NrwWB = 0x0014,
   NefSerial = 0x001d,
-
+  //PanaWBs2R = 0x0024,
+  //PanaWBs2G = 0x0025,
+  //PanaWBs2B = 0x0026,
   Cr2PowerShotWB = 0x0029,
   NewSubFileType = 0x00FE,
   Cr2OldOffset = 0x0081,
@@ -54,7 +62,7 @@ pub enum TiffCommonTag {
   RowsPerStrip = 278,
   XResolution = 282,
   YResolution = 283,
-  ResolutionUnit = 296,
+  ResolutionUnit = 296, // TODO add support
   Artist = 315,
   Compression = 0x0103,
   PhotometricInt = 0x0106,
@@ -111,7 +119,7 @@ pub enum TiffCommonTag {
   RafImageWidth = 0xF001,
   RafImageLength = 0xF002,
   RafBitsPerSample = 0xF003,
-
+  //RafOffsets       = 0xF007,
   RafWBGRB = 0xF00E,
   KdcWB = 0xFA2A,
   KdcWidth = 0xFD00,
@@ -119,10 +127,12 @@ pub enum TiffCommonTag {
   KdcOffset = 0xFD04,
   KdcIFD = 0xFE00,
 
+  // TIFF-EP
   CFAPattern = 0x828E,
   CFARepeatPatternDim = 33421,
 }
 
+/// EXIF GPS tags
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum ExifGpsTag {
@@ -160,6 +170,7 @@ pub enum ExifGpsTag {
   GPSHPositioningError = 0x001f,
 }
 
+/// EXIF tags
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum ExifTag {
@@ -504,9 +515,15 @@ pub enum ExifTag {
   PrintIM = 0xc4a5,
   HasselbladExif = 0xc51b,
   OriginalFileName = 0xc573,
-
+  //ExifExposureTime = 0x829a,
+  //ExifFNumber = 0x829d,
+  //ExifISOSpeedRatings = 0x8827,
+  //ExifVersion = 0x9000,
+  //ExifLensModel = 0xa434,
+  //ExifFocalLen = 0x920a,
 }
 
+/// DNG specific tags
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum DngTag {
@@ -558,7 +575,7 @@ pub enum DngTag {
   AsShotPreProfileMatrix = 50832,
   CurrentICCProfile = 50833,
   CurrentPreProfileMatrix = 50834,
-
+  // 1.2.0
   ColorimetricReference = 50879,
   CameraCalibrationSignature = 50931,
   ProfileCalibrationSignature = 50932,
@@ -586,12 +603,12 @@ pub enum DngTag {
   RowInterleaveFactor = 50975,
   ProfileLookTableDims = 50981,
   ProfileLookTableData = 50982,
-
+  // 1.3.0
   OpcodeList1 = 51008,
   OpcodeList2 = 51009,
   OpcodeList3 = 51022,
   NoiseProfile = 51041,
-
+  // 1.4.0
   DefaultUserCrop = 51125,
   DefaultBlackRender = 51110,
   BaselineExposureOffset = 51109,
@@ -602,7 +619,7 @@ pub enum DngTag {
   OriginalDefaultCropSize = 51091,
   NewRawImageDigest = 51111,
   RawToPreviewGain = 51112,
-
+  // 1.5.0
   DepthFormat = 51177,
   DepthNear = 51178,
   DepthFar = 51179,
@@ -610,6 +627,7 @@ pub enum DngTag {
   DepthMeasureType = 51181,
   EnhanceParams = 51182,
 
+  // 1.6.0
   ProfileGainTableMap = 52525,
   SemanticName = 52526,
   SemanticInstanceID = 52528,
@@ -626,5 +644,6 @@ pub enum DngTag {
   IlluminantData2 = 52534,
   IlluminantData3 = 52535,
 
+  // 1.7.1
   ColumnInterleaveFactor = 52547,
 }

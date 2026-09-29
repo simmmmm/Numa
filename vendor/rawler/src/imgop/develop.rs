@@ -29,6 +29,7 @@ use super::{
   xyz::Illuminant,
 };
 
+/// Parameters for raw image processing
 #[derive(Clone, Debug)]
 pub struct RawProcessingParams {
   pub crop: CropMode,
@@ -146,6 +147,23 @@ impl RawDevelop {
     Self { steps: Vec::from(steps) }
   }
 
+  /*
+  pub fn linearize(rawimage: &RawImage) -> crate::Result<RgbF32> {
+    todo!()
+  }
+
+  pub fn develop_monochrome_image(&self, rawimage: &RawImage) -> crate::Result<PixF32> {
+    todo!()
+  }
+
+  pub fn develop_rgb_image(&self, rawimage: &RawImage) -> crate::Result<RgbF32> {
+    todo!()
+  }
+   */
+
+  /// Develop raw image and write result into TIFF.
+  /// If demosaic is disabled or camera raw is monochrome, the TIFF
+  /// has only one color channel.
   pub fn develop_intermediate(&self, rawimage: &RawImage) -> crate::Result<Intermediate> {
     let mut rawimage = rawimage.clone();
     if self.steps.contains(&ProcessingStep::Rescale) {
@@ -183,6 +201,7 @@ impl RawDevelop {
               let ppg = PPGDemosaic::new();
               let mut rgb = ppg.demosaic(&pixels, &config.cfa, &config.colors, roi);
 
+              // Fuji Rotate
               if self.steps.contains(&ProcessingStep::FujiRotate)
                 && let Some(fuji_rotation_width) = rawimage.fuji_rotation_width
               {
@@ -213,7 +232,7 @@ impl RawDevelop {
       let d65_matrix: Vec<f32>;
       let (illu, matrix) = rawimage
         .color_matrix_find_first([
-          Illuminant::D65,
+          Illuminant::D65, // Best option
           Illuminant::A,
           Illuminant::B,
           Illuminant::C,
@@ -239,7 +258,7 @@ impl RawDevelop {
         }
       }
 
-      assert_eq!(d65_matrix.len() % 3, 0);
+      assert_eq!(d65_matrix.len() % 3, 0); // this is not so nice...
       let components = d65_matrix.len() / 3;
       for i in 0..components {
         for j in 0..3 {
@@ -247,6 +266,7 @@ impl RawDevelop {
         }
       }
 
+      // Some old images may not provide WB coeffs. Assume 1.0 in this case.
       let mut wb = if rawimage.wb_coeffs[0].is_nan() {
         [1.0, 1.0, 1.0, 1.0]
       } else {
@@ -271,18 +291,19 @@ impl RawDevelop {
       log::debug!("active_area: {:?}", rawimage.active_area);
       if let Some(mut crop) = rawimage.crop_area.or(rawimage.active_area) {
         if self.steps.contains(&ProcessingStep::Demosaic) && self.steps.contains(&ProcessingStep::CropActiveArea) {
-
+          // If active area crop was already applied during demosaic, we need to
+          // adapt default crop to active area crop.
           if let Some(active_area) = &rawimage.active_area {
             crop = crop.adapt(active_area);
             log::debug!("Adapt crop to active_area: {:?}", crop);
           }
         }
         if intermediate.dim().w == rawimage.active_area.map(|area| area.d).unwrap_or(rawimage.dim()).w / 2 {
-
+          // Superpixel debayer used
           crop.scale(0.5);
           log::debug!("Scale crop to 0.5: {:?}", crop);
         }
-
+        // Only apply crop if dimensions differ.
         if crop.d != intermediate.dim() {
           log::debug!("crop: {:?}, intermediate dim: {:?}, rawimage: {:?}", crop, intermediate.dim(), rawimage.dim());
           intermediate = match intermediate {
@@ -305,6 +326,9 @@ impl RawDevelop {
     Ok(intermediate)
   }
 
+  /// Develop raw image and write result into TIFF.
+  /// If demosaic is disabled or camera raw is monochrome, the TIFF
+  /// has only one color channel.
   pub fn develop<W>(&self, rawimage: &RawImage, md: &RawMetadata, writer: W) -> crate::Result<()>
   where
     W: io::Write + io::Seek,
@@ -315,6 +339,7 @@ impl RawDevelop {
     let mut root_ifd = DirectoryWriter::new();
     let mut exif_ifd = DirectoryWriter::new();
 
+    // Add EXIF version 0220
     exif_ifd.add_tag_undefined(ExifTag::ExifVersion, vec![48, 50, 50, 48]);
 
     md.write_exif_tags(&mut tiff, &mut root_ifd, &mut exif_ifd)?;
@@ -368,7 +393,7 @@ impl RawDevelop {
         root_ifd.add_tag(TiffCommonTag::Predictor, 1);
         root_ifd.add_tag(TiffCommonTag::StripOffsets, &strip_offsets);
         root_ifd.add_tag(TiffCommonTag::StripByteCounts, &strip_bytes);
-        root_ifd.add_tag(TiffCommonTag::BitsPerSample, [16_u16, 16, 16, 16]);
+        root_ifd.add_tag(TiffCommonTag::BitsPerSample, [16_u16, 16, 16, 16]); // Extra-channel, even if PhotometricInt is RGB!
         root_ifd.add_tag(TiffCommonTag::SamplesPerPixel, [4_u16]);
         root_ifd.add_tag(TiffCommonTag::PhotometricInt, [2_u16]);
         root_ifd.add_tag(TiffCommonTag::RowsPerStrip, strip_rows);

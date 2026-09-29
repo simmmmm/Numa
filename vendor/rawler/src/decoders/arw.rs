@@ -72,7 +72,7 @@ impl<'a> ArwDecoder<'a> {
       0
     };
     let mode = match compression {
-      32766 => "arw6",
+      32766 => "arw6", // New wavelet based compression
       _ => "",
     };
 
@@ -85,6 +85,8 @@ impl<'a> ArwDecoder<'a> {
       None
     }
     .ok_or("File has not makernotes")?;
+
+    //makernote.dump::<ExifTag>(0).iter().for_each(|line| eprintln!("DUMP: {}", line));
 
     Ok(ArwDecoder {
       tiff,
@@ -102,7 +104,7 @@ impl<'a> Decoder for ArwDecoder<'a> {
       if self.camera.model == "DSLR-A100" {
         return self.image_a100(file, dummy);
       } else {
-
+        // try decoding as SRF
         return self.image_srf(file, dummy);
       }
     }
@@ -121,6 +123,9 @@ impl<'a> Decoder for ArwDecoder<'a> {
     let params = self.get_params(file)?;
     debug!("Params: {:?}", params);
 
+    //assert!(params.blacklevel.is_some());
+    //assert!(params.whitelevel.is_some()); // DSC-R1 is SR2 format and has no whitelevel
+
     let mut white = params.whitelevel.map(|x| x[0]);
     let mut black = params.blacklevel;
 
@@ -137,7 +142,8 @@ impl<'a> Decoder for ArwDecoder<'a> {
       }
       7 => {
         cpp = fetch_tiff_tag!(raw, TiffCommonTag::SamplesPerPixel).force_usize(0);
-
+        // Starting with A-1, image is compressed in tiles with LJPEG92.
+        // Data is RGGB for bayer readout and YCbCr for reduced resolution files.
         ArwDecoder::decode_ljpeg(&self.camera, file, raw, dummy)?
       }
       32766 => {
@@ -155,7 +161,14 @@ impl<'a> Decoder for ArwDecoder<'a> {
               ArwDecoder::decode_arw2(src, width, height, &curve, dummy)?
             }
             12 => {
+              /*
+                Some cameras like the A700 have an uncompressed mode where the output is 12bit and
+                does not require any curve. For these all we need to do is set 12bit black and white
+                points instead of the 14bit ones of the normal compressed 8bit -> 10bit -> 14bit mode.
 
+                We set these 12bit points by shifting down the 14bit points. It might make sense to
+                have a separate camera mode instead but since the values seem good we don't bother.
+              */
               white = white.map(|x| x >> 2);
               black = black.map(|mut x| {
                 x.iter_mut().for_each(|x| *x >>= 2);
@@ -173,7 +186,7 @@ impl<'a> Decoder for ArwDecoder<'a> {
     let blacklevel = black
       .map(|black| match cpp {
         1 => Ok(BlackLevel::new(&black, self.camera.cfa.width, self.camera.cfa.height, cpp)),
-
+        // For YUV data, the blacklevel needs to be multiplicated by 2
         3 => Ok(BlackLevel::new(&[black[0] * 2, black[0] * 2, black[0] * 2], 1, 1, cpp)),
         _ => Err(RawlerError::DecoderFailed(format!("ARW: Unsupported cpp: {}", cpp))),
       })
@@ -189,7 +202,7 @@ impl<'a> Decoder for ArwDecoder<'a> {
     let mut img = RawImage::new(self.camera.clone(), image, cpp, params.wb, photometric, blacklevel, whitelevel, dummy);
 
     if cpp == 3 {
-
+      // For debayer images, we assume WB coeffs already applied
       img.wb_coeffs = [1.0, 1.0, 1.0, f32::NAN];
     }
 
@@ -207,6 +220,10 @@ impl<'a> Decoder for ArwDecoder<'a> {
     Ok(img)
   }
 
+  /// Return the embedded JPEG preview
+  /// Exiftool docs says there is a tag 0x2002 including the image, but this tag
+  /// exists in none of the samples?! Instead, we can use the JPEG thumbnail
+  /// tags which exists for most samples.
   fn preview_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     if params.image_index != 0 {
       return Ok(None);
@@ -229,7 +246,7 @@ impl<'a> Decoder for ArwDecoder<'a> {
 
   fn raw_metadata(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<RawMetadata> {
     let mut exif = Exif::new(self.tiff.root_ifd())?;
-    exif.extend_from_ifd(self.get_exif()?)?;
+    exif.extend_from_ifd(self.get_exif()?)?; // TODO: is this required?
     let mdata = RawMetadata::new_with_lens(&self.camera, exif, self.get_lens_description()?.cloned());
     Ok(mdata)
   }
@@ -247,8 +264,9 @@ impl<'a> ArwDecoder<'a> {
       .ok_or_else(|| "EXIF IFD not found".into())
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
-
+    // Try tag 0x9416
     if let Some(Entry {
       value: Value::Undefined(params),
       ..
@@ -265,6 +283,7 @@ impl<'a> ArwDecoder<'a> {
       return Ok(resolver.resolve());
     }
 
+    // Try tag 0x9050
     if let Some(Entry {
       value: Value::Undefined(params),
       ..
@@ -283,6 +302,7 @@ impl<'a> ArwDecoder<'a> {
       }
     }
 
+    // Try tag 0x940C
     if let Some(Entry {
       value: Value::Undefined(params),
       ..
@@ -302,7 +322,9 @@ impl<'a> ArwDecoder<'a> {
   }
 
   fn image_a100(&self, file: &RawSource, dummy: bool) -> Result<RawImage> {
-
+    // We've caught the elusive A100 in the wild, a transitional format
+    // between the simple sanity of the MRW custom format and the wordly
+    // wonderfullness of the Tiff-based ARW format, let's shoot from the hip
     let data = self.tiff.find_ifds_with_tag(TiffCommonTag::SubIFDs);
     if data.is_empty() {
       return Err(RawlerError::DecoderFailed("ARW: Couldn't find the data IFD!".to_string()));
@@ -315,6 +337,8 @@ impl<'a> ArwDecoder<'a> {
     let src = file.subview_until_eof(offset as u64)?;
     let image = ArwDecoder::decode_arw1(src, width, height, dummy)?;
 
+    // Get the WB the MRW way
+    // DNGPrivateTag contains 4 bytes forming a LE u32 offset value.
     let priv_offset = {
       let entry = fetch_tiff_tag!(self.tiff, TiffCommonTag::DNGPrivateArea);
       assert_eq!(entry.value_type(), 0x1);
@@ -322,17 +346,17 @@ impl<'a> ArwDecoder<'a> {
     };
     let buf = file.subview_until_eof(priv_offset as u64)?;
     if BEu32(buf, 0) != 0x4D5249 {
-
+      // MRI
       return Err(format!("Invalid DNGPRIVATEDATA tag: 0x{:X}, expected 0x4D5249 ", BEu32(buf, 0)).into());
     }
     let mut currpos: usize = 8;
     let mut wb_coeffs: [f32; 4] = [1.0, 1.0, 1.0, f32::NAN];
-
+    // At most we read 20 bytes from currpos so check we don't step outside that
     while currpos + 20 < buf.len() {
       let tag: u32 = BEu32(buf, currpos);
       let len: usize = LEu32(buf, currpos + 4) as usize;
       if tag == 0x574247 {
-
+        // WBG
         wb_coeffs[0] = LEu16(buf, currpos + 12) as f32;
         wb_coeffs[1] = LEu16(buf, currpos + 14) as f32;
         wb_coeffs[2] = LEu16(buf, currpos + 16) as f32;
@@ -362,15 +386,18 @@ impl<'a> ArwDecoder<'a> {
       let buffer = file.buf();
       let len = width * height * 2;
 
+      // Constants taken from dcraw
       let off: usize = 862144;
       let key_off: usize = 200896;
       let head_off: usize = 164600;
 
+      // Replicate the dcraw contortions to get the "decryption" key
       let offset = (buffer[key_off] as usize) * 4;
       let first_key = BEu32(&buffer, key_off + offset);
       let head = ArwDecoder::sony_decrypt(&buffer, head_off, 40, first_key)?;
       let second_key = LEu32(&head, 22);
 
+      // "Decrypt" the whole image buffer
       let image_data = ArwDecoder::sony_decrypt(&buffer, off, len, second_key)?;
       decompress_16be(&image_data, width, height, dummy)?
     };
@@ -425,12 +452,13 @@ impl<'a> ArwDecoder<'a> {
 
         let mut random = pump.peek_bits(16);
         for out in out.chunks_exact_mut(32) {
-
+          // Process 32 pixels at a time in interleaved fashion
           for j in 0..2 {
             let max = pump.get_bits(11);
             let min = pump.get_bits(11);
             let delta = max - min;
-
+            // Calculate the size of the data shift needed by how large the delta is
+            // A delta with 11 bits requires a shift of 4, 10 bits of 3, etc
             let delta_shift: u32 = cmp::max(0, (32 - (delta.leading_zeros() as i32)) - 7) as u32;
             let imax = pump.get_bits(4) as usize;
             let imin = pump.get_bits(4) as usize;
@@ -452,6 +480,14 @@ impl<'a> ArwDecoder<'a> {
     )?)
   }
 
+  /// Some newer cameras like Alpha-1 uses LJPEG compression, but in an awkward way.
+  /// The image is split into 512x512 tiles with cpp = 1, but the LJPEG stream is
+  /// compressed as 256x256 with cpp = 4. So the total of bytes matches, but the dimension
+  /// is wrong. Actually, the LJPEG stream is two lines packed into a single line each
+  /// decompressed line has the bayer pattern: RGGBRGGBRGGB...
+  /// So we need to decompress first, then unpack the bayer pattern from one line
+  /// into two lines.
+  /// For resolution-reduced files (cpp=3), pixels are encoded in YCbCr color space.
   pub(crate) fn decode_ljpeg(camera: &Camera, file: &RawSource, raw: &IFD, dummy: bool) -> Result<PixU16> {
     let offsets = raw.get_entry(TiffCommonTag::TileOffsets).ok_or("Unable to find TileOffsets")?;
     let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
@@ -501,13 +537,14 @@ impl<'a> ArwDecoder<'a> {
               let base = col * twidth * cpp;
               strip[base..base + w * cpp].copy_from_slice(line);
 
+              // Now move output strip by one row.
               strip = &mut strip[width * cpp..];
             }
           }
           Ok(())
         }),
       )?;
-
+      // Convert YC'bC'r data to RGB.
       ycbcr_to_rgb(&mut image.data);
       Ok(image)
     } else if cpp == 1 {
@@ -532,13 +569,14 @@ impl<'a> ArwDecoder<'a> {
             let mut strip = &mut *lines;
             for line in data.chunks_exact(1024) {
               for (i, chunk) in line.chunks_exact(4).enumerate() {
-
+                // Unpack chunks of RGGB pixel data into two output lines
+                // so the first line is RGRGRG and the second one is GBGBGB.
                 strip[col * twidth + i * 2 + 0] = chunk[0];
                 strip[col * twidth + i * 2 + 1] = chunk[1];
                 strip[width + col * twidth + i * 2 + 0] = chunk[2];
                 strip[width + col * twidth + i * 2 + 1] = chunk[3];
               }
-
+              // Now move output strip by two rows.
               strip = &mut strip[width * 2..];
             }
           }
@@ -561,9 +599,11 @@ impl<'a> ArwDecoder<'a> {
     };
     let priv_tiff = IFD::new(&mut file.reader(), priv_offset, 0, 0, Endian::Little, &[])?;
 
+    //priv_tiff.dump::<ExifTag>(0).iter().for_each(|line| println!("DUMPXX: {}", line));
+
     let sony_offset = fetch_tiff_tag!(priv_tiff, TiffCommonTag::SonyOffset).force_u32(0);
     let sony_length = fetch_tiff_tag!(priv_tiff, TiffCommonTag::SonyLength).force_usize(0);
-
+    // This tag is of type UNDEFINED and contains a 32 bit value
     let sony_key = {
       let tag = fetch_tiff_tag!(priv_tiff, TiffCommonTag::SonyKey).get_data();
       LEu32(tag, 0)
@@ -660,7 +700,7 @@ impl<'a> ArwDecoder<'a> {
     }
     let mut pad: [u32; 128] = [0_u32; 128];
     let mut mkey = key;
-
+    // Initialize the decryption pad from the key
     for p in 0..4 {
       mkey = mkey.wrapping_mul(48828125).wrapping_add(1);
       pad[p] = mkey;
@@ -674,7 +714,7 @@ impl<'a> ArwDecoder<'a> {
     }
 
     let mut out = Vec::with_capacity(length + 4);
-
+    //for i in 0..(length / 4 + 1) {
     for i in 0..(length / 4) {
       let p = i + 127;
       pad[p & 127] = pad[(p + 1) & 127] ^ pad[(p + 1 + 64) & 127];
@@ -698,8 +738,9 @@ impl<'a> ArwDecoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("ARW raw wb: {:?}", raw_wb);
-
-  let div = raw_wb[1];
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
+  let div = raw_wb[1]; // G1 should be 1024 and we use this as divisor
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
     if v.is_normal() {
@@ -711,6 +752,8 @@ fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
 
 crate::tags::tiff_tag_enum!(ArwMakernoteTag);
 
+/// Specific Makernotes tags.
+/// These are only related to the Makernote IFD.
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
@@ -719,9 +762,15 @@ pub enum ArwMakernoteTag {
   Tag_940C = 0x940C,
   Tag_9050 = 0x9050,
   Tag_9405 = 0x9405,
-  Tag_9416 = 0x9416,
+  Tag_9416 = 0x9416, // replaces 0x9405 for the Sony ILCE-7SM3, from July 2020
 }
 
+/// Decipher/encipher Sony tag 0x2010, 0x900b, 0x9050 and 0x940x data
+/// Extracted from exiftool, comment from PH:
+/// This is a simple substitution cipher, so use a hardcoded translation table for speed.
+/// The formula is: $c = ($b*$b*$b) % 249, where $c is the enciphered data byte
+/// note that bytes with values 249-255 are not translated, and 0-1, 82-84,
+/// 165-167 and 248 have the same enciphered value)
 const fn sony_tag9cxx_decipher_table() -> [u8; 256] {
   let mut tbl = [0; 256];
 
@@ -757,6 +806,8 @@ struct ArwImageParams {
 
 crate::tags::tiff_tag_enum!(SR2SubIFD);
 
+/// Specific Sony SR2 sub-IFD tags.
+/// These are only related to the Makernote IFD.
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]

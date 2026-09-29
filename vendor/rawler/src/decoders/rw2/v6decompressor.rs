@@ -1,9 +1,11 @@
+/// Ported from Libraw
 use crate::{
   decoders::*,
   decompressors::decompress_lines_fn,
   pumps::{BitPump, BitPumpLSB},
 };
 
+/// This works for 12 and 14 bit depth images
 pub(crate) fn decode_panasonic_v6(buf: &[u8], width: usize, height: usize, bps: u32, dummy: bool) -> std::result::Result<PixU16, String> {
   log::debug!("width: {}", width);
 
@@ -41,6 +43,10 @@ pub(crate) fn decode_panasonic_v6(buf: &[u8], width: usize, height: usize, bps: 
 
   assert_eq!(width % pixels_per_block, 0);
 
+  //log::debug!("RW2 V5 decoder: pixels per block: {}, bps: {}", pixels_per_block, bps);
+
+  // We decode chunked at pixels_per_block boundary
+  // Each block delivers the same amount of pixels.
   decompress_lines_fn(
     width,
     height,
@@ -55,8 +61,8 @@ pub(crate) fn decode_panasonic_v6(buf: &[u8], width: usize, height: usize, bps: 
 
         match bps {
           14 => {
-
-            pump.get_bits(4);
+            // We fill from reverse, because bitstream is reversed
+            pump.get_bits(4); // padding bits, ignore it
             pixelbuffer[13] = pump.get_bits(10) as u16;
             pixelbuffer[12] = pump.get_bits(10) as u16;
             pixelbuffer[11] = pump.get_bits(10) as u16;
@@ -135,13 +141,49 @@ pub(crate) fn decode_panasonic_v6(buf: &[u8], width: usize, height: usize, bps: 
           if spix <= spix_compare {
             out[pix] = (spix & spix_compare) as u16;
           } else {
-
+            // FIXME: this is a convoluted way to compute zero.
+            // What was this code trying to do, actually?
             epixel = ((epixel as i32).wrapping_add(0x7ffffff1) >> 0x1f) as u16;
-
+            //epixel = static_cast<int>(epixel + 0x7ffffff1) >> 0x1f;
+            //out(row, col) = epixel & 0x3fff;
             out[pix] = (epixel & pixel_mask) as u16;
           }
         }
 
+        /*
+        for (int pix = 0; pix < PanasonicV6Decompressor::PixelsPerBlock;
+             pix++, col++) {
+          if (pix % 3 == 2) {
+            uint16_t base = page.nextpixel();
+            if (base == 3)
+              base = 4;
+            pixel_base = 0x200 << base;
+            pmul = 1 << base;
+          }
+          uint16_t epixel = page.nextpixel();
+          if (oddeven[pix % 2]) {
+            epixel *= pmul;
+            if (pixel_base < 0x2000 && nonzero[pix % 2] > pixel_base)
+              epixel += nonzero[pix % 2] - pixel_base;
+            nonzero[pix % 2] = epixel;
+          } else {
+            oddeven[pix % 2] = epixel;
+            if (epixel)
+              nonzero[pix % 2] = epixel;
+            else
+              epixel = nonzero[pix % 2];
+          }
+          auto spix = static_cast<unsigned>(static_cast<int>(epixel) - 0xf);
+          if (spix <= 0xffff)
+            out(row, col) = spix & 0xffff;
+          else {
+            // FIXME: this is a convoluted way to compute zero.
+            // What was this code trying to do, actually?
+            epixel = static_cast<int>(epixel + 0x7ffffff1) >> 0x1f;
+            out(row, col) = epixel & 0x3fff;
+          }
+        }
+        */
       }
       Ok(())
     }),

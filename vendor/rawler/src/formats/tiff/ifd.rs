@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{
   Entry, Result, TiffError, Value, apply_corr,
   entry::RawEntry,
@@ -43,8 +46,9 @@ pub struct IFD {
   pub chain: Vec<IFD>,
 }
 
+// TODO: fixme
 impl IFD {
-
+  /// Construct new IFD from reader at specific base
   pub fn new_root<R: Read + Seek>(reader: &mut R, base: u32) -> Result<IFD> {
     Self::new_root_with_correction(reader, 0, base, 0, 10, &[TiffCommonTag::SubIFDs.into(), TiffCommonTag::ExifIFDPointer.into()])
   }
@@ -174,6 +178,7 @@ impl IFD {
           consecutive_errors += 1;
           log::warn!("Failed to parse TIFF tag 0x{:X} (Index {}). Error: {:?}", tag, i, err);
 
+          // If we fail 5 times in a row, the IFD is likely garbage or physically truncated.
           if consecutive_errors >= 5 {
             log::warn!("Too many consecutive parsing errors ({}). Stopping parse to prevent flood.", consecutive_errors);
             break;
@@ -182,6 +187,8 @@ impl IFD {
       }
     }
 
+    // Some TIFF writers skip the next ifd pointer
+    // If we get an I/O error, we fallback to 0, signaling the end of IFD chains.
     let next_ifd = match reader.read_u32() {
       Ok(ptr) => ptr,
       Err(e) => {
@@ -193,6 +200,7 @@ impl IFD {
       }
     };
 
+    // Process SubIFDs
     let pos = reader.position()?;
     let reader = reader.into_inner();
     for subs in sub_ifd_offsets {
@@ -207,7 +215,7 @@ impl IFD {
       }
       sub.insert(subs.0, ifds);
     }
-    EndianReader::new(reader, endian).goto(pos)?;
+    EndianReader::new(reader, endian).goto(pos)?; // restore
     Ok(IFD {
       offset,
       base,
@@ -230,6 +238,57 @@ impl IFD {
     self.entries().iter().map(|(tag, entry)| (tag, &entry.value))
   }
 
+  /*
+  pub fn new<R: Read + Seek>(reader: &mut R, offset: u32, base: u32, corr: i32, endian: Endian, sub_tags: &[u16]) -> Result<Self> {
+    reader.seek(SeekFrom::Start((base + offset) as u64))?;
+    let mut sub_ifd_offsets = Vec::new();
+    let mut reader = EndianReader::new(reader, endian);
+    let entry_count = reader.read_u16()?;
+    let mut entries = BTreeMap::new();
+    let mut sub = Vec::new();
+    for _ in 0..entry_count {
+      //let embedded = reader.read_u32()?;
+      let tag = reader.read_u16()?;
+      if tag == LegacyTiffRootTag::SubIFDs.into() || sub_tags.contains(&tag) {
+        let entry = Entry::parse(&mut reader, base, corr, tag)?;
+        match entry.value {
+          Value::Long(offsets) => {
+            sub_ifd_offsets.extend_from_slice(&offsets);
+          }
+          _ => {
+            todo!()
+          }
+        }
+      } else {
+        let entry = Entry::parse(&mut reader, base, corr, tag)?;
+        entries.insert(entry.tag, entry);
+      }
+    }
+    let next_ifd = reader.read_u32()?;
+
+    // Process SubIFDs
+    let pos = reader.position()?;
+    let reader = reader.into_inner();
+    for offset in sub_ifd_offsets {
+      let ifd = IFD::new(reader, apply_corr(offset, corr), base, corr, endian, sub_tags)?;
+      sub.push(ifd);
+    }
+    EndianReader::new(reader, endian).goto(pos)?; // restore
+
+    Ok(Self {
+      offset,
+      base,
+      corr,
+      next_ifd: if next_ifd == 0 { 0 } else { apply_corr(next_ifd, corr) },
+      entries,
+      endian,
+      sub,
+    })
+  }
+   */
+
+  /// Extend the IFD with sub-IFDs from a specific tag.
+  /// The IFD corrections are used from current IFD.
   pub fn extend_sub_ifds<R: Read + Seek>(&mut self, reader: &mut R, tag: u16) -> Result<Option<&Vec<Self>>> {
     if let Some(entry) = self.get_entry(tag) {
       let mut subs = Vec::new();
@@ -322,6 +381,7 @@ impl IFD {
     Ok(None)
   }
 
+  /// Get the data of a tag by just reading as many `len` bytes from offet.
   pub fn get_entry_raw_with_len<'a, T: TiffTag, R: Read + Seek>(&'a self, tag: T, file: &mut R, len: usize) -> Result<Option<RawEntry<'a>>> {
     if let Some(entry) = self.get_entry(tag) {
       return Ok(Some(RawEntry {
@@ -374,7 +434,7 @@ impl IFD {
     if self.get_entry(tag).is_some() {
       ifds.push(self);
     }
-
+    // Now search in all sub IFDs
     for subs in self.sub_ifds() {
       for ifd in subs.1 {
         ifds.append(&mut ifd.find_ifds_with_tag(tag));
@@ -387,12 +447,33 @@ impl IFD {
     self.find_ifds_with_tag(tag).get(0).copied()
   }
 
+  /*
+  pub fn get_ifd<T: TiffTagEnum, R: Read + Seek>(&self, tag: T, reader: &mut R) -> Result<Option<IFD>> {
+    if let Some(offset) = self.get_entry(tag) {
+      match &offset.value {
+        Value::Long(v) => {
+          debug!("IFD offset: {}", v[0]);
+          Ok(Some(IFD::new(reader, apply_corr(v[0], self.corr), self.base, self.corr, self.endian, &[])?))
+        }
+        _ => {
+          return Err(TiffError::General(format!(
+            "TIFF tag {:?} is not of type LONG, thus can not be used as IFD offset in get_ifd().",
+            tag
+          )));
+        }
+      }
+    } else {
+      Ok(None)
+    }
+  }
+   */
+
   pub fn has_entry<T: TiffTag>(&self, tag: T) -> bool {
     self.get_entry(tag).is_some()
   }
 
   pub fn sub_buf<R: Read + Seek>(&self, reader: &mut R, offset: usize, len: usize) -> Result<Vec<u8>> {
-
+    //&buf[self.start_offset+offset..self.start_offset+offset+len]
     let mut buf = vec![0; len];
     reader.seek(SeekFrom::Start(self.base as u64 + offset as u64))?;
     reader.read_exact(&mut buf)?;
@@ -420,6 +501,9 @@ impl IFD {
     Ok(rawsource.subview((self.base + offset) as u64, len as u64)?)
   }
 
+  /// Return byte slices to strip data.
+  /// If there exists a single strip only or if all strips are continous,
+  /// the second return value contains the whole strip data in a single slice.
   pub fn strip_data<'a>(&self, rawsource: &'a RawSource) -> Result<(Vec<&'a [u8]>, Option<&'a [u8]>)> {
     if !self.has_entry(TiffCommonTag::StripOffsets) {
       return Err(TiffError::General("IFD contains no strip data".into()));
@@ -443,6 +527,7 @@ impl IFD {
       )));
     }
 
+    // Check if all slices are continous
     let (is_continous, end_off) =
       offsets.iter().zip(sizes.iter()).fold(
         (true, offsets[0]),
@@ -485,6 +570,7 @@ impl IFD {
     Ok(tile_slices.into_iter().collect::<Result<Vec<_>>>()?)
   }
 
+  /// Check for the data mode (Strips or Tiles)
   pub fn data_mode(&self) -> Result<DataMode> {
     if self.has_entry(TiffCommonTag::StripOffsets) {
       Ok(DataMode::Strips)
@@ -504,6 +590,7 @@ impl IFD {
           let mut off = 0;
           let mut endian = self.endian;
 
+          // Olympus starts the makernote with their own name, sometimes truncated
           if data[0..5] == b"OLYMP"[..] {
             off += 8;
             if data[0..7] == b"OLYMPUS"[..] {
@@ -511,28 +598,34 @@ impl IFD {
             }
           }
 
+          // Epson starts the makernote with its own name
           if data[0..5] == b"EPSON"[..] {
             off += 8;
           }
 
+          // Fujifilm has 12 extra bytes
           if data[0..8] == b"FUJIFILM"[..] {
             off += 12;
           }
 
+          // Sony has 12 extra bytes
           if data[0..9] == b"SONY DSC "[..] {
             off += 12;
           }
 
+          // Pentax makernote starts with AOC\0 - If it's there, skip it
           if data[0..4] == b"AOC\0"[..] {
             off += 4;
           }
 
+          // Pentax can also start with PENTAX and in that case uses different offsets
           if data[0..6] == b"PENTAX"[..] {
             off += 8;
             let endian = if data[off..off + 2] == b"II"[..] { Endian::Little } else { Endian::Big };
-
+            // All offsets in this IFD are relative to the start of this tag,
+            // so wie use the offset as correction value.
             let corr = offset as i32;
-
+            // The IFD itself starts 10 bytes after tag offset.
             return Ok(Some(IFD::new(reader, offset + 10, self.base, corr, endian, sub_tags)?));
           }
 
@@ -542,6 +635,7 @@ impl IFD {
             return Ok(Some(IFD::new(reader, 8, self.base + offset + 10, 0, endian, sub_tags)?));
           }
 
+          // Some have MM or II to indicate endianness - read that
           if data[off..off + 2] == b"II"[..] {
             off += 2;
             endian = Endian::Little;
@@ -554,7 +648,7 @@ impl IFD {
           match offset_mode {
             OffsetMode::Absolute => Ok(Some(IFD::new(reader, offset + off as u32, self.base, self.corr, endian, sub_tags)?)),
             OffsetMode::RelativeToIFD => {
-
+              // Value offsets are relative to IFD offset
               let corr = offset + off as u32;
               Ok(Some(IFD::new(reader, offset + off as u32, self.base, corr as i32, endian, sub_tags)?))
             }

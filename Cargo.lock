@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "numa"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "byteorder",
  "dirs",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "numa-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "dirs",
  "image",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "numa-cull"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "image",
  "log",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "numa-gpu"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "bytemuck",
  "env_logger",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "numa-infer"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "image",
  "log",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "numa-io"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "avif-serialize",
  "byteorder",
@@ -2112,6 +2112,7 @@ dependencies = [
  "rayon",
  "roxmltree",
  "rusqlite",
+ "ruzstd",
  "serde",
  "serde_json",
  "zip",
@@ -2119,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "numa-render"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "image",
  "log",
@@ -2825,6 +2826,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a252f5e20f038fe7b4ea53e073e65398d652c864cc162fc77c56c2f13717b888"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3223,6 +3233,12 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typed-path"

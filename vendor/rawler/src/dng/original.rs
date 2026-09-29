@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use byteorder::{BigEndian, ReadBytesExt};
 use libflate::zlib::{Decoder, EncodeOptions, Encoder};
 use log::debug;
@@ -15,6 +18,7 @@ use crate::{
   tags::DngTag,
 };
 
+// DNG requires this block size
 const COMPRESS_BLOCK_SIZE: u32 = 65536;
 
 pub type OriginalDigest = [u8; 16];
@@ -32,7 +36,7 @@ impl OriginalCompressed {
     let start = stream.stream_position()?;
 
     let raw_fork_size: u32 = stream.read_u32::<BigEndian>()?;
-    let raw_fork_blocks: u32 = raw_fork_size.div_ceil(COMPRESS_BLOCK_SIZE);
+    let raw_fork_blocks: u32 = raw_fork_size.div_ceil(COMPRESS_BLOCK_SIZE); // (raw_fork_size + (COMPRESS_BLOCK_SIZE - 1)) / COMPRESS_BLOCK_SIZE
 
     let mut index_list: Vec<u32> = Vec::with_capacity(raw_fork_blocks as usize + 1);
 
@@ -73,6 +77,8 @@ impl OriginalCompressed {
     Ok(total)
   }
 
+  /// Read bytes from stream until EOF, split into chunks
+  /// and compress each one.
   pub fn compress<T>(stream: &mut T) -> io::Result<Self>
   where
     T: Seek + Read,
@@ -83,7 +89,7 @@ impl OriginalCompressed {
     stream.seek(SeekFrom::Current((uncomp_len as i64).neg()))?;
 
     let raw_fork_size = u32::try_from(uncomp_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    let raw_fork_blocks = raw_fork_size.div_ceil(COMPRESS_BLOCK_SIZE);
+    let raw_fork_blocks = raw_fork_size.div_ceil(COMPRESS_BLOCK_SIZE); // (raw_fork_size + (COMPRESS_BLOCK_SIZE - 1)) / COMPRESS_BLOCK_SIZE
     let mut forks = Vec::with_capacity(raw_fork_blocks as usize);
 
     loop {
@@ -93,23 +99,26 @@ impl OriginalCompressed {
         break;
       }
       forks.push(buf);
-
+      //chunks.push(ForkBlock::compress(&buf)?);
     }
     let chunks = forks.par_iter().flat_map(ForkBlock::compress).collect();
     Ok(Self { raw_fork_size, chunks })
   }
 
+  /// Write compressed chunks to output stream.
+  ///
+  /// Returns the MD5 digest of everything written to `stream`.
   pub fn write_to_stream<T>(&self, stream: &mut T) -> io::Result<md5::Digest>
   where
     T: Write,
   {
-
+    // Tee every byte into the digest as it is written to the stream.
     let mut stream = DigestWriter::new(stream);
-    stream.write_all(&self.raw_fork_size.to_be_bytes())?;
+    stream.write_all(&self.raw_fork_size.to_be_bytes())?; // Fork 1
     let chunks_start: u32 = (size_of::<u32>() + (self.chunks.len() + 1) * size_of::<u32>()) as u32;
-
+    // Offset of first chunk
     stream.write_all(&chunks_start.to_be_bytes())?;
-
+    // Write all other end offsets.
     for end in self.chunks.iter().map(ForkBlock::len).scan(chunks_start, |end, len| {
       *end += len as u32;
       Some(*end)
@@ -130,6 +139,9 @@ impl OriginalCompressed {
   }
 }
 
+/// A [`Write`] adapter that forwards all bytes to an inner writer while
+/// feeding them into an MD5 context, so the digest of the written stream is
+/// available without a second pass over the data.
 struct DigestWriter<'a, T> {
   inner: &'a mut T,
   context: md5::Context,
@@ -143,6 +155,7 @@ impl<'a, T: Write> DigestWriter<'a, T> {
     }
   }
 
+  /// Consume the adapter and return the digest of everything written so far.
   fn finalize(self) -> md5::Digest {
     self.context.finalize()
   }
@@ -151,7 +164,7 @@ impl<'a, T: Write> DigestWriter<'a, T> {
 impl<T: Write> Write for DigestWriter<'_, T> {
   fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
     let written = self.inner.write(buf)?;
-
+    // Only hash the bytes actually accepted by the inner writer.
     self.context.consume(&buf[..written]);
     Ok(written)
   }
@@ -161,8 +174,21 @@ impl<T: Write> Write for DigestWriter<'_, T> {
   }
 }
 
+/// Extract the original raw file embedded in a DNG and write it to `target`.
+///
+/// Reads the `OriginalRawFileData` tag from `dng`, decompresses the embedded
+/// payload and writes the reconstructed original file to `target`. When
+/// `verify_digest` is `true`, the decompressed data is checked against the
+/// `OriginalRawFileDigest` stored in the DNG.
+///
+/// Returns the number of bytes written to `target`.
+///
+/// # Errors
+///
+/// Fails if `dng` is not a valid DNG, does not embed an original raw file, or
+/// if digest verification fails.
 pub fn extract_original<W: Write + Seek + Send>(dng: &RawSource, target: &mut W, verify_digest: bool) -> crate::Result<usize> {
-
+  //let mut in_file = BufReader::new(dng_file);
   let file = GenericTiffReader::new(&mut dng.reader(), 0, 0, None, &[])?;
 
   if !file.has_entry(DngTag::DNGVersion) {
@@ -207,8 +233,9 @@ pub fn extract_original<W: Write + Seek + Send>(dng: &RawSource, target: &mut W,
   }
 }
 
+/// Single chunk for compressed data
 struct ForkBlock {
-
+  /// Compressed data for block
   chunk: Vec<u8>,
 }
 
@@ -250,20 +277,20 @@ mod tests {
 
   #[test]
   fn empty_data() -> std::result::Result<(), Box<dyn std::error::Error>> {
-
+    //let data = [0x00, 0xFF, 0xDD];
     let data = [];
     let mut file = Cursor::new(data);
-
+    // Compress
     let orig = OriginalCompressed::compress(&mut file)?;
     let mut out = Cursor::new(Vec::new());
     let _digest = orig.write_to_stream(&mut out)?;
     out.seek(SeekFrom::Start(0))?;
-
+    // Reload
     let comp = OriginalCompressed::new(&mut out)?;
-
+    // Decompress
     let mut restored = Cursor::new(Vec::new());
     comp.decompress(&mut restored)?;
-
+    // Compare
     let unpacked = restored.into_inner();
     assert_eq!(unpacked, data);
     Ok(())
@@ -273,17 +300,17 @@ mod tests {
   fn dummy_data() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let data = [0x00, 0xFF, 0xDD, 0x00, 0x00];
     let mut file = Cursor::new(data);
-
+    // Compress
     let orig = OriginalCompressed::compress(&mut file)?;
     let mut out = Cursor::new(Vec::new());
     let _digest = orig.write_to_stream(&mut out)?;
     out.seek(SeekFrom::Start(0))?;
-
+    // Reload
     let comp = OriginalCompressed::new(&mut out)?;
-
+    // Decompress
     let mut restored = Cursor::new(Vec::new());
     comp.decompress(&mut restored)?;
-
+    // Compare
     let unpacked = restored.into_inner();
     assert_eq!(unpacked, data);
     Ok(())

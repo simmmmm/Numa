@@ -62,7 +62,7 @@ impl<'a> Decoder for AriDecoder<'a> {
 
   fn raw_metadata(&self, file: &RawSource, _params: &RawDecodeParams) -> Result<RawMetadata> {
     let mut exif = Exif::default();
-    let buffer = file.subview(0, 0x0a98)?;
+    let buffer = file.subview(0, 0x0a98)?; // max header
     exif.recommended_exposure_index = Some(LEu32(buffer, ArriRawTag::ExposureIndexASA as usize));
     exif.sensitivity_type = Some(2);
     let lens_model = char_slice_to_string(&buffer[ArriRawTag::LensModel as usize..ArriRawTag::LensModel as usize + 32]);

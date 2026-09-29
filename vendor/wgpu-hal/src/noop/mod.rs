@@ -155,6 +155,10 @@ impl crate::Instance for Context {
     }
 }
 
+/// Returns the adapter info for the noop backend.
+///
+/// This is used in the test harness to construct info about
+/// the noop backend adapter without actually initializing wgpu.
 pub fn adapter_info() -> wgt::AdapterInfo {
     wgt::AdapterInfo {
         name: String::from("noop wgpu backend"),
@@ -163,11 +167,15 @@ pub fn adapter_info() -> wgt::AdapterInfo {
     }
 }
 
+/// The capabilities of the noop backend.
+///
+/// This is used in the test harness to construct capabilities
+/// of the noop backend without actually initializing wgpu.
 pub const CAPABILITIES: crate::Capabilities = {
     crate::Capabilities {
         limits: wgt::Limits::unlimited(),
         alignments: crate::Alignments {
-
+            // All maximally permissive
             buffer_copy_offset: wgt::BufferSize::MIN,
             buffer_copy_pitch: wgt::BufferSize::MIN,
             uniform_bounds_check_alignment: wgt::BufferSize::MIN,
@@ -262,9 +270,10 @@ impl crate::Queue for Context {
         surface_textures: &[&Resource],
         (fence, fence_value): (&Fence, crate::FenceValue),
     ) -> DeviceResult<()> {
-
+        // All commands are executed synchronously.
         for cb in command_buffers {
-
+            // SAFETY: Caller is responsible for ensuring synchronization between commands and
+            // other mutations.
             unsafe {
                 cb.execute();
             }
@@ -304,7 +313,9 @@ impl crate::Device for Context {
         buffer: &Buffer,
         range: crate::MemoryRange,
     ) -> DeviceResult<crate::BufferMapping> {
-
+        // Safety: the `wgpu-core` validation layer will prevent any user-accessible aliasing
+        // mappings from being created, so we don’t need to perform any checks here, except for
+        // bounds checks on the range which are built into `get_slice_ptr()`.
         Ok(crate::BufferMapping {
             ptr: ptr::NonNull::new(buffer.get_slice_ptr(range).cast::<u8>()).unwrap(),
             is_coherent: true,
@@ -428,7 +439,9 @@ impl crate::Device for Context {
         value: crate::FenceValue,
         timeout: Option<Duration>,
     ) -> DeviceResult<bool> {
-
+        // The relevant commands must have already been submitted, and noop-backend commands are
+        // executed synchronously, so there is no waiting — either it is already done,
+        // or this method was called incorrectly.
         assert!(
             fence.value.load(Ordering::Acquire) >= value,
             "submission must have already been done"

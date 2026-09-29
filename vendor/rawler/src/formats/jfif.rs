@@ -7,9 +7,10 @@ use crate::rawsource::RawSource;
 
 pub type Result<T> = std::result::Result<T, JfifError>;
 
+/// Error variants for JFIF parser
 #[derive(Debug, Error)]
 pub enum JfifError {
-
+  /// Overflow of input, size constraints...
   #[error("Overflow error: {}", _0)]
   Overflow(String),
 
@@ -19,6 +20,7 @@ pub enum JfifError {
   #[error("Format mismatch: {}", _0)]
   FormatMismatch(String),
 
+  /// Error on internal cursor type
   #[error("I/O error: {:?}", _0)]
   Io(#[from] std::io::Error),
 }
@@ -41,7 +43,7 @@ pub struct App0 {
 
 impl<R: Read + Seek> ReadSegment<&mut R> for App0 {
   fn read_segment(reader: &mut R, _symbol: u16) -> Result<Self> {
-
+    //let pos = reader.stream_position()?;
     let len: u64 = reader.read_u16::<BigEndian>()? as u64;
 
     const APP1_JFIF_MARKER: [u8; 5] = [b'J', b'F', b'I', b'F', b'\0'];
@@ -148,6 +150,16 @@ impl<R: Read + Seek> ReadSegment<&mut R> for App1 {
         let ifd = IFD::new_root(reader, pos as u32 + 2 + 6);
         reader.seek(SeekFrom::Start(pos + len))?;
 
+        /*
+        for i in ifd.dump::<TiffCommonTag>(10) {
+          println!("{}", i);
+        }
+
+        for i in ifd.get_sub_ifds(TiffCommonTag::ExifIFDPointer).unwrap()[0].dump::<ExifTag>(10) {
+          println!("{}", i);
+        }
+         */
+
         if let Ok(ifd) = ifd {
           return Ok(Self {
             len,
@@ -241,7 +253,7 @@ impl Jfif {
       }
       segments.push(segment);
       if symbol == 0xFFD9 {
-        break;
+        break; // EOI reached
       }
       pos = reader.stream_position()?;
       sym = reader.read_u16::<BigEndian>().ok();
@@ -288,7 +300,7 @@ pub fn is_jfif(file: &RawSource) -> bool {
     Ok(buf) => {
       let result = buf[0..4] == [0xFF, 0xD8, 0xFF, 0xE0];
       if !result {
-
+        //panic!("Failed: {:x} {:x} {:x} {:x}", buf[0], buf[1], buf[2], buf[3]);
       }
       result
     }

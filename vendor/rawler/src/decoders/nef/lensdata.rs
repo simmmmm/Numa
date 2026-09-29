@@ -89,7 +89,7 @@ pub(super) fn from_makernote(makernote: &IFD) -> Result<Option<NefLensData>> {
         super::decrypt::nef_decrypt(&mut buf, 4, makernote)?;
         NefLensData::FMount(parse_lensdata_0x4xx(version, &buf, 0x2ac)?)
       }
-      0x800 | 0x801 | 0x802
+      0x800 | 0x801 | 0x802 // Z Models
       => {
         super::decrypt::nef_decrypt(&mut buf, 4, makernote)?;
         parse_lensdata_0x800(version, &buf)?
@@ -173,7 +173,8 @@ fn parse_lensdata_0x4xx(version: u32, buf: &[u8], model_offset: usize) -> Result
 }
 
 fn parse_lensdata_0x800(version: u32, buf: &[u8]) -> Result<NefLensData> {
-
+  // This check comes from exiftool. If the buffer contains only zeros,
+  // we consider the block as unused. Hopefully we find another method...
   let old_data_avail = !buf[0x04..0x04 + 16].iter().all(|&x| x == 0);
   let new_data_avail = !buf[48..].iter().all(|&x| x == 0);
   if old_data_avail {

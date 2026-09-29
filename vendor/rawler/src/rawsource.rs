@@ -1,3 +1,5 @@
+//! Image source like file or buffer
+
 use std::{
   fmt::Debug,
   fs::File,
@@ -26,7 +28,10 @@ enum RawSourceImpl {
 impl RawSource {
   pub fn new(path: &Path) -> std::io::Result<Self> {
     let file = File::open(path)?;
-
+    // Numa IO-021: mapped, not read. `populate` and `WillNeed` read the whole
+    // file before anything was parsed, so a thumbnail or a summary cost the
+    // full raw; now a reader reads the pages it touches, and a decode, which
+    // touches them all, is no slower.
     let mmap = unsafe { MmapOptions::new().map(&file)? };
     Ok(Self {
       path: path.canonicalize().unwrap_or_else(|_| path.to_owned()),
@@ -52,6 +57,7 @@ impl RawSource {
     Self::new_from_shared_vec(Arc::new(Vec::from(buf)))
   }
 
+  /// Calculate digest for file
   pub fn digest(&self) -> Digest {
     md5::compute(self.buf())
   }
@@ -89,6 +95,10 @@ impl RawSource {
     }
   }
 
+  /// Numa IO-021: `subview_padded` for a decode that may be a `dummy` one, the
+  /// geometry without the pixels. Padding a view that ends at the end of the
+  /// file copies all of it, and a dummy decode reads none of it: it gets zeros
+  /// of the same length instead, which are neither read nor written.
   pub fn subview_padded_or_dummy(&self, offset: u64, size: u64, dummy: bool) -> std::io::Result<PaddedBuf<'_>> {
     match dummy && offset + size <= self.len() as u64 {
       true => Ok(PaddedBuf::new_owned(vec![0; size as usize + 16], size as usize)),
@@ -96,6 +106,7 @@ impl RawSource {
     }
   }
 
+  /// Numa IO-021: the same for `subview_until_eof_padded`, which always copied.
   pub fn subview_until_eof_padded_or_dummy(&self, offset: u64, dummy: bool) -> std::io::Result<PaddedBuf<'_>> {
     match dummy && offset < self.len() as u64 {
       true => self.subview_padded_or_dummy(offset, self.len() as u64 - offset, true),

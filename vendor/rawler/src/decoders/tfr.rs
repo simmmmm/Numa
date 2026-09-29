@@ -18,6 +18,7 @@ use crate::{RawlerError, Result};
 
 use super::{BlackLevel, CFAConfig, Camera, Decoder, FormatHint, RawDecodeParams, RawMetadata, RawPhotometricInterpretation, WhiteLevel};
 
+/// 3FR format encapsulation for analyzer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TfrFormat {
@@ -36,12 +37,12 @@ impl<'a> TfrDecoder<'a> {
   pub fn new(_file: &RawSource, tiff: GenericTiffReader, rawloader: &'a RawLoader) -> Result<TfrDecoder<'a>> {
     debug!("3FR decoder choosen");
     let camera = rawloader.check_supported(tiff.root_ifd())?;
-
+    //let makernotes = new_makernote(file, 8).map_err(|ioerr| RawlerError::with_io_error("load 3FR makernotes", file.path(), ioerr))?;
     Ok(TfrDecoder {
       camera,
       tiff,
       rawloader,
-
+      // makernotes,
     })
   }
 }
@@ -74,6 +75,8 @@ impl<'a> Decoder for TfrDecoder<'a> {
     };
 
     let crop = Rect::from_tiff(raw).or_else(|| self.camera.crop_area.map(|area| Rect::new_with_borders(Dim2::new(width, height), &area)));
+
+    //crate::devtools::dump_image_u16(&image.data, width, height, "/tmp/tfrdump.pnm");
 
     let cpp = 1;
     let photometric = RawPhotometricInterpretation::Cfa(CFAConfig::new_from_camera(&self.camera));
@@ -117,7 +120,7 @@ impl<'a> Decoder for TfrDecoder<'a> {
   fn raw_metadata(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<RawMetadata> {
     let exif = Exif::new(self.tiff.root_ifd())?;
     let mut mdata = RawMetadata::new_with_lens(&self.camera, exif, self.get_lens_description()?.cloned());
-
+    // Read Unique ID
     if let Some(Entry {
       value: Value::Byte(unique_id), ..
     }) = self.tiff.root_ifd().get_entry(DngTag::RawDataUniqueID)
@@ -138,7 +141,7 @@ impl<'a> Decoder for TfrDecoder<'a> {
 }
 
 impl<'a> TfrDecoder<'a> {
-
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     if let Some(exif) = self.tiff.root_ifd().get_sub_ifd(TiffCommonTag::ExifIFDPointer) {
       let lens_make = exif.get_entry(ExifTag::LensMake).and_then(|entry| entry.as_string());

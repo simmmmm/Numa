@@ -134,8 +134,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
         let raw = self.free.pop().unwrap();
 
+        // Set the name unconditionally, since there might be a
+        // previous name assigned to this.
         unsafe { self.device.set_object_name(raw, label.unwrap_or_default()) };
 
+        // Reset some state in case the last renderpass was never ended.
         self.rpass_debug_marker_active = false;
         self.end_of_pass_timer_query = None;
 
@@ -153,14 +156,17 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active = vk::CommandBuffer::null();
         unsafe { self.device.raw.end_command_buffer(raw) }.map_err(map_err)?;
         fn map_err(err: vk::Result) -> crate::DeviceError {
-
+            // We don't use VK_KHR_video_encode_queue
+            // VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR
             super::map_host_device_oom_err(err)
         }
         Ok(super::CommandBuffer { raw })
     }
 
     unsafe fn discard_encoding(&mut self) {
-
+        // Safe use requires this is not called in the "closed" state, so the buffer
+        // shouldn't be null. Assert this to make sure we're not pushing null
+        // buffers to the discard pile.
         assert_ne!(self.active, vk::CommandBuffer::null());
 
         self.discarded.push(self.active);
@@ -175,7 +181,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
-
+        // Delete framebuffers from the framebuffer cache
         for (_, framebuffer) in self.framebuffers.drain() {
             unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
         }
@@ -190,7 +196,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     where
         T: Iterator<Item = crate::BufferBarrier<'a, super::Buffer>>,
     {
-
+        //Note: this is done so that we never end up with empty stage flags
         let mut src_stages = vk::PipelineStageFlags::TOP_OF_PIPE;
         let mut dst_stages = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
         let vk_barriers = &mut self.temp.buffer_barriers;
@@ -294,6 +300,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 )
             };
 
+            // This will never be zero, as rounding can only add up to 12 bytes, and the total size is 4096.
             let suffix_size = range.end - rounded_start;
 
             unsafe {
@@ -549,6 +556,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
         };
 
+        // storage to all the data required for cmd_build_acceleration_structures
         let mut ranges_storage = smallvec::SmallVec::<
             [smallvec::SmallVec<[vk::AccelerationStructureBuildRangeInfoKHR; CAPACITY_INNER]>;
                 CAPACITY_OUTER],
@@ -558,6 +566,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 CAPACITY_OUTER],
         >::with_capacity(descriptor_count);
 
+        // pointers to all the data required for cmd_build_acceleration_structures
         let mut geometry_infos = smallvec::SmallVec::<
             [vk::AccelerationStructureBuildGeometryInfoKHR; CAPACITY_OUTER],
         >::with_capacity(descriptor_count);
@@ -569,7 +578,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             let (geometries, ranges) = match *desc.entries {
                 crate::AccelerationStructureEntries::Instances(ref instances) => {
                     let instance_data = vk::AccelerationStructureGeometryInstancesDataKHR::default(
-
+                    // TODO: Code is so large that rustfmt refuses to treat this... :(
                     )
                     .data(vk::DeviceOrHostAddressConstKHR {
                         device_address: get_device_address(instances.buffer),
@@ -597,7 +606,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     for triangles in in_geometries {
                         let mut triangle_data =
                             vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-
+                                // IndexType::NONE_KHR is not set by default (due to being provided by VK_KHR_acceleration_structure) but unless there is an
+                                // index buffer we need to have IndexType::NONE_KHR as our index type.
                                 .index_type(vk::IndexType::NONE_KHR)
                                 .vertex_data(vk::DeviceOrHostAddressConstKHR {
                                     device_address: get_device_address(triangles.vertex_buffer)
@@ -767,6 +777,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         _dependencies: &[&super::AccelerationStructure],
     ) {
     }
+    // render
 
     unsafe fn begin_render_pass(
         &mut self,
@@ -869,6 +880,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             self.rpass_debug_marker_active = true;
         }
 
+        // Start timestamp if any (before all other commands but after debug marker)
         if let Some(timestamp_writes) = desc.timestamp_writes.as_ref() {
             if let Some(index) = timestamp_writes.beginning_of_pass_write_index {
                 unsafe {
@@ -903,6 +915,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             self.device.raw.cmd_end_render_pass(self.active);
         }
 
+        // After all other commands but before debug marker, so this is still seen as part of this pass.
         self.write_pass_end_timestamp_if_requested();
 
         if self.rpass_debug_marker_active {
@@ -1012,7 +1025,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             x: rect.x,
             y: rect.y + rect.h,
             width: rect.w,
-            height: -rect.h,
+            height: -rect.h, // flip Y
             min_depth: depth_range.start,
             max_depth: depth_range.end,
         }];
@@ -1286,6 +1299,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
 
+    // compute
+
     unsafe fn begin_compute_pass(
         &mut self,
         desc: &crate::ComputePassDescriptor<'_, super::QuerySet>,
@@ -1345,6 +1360,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
 
+    // ray tracing
+
     unsafe fn begin_ray_tracing_pass(&mut self, desc: &crate::RayTracingPassDescriptor<'_>) {
         self.bind_point = vk::PipelineBindPoint::RAY_TRACING_KHR;
         if let Some(label) = desc.label {
@@ -1395,7 +1412,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     device_address: get_device_address(ray_generation_group_data.buffer)
                         + ray_generation_group_data.offset,
                     stride: ray_generation_group_data.stride,
-                    size: ray_generation_group_data.stride ,
+                    size: ray_generation_group_data.stride /* no need for multiplying by count, vulkan requires the ray gen sbt to be just one group */,
                 },
                 &vk::StridedDeviceAddressRegionKHR {
                     device_address: get_device_address(miss_group_data.buffer)

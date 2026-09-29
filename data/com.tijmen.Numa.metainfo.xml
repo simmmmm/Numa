@@ -8,7 +8,8 @@
   </developer>
   <description>
     <p>
-      A raw developer for Linux. It reads the files twenty-nine cameras write,
+      A raw developer and library for Linux. It reads raw files in twenty-nine
+      formats from 850 cameras, as well as JPEG, PNG and HEIF,
       renders them through the camera's own colour profile, and keeps every
       edit as a list of operations rather than as pixels — so nothing is ever
       written back over the original.
@@ -23,14 +24,43 @@
       <li>Heal and clone</li>
       <li>Lens corrections from the camera's own tables, or from lensfun</li>
       <li>Crop, straighten, noise reduction and sharpening</li>
+      <li>Looks with a Strength slider, and LUTs (.cube, .3dl)</li>
+      <li>Culling that measures sharpness, groups bursts and suggests the best
+          frame; pick and reject from the keyboard</li>
       <li>A library with ratings and flags, and export in batches</li>
     </ul>
+    <p>
+      Everything runs on your own computer, the models behind the masks
+      included. Numa is also coming to iPhone, iPad and Mac, as a separate app.
+    </p>
   </description>
-  <url type="homepage">https://github.com/simmmmm/Numa</url>
+  <url type="homepage">https://numa.photo</url>
+  <url type="bugtracker">https://github.com/simmmmm/Numa/issues</url>
+  <url type="help">https://numa.photo/support</url>
+  <url type="vcs-browser">https://github.com/simmmmm/Numa</url>
+  <keywords>
+    <keyword>photo editor</keyword>
+    <keyword>raw</keyword>
+    <keyword>photography</keyword>
+    <keyword>culling</keyword>
+    <keyword>masks</keyword>
+    <keyword>Fujifilm</keyword>
+    <keyword>X-Trans</keyword>
+  </keywords>
   <launchable type="desktop-id">com.tijmen.Numa.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.33.0" date="2026-09-29">
+      <description>
+        <p>
+          The AI models download about a fifth smaller: they come packed and
+          are unpacked once, to exactly the same files. Raws from the Sony
+          FX2 open. Add-ons and About say which models are for non-commercial
+          use only, and About links to Numa's source.
+        </p>
+      </description>
+    </release>
     <release version="0.32.0" date="2026-09-29">
       <description>
         <p>

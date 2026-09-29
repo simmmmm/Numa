@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2024 Daniel Vogelbacher <daniel@chaospixel.com>
+// Originally written in C in dcraw.c by Dave Coffin
+
+//! Kodak Run Adaptive Differential Coding (RADC).
+
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 
@@ -42,13 +48,15 @@ struct HuffDecoder {
 }
 
 impl HuffDecoder {
-
+  /// Create new HuffmanDecoder
+  ///
+  /// cbpp is Compressed Bits Per Pixel
   fn new(cbpp: u8) -> Self {
     let mut cache = [[HuffSymbol::default(); 256]; 19];
     let mut a = 0;
     for x in HUFF_INIT {
       for _ in 0..(256 >> x.0) {
-
+        // max bit value in cache
         cache.as_flattened_mut()[a].bitcnt = x.0;
         cache.as_flattened_mut()[a].value = x.1 as u8;
         a += 1;
@@ -70,6 +78,9 @@ impl HuffDecoder {
   }
 }
 
+/// Decompress a RADC buffer
+///
+/// cbpp is Compressed Bits Per Pixel
 pub fn decompress(src: &PaddedBuf, width: usize, height: usize, cbpp: u8, dummy: bool) -> Result<PixU16> {
   log::debug!("RADC decompress with cbpp: {}, width: {}, height: {}", cbpp, width, height);
   let mut out = alloc_image_ok!(width, height, dummy);
@@ -176,6 +187,8 @@ pub fn decompress(src: &PaddedBuf, width: usize, height: usize, cbpp: u8, dummy:
           }
         }
 
+        // Copy buffer from buf[c][2] to buf[c][0]
+        // Borrow checker needs this hack...
         let (dst, src) = buf[c].split_at_mut(2);
         if c == 0 {
           dst[0][1..].copy_from_slice(&src[2 - 2][..386 - 1]);

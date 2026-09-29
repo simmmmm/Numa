@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, ext_cr3::cr3desc::Cr3DescBox, mvhd::MvhdBox, trak::TrakBox, vendor::VendorBox};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -9,9 +13,12 @@ pub struct MoovBox {
   pub header: BoxHeader,
   pub mvhd: MvhdBox,
 
+  //#[serde(skip_serializing_if = "Option::is_none")]
+  //pub mvex: Option<MvexBox>,
   #[serde(rename = "trak")]
   pub traks: Vec<TrakBox>,
 
+  // UUID Box 85c0b687-820f-11e0-8111-f4ce462b6a48
   pub cr3desc: Option<Cr3DescBox>,
 
   pub vendor: Vec<VendorBox>,
@@ -33,6 +40,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MoovBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 

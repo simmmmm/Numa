@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use multiversion::multiversion;
 
 use crate::{
@@ -17,7 +20,7 @@ impl Bilinear4Channel {
 }
 
 impl Demosaic<f32, 4> for Bilinear4Channel {
-
+  /// Debayer image by using bilinear method.
   fn demosaic(&self, pixels: &PixF32, cfa: &CFA, colors: &PlaneColor, roi: Rect) -> Color2D<f32, 4> {
     Self::demosaic_4ch(pixels, cfa, colors, roi)
   }
@@ -39,6 +42,7 @@ impl Bilinear4Channel {
     let dim = pixels.dim();
     let mut out = Color2D::new(pixels.dim().w, pixels.dim().h);
 
+    // Process edges
     out.at_mut(0, 0)[ch(0, 0)] = *pixels.at(0, 0);
     out.at_mut(0, 0)[ch(0, 1)] = *pixels.at(0, 1);
     out.at_mut(0, 0)[ch(1, 0)] = *pixels.at(1, 0);
@@ -59,13 +63,14 @@ impl Bilinear4Channel {
     out.at_mut(dim.h - 1, dim.w - 1)[ch(dim.h - 2, dim.w - 1)] = *pixels.at(dim.h - 2, dim.w - 1);
     out.at_mut(dim.h - 1, dim.w - 1)[ch(dim.h - 2, dim.w - 2)] = *pixels.at(dim.h - 2, dim.w - 2);
 
+    // Process borders
     for i in 1..out.width - 1 {
-
+      // Top line
       out.at_mut(0, i)[ch(0, i)] = *pixels.at(0, i);
       out.at_mut(0, i)[ch(0, i + 1)] = (*pixels.at(0, i - 1) + *pixels.at(0, i + 1)) / 2.0;
       out.at_mut(0, i)[ch(1, i)] = *pixels.at(1, i);
       out.at_mut(0, i)[ch(1, i + 1)] = (*pixels.at(1, i - 1) + *pixels.at(1, i + 1)) / 2.0;
-
+      // Bottom line
       out.at_mut(dim.h - 1, i)[ch(dim.h - 1, i)] = *pixels.at(dim.h - 1, i);
       out.at_mut(dim.h - 1, i)[ch(dim.h - 1, i + 1)] = (*pixels.at(dim.h - 1, i - 1) + *pixels.at(dim.h - 1, i + 1)) / 2.0;
       out.at_mut(dim.h - 1, i)[ch(dim.h - 2, i)] = *pixels.at(dim.h - 2, i);
@@ -73,21 +78,27 @@ impl Bilinear4Channel {
     }
 
     for i in 1..out.height - 1 {
-
+      // Left
       out.at_mut(i, 0)[ch(i, 0)] = *pixels.at(i, 0);
       out.at_mut(i, 0)[ch(i + 1, 0)] = (*pixels.at(i - 1, 0) + *pixels.at(i + 1, 0)) / 2.0;
       out.at_mut(i, 0)[ch(i, 1)] = *pixels.at(i, 1);
       out.at_mut(i, 0)[ch(i + 1, 1)] = (*pixels.at(i - 1, 1) + *pixels.at(i + 1, 1)) / 2.0;
-
+      // Right
       out.at_mut(i, dim.w - 1)[ch(i, dim.w - 1)] = *pixels.at(i, dim.w - 1);
       out.at_mut(i, dim.w - 1)[ch(i + 1, dim.w - 1)] = (*pixels.at(i - 1, dim.w - 1) + *pixels.at(i + 1, dim.w - 1)) / 2.0;
       out.at_mut(i, dim.w - 1)[ch(i, dim.w - 2)] = *pixels.at(i, dim.w - 2);
       out.at_mut(i, dim.w - 1)[ch(i + 1, dim.w - 2)] = (*pixels.at(i - 1, dim.w - 2) + *pixels.at(i + 1, dim.w - 2)) / 2.0;
     }
 
+    /*
+    A B A B
+    C D C D
+    A B A B
+    C D C D
+     */
     out.for_each_row(|row, pix| {
       if row == 0 || row == dim.h - 1 {
-        return;
+        return; // Skip border rows
       }
       for col in 1..dim.w - 1 {
         pix[col][ch(row, col)] = *pixels.at(row, col);

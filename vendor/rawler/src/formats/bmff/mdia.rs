@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, hdlr::HdlrBox, mdhd::MdhdBox, minf::MinfBox, vendor::VendorBox};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -27,8 +31,11 @@ impl<R: Read + Seek> ReadBox<&mut R> for MdiaBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
+
+      //let ftyp = Some(FtypBox::read_box(&mut file, header)?);
 
       match header.typ {
         MdhdBox::TYP => {

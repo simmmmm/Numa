@@ -43,7 +43,8 @@ where
 {
   pub dng: TiffWriter<B>,
   root_ifd: DirectoryWriter,
-
+  //raw_ifd: DirectoryWriter,
+  //preview_ifd: DirectoryWriter,
   exif_ifd: DirectoryWriter,
   subs: Vec<u32>,
 }
@@ -133,20 +134,27 @@ where
       }
     }
 
+    /*
+    for (tag, value) in rawimage.dng_tags.iter() {
+      self.ifd.add_untyped_tag(*tag, value.clone())?;
+    }
+     */
+
     Ok(())
   }
 
   fn write_rawimage(&mut self, mut rawimage: Cow<RawImage>, cropmode: CropMode, compression: DngCompression, predictor: u8) -> Result<()> {
     if compression == DngCompression::Lossless && matches!(rawimage.data, RawImageData::Float(_)) {
-
+      // Lossless (LJPEG92) can only be used for 16 bit integer data.
+      // If we have floats, convert them.
       rawimage.to_mut().data.force_integer();
       rawimage.to_mut().whitelevel.0.iter_mut().for_each(|x| *x = u16::MAX as u32);
-      rawimage.to_mut().bps = 16;
+      rawimage.to_mut().bps = 16; // Reset bps as intgers are scaled to u16 range.
     }
 
     if rawimage.cpp > 1 || matches!(rawimage.photometric, RawPhotometricInterpretation::Cfa(_)) {
       self.writer.as_shot_neutral(wbcoeff_to_tiff_value(&rawimage));
-
+      // Add matrix and illumninant
       let mut available_matrices = rawimage.color_matrix.clone();
       if let Some(first_key) = available_matrices.keys().next().cloned() {
         let first_matrix = available_matrices
@@ -170,6 +178,7 @@ where
 
     let full_size = Rect::new(Point::new(0, 0), Dim2::new(rawimage.width, rawimage.height));
 
+    // Active area or uncropped
     let active_area: Rect = match cropmode {
       CropMode::ActiveArea | CropMode::Best => rawimage.active_area.unwrap_or(full_size),
       CropMode::None => full_size,
@@ -178,6 +187,7 @@ where
     assert!(active_area.p.x + active_area.d.w <= rawimage.width);
     assert!(active_area.p.y + active_area.d.h <= rawimage.height);
 
+    //self.ifd.add_tag(TiffCommonTag::NewSubFileType, 0_u16)?; // Raw
     self.ifd_mut().add_tag(TiffCommonTag::ImageWidth, rawimage.width as u32);
     self.ifd_mut().add_tag(TiffCommonTag::ImageLength, rawimage.height as u32);
 
@@ -221,10 +231,11 @@ where
       Rational::new(rawimage.camera.best_quality_scale.0[0], rawimage.camera.best_quality_scale.0[1]),
     );
 
+    // Whitelevel
     assert_eq!(rawimage.whitelevel.0.len(), rawimage.cpp, "Whitelevel sample count must match cpp");
 
     if rawimage.whitelevel.0.iter().all(|x| *x <= (u16::MAX as u32)) {
-
+      // Add as u16
       self
         .ifd_mut()
         .add_tag(DngTag::WhiteLevel, &rawimage.whitelevel.0.iter().map(|x| *x as u16).collect::<Vec<u16>>());
@@ -232,6 +243,7 @@ where
       self.ifd_mut().add_tag(DngTag::WhiteLevel, &rawimage.whitelevel.0);
     }
 
+    // Blacklevel
     let blacklevel = rawimage.blacklevel.shift(active_area.p.x, active_area.p.y);
 
     self
@@ -241,16 +253,16 @@ where
     if blacklevel.levels.iter().all(|x| x.d == 1) {
       let payload: Vec<u32> = blacklevel.levels.iter().map(|x| x.n as u32).collect();
       if payload.iter().all(|x| *x <= (u16::MAX as u32)) {
-
+        // Add as u16
         self
           .ifd_mut()
           .add_tag(DngTag::BlackLevel, &payload.into_iter().map(|x| x as u16).collect::<Vec<u16>>());
       } else {
-
+        // Add as u32
         self.ifd_mut().add_tag(DngTag::BlackLevel, &payload);
       }
     } else {
-
+      // Add as RATIONAL
       self.ifd_mut().add_tag(DngTag::BlackLevel, blacklevel.levels.as_slice());
     }
 
@@ -276,7 +288,7 @@ where
         self.ifd_mut().add_tag(TiffCommonTag::CFAPattern, &cfa.flat_pattern()[..]);
         self.ifd_mut().add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::CFA);
         self.ifd_mut().add_tag(DngTag::CFAPlaneColor, &config.colors);
-        self.ifd_mut().add_tag(DngTag::CFALayout, 1_u16);
+        self.ifd_mut().add_tag(DngTag::CFALayout, 1_u16); // Square layout
       }
       RawPhotometricInterpretation::LinearRaw => {
         self.ifd_mut().add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::LinearRaw);
@@ -293,6 +305,12 @@ where
         dng_put_raw_ljpeg(self, &rawimage, predictor)?;
       }
     }
+
+    /*
+    for (tag, value) in rawimage.dng_tags.iter() {
+      self.ifd.add_untyped_tag(*tag, value.clone())?;
+    }
+     */
 
     Ok(())
   }
@@ -314,11 +332,15 @@ where
     self.ifd_mut().add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::YCbCr);
     self.ifd_mut().add_tag(TiffCommonTag::RowsPerStrip, Value::long(preview_img.height()));
     self.ifd_mut().add_tag(TiffCommonTag::SamplesPerPixel, 3_u16);
-    self.ifd_mut().add_tag(DngTag::PreviewColorSpace, PreviewColorSpace::SRgb);
+    self.ifd_mut().add_tag(DngTag::PreviewColorSpace, PreviewColorSpace::SRgb); // ??
+
+    //ifd.add_tag(TiffRootTag::XResolution, Rational { n: 1, d: 1 })?;
+    //ifd.add_tag(TiffRootTag::YResolution, Rational { n: 1, d: 1 })?;
+    //ifd.add_tag(TiffRootTag::ResolutionUnit, ResolutionUnit::None.to_u16())?;
 
     let now = Instant::now();
     let offset = self.writer.dng.position()?;
-
+    // TODO: improve offsets?
     let jpeg_encoder = JpegEncoder::new_with_quality(&mut self.writer.dng.writer, (quality * 100.0).clamp(0.0, 100.0) as u8);
     preview_img
       .write_with_encoder(jpeg_encoder)
@@ -352,7 +374,7 @@ where
     let mut exif_ifd = DirectoryWriter::new();
     root_ifd.add_tag(DngTag::DNGBackwardVersion, backward_version);
     root_ifd.add_tag(DngTag::DNGVersion, DNG_VERSION_V1_6);
-
+    // Add EXIF version 0220
     exif_ifd.add_tag_undefined(ExifTag::ExifVersion, vec![48, 50, 50, 48]);
 
     Ok(Self {
@@ -364,7 +386,7 @@ where
   }
 
   pub fn as_shot_neutral(&mut self, wb: impl AsRef<[Rational]>) {
-
+    // Only write tag if wb is valid
     if wb.as_ref()[0].n != 0 {
       self.root_ifd.add_tag(DngTag::AsShotNeutral, wb.as_ref());
     }
@@ -387,6 +409,7 @@ where
   pub fn load_metadata(&mut self, metadata: &RawMetadata) -> Result<()> {
     metadata.write_exif_tags(&mut self.dng, &mut self.root_ifd, &mut self.exif_ifd)?;
 
+    // DNG has a lens info tag that is identical to the LensSpec tag in EXIF IFD
     transfer_entry(&mut self.root_ifd, DngTag::LensInfo, &metadata.exif.lens_spec)?;
 
     if let Some(id) = &metadata.unique_image_id {
@@ -415,6 +438,7 @@ where
       self.root_ifd.add_tag(TiffCommonTag::ExifIFDPointer, exif_ifd_offset);
     }
 
+    // Add SubIFDs
     if !self.subs.is_empty() {
       self.root_ifd.add_tag(TiffCommonTag::SubIFDs, &self.subs);
     }
@@ -441,6 +465,7 @@ where
     SubFrameWriter::new(self, id, true)
   }
 
+  /// Write thumbnail image into DNG
   pub fn thumbnail(&mut self, img: &DynamicImage) -> Result<()> {
     let thumb_img = img.resize(240, 120, FilterType::Nearest).to_rgb8();
     self.root_ifd.add_tag(TiffCommonTag::NewSubFileType, 1_u32);
@@ -451,6 +476,9 @@ where
     self.root_ifd.add_tag(TiffCommonTag::SampleFormat, [1_u16, 1, 1]);
     self.root_ifd.add_tag(TiffCommonTag::PhotometricInt, PhotometricInterpretation::RGB);
     self.root_ifd.add_tag(TiffCommonTag::SamplesPerPixel, 3_u16);
+    //ifd.add_tag(TiffRootTag::XResolution, Rational { n: 1, d: 1 })?;
+    //ifd.add_tag(TiffRootTag::YResolution, Rational { n: 1, d: 1 })?;
+    //ifd.add_tag(TiffRootTag::ResolutionUnit, ResolutionUnit::None.to_u16())?;
 
     let offset = self.dng.write_data(&thumb_img)?;
 
@@ -478,11 +506,12 @@ where
   }
 }
 
+/// DNG requires the WB values to be the reciprocal
 fn wbcoeff_to_tiff_value(rawimage: &RawImage) -> Vec<Rational> {
   let wb = &rawimage.wb_coeffs;
   match &rawimage.photometric {
     RawPhotometricInterpretation::BlackIsZero => {
-      vec![Rational::new(1, 1)]
+      vec![Rational::new(1, 1)] // TODO: is this useful?
     }
     RawPhotometricInterpretation::Cfa(config) => {
       assert!([1, 3, 4].contains(&config.cfa.unique_colors()));
@@ -499,6 +528,7 @@ fn wbcoeff_to_tiff_value(rawimage: &RawImage) -> Vec<Rational> {
       values
     }
     RawPhotometricInterpretation::LinearRaw => {
+      //assert_eq!(rawimage.cpp, 3);
 
       match rawimage.cpp {
         1 => {
@@ -521,15 +551,29 @@ fn matrix_to_tiff_value(xyz_to_cam: &[f32], d: i32) -> Vec<SRational> {
   xyz_to_cam.iter().map(|a| SRational::new((a * d as f32) as i32, d)).collect()
 }
 
+/// Compress RAW image with LJPEG-92
+///
+/// Data is split into multiple tiles, each tile is compressed seperately
+///
+/// Predictor mode 4,5,6,7 is best for images where two images
+/// lines are merged, because then the image bayer pattern is:
+/// RGRGGBGB
+/// RGRGGBGB
+/// Instead of the default:
+/// RGRG
+/// GBGB
+/// RGRG
+/// GBGB
 fn dng_put_raw_ljpeg<W>(subframe: &mut SubFrameWriter<W>, rawimage: &RawImage, predictor: u8) -> Result<()>
 where
   W: Seek + Write,
 {
-  let tile_w = 256 & !0b111;
+  let tile_w = 256 & !0b111; // ensure div 16
   let tile_h = 256 & !0b111;
 
   let lj92_data = match rawimage.data {
     RawImageData::Integer(ref data) => {
+      // Only merge two lines into one for higher predictors, if image is CFA
 
       let (j_width, j_height, components, realign) = match &rawimage.photometric {
         RawPhotometricInterpretation::BlackIsZero => {
@@ -546,12 +590,16 @@ where
           (tile_w / 2, tile_h, 2, realign)
         }
         RawPhotometricInterpretation::LinearRaw => {
-          (tile_w, tile_h, rawimage.cpp, 1)
+          (tile_w, tile_h, rawimage.cpp, 1) /* RGB LinearRaw */
         }
       };
 
       debug!("LJPEG compression: bit depth: {}", rawimage.bps);
 
+      // Build and compress each tile in one parallel pass: tile materialization
+      // overlaps with LJPEG encoding instead of pre-collecting `Vec<Vec<u16>>`
+      // for the whole image. Peak memory drops from O(image) uncompressed
+      // staging to roughly O(threads × tile).
       let tiler = ImageTiler::new(data, rawimage.width, rawimage.height, rawimage.cpp, tile_w, tile_h);
       let n_tiles = tiler.tile_count();
       let bps = rawimage.bps as u8;
@@ -592,6 +640,10 @@ where
   Ok(())
 }
 
+/// Write RAW uncompressed into DNG
+///
+/// This uses unsigned 16 bit values for storage
+/// Data is split into multiple strips
 fn dng_put_raw_uncompressed<W>(subframe: &mut SubFrameWriter<W>, rawimage: &RawImage) -> Result<()>
 where
   W: Write + Seek,
@@ -614,7 +666,7 @@ where
         strip_sizes.push(std::mem::size_of_val(strip) as u32);
         strip_rows.push((strip.len() / (rawimage.width * rawimage.cpp)) as u32);
       }
-      subframe.ifd_mut().add_tag(TiffCommonTag::SampleFormat, &vec![1_u16; rawimage.cpp]);
+      subframe.ifd_mut().add_tag(TiffCommonTag::SampleFormat, &vec![1_u16; rawimage.cpp]); // Unsigned Integer
       subframe.ifd_mut().add_tag(TiffCommonTag::BitsPerSample, &vec![16_u16; rawimage.cpp]);
     }
     RawImageData::Float(ref data) => {
@@ -624,7 +676,7 @@ where
         strip_sizes.push(std::mem::size_of_val(strip) as u32);
         strip_rows.push((strip.len() / (rawimage.width * rawimage.cpp)) as u32);
       }
-      subframe.ifd_mut().add_tag(TiffCommonTag::SampleFormat, &vec![3_u16; rawimage.cpp]);
+      subframe.ifd_mut().add_tag(TiffCommonTag::SampleFormat, &vec![3_u16; rawimage.cpp]); // IEEE Float
       subframe.ifd_mut().add_tag(TiffCommonTag::BitsPerSample, &vec![32_u16; rawimage.cpp]);
     }
   };
@@ -697,7 +749,7 @@ mod tests {
     let predictor = 1;
 
     let buf = BufWriter::new(Cursor::new(Vec::new()));
-
+    //let buf = BufWriter::new(File::create("/tmp/dng_writer_simple_test.dng")?);
     let mut dng = DngWriter::new(buf, DNG_VERSION_V1_4)?;
     let mut raw = dng.subframe(0);
     raw.raw_image(

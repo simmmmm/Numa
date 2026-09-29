@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2026 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use std::fs;
 use std::io;
@@ -5,11 +8,17 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 
+// RFC 3986 path segment: encode everything except unreserved (alphanumeric + - _ . ~).
 const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 
 const BASE_URL: &str = "https://rawdb.dnglab.org/api/download";
 const MAX_RETRIES: u32 = 3;
 
+/// Returns the absolute path of the directory referenced by `RAWDB_CACHE`.
+///
+/// If the directory does not exist yet it is created, and a note is printed to
+/// stderr. Panics if `RAWDB_CACHE` is unset or the path exists but is not a
+/// directory.
 pub fn get_rawdb_cache() -> PathBuf {
   let raw = std::env::var("RAWDB_CACHE").expect("RAWDB_CACHE environment variable must be set (~100 GiB data to download!)");
   let path = PathBuf::from(&raw);
@@ -31,6 +40,13 @@ pub enum RawdbError {
   Http { status: u16, url: String },
 }
 
+/// Ensure a sample file exists locally, downloading it from rawdb.dnglab.org if missing.
+///
+/// Returns the absolute path to the local file. The local layout mirrors the
+/// remote one: `{rawdb_cache}/{make}/{model}/{subpath}`.
+///
+/// If `RAWDB_API_KEY` is set in the environment, it is sent as the
+/// `X-API-Key` header to bypass anonymous rate limits.
 pub fn rawdb_ensure_file(rawdb_cache: &Path, make: &str, model: &str, subpath: &str) -> Result<PathBuf, RawdbError> {
   let local = rawdb_cache.join(make).join(model).join(subpath);
   if local.is_file() {
@@ -82,6 +98,12 @@ pub fn rawdb_ensure_file(rawdb_cache: &Path, make: &str, model: &str, subpath: &
   Ok(fs::canonicalize(&local)?)
 }
 
+// 10s before retry #1, 60s before #2, 120s before #3.
+/// Returns true if `RAWDB_API_KEY_REQUIRED` is set to a truthy value
+/// (`"true"`, `"1"`, `"yes"`; case-insensitive). When true, downloads must
+/// not proceed without `RAWDB_API_KEY` — used by CI to guarantee tests use
+/// the rate-limit-exempt key rather than silently falling back to anonymous
+/// requests.
 fn api_key_required() -> bool {
   matches!(
     std::env::var("RAWDB_API_KEY_REQUIRED").as_deref().map(str::trim),
@@ -109,6 +131,7 @@ fn build_url(make: &str, model: &str, subpath: &str) -> String {
   s
 }
 
+// Only the integer-seconds form of Retry-After is honored.
 fn parse_retry_after(resp: &ureq::Response) -> Option<Duration> {
   resp.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok()).map(Duration::from_secs)
 }

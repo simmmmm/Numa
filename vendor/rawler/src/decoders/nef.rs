@@ -58,45 +58,49 @@ pub mod lensdata;
 const NIKON_F_MOUNT: &str = "F-mount";
 const NIKON_Z_MOUNT: &str = "Z-mount";
 
+// NEF Huffman tables in order. First two are the normal huffman definitions.
+// Third one are weird shifts that are used in the lossy split encodings only
+// Values are extracted from dcraw with the shifts unmangled out.
 const NIKON_TREE: [[[u8; 16]; 3]; 6] = [
   [
-
+    // 12-bit lossy
     [0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0],
     [5, 4, 3, 6, 2, 7, 1, 0, 8, 9, 11, 10, 12, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
   [
-
+    // 12-bit lossy after split
     [0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0],
     [6, 5, 5, 5, 5, 5, 4, 3, 2, 1, 0, 11, 12, 12, 0, 0],
     [3, 5, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
   [
-
+    // 12-bit lossless
     [0, 0, 1, 4, 2, 3, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
     [5, 4, 6, 3, 7, 2, 8, 1, 9, 0, 10, 11, 12, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
   [
-
+    // 14-bit lossy
     [0, 0, 1, 4, 3, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0],
     [5, 6, 4, 7, 8, 3, 9, 2, 1, 0, 10, 11, 12, 13, 14, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
   [
-
+    // 14-bit lossy after split
     [0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0],
     [8, 7, 7, 7, 7, 7, 6, 5, 4, 3, 2, 1, 0, 13, 14, 0],
     [0, 5, 4, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
   [
-
+    // 14-bit lossless
     [0, 0, 1, 4, 2, 2, 3, 1, 2, 0, 0, 0, 0, 0, 0, 0],
     [7, 6, 8, 5, 9, 4, 10, 3, 11, 12, 2, 0, 1, 13, 14, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ],
 ];
 
+// We use this for the D50 and D2X whacky WB "encryption"
 const WB_SERIALMAP: [u8; 256] = [
   0xc1, 0xbf, 0x6d, 0x0d, 0x59, 0xc5, 0x13, 0x9d, 0x83, 0x61, 0x6b, 0x4f, 0xc7, 0x7f, 0x3d, 0x3d, 0x53, 0x59, 0xe3, 0xc7, 0xe9, 0x2f, 0x95, 0xa7, 0x95, 0x1f,
   0xdf, 0x7f, 0x2b, 0x29, 0xc7, 0x0d, 0xdf, 0x07, 0xef, 0x71, 0x89, 0x3d, 0x13, 0x3d, 0x3b, 0x13, 0xfb, 0x0d, 0x89, 0xc1, 0x65, 0x1f, 0xb3, 0x0d, 0x6b, 0x29,
@@ -123,6 +127,7 @@ const WB_KEYMAP: [u8; 256] = [
   0xc5, 0xa7, 0x50, 0x11, 0x36, 0xfb, 0xc6, 0x67, 0x4a, 0xf5, 0xa5, 0x12, 0x65, 0x7e, 0xb0, 0xdf, 0xaf, 0x4e, 0xb3, 0x61, 0x7f, 0x2f,
 ];
 
+/// NEF format encapsulation for analyzer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NefFormat {
@@ -146,6 +151,7 @@ impl<'a> NefDecoder<'a> {
       .ok_or_else(|| RawlerError::DecoderFailed(format!("Failed to find a suitable IFD in NEF decoder")))?;
     let bps = fetch_tiff_tag!(raw, TiffCommonTag::BitsPerSample).force_usize(0);
 
+    // Make sure we always use a 12/14 bit mode to get correct white/blackpoints
     let mode = format!("{}bit", bps);
     let camera = rawloader.check_supported_with_mode(tiff.root_ifd(), &mode)?;
 
@@ -156,6 +162,8 @@ impl<'a> NefDecoder<'a> {
       None
     }
     .ok_or("File has not makernotes")?;
+
+    //makernote.dump::<ExifTag>(0).iter().for_each(|line| eprintln!("DUMP: {}", line));
 
     Ok(NefDecoder {
       tiff,
@@ -176,11 +184,12 @@ impl<'a> Decoder for NefDecoder<'a> {
     let mut width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
     let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
     let bps = fetch_tiff_tag!(raw, TiffCommonTag::BitsPerSample).force_usize(0);
-    let mut cpp = fetch_tiff_tag!(raw, TiffCommonTag::BitsPerSample).count();
+    let mut cpp = fetch_tiff_tag!(raw, TiffCommonTag::BitsPerSample).count(); // Linear files don't have SamplesPerPixel
     let compression = fetch_tiff_tag!(raw, TiffCommonTag::Compression).force_usize(0);
 
     let nef_compression = if let Some(z_makernote) = self.makernote.get_entry(NikonMakernote::Makernotes0x51) {
-
+      // For new Z models, a new tag 0x51 for makernotes appears. This contains
+      // The new-old NEFCompression tag. The old tag is unavailable in this models.
       Some(NefCompression::try_from(crate::bits::LEu16(z_makernote.get_data(), 10)).map_err(RawlerError::from)?)
     } else {
       self
@@ -201,6 +210,10 @@ impl<'a> Decoder for NefDecoder<'a> {
     let size = fetch_tiff_tag!(raw, TiffCommonTag::StripByteCounts).force_usize(0);
     let rows_per_strip = fetch_tiff_tag!(raw, TiffCommonTag::RowsPerStrip).get_usize(0).ok().flatten().unwrap_or(height);
 
+    // That's little bit hacky here. Some files like D500 using multiple strips.
+    // Because the strips has no holes between and are perfectly aligned, we can process the whole
+    // chunk at once, instead of iterating over every strip.
+    // It would be safer to process each strip offset, but it is not need for any known model so far.
     let src = if rows_per_strip == height {
       file.subview_padded_or_dummy(offset as u64, size as u64, dummy)?
     } else {
@@ -228,7 +241,7 @@ impl<'a> Decoder for NefDecoder<'a> {
     } else if self.camera.find_hint("msb32") {
       decompress_12be_msb32(&src, width, height, dummy)?
     } else if self.camera.find_hint("unpacked") {
-
+      // P7800 and others is LE, but data is BE, so we use hints here
       if (self.tiff.little_endian() || self.camera.find_hint("little_endian")) && !self.camera.find_hint("big_endian") {
         decompress_16le(&src, width, height, dummy)?
       } else {
@@ -238,7 +251,7 @@ impl<'a> Decoder for NefDecoder<'a> {
       debug!("NEF uncompressed row padding: {}, little-endian: {}", padding, self.tiff.little_endian());
       match bps {
         16 => {
-
+          // Used by Coolscan scanners
           if self.tiff.little_endian() {
             decompress_16le(&src, width * cpp, height, dummy)?
           } else {
@@ -247,7 +260,8 @@ impl<'a> Decoder for NefDecoder<'a> {
         }
         14 => {
           if (self.tiff.little_endian() || self.camera.find_hint("little_endian")) && !self.camera.find_hint("big_endian") {
-
+            // Models like D6 uses packed instead of unpacked 14le encoding. And D6 uses
+            // row padding.
             if matches!(nef_compression, Some(NefCompression::Packed14Bits)) {
               decompress_14le_padded(&src, width, height, (width * bps / u8::BITS as usize) + padding, dummy)?
             } else {
@@ -297,7 +311,7 @@ impl<'a> Decoder for NefDecoder<'a> {
     }
 
     if cpp == 3 {
-
+      // Reset levels to defaults (0)
       img.blacklevel = BlackLevel::zero(1, 1, cpp);
       img.whitelevel = WhiteLevel::new(vec![65535; cpp]);
     }
@@ -324,7 +338,8 @@ impl<'a> Decoder for NefDecoder<'a> {
     if params.image_index != 0 {
       return Ok(None);
     }
-
+    // High resolution preview image is stored in JPEGInterchangeFormat tag.
+    // Search for all IFDs and use the best match.
     let mut ifds = self.tiff.find_ifds_with_filter(|ifd| {
       if ifd.get_new_sub_file_type() == Some(1) {
         ifd.get_entry(ExifTag::JPEGInterchangeFormatLength).is_some()
@@ -339,10 +354,11 @@ impl<'a> Decoder for NefDecoder<'a> {
         .cmp(&b.get_entry(ExifTag::JPEGInterchangeFormatLength).map(|x| x.force_u32(0)))
     });
 
+    // Take the IFD with the largest JPEG stream size
     if let Some(jpeg_ifd) = ifds.last() {
       return Ok(Some(dynamic_image_from_jpeg_interchange_format(jpeg_ifd, file)?));
     } else {
-
+      // No matching IFDs found, use root IFD (possibly bad resolution)
       Ok(Some(dynamic_image_from_ifd(self.tiff.root_ifd(), file)?))
     }
   }
@@ -353,7 +369,10 @@ impl<'a> Decoder for NefDecoder<'a> {
 }
 
 impl<'a> NefDecoder<'a> {
-
+  /// For older formats, we use the camera definitions and this here
+  /// is useless. But if we found here the levels in makernotes, we
+  /// use these instead. For 12 bit images, the blacklevels are still relative to
+  /// 14 bit image data. So we need to reduce them by 2 bits.
   fn get_blacklevel(&self, bps: usize) -> Result<Option<BlackLevel>> {
     if let Some(levels) = self.makernote.get_entry(NikonMakernote::BlackLevel) {
       let mut black = [levels.force_u16(0), levels.force_u16(1), levels.force_u16(2), levels.force_u16(3)];
@@ -379,6 +398,7 @@ impl<'a> NefDecoder<'a> {
     }
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     if let Some(lensdata) = lensdata::from_makernote(&self.makernote)? {
       if let Some(lenstype) = self.makernote.get_entry(NikonMakernote::LensType) {
@@ -438,14 +458,14 @@ impl<'a> NefDecoder<'a> {
           BEu16(buf, 38 * 2) as f32,
           BEu16(buf, 37 * 2) as f32,
         ]),
-
+        // Nikon D2H
         0x102 => Ok([
           BEu16(buf, 5 * 2) as f32,
           BEu16(buf, 6 * 2) as f32,
           BEu16(buf, 6 * 2) as f32,
           BEu16(buf, 8 * 2) as f32,
         ]),
-
+        // Nikon D70
         0x103 => Ok([
           BEu16(buf, 10 * 2) as f32,
           BEu16(buf, 11 * 2) as f32,
@@ -462,16 +482,18 @@ impl<'a> NefDecoder<'a> {
             }
             serialno = serialno * 10
               + if data[i] >= 48 && data[i] <= 57 {
-
+                // "0" to "9"
                 (data[i] - 48) as usize
               } else {
                 (data[i] % 10) as usize
               };
           }
 
+          // Get the "decryption" key
           let keydata = fetch_tiff_tag!(self.makernote, TiffCommonTag::NefKey).force_u32(0).to_le_bytes();
           let keyno = (keydata[0] ^ keydata[1] ^ keydata[2] ^ keydata[3]) as usize;
 
+          // 0x205 stores encrypted data starting at offset 4; 0x204 and 0x206 at offset 284
           let src = if version == 0x205 {
             &levels.get_data()[4..]
           } else {
@@ -488,6 +510,7 @@ impl<'a> NefDecoder<'a> {
             buf[i] = src[i] ^ (cj as u8);
           }
 
+          // 0x205 stores WB at offset 14 in the decrypted block; 0x204 and 0x206 at offset 6
           let off = if version == 0x205 { 14 } else { 6 };
           Ok([
             BEu16(&buf, off) as f32,
@@ -517,6 +540,10 @@ impl<'a> NefDecoder<'a> {
     Ok(htable)
   }
 
+  /// The compression flags in some raws are not reliable because of firmware bugs.
+  /// We try to figure out the compression by some heuristics.
+  /// The return value is None if the file is not uncompressed or Some(x)
+  /// where x is the extra amount of bytes after each row.
   fn is_uncompressed(&self, raw: &IFD) -> Result<Option<usize>> {
     let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
     let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
@@ -525,7 +552,7 @@ impl<'a> NefDecoder<'a> {
     let size = fetch_tiff_tag!(raw, TiffCommonTag::StripByteCounts).force_usize(0);
 
     fn div_round_up(a: usize, b: usize) -> usize {
-      a.div_ceil(b)
+      a.div_ceil(b) // (a + b - 1) / b
     }
 
     let req_pixels = width * height;
@@ -535,7 +562,8 @@ impl<'a> NefDecoder<'a> {
     Ok(if compression == 1 || size == width * height * bps / 8 {
       Some(0)
     } else if size >= req_input_bytes {
-
+      // Some models (D6) using row padding, so the row width is slightly larger.
+      // This should be no more than 16 extra bytes.
       let total_padding = size - req_input_bytes;
       let per_row_padding = total_padding / height;
       if total_padding % height != 0 {
@@ -591,18 +619,24 @@ impl<'a> NefDecoder<'a> {
       huff_select += 3;
     }
 
+    // Create the huffman table used to decode
     let mut htable = Self::create_hufftable(huff_select)?;
 
+    // Setup the predictors
     let mut pred_up1: [i32; 2] = [stream.get_u16() as i32, stream.get_u16() as i32];
     let mut pred_up2: [i32; 2] = [stream.get_u16() as i32, stream.get_u16() as i32];
 
+    // Get the linearization curve
     let mut points = [0_u16; 1 << 16];
     for i in 0..points.len() {
       points[i] = i as u16;
     }
 
+    // Some models reports 14 bits, but the data is 12 bits.
+    // So we reduce the bps to calculate the max value which
+    // is needed in the next steps.
     let real_bps = if v0 == 68 && v1 == 64 {
-      bps as u32 - 2
+      bps as u32 - 2 // Special for D780, Z7 and others
     } else {
       bps as u32
     };
@@ -619,7 +653,10 @@ impl<'a> NefDecoder<'a> {
         let b_scale = i % step;
         let a_pos = i - b_scale;
         let b_pos = a_pos + step;
-
+        //assert!(a_pos < max);
+        //assert!(b_pos > 0);
+        //assert!(b_pos < max);
+        //assert!(a_pos < b_pos);
         let a_scale = step - b_scale;
         points[i] = ((a_scale * points[a_pos] as usize + b_scale * points[b_pos] as usize) / step) as u16;
       }
@@ -632,6 +669,7 @@ impl<'a> NefDecoder<'a> {
     }
     let curve = LookupTable::new(&points[0..max]);
 
+    // Numa (PERF-022): one table throughout, read on several threads.
     if split == 0 && !dummy {
       let pool = crate::decompressors::ljpeg::parallel::pool();
       if let Some(image) = pool.and_then(|pool| pool.install(|| Self::decode_parallel(src, &htable, pred_up1, pred_up2, &curve, real_bps, width, height))) {
@@ -663,6 +701,12 @@ impl<'a> NefDecoder<'a> {
     Ok(out)
   }
 
+  /// Numa (PERF-022): `do_decode`'s loop with the stream read on several
+  /// threads (`ljpeg::parallel`), then the rows side by side. Each row
+  /// starts from the one two above, which is a sum down the rows done first;
+  /// the dither's random number is a multiply-with-carry generator, which
+  /// is a multiplication modulo 15700 · 2¹⁶ − 1, so its value at the start of
+  /// any row is a power away. `None` when the stream does not split.
   #[allow(clippy::too_many_arguments)]
   fn decode_parallel(
     src: &[u8],
@@ -681,6 +725,8 @@ impl<'a> NefDecoder<'a> {
     }
     let diffs = parallel::decode(src, src.len(), htable, width * height)?;
 
+    // The dither's state is advanced once a sample: r → 15700·(r mod 2¹⁶) +
+    // ⌊r / 2¹⁶⌋, which for r below the modulus is r · 15700 mod the modulus.
     const MODULUS: u64 = 15700 * 65536 - 1;
     let power = |mut base: u64, mut exp: u64| {
       let mut result = 1u64;
@@ -697,6 +743,7 @@ impl<'a> NefDecoder<'a> {
     let step = power(15700, width as u64);
     let mut random = ((src[0] as u64) << 16) | ((src[1] as u64) << 8) | src[2] as u64;
 
+    // Each row's first two samples, and its dither state.
     let mut firsts = Vec::with_capacity(height);
     for row in 0..height {
       let mut two = diffs.pieces(row * width, 2).flatten();
@@ -724,9 +771,13 @@ impl<'a> NefDecoder<'a> {
     Some(out)
   }
 
+  // Decodes 12 bit data in an YUY2-like pattern (2 Luma, 1 Chroma per 2 pixels).
+  // We un-apply the whitebalance, so output matches lossless.
   pub(crate) fn decode_snef_compressed(src: &PaddedBuf, coeffs: [f32; 4], width: usize, height: usize, dummy: bool) -> std::result::Result<PixU16, String> {
     let inv_wb_r = (1024.0 / coeffs[0]) as i32;
     let inv_wb_b = (1024.0 / coeffs[2]) as i32;
+
+    //println!("Got invwb {} {}", inv_wb_r, inv_wb_b);
 
     let snef_curve = {
       let g: f32 = 2.4;
@@ -766,7 +817,7 @@ impl<'a> NefDecoder<'a> {
           let r = snef_curve.dither(clampbits((y1 + 1.370705 * cr) as i32, 12), &mut random);
           let g = snef_curve.dither(clampbits((y1 - 0.337633 * cb - 0.698001 * cr) as i32, 12), &mut random);
           let b = snef_curve.dither(clampbits((y1 + 1.732446 * cb) as i32, 12), &mut random);
-
+          // invert the white balance
           o[0] = clampbits((inv_wb_r * r as i32 + (1 << 9)) >> 10, 15);
           o[1] = g;
           o[2] = clampbits((inv_wb_b * b as i32 + (1 << 9)) >> 10, 15);
@@ -774,7 +825,7 @@ impl<'a> NefDecoder<'a> {
           let r = snef_curve.dither(clampbits((y2 + 1.370705 * cr) as i32, 12), &mut random);
           let g = snef_curve.dither(clampbits((y2 - 0.337633 * cb - 0.698001 * cr) as i32, 12), &mut random);
           let b = snef_curve.dither(clampbits((y2 + 1.732446 * cb) as i32, 12), &mut random);
-
+          // invert the white balance
           o[3] = clampbits((inv_wb_r * r as i32 + (1 << 9)) >> 10, 15);
           o[4] = g;
           o[5] = clampbits((inv_wb_b * b as i32 + (1 << 9)) >> 10, 15);
@@ -787,7 +838,8 @@ impl<'a> NefDecoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("NEF raw wb: {:?}", raw_wb);
-
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
   let div = raw_wb[1];
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
@@ -823,6 +875,7 @@ pub enum NikonMakernote {
   NefKey = 0x00a7,
 }
 
+/// Known NEF compression formats
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 enum NefCompression {

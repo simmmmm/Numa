@@ -13,7 +13,7 @@ pub struct DynExposedAdapter {
 }
 
 impl DynExposedAdapter {
-
+    /// Returns the backend this adapter is using.
     pub fn backend(&self) -> wgt::Backend {
         self.info.backend
     }

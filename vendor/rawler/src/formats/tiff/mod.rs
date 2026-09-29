@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::io::{Read, Seek, SeekFrom};
 
 use thiserror::Error;
@@ -26,13 +29,13 @@ pub enum CompressionMethod {
   Fax3 = 3,
   Fax4 = 4,
   LZW = 5,
-  OldJPEG = 6,
-
+  OldJPEG = 6, // TODO: RENAME
+  // "Extended JPEG" or "new JPEG" style
   ModernJPEG = 7,
   Deflate = 8,
   OldDeflate = 0x80B2,
   PackBits = 0x8005,
-
+  // DNG Extensions
   LossyJPEG = 34892,
   JPEGXL = 52546,
 }
@@ -69,7 +72,7 @@ pub enum PhotometricInterpretation {
   CMYK = 5,
   YCbCr = 6,
   CIELab = 8,
-
+  // Defined by DNG
   CFA = 32803,
   LinearRaw = 34892,
 }
@@ -178,6 +181,7 @@ impl From<Predictor> for Value {
   }
 }
 
+/// Type to represent resolution units
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum ResolutionUnit {
@@ -243,9 +247,10 @@ where
   fn extract(ifd: &IFD) -> Result<Option<Self>>;
 }
 
+/// Error variants for compressor
 #[derive(Debug, Error)]
 pub enum TiffError {
-
+  /// Overflow of input, size constraints...
   #[error("Overflow error: {}", _0)]
   Overflow(String),
 
@@ -255,13 +260,23 @@ pub enum TiffError {
   #[error("Format mismatch: {}", _0)]
   FormatMismatch(String),
 
+  /// Error on internal cursor type
   #[error("I/O error: {:?}", _0)]
   Io(#[from] std::io::Error),
 }
 
+/// Result type for Compressor results
 pub type Result<T> = std::result::Result<T, TiffError>;
 
 use crate::tags::{DngTag, ExifTag, TiffCommonTag};
+
+/*
+impl From<Value> for Entry {
+  fn from(value: Value) -> Self {
+    Entry { value, embedded: None }
+  }
+}
+ */
 
 pub struct DataOffset {
   pub offset: usize,
@@ -332,14 +347,16 @@ mod tests {
 
     tiff.build(dir)?;
 
-    let mut garbage_output: Vec<u8> = vec![0x4a, 0xee];
+    //assert!(TiffReader::is_tiff(&mut output) == true);
+
+    let mut garbage_output: Vec<u8> = vec![0x4a, 0xee]; // Garbage
     garbage_output.extend_from_slice(&output.into_inner());
 
     let mut garbage_output = Cursor::new(garbage_output);
 
     garbage_output.seek(SeekFrom::Start(2))?;
 
-    let reader = GenericTiffReader::new(&mut garbage_output, 1, 1, Some(16), &[])?;
+    let reader = GenericTiffReader::new(&mut garbage_output, 1, 1, Some(16), &[])?; // 1 byte offset correction
 
     assert_eq!(reader.root_ifd().entry_count(), 7);
     assert!(reader.root_ifd().get_entry(TiffCommonTag::WhiteLevel).is_some());

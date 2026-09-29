@@ -25,6 +25,7 @@ impl<'a> DngDecoder<'a> {
   }
 }
 
+/// DNG format encapsulation for analyzer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DngFormat {
@@ -41,7 +42,7 @@ impl<'a> Decoder for DngDecoder<'a> {
     let orientation = Orientation::from_tiff(self.tiff.root_ifd());
 
     let mut cam = self.make_camera(raw, width, height)?;
-
+    // If we know the camera, re-use the clean names
     if let Ok(known_cam) = self
       .rawloader
       .check_supported_with_mode(self.tiff.root_ifd(), "dng")
@@ -53,7 +54,7 @@ impl<'a> Decoder for DngDecoder<'a> {
       cam.params.extend(known_cam.params.iter().map(|(k, v)| (k.clone(), v.clone())));
     } else {
       log::debug!("DNG: camera {} / {} is not in the camera catalog", cam.make, cam.model);
-
+      // panic!("Camera {} / {} is not in the camera catalog", cam.make, cam.model);
     }
 
     let blacklevel = self.get_blacklevels(raw)?;
@@ -66,6 +67,8 @@ impl<'a> Decoder for DngDecoder<'a> {
       _ => todo!(),
     };
 
+    // Numa IO-021: a dummy decode is the geometry, not the pixels; the whole
+    // frame was read and decoded for it.
     let raw_data = if dummy {
       RawImageData::Integer(vec![0; width * cpp * height])
     } else {
@@ -86,7 +89,7 @@ impl<'a> Decoder for DngDecoder<'a> {
     let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
     let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
     let mut cam = self.make_camera(raw, width, height)?;
-
+    // If we know the camera, re-use the clean names
     if let Ok(known_cam) = self.rawloader.check_supported(self.tiff.root_ifd()) {
       cam.clean_make = known_cam.clean_make;
       cam.clean_model = known_cam.clean_model;
@@ -252,8 +255,8 @@ impl<'a> DngDecoder<'a> {
     let crop_area = if let Some(crops) = self.get_crop(raw) {
       if let Some(active_area) = &active_area {
         let mut full = crops;
-        full.p.x += active_area[0];
-        full.p.y += active_area[1];
+        full.p.x += active_area[0]; // left
+        full.p.y += active_area[1]; // Top
         Some(full.as_ltrb_offsets(width, height))
       } else {
         Some(crops.as_ltrb_offsets(width, height))
@@ -266,7 +269,7 @@ impl<'a> DngDecoder<'a> {
     let cfa = if linear { CFA::default() } else { self.get_cfa(raw)? };
     let color_matrix = self.get_color_matrix()?;
     let real_bps = if raw.has_entry(TiffCommonTag::Linearization) {
-
+      // If DNG contains linearization table, output is always 16 bits
       16
     } else {
       raw.get_entry(TiffCommonTag::BitsPerSample).map(|v| v.force_usize(0)).unwrap_or(16)
@@ -296,7 +299,7 @@ impl<'a> DngDecoder<'a> {
     if let Some(levels) = self.tiff.get_entry(DngTag::AsShotNeutral) {
       Ok([1.0 / levels.force_f32(0), 1.0 / levels.force_f32(1), 1.0 / levels.force_f32(2), f32::NAN])
     } else if let Some(levels) = self.tiff.get_entry(DngTag::AsShotWhiteXY) {
-
+      // TODO: improve once AnalogBalance and CC is properly implemented
       if let Some(flat_colormatrix) = cam.color_matrix.get(&Illuminant::D65)
         && let Some(colormatrix) = transform_1d::<3, 3>(flat_colormatrix)
       {
@@ -327,7 +330,7 @@ impl<'a> DngDecoder<'a> {
         if value.len() == 2 {
           repeat = (value[0] as usize, value[1] as usize);
         } else {
-
+          // Pentax K-3 Mark III Monochrome is known to has invalid tag
           log::warn!("File has BlackLevelRepeatDim tag but with invalid length: {}", value.len());
         }
       }
@@ -341,7 +344,7 @@ impl<'a> DngDecoder<'a> {
     let cpp = fetch_tiff_tag!(raw, TiffCommonTag::SamplesPerPixel).force_usize(0);
     if let Some(levels) = raw.get_entry(TiffCommonTag::WhiteLevel) {
       let mut whitelevels = WhiteLevel((0..levels.count()).map(|i| levels.force_u32(i as usize)).collect());
-
+      // Fixes a bug where only a single whitelevel value is given.
       if whitelevels.0.len() == 1 && cpp > 1 {
         whitelevels.0 = vec![whitelevels.0[0]; cpp];
       }
@@ -353,7 +356,9 @@ impl<'a> DngDecoder<'a> {
   fn get_cfa(&self, raw: &IFD) -> Result<CFA> {
     let pattern = fetch_tiff_tag!(raw, TiffCommonTag::CFAPattern);
     let cfa = CFA::new_from_tag(pattern);
-
+    // If DNG has active area, we need to calulate back the CFA pattern,
+    // because for DNG the CFAPattern is relative to ActiveArea and we
+    // use (0, 0) as starting point.
     if let Some(active_area) = self.get_active_area_borders(raw) {
       let top = active_area[0];
       let left = active_area[1];
@@ -368,7 +373,7 @@ impl<'a> DngDecoder<'a> {
       let rect = [crops.force_usize(0), crops.force_usize(1), crops.force_usize(2), crops.force_usize(3)];
       Some(rect)
     } else {
-
+      // Ignore missing crops, at least some pentax DNGs don't have it
       None
     }
   }
@@ -431,6 +436,7 @@ impl<'a> DngDecoder<'a> {
 
     read_matrix(DngTag::CalibrationIlluminant1, DngTag::ColorMatrix1)?;
     read_matrix(DngTag::CalibrationIlluminant2, DngTag::ColorMatrix2)?;
+    // TODO: add 3
 
     Ok(result)
   }

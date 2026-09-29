@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, FourCC, ReadBox, Result, read_box_header_ext};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -38,7 +42,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StszBox {
         sample_sizes.push(sample_number);
       }
     } else {
-
+      // If the sample_size is non-zero, it is the only sample_size
       sample_sizes.push(sample_size);
     }
 
