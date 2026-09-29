@@ -425,16 +425,22 @@ pub(super) fn ensure_embedding(state: &App) {
         }
         geometry.set_rotation(photo.document.rotation());
         geometry.set_mirrored(photo.document.mirrored());
-        (geometry, photo.working.clone())
+        (geometry, photo.working.clone(), mask_framing(photo))
     };
 
-    let (geometry, working) = request;
+    let (geometry, working, framing) = request;
+    let path = std::path::PathBuf::from(&geometry.source.path);
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
-        let made = busy(&state, "Working out what can be clicked…", move || {
+
+        let made = busy_in(&state.zooming.waiting, move || {
             let frame = render::apply_stack(&geometry, &*working, 1.0);
-            sam::encode(&frame)
+
+            let made = numa::io::previews::embedding(&path, &framing, &frame);
+
+            sam::prepare();
+            made
         })
         .await;
 
@@ -468,6 +474,29 @@ pub(super) fn ensure_embedding(state: &App) {
     });
 }
 
+pub(super) fn ensure_found(state: &App) {
+    let kept = {
+        let open = state.open.borrow();
+        let Some(photo) = open.as_ref() else { return };
+        if photo.chips.is_some() || photo.segmentation.is_some() || photo.segmenting {
+            return;
+        }
+        asked_as(photo).and_then(|(id, asked)| state.catalog.found(id, &asked))
+    };
+    let Some(chips) = kept else { return ensure_segmentation(state) };
+    if let Some(photo) = state.open.borrow_mut().as_mut() {
+        photo.chips = Some(chips);
+    }
+    refresh_found(state);
+}
+
+fn asked_as(photo: &OpenPhoto) -> Option<(i64, String)> {
+    match &photo.source {
+        Source::Photo { id, .. } => Some((*id, numa::io::masks::Chips::asked(&mask_framing(photo)))),
+        Source::Bracket { .. } => None,
+    }
+}
+
 pub(super) fn ensure_segmentation(state: &App) {
     let request = {
         let mut open = state.open.borrow_mut();
@@ -484,21 +513,31 @@ pub(super) fn ensure_segmentation(state: &App) {
         }
         geometry.set_rotation(photo.document.rotation());
         geometry.set_mirrored(photo.document.mirrored());
-        (geometry, photo.working.clone())
+        (geometry, photo.working.clone(), asked_as(photo))
     };
 
-    let (geometry, working) = request;
+    let (geometry, working, kept_as) = request;
 
     refresh_found(state);
 
+    let hold = state.open.borrow().as_ref().filter(|photo| pending_masks(photo)).map(|_| state.zooming.waiting.hold());
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
-        let found = busy(&state, "Finding what is in the photograph…", move || {
+        let found = gio::spawn_blocking(move || {
             let frame = render::apply_stack(&geometry, &*working, 1.0);
             segment::of(&frame)
         })
         .await;
+        drop(hold);
+        let found = found.ok().flatten().map(Arc::new);
+
+        let mut chips = found.as_deref().map(numa::io::masks::Chips::of);
+        if let (Some(chips), Some((id, asked))) = (&chips, &kept_as) {
+            if let Err(err) = state.catalog.save_found(*id, asked, chips) {
+                log::warn!("the found masks were not kept: {err}");
+            }
+        }
 
         if state.open_generation.get() != generation {
             return;
@@ -506,7 +545,12 @@ pub(super) fn ensure_segmentation(state: &App) {
 
         if let Some(photo) = state.open.borrow_mut().as_mut() {
             photo.segmenting = false;
-            photo.segmentation = found.ok().flatten().map(Arc::new);
+            photo.segmentation = found.clone();
+
+            if let (Some(chips), Some(kept)) = (chips.as_mut(), photo.chips.as_ref()) {
+                chips.animal = kept.animal.clone();
+            }
+            photo.chips = chips.clone();
 
             let mut masks = photo.document.masks();
             for mask in masks.iter_mut().filter(|mask| mask.wants_pixels()) {
@@ -521,21 +565,24 @@ pub(super) fn ensure_segmentation(state: &App) {
         request_render(&state);
         state.mask_overlay.area.queue_draw();
 
-        let Some(found) = state.open.borrow().as_ref().and_then(|photo| photo.segmentation.clone())
-        else {
-            return;
-        };
-        if !numa::render::classify::is_installed() {
+        let (Some(found), Some(mut chips)) = (found, chips) else { return };
+        if !numa::render::classify::is_installed() || !chips.groups.iter().any(|group| group.1 == [126]) {
             return;
         }
-        let asked = Arc::downgrade(&found);
-        let guess = gtk::gio::spawn_blocking(move || numa::render::classify::animal(&found)).await;
+        let asked = found.clone();
+        let guess = gtk::gio::spawn_blocking(move || numa::render::classify::animal(&asked)).await;
+        chips.animal = guess.ok().flatten().map(|guess| (guess.name.to_string(), guess.confidence));
+        if let Some((id, asked)) = &kept_as {
+            let _ = state.catalog.save_found(*id, asked, &chips);
+        }
         if state.open_generation.get() != generation {
             return;
         }
-        let Ok(Some(guess)) = guess else { return };
+
         if let Some(photo) = state.open.borrow_mut().as_mut() {
-            photo.animal = Some((asked, guess));
+            if photo.segmentation.as_ref().is_some_and(|now| Arc::ptr_eq(now, &found)) {
+                photo.chips = Some(chips);
+            }
         }
         refresh_found(&state);
     });

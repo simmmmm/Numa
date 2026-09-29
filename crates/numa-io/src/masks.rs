@@ -33,6 +33,43 @@ pub fn mask_label(masks: &[Mask], index: usize) -> String {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Chips {
+
+    pub groups: Vec<(String, Vec<u16>, f32)>,
+
+    pub animal: Option<(String, f32)>,
+
+    #[serde(skip)]
+    pub grid: (usize, usize, Vec<u8>),
+}
+
+impl Chips {
+    pub fn of(found: &segment::Segmentation) -> Self {
+        let (width, height, winners) = found.winners();
+        Chips {
+            groups: found.found().into_iter().map(|thing| (thing.name, thing.classes, thing.share)).collect(),
+            animal: None,
+
+            grid: (width, height, winners.iter().map(|class| (*class).min(255) as u8).collect()),
+        }
+    }
+
+    pub fn found(&self) -> Vec<segment::Found> {
+        let groups = self.groups.iter().cloned();
+        groups.map(|(name, classes, share)| segment::Found { name, classes, share }).collect()
+    }
+
+    pub fn coarse(&self, classes: &[u16]) -> (usize, usize, Vec<f32>) {
+        let (width, height, cells) = &self.grid;
+        (*width, *height, cells.iter().map(|class| classes.contains(&(*class as u16)) as u8 as f32).collect())
+    }
+
+    pub fn asked(framing: &str) -> String {
+        format!("{framing}\0{}", segment::asked())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

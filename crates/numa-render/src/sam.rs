@@ -10,7 +10,7 @@ use numa_core::mask::Alpha;
 use crate::local::{self, Plane};
 use crate::segment;
 
-pub const ANSWERS: &str = "sam-4: logits up, guided, cleaned, closer, the rim";
+pub const ANSWERS: &str = "sam-5: logits up, guided, cleaned, closer, the rim, the card's positions";
 
 const EDGE: usize = 1024;
 
@@ -43,9 +43,17 @@ fn encoder() -> Option<std::sync::Arc<Model>> {
     })
 }
 
+fn squashes(encoder: &Model) -> bool {
+    encoder.describe().iter().filter(|port| port.starts_with("out")).count() != 2
+}
+
 fn decoder() -> Option<std::sync::Arc<Model>> {
     static PLAN: numa_infer::Kept = numa_infer::Kept::new();
     PLAN.get_or_init(|| Model::load(&model_path(DECODER)?))
+}
+
+pub fn prepare() {
+    let _ = decoder();
 }
 
 pub struct Embedding {
@@ -78,20 +86,78 @@ enum Closer {
 }
 
 struct Encoded {
-    image: ndarray::ArrayD<f32>,
-    positional: ndarray::ArrayD<f32>,
+    features: Vec<ndarray::ArrayD<f32>>,
 
     covered: (f32, f32),
 }
 
 pub fn encode(photo: &RgbImage) -> Option<Embedding> {
-    Some(Embedding {
-        whole: encoded(photo)?,
+    Some(embedding(encoded(photo)?, photo))
+}
+
+fn embedding(whole: Encoded, photo: &RgbImage) -> Embedding {
+    Embedding {
+        whole,
         guide: segment::luminance(photo, segment::REFINE),
         photo: photo.clone(),
         asked: Mutex::default(),
         looking: Mutex::default(),
-    })
+    }
+}
+
+pub fn model_id() -> Option<String> {
+    let path = model_path(ENCODER)?;
+    let size = std::fs::metadata(&path).ok()?.len();
+    Some(format!("{}:{size}", path.file_name()?.to_string_lossy()))
+}
+
+impl Embedding {
+
+    pub fn kept(&self) -> Option<(&ndarray::ArrayD<f32>, (f32, f32))> {
+        match &self.whole.features[..] {
+            [image, _positional] => Some((image, self.whole.covered)),
+            _ => None,
+        }
+    }
+}
+
+pub fn from_kept(photo: &RgbImage, image: ndarray::ArrayD<f32>, covered: (f32, f32)) -> Option<Embedding> {
+    Some(embedding(Encoded { features: vec![image, positional(None)?], covered }, photo))
+}
+
+fn positional(made: Option<&ndarray::ArrayD<f32>>) -> Option<ndarray::ArrayD<f32>> {
+    static KNOWN: Mutex<Option<(String, ndarray::ArrayD<f32>)>> = Mutex::new(None);
+    let model = model_id()?;
+    let file = numa_core::paths::cache_dir().join("sam").join(format!("{}.positional", model.replace(['/', ':'], "-")));
+    let mut known = KNOWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(made) = made {
+        if known.as_ref().is_none_or(|(id, _)| *id != model) {
+            *known = Some((model, made.clone()));
+            if !file.is_file() {
+                let mut bytes: Vec<u8> = (made.ndim() as u32).to_le_bytes().to_vec();
+                made.shape().iter().for_each(|dim| bytes.extend((*dim as u32).to_le_bytes()));
+                made.iter().for_each(|value| bytes.extend(value.to_le_bytes()));
+                let _ = std::fs::create_dir_all(file.parent()?);
+                let partial = file.with_extension("partial");
+                if std::fs::write(&partial, bytes).is_ok() {
+                    let _ = std::fs::rename(&partial, &file);
+                }
+            }
+        }
+        return Some(made.clone());
+    }
+    if let Some((id, grid)) = known.as_ref().filter(|(id, _)| *id == model) {
+        let _ = id;
+        return Some(grid.clone());
+    }
+    let bytes = std::fs::read(&file).ok()?;
+    let word = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize);
+    let rank = word(0)?;
+    let shape: Vec<usize> = (0..rank).map(|k| word(4 + 4 * k)).collect::<Option<_>>()?;
+    let values: Vec<f32> = bytes.get(4 + 4 * rank..)?.chunks_exact(4).map(|v| f32::from_le_bytes([v[0], v[1], v[2], v[3]])).collect();
+    let grid = ndarray::ArrayD::from_shape_vec(shape, values).ok()?;
+    *known = Some((model, grid.clone()));
+    Some(grid)
 }
 
 fn encoded(photo: &RgbImage) -> Option<Encoded> {
@@ -102,10 +168,13 @@ fn encoded(photo: &RgbImage) -> Option<Encoded> {
     }
 
     let scale = EDGE as f32 / width.max(height) as f32;
-    let fitted = (
-        ((width as f32 * scale).round() as u32).clamp(1, EDGE as u32),
-        ((height as f32 * scale).round() as u32).clamp(1, EDGE as u32),
-    );
+    let fitted = match squashes(&plan) {
+        true => (EDGE as u32, EDGE as u32),
+        false => (
+            ((width as f32 * scale).round() as u32).clamp(1, EDGE as u32),
+            ((height as f32 * scale).round() as u32).clamp(1, EDGE as u32),
+        ),
+    };
     let small = imageops::resize(photo, fitted.0, fitted.1, imageops::FilterType::Triangle);
     let mut padded = RgbImage::from_pixel(EDGE as u32, EDGE as u32, Rgb([0, 0, 0]));
     imageops::replace(&mut padded, &small, 0, 0);
@@ -125,11 +194,12 @@ fn encoded(photo: &RgbImage) -> Option<Encoded> {
             return None;
         }
     };
-    Some(Encoded {
-        image: outputs.first()?.clone(),
-        positional: outputs.get(1)?.clone(),
-        covered: (fitted.0 as f32, fitted.1 as f32),
-    })
+
+    let features = match &outputs[..] {
+        [image, grid] => vec![image.clone(), positional(Some(grid))?],
+        _ => outputs,
+    };
+    Some(Encoded { features, covered: (fitted.0 as f32, fitted.1 as f32) })
 }
 
 impl Embedding {
@@ -305,12 +375,13 @@ impl Encoded {
 
         let label = ndarray::Array3::<i64>::from_shape_vec((1, 1, 1), vec![1]).ok()?;
 
-        let outputs = match plan.run(vec![
-            point.into_dyn().into(),
-            label.into_dyn().into(),
-            self.image.clone().into(),
-            self.positional.clone().into(),
-        ]) {
+        let mut inputs: Vec<numa_infer::Input> = vec![point.into_dyn().into(), label.into_dyn().into()];
+
+        if plan.describe().iter().any(|port| port.starts_with("in  input_boxes")) {
+            inputs.push(ndarray::Array3::<f32>::zeros((1, 0, 4)).into_dyn().into());
+        }
+        inputs.extend(self.features.iter().map(|feature| feature.clone().into()));
+        let outputs = match plan.run(inputs) {
             Ok(outputs) => outputs,
             Err(err) => {
                 log::warn!("sam decoder failed: {err}");

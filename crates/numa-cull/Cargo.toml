@@ -2,7 +2,7 @@
 name = "numa-cull"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

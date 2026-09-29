@@ -50,37 +50,52 @@ pub fn denoise(
         return;
     }
 
-    let luminance = luminance.clamp(0.0, 1.0);
+    if let Some(LumaShape { radius, floor, contrast, luminance }) = LumaShape::new(luminance, detail, contrast, scale) {
+        let log = log_luminance(data, width, height);
+        let smoothed = guided(&log, radius, floor);
 
-    if luminance > 0.0 {
+        let coarse = (contrast > 0.0).then(|| {
+            let removed = Plane::new(
+                width,
+                height,
+                log.data.iter().zip(&smoothed.data).map(|(before, after)| before - after).collect(),
+            );
+            blur(&removed, radius * 2)
+        });
 
-        let radius = (2.0 * scale).round().max(1.0) as usize;
-        if 2.0 * scale >= MIN_RADIUS {
-            let log = log_luminance(data, width, height);
-
-            let floor = noise_floor(luminance) * 4.0f32.powf(1.0 - 2.0 * detail.clamp(0.0, 1.0));
-            let smoothed = guided(&log, radius, floor);
-
-            let contrast = contrast.clamp(0.0, 1.0);
-            let coarse = (contrast > 0.0).then(|| {
-                let removed = Plane::new(
-                    width,
-                    height,
-                    log.data.iter().zip(&smoothed.data).map(|(before, after)| before - after).collect(),
-                );
-                blur(&removed, radius * 2)
-            });
-
-            data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
-                let back = coarse.as_ref().map_or(0.0, |coarse| coarse.data[index] * contrast);
-                let gain = ((smoothed.data[index] + back - log.data[index]) * luminance).exp2();
-                for channel in pixel.iter_mut() {
-                    *channel = (*channel * gain).max(0.0);
-                }
-            });
-        }
+        data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
+            let back = coarse.as_ref().map_or(0.0, |coarse| coarse.data[index] * contrast);
+            let gain = ((smoothed.data[index] + back - log.data[index]) * luminance).exp2();
+            for channel in pixel.iter_mut() {
+                *channel = (*channel * gain).max(0.0);
+            }
+        });
     }
+}
 
+#[derive(Clone, Copy)]
+pub struct LumaShape {
+
+    pub radius: usize,
+
+    pub floor: f32,
+
+    pub contrast: f32,
+
+    pub luminance: f32,
+}
+
+impl LumaShape {
+    pub fn new(luminance: f32, detail: f32, contrast: f32, scale: f32) -> Option<Self> {
+        let luminance = luminance.clamp(0.0, 1.0);
+
+        (luminance > 0.0 && 2.0 * scale >= MIN_RADIUS).then(|| Self {
+            radius: (2.0 * scale).round().max(1.0) as usize,
+            floor: noise_floor(luminance) * 4.0f32.powf(1.0 - 2.0 * detail.clamp(0.0, 1.0)),
+            contrast: contrast.clamp(0.0, 1.0),
+            luminance,
+        })
+    }
 }
 
 pub fn denoise_colour(data: &mut [f32], width: usize, height: usize, colour: f32, scale: f32) {

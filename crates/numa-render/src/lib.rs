@@ -7,9 +7,11 @@ pub mod effects;
 pub mod align;
 pub mod beautify;
 pub mod bracket;
+pub mod card;
 pub mod closed_form;
 pub mod classify;
 pub mod histogram;
+mod kept;
 pub mod local;
 pub mod auto;
 pub mod matte;
@@ -61,6 +63,28 @@ pub struct RenderInputs {
     pub sharpened: Option<std::sync::Arc<numa_core::denoise::Denoised>>,
 }
 
+const FINISHED_WHITE: numa_core::color::WhiteBalance = numa_core::color::WhiteBalance { temperature: 5500.0, tint: 0.0 };
+
+fn finished_into_working_space(document: &Document, mut image: LinearImage) -> LinearImage {
+
+    if let Some(matrix) = ColourSpace::Srgb.convert_to(document.working_space) {
+        into_space(&mut image.data, &matrix);
+    }
+
+    let effective = document.white_balance.unwrap_or(FINISHED_WHITE);
+    if effective != FINISHED_WHITE {
+        let gains = numa_core::color::relative_gains(FINISHED_WHITE, effective, document.working_space.from_xyz());
+        image.data.par_chunks_exact_mut(3).for_each(|pixel| {
+            for (channel, gain) in pixel.iter_mut().zip(gains) {
+                *channel = (*channel * gain).max(0.0);
+            }
+        });
+    }
+
+    image.white_point = Some(effective);
+    image
+}
+
 pub fn to_working_space<'a>(
     document: &Document,
     source: impl Into<Cow<'a, LinearImage>>,
@@ -81,12 +105,7 @@ pub fn to_working_space<'a>(
     let balance = document.white_balance;
 
     let Some(profile) = source.profile.clone() else {
-
-        let mut image = source.into_owned();
-        if let Some(matrix) = ColourSpace::Srgb.convert_to(document.working_space) {
-            into_space(&mut image.data, &matrix);
-        }
-        return image;
+        return finished_into_working_space(document, source.into_owned());
     };
 
     let mut data = match &mut source {
@@ -476,6 +495,36 @@ pub fn apply_stack<'a>(
     stack(document, working, detail_scale, local::Tone::Own)
 }
 
+pub fn apply_stack_kept(document: &Document, working: &std::sync::Arc<LinearImage>, detail_scale: f32) -> RgbImage {
+    let (data, width, height) = kept::finished(document, working, detail_scale, WHOLE_FRAME, true, local::Tone::Own);
+    let lut = lut_of(document);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, lut.as_ref());
+    kept::recycle(data);
+    frame
+}
+
+pub fn forget_kept() {
+    kept::forget();
+}
+
+pub fn apply_pixels_kept(
+    document: &Document,
+    working: &std::sync::Arc<LinearImage>,
+    detail_scale: f32,
+    region: [f32; 4],
+    guide: Option<&local::ToneGuide>,
+) -> RgbImage {
+    let tone = match guide {
+        Some(guide) => local::Tone::Guided(guide, region),
+        None => local::Tone::Own,
+    };
+    let (data, width, height) = kept::finished(document, working, detail_scale, region, false, tone);
+    let lut = lut_of(document);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, lut.as_ref());
+    kept::recycle(data);
+    frame
+}
+
 pub fn apply_stack_recording<'a>(
     document: &Document,
     working: impl Into<Cow<'a, LinearImage>>,
@@ -642,30 +691,49 @@ fn finished<'a>(
     let mut data = take_pixels(&mut working);
     let working = &*working;
 
-    let mut basic = document.basic();
-
-    if working.display_referred {
-        let rest = numa_core::document::Detail::default();
-        basic.detail.sharpen = (basic.detail.sharpen - rest.sharpen).max(0.0);
-        basic.detail.denoise_colour = (basic.detail.denoise_colour - rest.denoise_colour).max(0.0);
-    }
+    let basic = stack_basic(document, working.display_referred);
     let (width, height) = (working.width as usize, working.height as usize);
-    let weights = document.working_space.luminance_weights();
     match measuring {
         true => prefix(document, &basic, &mut data, (width, height), detail_scale, region, measuring, &mut passes),
         false => prefix_kept(document, &basic, &mut data, (width, height), detail_scale, region, &mut passes),
     }
 
-    run_operations(document, &mut data, working, tone);
+    run_operations(document, &mut data, (width, height), tone);
 
     if measuring {
         return (data, working.width, working.height);
     }
 
     passes.mark("operations");
+    to_the_grade(document, &mut data, (width, height), region, (working.white_point, working.display_referred), detail_scale, &mut passes);
+    from_the_grade(document, &basic, &mut data, (width, height), region, detail_scale, &mut passes);
+    passes.report(width, height);
+    (data, working.width, working.height)
+}
 
-    let (point, space) = (working.white_point, document.working_space);
-    apply_masks(document, &mut data, width, height, region, point, space, detail_scale, working.display_referred);
+fn stack_basic(document: &Document, display_referred: bool) -> Basic {
+    let mut basic = document.basic();
+
+    if display_referred {
+        let rest = numa_core::document::Detail::default();
+        basic.detail.sharpen = (basic.detail.sharpen - rest.sharpen).max(0.0);
+        basic.detail.denoise_colour = (basic.detail.denoise_colour - rest.denoise_colour).max(0.0);
+    }
+    basic
+}
+
+fn to_the_grade(
+    document: &Document,
+    data: &mut [f32],
+    (width, height): (usize, usize),
+    region: [f32; 4],
+    (point, display_referred): (Option<numa_core::color::WhiteBalance>, bool),
+    detail_scale: f32,
+    passes: &mut Passes,
+) {
+    let weights = document.working_space.luminance_weights();
+
+    apply_masks(document, data, width, height, region, point, document.working_space, detail_scale, display_referred);
 
     passes.mark("masks");
 
@@ -677,8 +745,18 @@ fn finished<'a>(
             pixel.fill(luminance * mixer.grey_gain(rgb));
         });
     }
-
     passes.mark("monochrome");
+}
+
+fn from_the_grade(
+    document: &Document,
+    basic: &Basic,
+    data: &mut [f32],
+    (width, height): (usize, usize),
+    region: [f32; 4],
+    detail_scale: f32,
+    passes: &mut Passes,
+) {
 
     let grading = document.grading();
     if !grading.is_identity() {
@@ -690,10 +768,9 @@ fn finished<'a>(
 
     passes.mark("grade");
 
-    vignette_and_grain(&mut data, width, height, region, &basic, weights, detail_scale);
+    let weights = document.working_space.luminance_weights();
+    vignette_and_grain(data, width, height, region, basic, weights, detail_scale);
     passes.mark("vignette");
-    passes.report(width, height);
-    (data, working.width, working.height)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -873,7 +950,7 @@ fn take_pixels(working: &mut Cow<'_, LinearImage>) -> Vec<f32> {
     }
 }
 
-fn run_operations(document: &Document, data: &mut [f32], working: &LinearImage, tone: local::Tone) {
+fn run_operations(document: &Document, data: &mut [f32], (width, height): (usize, usize), tone: local::Tone) {
 
     let mut looks: Vec<Look> = Vec::new();
     let mixer = document.mixer();
@@ -898,8 +975,8 @@ fn run_operations(document: &Document, data: &mut [f32], working: &LinearImage, 
         if let Operation::Basic(basic) = operation {
             local::tone_map(
                 data,
-                working.width as usize,
-                working.height as usize,
+                width,
+                height,
                 basic.presence.hdr / 100.0,
                 basic.presence.clarity / 100.0,
                 basic.presence.texture / 100.0,
@@ -1118,6 +1195,16 @@ fn finish_mask(
 }
 
 fn tint(data: &mut [f32], colour: numa_core::mask::Tint, weights: [f32; 3]) {
+    let (hue_of, strength) = tint_of(colour, weights);
+    data.par_chunks_exact_mut(3).for_each(|pixel| {
+        let luminance = pixel[0] * weights[0] + pixel[1] * weights[1] + pixel[2] * weights[2];
+        for (channel, value) in pixel.iter_mut().enumerate() {
+            *value += (luminance * hue_of[channel] - *value) * strength;
+        }
+    });
+}
+
+fn tint_of(colour: numa_core::mask::Tint, weights: [f32; 3]) -> ([f32; 3], f32) {
     let hue = colour.hue.rem_euclid(360.0) / 60.0;
     let x = 1.0 - (hue.rem_euclid(2.0) - 1.0).abs();
     let rgb = match hue as u32 {
@@ -1132,13 +1219,7 @@ fn tint(data: &mut [f32], colour: numa_core::mask::Tint, weights: [f32; 3]) {
     let linear = rgb.map(|value: f32| ColourSpace::Srgb.decode(value));
     let own = linear[0] * weights[0] + linear[1] * weights[1] + linear[2] * weights[2];
     let hue_of = linear.map(|value| value / own.max(1e-6));
-    let strength = (colour.saturation / 100.0).clamp(0.0, 1.0) * 0.6;
-    data.par_chunks_exact_mut(3).for_each(|pixel| {
-        let luminance = pixel[0] * weights[0] + pixel[1] * weights[1] + pixel[2] * weights[2];
-        for (channel, value) in pixel.iter_mut().enumerate() {
-            *value += (luminance * hue_of[channel] - *value) * strength;
-        }
-    });
+    (hue_of, (colour.saturation / 100.0).clamp(0.0, 1.0) * 0.6)
 }
 
 fn rows_to_work(basic: &Basic, field: &[f32], width: usize, height: usize) -> Option<(usize, usize)> {
@@ -1333,7 +1414,7 @@ pub fn tile_in_source(document: &Document, tile: [f32; 4]) -> Option<[f32; 4]> {
     }
 }
 
-pub fn cut_turned_tile(document: &Document, full: &LinearImage, region: [f32; 4]) -> Option<LinearImage> {
+fn turned_cut(document: &Document, width: f32, height: f32, region: [f32; 4]) -> Option<TurnedCut> {
     let basic = document.basic();
     if !document.perspective().is_identity()
         || basic.optics.lens_distortion != 0.0
@@ -1349,7 +1430,6 @@ pub fn cut_turned_tile(document: &Document, full: &LinearImage, region: [f32; 4]
         _ => return None,
     };
     let mirrored = document.mirrored();
-    let (width, height) = (full.width as f32, full.height as f32);
 
     let (turned_w, turned_h) = if quarter % 2 == 1 { (height, width) } else { (width, height) };
     let (crop, angle) = document.crop().unwrap_or(([0.0, 0.0, 1.0, 1.0], 0.0));
@@ -1393,6 +1473,34 @@ pub fn cut_turned_tile(document: &Document, full: &LinearImage, region: [f32; 4]
     let top = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min).floor().max(0.0);
     let right = corners.iter().map(|c| c.0).fold(f32::MIN, f32::max).ceil().min(width);
     let bottom = corners.iter().map(|c| c.1).fold(f32::MIN, f32::max).ceil().min(height);
+    Some(TurnedCut { quarter, mirrored, angle, middle, tile: (tile_w, tile_h), bounds: [left, top, right, bottom] })
+}
+
+struct TurnedCut {
+    quarter: i32,
+    mirrored: bool,
+    angle: f32,
+    middle: (f32, f32),
+    tile: (f32, f32),
+    bounds: [f32; 4],
+}
+
+pub fn tile_box(document: &Document, width: u32, height: u32, region: [f32; 4]) -> Option<[u32; 4]> {
+    let (width, height) = (width as f32, height as f32);
+    let [left, top, right, bottom] = match tile_in_source(document, region) {
+        Some([x, y, w, h]) => [x * width, y * height, (x + w) * width, (y + h) * height],
+        None => turned_cut(document, width, height, region)?.bounds,
+    };
+
+    let (x0, x1) = ((left.floor() - 2.0).max(0.0), (right.ceil() + 2.0).min(width));
+    let (y0, y1) = ((top.floor() - 2.0).max(0.0), (bottom.ceil() + 2.0).min(height));
+    (x1 > x0 && y1 > y0).then(|| [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32])
+}
+
+pub fn cut_turned_tile(document: &Document, full: &LinearImage, region: [f32; 4]) -> Option<LinearImage> {
+    let (width, height) = (full.width as f32, full.height as f32);
+    let TurnedCut { quarter, mirrored, angle, middle, tile: (tile_w, tile_h), bounds: [left, top, right, bottom] } =
+        turned_cut(document, width, height, region)?;
     let cut = full.cropped([left / width, top / height, (right - left) / width, (bottom - top) / height], 0.0, Default::default());
 
     let flipped = if mirrored { cut.into_oriented(false, true, false) } else { cut };
@@ -1670,6 +1778,19 @@ where
         return Frame::from_raw(width, height, out).expect("buffer matches dimensions");
     }
 
+    if lut.is_none() {
+        if let Some(bytes) = (&mut out as &mut dyn std::any::Any).downcast_mut::<Vec<u8>>() {
+            let exact = |channel: usize, value: f32| u8::quantise(shape(channel, tone::shown(value, display_referred).clamp(0.0, 1.0)));
+            let encoder = Encoder::for_curves(curves, display_referred, &exact);
+            bytes.par_chunks_mut(3 << 12).zip(data.par_chunks(3 << 12)).for_each(|(bytes, values)| {
+                for (byte, (index, value)) in bytes.iter_mut().zip(values.iter().enumerate()) {
+                    *byte = encoder.code(index % 3, *value, &exact);
+                }
+            });
+            return Frame::from_raw(width, height, out).expect("buffer matches dimensions");
+        }
+    }
+
     out.par_chunks_exact_mut(3)
         .zip(data.par_chunks_exact(3))
         .for_each(|(bytes, pixel)| {
@@ -1684,8 +1805,95 @@ where
     Frame::from_raw(width, height, out).expect("buffer matches dimensions")
 }
 
+struct Encoder {
+    base: u32,
+    codes: [Vec<u16>; 3],
+    ends: [[u8; 2]; 3],
+}
+
+impl Encoder {
+    const SHIFT: u32 = 13;
+    const LOW: f32 = 1.0 / 16_777_216.0;
+    const HIGH: f32 = 256.0;
+    const WORK_IT_OUT: u16 = u16::MAX;
+
+    fn for_curves(curves: &[Curve], display_referred: bool, exact: &(impl Fn(usize, f32) -> u8 + Sync)) -> std::sync::Arc<Encoder> {
+        type Kept = Option<(String, std::sync::Arc<Encoder>)>;
+        static KEPT: std::sync::Mutex<Kept> = std::sync::Mutex::new(None);
+        let key = format!("{curves:?}{display_referred}");
+        let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, encoder)) = kept.as_ref().filter(|(was, _)| *was == key) {
+            return encoder.clone();
+        }
+        let base = Self::LOW.to_bits() >> Self::SHIFT;
+        let count = ((Self::HIGH.to_bits() >> Self::SHIFT) - base) as usize;
+        let codes = std::array::from_fn(|channel| {
+            (0..count)
+                .into_par_iter()
+                .map(|bucket| {
+                    let first = f32::from_bits((base + bucket as u32) << Self::SHIFT);
+                    let last = f32::from_bits(((base + bucket as u32 + 1) << Self::SHIFT) - 1);
+                    let (a, b) = (exact(channel, first), exact(channel, last));
+                    if a == b { u16::from(a) } else { Self::WORK_IT_OUT }
+                })
+                .collect()
+        });
+        let ends = std::array::from_fn(|channel| [exact(channel, 0.0), exact(channel, Self::HIGH)]);
+        let encoder = std::sync::Arc::new(Encoder { base, codes, ends });
+        *kept = Some((key, encoder.clone()));
+        encoder
+    }
+
+    #[inline]
+    fn code(&self, channel: usize, value: f32, exact: &impl Fn(usize, f32) -> u8) -> u8 {
+
+        if value <= 0.0 {
+            return self.ends[channel][0];
+        }
+        if value >= Self::HIGH {
+            return self.ends[channel][1];
+        }
+        if !(value > Self::LOW) {
+            return exact(channel, value);
+        }
+        match self.codes[channel][((value.to_bits() >> Self::SHIFT) - self.base) as usize] {
+            Self::WORK_IT_OUT => exact(channel, value),
+            code => code as u8,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_table_encode_is_the_exact_encode() {
+        let curves = [
+            vec![Curve::identity(); 4],
+            vec![
+                Curve::new([[0.0, 0.0], [0.45, 0.05], [0.55, 0.95], [1.0, 1.0]]),
+                Curve::new([[0.0, 0.1], [1.0, 0.9]]),
+                Curve::identity(),
+                Curve::new([[0.0, 0.0], [0.25, 0.4], [0.75, 0.6], [1.0, 1.0]]),
+            ],
+        ];
+        let mut values: Vec<f32> = vec![f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -1.0, -0.0, 0.0, 1e-30, 1e-7, 1e-6, 255.9, 256.0, 1e9];
+
+        let (low, high) = ((2f32).powi(-26).to_bits(), (512f32).to_bits());
+        values.extend((low..high).step_by(97).map(f32::from_bits));
+        let data: Vec<f32> = values.iter().flat_map(|v| [*v; 3]).collect();
+        let width = data.len() as u32 / 3;
+        for curves in &curves {
+            let shape = shaper(curves);
+            for referred in [false, true] {
+                let fast = encode::<u8>(width, 1, &data, curves, ColourSpace::Srgb, ColourSpace::Srgb, referred, None);
+                for (index, (byte, value)) in fast.as_raw().iter().zip(&data).enumerate() {
+                    let exact = u8::quantise(shape(index % 3, tone::shown(*value, referred).clamp(0.0, 1.0)));
+                    assert_eq!(*byte, exact, "{value:e} moved a code value");
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_kept_prefix_is_the_prefix() {
@@ -2016,6 +2224,27 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_pictures_white_balance_moves_it() {
+        use numa_core::color::WhiteBalance;
+        let grey = LinearImage::new(2, 2, vec![0.4; 12]);
+        let render = |balance: Option<WhiteBalance>| {
+            let mut document = plain();
+            document.white_balance = balance;
+            to_working_space(&document, &grey, &RenderInputs::default())
+        };
+        assert_eq!(render(None).data, grey.data, "no balance, no change");
+        assert_eq!(render(Some(FINISHED_WHITE)).data, grey.data, "the neutral is no shift");
+        let warm = render(Some(WhiteBalance { temperature: 8000.0, tint: 0.0 }));
+        assert!(warm.data[0] > warm.data[2], "higher is warmer: {:?}", &warm.data[..3]);
+        let cool = render(Some(WhiteBalance { temperature: 3200.0, tint: 0.0 }));
+        assert!(cool.data[2] > cool.data[0], "lower is cooler: {:?}", &cool.data[..3]);
+        let tinted = render(Some(WhiteBalance { temperature: 5500.0, tint: 30.0 })).data;
+        assert!(tinted[0] != tinted[1], "tint moves green: {:?}", &tinted[..3]);
+        assert_eq!((tinted[0] - tinted[1]).signum(), (tinted[2] - tinted[1]).signum(), "against red and blue together");
+        assert_eq!(warm.white_point, Some(WhiteBalance { temperature: 8000.0, tint: 0.0 }), "a mask's shift is from here");
+    }
+
+    #[test]
     fn a_guided_tile_matches_the_whole_frame() {
 
         let (width, height) = (800u32, 600u32);
@@ -2121,6 +2350,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_tile_reads_nothing_outside_its_box() {
+        let (width, height) = (160u32, 110u32);
+        let mut data = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let (u, v) = (x as f32 / width as f32, y as f32 / height as f32);
+                data.extend([0.1 + 0.6 * u * u, 0.1 + 0.5 * v, 0.2 + 0.3 * (u * 7.0).sin() * v]);
+            }
+        }
+        let full = LinearImage::new(width, height, data);
+        let cut = |document: &Document, frame: &LinearImage, region: [f32; 4]| match tile_in_source(document, region) {
+            Some(within) => Some(frame.cropped(within, 0.0, Default::default())),
+            None => cut_turned_tile(document, frame, region),
+        };
+
+        let mut checked = 0;
+        for rotation in [0.0, 90.0, 180.0, 270.0] {
+            for mirrored in [false, true] {
+                for (crop, angle) in [(None, 0.0), (Some([0.1, 0.15, 0.8, 0.7]), 0.0), (Some([0.05, 0.1, 0.9, 0.75]), 3.0)] {
+                    let mut document = plain();
+                    document.set_rotation(rotation);
+                    document.set_mirrored(mirrored);
+                    if let Some(crop) = crop {
+                        document.set_crop(crop, angle);
+                    }
+                    for region in [[0.2, 0.3, 0.25, 0.2], [0.0, 0.0, 0.3137, 0.411], [0.61, 0.55, 0.39, 0.45]] {
+                        let Some([x, y, w, h]) = tile_box(&document, width, height, region) else { continue };
+                        let mut boxed = full.clone();
+                        for row in 0..height {
+                            for column in 0..width {
+                                if !(x..x + w).contains(&column) || !(y..y + h).contains(&row) {
+                                    boxed.data[((row * width + column) * 3) as usize..][..3].fill(0.0);
+                                }
+                            }
+                        }
+                        let (want, got) = (cut(&document, &full, region).expect("a tile"), cut(&document, &boxed, region).expect("a tile"));
+                        assert!(
+                            want.data.iter().zip(&got.data).all(|(a, b)| a.to_bits() == b.to_bits()),
+                            "{rotation}° mirrored {mirrored} crop {crop:?} at {angle}°, region {region:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked >= 60, "only {checked} could be cut");
     }
 
     #[test]

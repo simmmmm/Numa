@@ -228,7 +228,7 @@ fn texture(photo: &(PathBuf, i64, Option<String>), edge: u32) -> Option<gtk::gdk
                 if side > edge {
                     numa::io::thumbs::store(path, *mtime, edge, edits, &square);
                 }
-                Some(texture_from(square))
+                Some(texture_from(&square))
             })
             .clone()
     })

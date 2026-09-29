@@ -414,6 +414,10 @@ pub fn database_dir() -> Option<PathBuf> {
     candidates.into_iter().find(|dir| dir.is_dir())
 }
 
+pub fn warm() {
+    database();
+}
+
 fn database() -> Option<&'static Database> {
     static DB: OnceLock<Option<Database>> = OnceLock::new();
     DB.get_or_init(|| {

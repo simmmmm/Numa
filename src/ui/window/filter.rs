@@ -9,9 +9,19 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     let sort = build_sort_picker(state);
     let direction = build_sort_direction(state);
 
-    restore_filters(state, &rating, &flag, &sort, &direction, &file_type);
-
     let analyse = build_analyse_button(state, window);
+    restore_filters(state, &rating, &flag, &sort, &direction, &file_type, window);
+
+    state.libraries.show_filter.replace(Some(Box::new(glib::clone!(
+        #[strong] state,
+        #[weak] rating,
+        #[weak] flag,
+        #[weak] sort,
+        #[weak] direction,
+        #[weak] file_type,
+        #[weak] window,
+        move || restore_filters(&state, &rating, &flag, &sort, &direction, &file_type, &window)
+    ))));
 
     bar.append(&rating);
     bar.append(&flag);
@@ -171,12 +181,19 @@ fn restore_filters(
     sort: &gtk::DropDown,
     direction: &gtk::ToggleButton,
     file_type: &gtk::DropDown,
+    window: &adw::ApplicationWindow,
 ) {
-    let (min_rating, saved_flag, saved_sort, saved_reversed, saved_type) = {
+    let (min_rating, saved_flag, saved_sort, saved_reversed, saved_type, questionable, best_of_burst) = {
         let filter = state.libraries.filter.borrow();
-        (filter.min_rating, filter.flag, filter.sort, filter.reversed, filter.file_type)
+        (filter.min_rating, filter.flag, filter.sort, filter.reversed, filter.file_type, filter.only_questionable, filter.best_of_burst)
     };
-    state.applying.set(true);
+    for (name, on) in [("questionable", questionable), ("best-of-burst", best_of_burst)] {
+        if let Some(action) = window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+            action.set_state(&on.to_variant());
+        }
+    }
+
+    let applying = state.applying.replace(true);
     rating.set_selected(min_rating.min(5) as u32);
     flag.set_selected(match saved_flag {
         Some(Flag::Picked) => 1,
@@ -191,7 +208,7 @@ fn restore_filters(
         FileType::Raw => 1,
         FileType::NotRaw => 2,
     });
-    state.applying.set(false);
+    state.applying.set(applying);
 }
 
 fn build_analyse_button(state: &App, window: &adw::ApplicationWindow) -> adw::SplitButton {

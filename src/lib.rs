@@ -3,3 +3,6 @@ pub use numa_cull as cull;
 pub use numa_infer as infer;
 pub use numa_io as io;
 pub use numa_render as render;
+
+#[cfg(feature = "gpu")]
+pub use numa_gpu as gpu;

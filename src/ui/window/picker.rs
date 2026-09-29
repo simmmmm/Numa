@@ -171,7 +171,3 @@ pub(super) fn rescan_everywhere(state: &App) {
         state.toast(&format!("Rescanned: {added} new photo(s)"));
     });
 }
-
-pub(super) fn selected_ids(state: &App) -> Vec<i64> {
-    selected_cards(state).iter().filter_map(|child| child.widget_name().parse::<i64>().ok()).collect()
-}

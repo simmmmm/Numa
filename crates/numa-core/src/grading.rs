@@ -60,15 +60,28 @@ impl Grading {
     }
 
     pub fn weights(&self, display: f32) -> [f32; 3] {
-        let blend = (self.blending / 100.0).clamp(0.0, 1.0);
-        let balance = (self.balance / 100.0).clamp(-1.0, 1.0);
-
-        let shifted = display.clamp(0.0, 1.0).powf(2.0f32.powf(-balance));
-
-        let reach = 4.0 - blend * 2.0;
+        let (bend, reach) = self.shape();
+        let shifted = display.clamp(0.0, 1.0).powf(bend);
         let shadow = (1.0 - shifted).powf(reach);
         let highlight = shifted.powf(reach);
         [shadow, (1.0 - shadow - highlight).max(0.0), highlight]
+    }
+
+    pub fn shape(&self) -> (f32, f32) {
+        let blend = (self.blending / 100.0).clamp(0.0, 1.0);
+        let balance = (self.balance / 100.0).clamp(-1.0, 1.0);
+
+        (2.0f32.powf(-balance), 4.0 - blend * 2.0)
+    }
+
+    pub fn tints(&self) -> [[f32; 4]; 4] {
+        [self.shadows, self.midtones, self.highlights, self.global].map(|range| match range.is_identity() {
+            true => [0.0; 4],
+            false => {
+                let [r, g, b] = range.direction().map(|pull| pull * range.saturation / 100.0);
+                [r, g, b, range.luminance / 100.0]
+            }
+        })
     }
 
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {

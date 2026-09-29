@@ -1,8 +1,48 @@
 use std::path::Path;
 
 pub fn taken(path: &Path) -> Option<i64> {
-    let read = || from_container(path).or_else(|| from_raf(path)).or_else(|| from_raw(path));
+    let read = || from_head(path).or_else(|| from_container(path)).or_else(|| from_raf(path)).or_else(|| from_raw(path));
     unix_seconds(&std::panic::catch_unwind(read).ok().flatten()?)
+}
+
+const HEAD: u64 = 256 << 10;
+
+fn from_head(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = vec![0u8; 12];
+    file.read_exact(&mut head).ok()?;
+    let cr3 = &head[4..12] == b"ftypcrx ";
+    if !cr3 && !matches!(&head[..2], b"II" | b"MM") {
+        return None;
+    }
+    file.take(HEAD).read_to_end(&mut head).ok()?;
+    let tiff = if cr3 {
+
+        let at = head.windows(4).position(|w| w == b"CMT2")?;
+        let size = u32::from_be_bytes(head.get(at.checked_sub(4)?..at)?.try_into().ok()?) as usize;
+        head.get(at + 4..(at - 4).checked_add(size)?)?.to_vec()
+    } else {
+
+        let magic: [u8; 2] = if head[0] == b'I' { [42, 0] } else { [0, 42] };
+        head[2..4].copy_from_slice(&magic);
+        head
+    };
+    date_in(&tiff).or_else(|| {
+
+        let at = tiff.windows(6).position(|w| w == b"Exif\0\0")?;
+        date_in(&tiff[at + 6..])
+    })
+}
+
+fn date_in(tiff: &[u8]) -> Option<String> {
+    let exif = match ::exif::Reader::new().continue_on_error(true).read_raw(tiff.to_vec()) {
+        Ok(exif) => exif,
+        Err(::exif::Error::PartialResult(partial)) => partial.into_inner().0,
+        Err(_) => return None,
+    };
+    let field = exif.fields().find(|field| field.tag.number() == 0x9003)?;
+    Some(field.display_value().to_string())
 }
 
 fn from_container(path: &Path) -> Option<String> {
@@ -92,6 +132,46 @@ mod tests {
 
         assert_eq!(unix_seconds("0000:00:00 00:00:00"), None);
         assert_eq!(unix_seconds(""), None);
+    }
+
+    #[test]
+    fn the_head_of_an_orf_says_when() {
+        let mut tiff: Vec<u8> = b"IIRO".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x69, 0x87, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0]);
+
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x03, 0x90, 2, 0, 20, 0, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0]);
+        tiff.extend(b"2022:07:17 12:14:32\0");
+        let path = std::env::temp_dir().join(format!("numa-head-{}.orf", std::process::id()));
+        std::fs::write(&path, &tiff).unwrap();
+        let found = from_head(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(unix_seconds(&found.expect("a date")), unix_seconds("2022:07:17 12:14:32"));
+    }
+
+    #[test]
+    #[ignore]
+    fn the_head_agrees_with_the_whole_file() {
+        let Some(list) = std::env::var_os("NUMA_DATE_FILES") else {
+            println!("NUMA_DATE_FILES is not set");
+            return;
+        };
+        let (mut same, mut left) = (0, 0);
+        for line in std::fs::read_to_string(list).unwrap().lines().filter(|line| !line.is_empty()) {
+            let path = Path::new(line);
+            let whole = from_container(path).or_else(|| from_raf(path)).or_else(|| from_raw(path));
+            match from_head(path) {
+                Some(head) => {
+                    assert_eq!(unix_seconds(&head), whole.as_deref().and_then(unix_seconds), "{line}");
+                    same += 1;
+                }
+                None => left += 1,
+            }
+        }
+        println!("{same} read the same from the head; {left} left to the whole file");
     }
 
     #[test]

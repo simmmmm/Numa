@@ -103,12 +103,11 @@ pub(super) fn export_selection(state: &App, parent: &impl IsA<gtk::Widget>) {
 }
 
 pub(super) fn selected_jobs(state: &App) -> Vec<ExportJob> {
-    let selected = selected_cards(state);
+    let selected = selected_ids(state);
     let cards = state.grid.cards.borrow();
     selected
-        .iter()
-        .filter_map(|child| child.widget_name().parse::<i64>().ok())
-        .filter_map(|id| cards.get(&id).map(|(photo, _)| (id, photo.path.clone())))
+        .into_iter()
+        .filter_map(|id| cards.get(&id).map(|photo| (id, photo.path.clone())))
         .map(|(id, path)| {
             let document = state
                 .catalog

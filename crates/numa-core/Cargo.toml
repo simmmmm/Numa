@@ -2,7 +2,7 @@
 name = "numa-core"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
@@ -11,3 +11,6 @@ image.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_vendor = "apple"))'.dependencies]
+libc.workspace = true

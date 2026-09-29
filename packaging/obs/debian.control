@@ -1,0 +1,16 @@
+Source: numa
+Section: graphics
+Priority: optional
+Maintainer: Tijmen <38768749+simmmmm@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.92), gcc, pkgconf, libgtk-4-dev (>= 4.14), libadwaita-1-dev (>= 1.5), libssl-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/simmmmm/Numa
+Rules-Requires-Root: no
+
+Package: numa
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, libvulkan1, hicolor-icon-theme
+Description: RAW photo editor and library
+ Numa is a RAW photo editor and library. Add a folder, cull the shoot,
+ develop the frames you keep and export them. Your originals are never
+ moved, copied or written to.

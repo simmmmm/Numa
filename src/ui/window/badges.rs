@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
+pub(super) fn make_card() -> gtk::Widget {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 5);
 
     let picture = gtk::Picture::new();
@@ -8,89 +8,100 @@ pub(super) fn build_card(state: &App, photo: &Photo) -> gtk::Widget {
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_content_fit(gtk::ContentFit::Cover);
-
-    picture.connect_paintable_notify(glib::clone!(
-        #[weak(rename_to = wall)] state.grid.wall,
-        #[weak] card,
-        move |picture| {
-            let Some(paintable) = picture.paintable() else { return };
-            let aspect = paintable.intrinsic_aspect_ratio();
-            if aspect > 0.0 {
-                wall.set_aspect(&card, aspect as f32);
-            }
-        }
-    ));
     picture.add_css_class("thumbnail");
 
     picture.set_overflow(gtk::Overflow::Hidden);
 
-    let card_thumb = LazyThumb {
-        id: photo.id,
-        path: photo.path.clone(),
-        mtime: photo.mtime,
-        edited: photo.edited,
-        edge: grid_edge(state),
-        asked: 0,
-        fitted: 0,
-        picture: picture.clone(),
+    let hint = gtk::Label::new(None);
+    hint.add_css_class("cull-note");
+    hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-        widget: picture.clone().upcast(),
-        wanted: false,
-    };
-
-    let name = gtk::Label::new(photo.path.file_name().and_then(|name| name.to_str()));
+    let titled = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    titled.set_halign(gtk::Align::Center);
+    let mark = gtk::Image::from_icon_name("document-edit-symbolic");
+    mark.set_pixel_size(11);
+    mark.add_css_class("edited-mark");
+    mark.set_tooltip_text(Some("Has adjustments"));
+    let name = gtk::Label::new(None);
     name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     name.set_max_width_chars(20);
     name.add_css_class("photo-name");
 
-    let titled = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    titled.set_halign(gtk::Align::Center);
-    if photo.edited {
-        let mark = gtk::Image::from_icon_name("document-edit-symbolic");
-        mark.set_pixel_size(11);
-        mark.add_css_class("edited-mark");
-        mark.set_tooltip_text(Some("Has adjustments"));
-        titled.append(&mark);
-    }
+    let away = gtk::Image::from_icon_name("drive-removable-media-symbolic");
+    away.set_pixel_size(11);
+    away.add_css_class("dim-label");
+    away.set_tooltip_text(Some("Source file not available — its drive is not connected"));
+    titled.append(&mark);
     titled.append(&name);
+    titled.append(&away);
 
-    if state.catalog.is_offline(numa::io::catalog::library_of(photo.id)) {
-        let away = gtk::Image::from_icon_name("drive-removable-media-symbolic");
-        away.set_pixel_size(11);
-        away.add_css_class("dim-label");
-        away.set_tooltip_text(Some("Source file not available — its drive is not connected"));
-        titled.append(&away);
-    }
-
-    let badge = gtk::Label::new(Some(&badge_text(photo.rating, photo.flag)));
+    let badge = gtk::Label::new(None);
     badge.add_css_class("photo-badge");
-    style_badge(&badge, photo.rating, photo.flag);
+
+    badge.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+    card.append(&picture);
+    card.append(&hint);
+    card.append(&titled);
+    card.append(&badge);
+    card.upcast()
+}
+
+struct CardParts {
+    picture: gtk::Picture,
+    hint: gtk::Label,
+    mark: gtk::Widget,
+    name: gtk::Label,
+    away: gtk::Widget,
+    badge: gtk::Label,
+}
+
+impl CardParts {
+    fn of(card: &gtk::Widget) -> Option<Self> {
+        let picture = card.first_child()?;
+        let hint = picture.next_sibling()?;
+        let titled = hint.next_sibling()?;
+        let badge = titled.next_sibling()?;
+        let mark = titled.first_child()?;
+        let name = mark.next_sibling()?;
+        let away = name.next_sibling()?;
+        Some(Self {
+            picture: picture.downcast().ok()?,
+            hint: hint.downcast().ok()?,
+            mark,
+            name: name.downcast().ok()?,
+            away,
+            badge: badge.downcast().ok()?,
+        })
+    }
+}
+
+pub(super) fn bind_card(state: &App, card: &gtk::Widget, index: usize) {
+    let Some(parts) = CardParts::of(card) else { return };
+    let lazy = state.grid.lazy.borrow();
+    let Some(thumb) = lazy.get(index) else { return };
+    let cards = state.grid.cards.borrow();
+    let Some(photo) = cards.get(&thumb.id) else { return };
+
+    parts.picture.set_paintable(thumb.texture.as_ref());
+    parts.name.set_text(&photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
+    parts.mark.set_visible(photo.edited);
+    parts.away.set_visible(state.catalog.is_offline(numa::io::catalog::library_of(photo.id)));
 
     let scale = state.libraries.scale.get();
     let note = cull_note(photo, &scale);
+    parts.hint.set_visible(!note.is_empty());
     if !note.is_empty() {
-        let hint = gtk::Label::new(Some(&note));
-        hint.add_css_class("cull-note");
-        hint.set_tooltip_text(Some(&cull_detail(photo, &scale)));
-        hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        card.append(&picture);
-        card.append(&hint);
-    } else {
-        card.append(&picture);
+        parts.hint.set_text(&note);
+        parts.hint.set_tooltip_text(Some(&cull_detail(photo, &scale)));
     }
-    card.append(&titled);
-    card.append(&badge);
 
-    badge.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let child: gtk::Widget = card.clone().upcast();
-    child.set_tooltip_text(photo.path.to_str());
+    parts.badge.set_text(&badge_text(photo.rating, photo.flag));
+    style_badge(&parts.badge, photo.rating, photo.flag);
 
-    child.set_widget_name(&photo.id.to_string());
+    card.set_tooltip_text(photo.path.to_str());
 
-    state.grid.lazy.borrow_mut().push(LazyThumb { widget: child.clone(), ..card_thumb });
-
-    state.grid.cards.borrow_mut().insert(photo.id, (photo.clone(), badge));
-    child
+    card.set_widget_name(&photo.id.to_string());
 }
 
 pub(super) fn style_badge(badge: &gtk::Label, rating: u8, flag: Flag) {

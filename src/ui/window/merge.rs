@@ -3,11 +3,7 @@ use super::*;
 pub(super) fn merge_selection(state: &App, button: &gtk::Button) {
     let paths: Vec<PathBuf> = {
         let cards = state.grid.cards.borrow();
-        selected_cards(state)
-            .iter()
-            .filter_map(|child| child.widget_name().parse::<i64>().ok())
-            .filter_map(|id| cards.get(&id).map(|(photo, _)| photo.path.clone()))
-            .collect()
+        selected_ids(state).into_iter().filter_map(|id| cards.get(&id).map(|photo| photo.path.clone())).collect()
     };
 
     if paths.len() < 2 {
@@ -80,9 +76,6 @@ pub(super) fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) 
     document.set_basic(Basic::with(|b| b.presence.hdr = 50.0));
     let basic = document.basic();
 
-    state.sliders.balance.temperature.set_sensitive(proxy.profile.is_some());
-    state.sliders.balance.tint.set_sensitive(proxy.profile.is_some());
-
     let working_key = colour_key(&document);
     let inputs = render_inputs(&document);
     let working = render::to_working_space(&document, &proxy, &inputs);
@@ -101,7 +94,7 @@ pub(super) fn open_merged(state: &App, proxy: LinearImage, paths: Vec<PathBuf>) 
         faces_pending: false,
         people: Vec::new(),
         segmenting: false,
-        animal: None,
+        chips: None,
         draft: None,
         full_size,
         proxy: proxy.into(),

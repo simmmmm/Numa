@@ -202,7 +202,10 @@ CREATE TABLE IF NOT EXISTS photos (
     taken  INTEGER,
     rating INTEGER NOT NULL DEFAULT 0,
     flag   INTEGER NOT NULL DEFAULT 0,
-    edits  TEXT
+    edits  TEXT,
+    -- PERF-051: width over height, as the thumbnail has it; null until one
+    -- has been seen. What the grid lays a photograph out by.
+    aspect REAL
 );
 
 -- DOC-004: each photograph's history, so stepping back reaches past the moment
@@ -332,4 +335,16 @@ CREATE TABLE IF NOT EXISTS album_photos (
 -- The key leads with the album, so asking by photograph — a photograph's
 -- albums, the cascade when one is deleted — needs its own.
 CREATE INDEX IF NOT EXISTS album_photos_photo ON album_photos(photo_id);
+
+-- MASK-015: what the found-masks model named in a photograph (`masks::Chips`):
+-- the chips as JSON and the model's grid of classes, deflated, one byte a
+-- cell. `asked` is the framing and the model it was asked with; an answer
+-- asked otherwise is not read back. Derived: dropping the table costs a model
+-- run per photograph next time, and no work.
+CREATE TABLE IF NOT EXISTS found (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    asked    TEXT NOT NULL,
+    chips    TEXT NOT NULL,
+    grid     BLOB NOT NULL
+);
 "#;

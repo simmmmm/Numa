@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn build_editor_page(state: &App) -> gtk::Box {
     let page = state.editor_page.page.clone();
 
-    fill_header_end(state);
+    fill_header(state);
     page.append(&key_hint(
         state,
         "hint-editor-keys",
@@ -164,12 +164,9 @@ fn build_editor_filmstrip(state: &App) -> gtk::ScrolledWindow {
 
     let strip = state.filmstrip.scroller.clone();
     strip.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    install_filmstrip(state);
     strip.set_child(Some(&state.filmstrip.strip));
     strip.add_css_class("filmstrip");
-    state.filmstrip.strip.set_margin_top(6);
-    state.filmstrip.strip.set_margin_bottom(6);
-    state.filmstrip.strip.set_margin_start(8);
-    state.filmstrip.strip.set_margin_end(8);
 
     let wheel = gtk::EventControllerScroll::new(
         gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
@@ -196,6 +193,12 @@ fn build_editor_filmstrip(state: &App) -> gtk::ScrolledWindow {
         #[strong] state,
         move |_| schedule_thumbnails(&state)
     ));
+
+    strip.connect_map(glib::clone!(
+        #[strong] state,
+        move |_| schedule_thumbnails(&state)
+    ));
+    time_scrolling(&strip, &adjustment, "filmstrip");
     strip
 }
 
@@ -229,6 +232,14 @@ pub(super) fn build_crumbs(state: &App) -> gtk::Box {
     crumbs.append(&state.editor_page.library_crumb);
     crumbs.append(&crumb_arrow());
     crumbs.append(&state.editor_page.photo_crumb);
+
+    let info = &state.editor_page.info_button;
+    info.set_icon_name("help-about-symbolic");
+    info.set_tooltip_text(Some("Photo Info (I)"));
+    info.add_css_class("flat");
+    info.add_css_class("dim-label");
+    name_icon_buttons(info.upcast_ref());
+    crumbs.append(info);
 
     let mask = &state.editor_page.mask_crumb;
     mask.append(&crumb_arrow());
@@ -312,14 +323,43 @@ pub(super) fn refresh_crumbs(state: &App) {
     state.editor_page.photo_crumb.set_label(name.as_deref().unwrap_or("\u{2014}"));
 }
 
-pub(super) fn fill_header_end(state: &App) {
+pub(super) fn fill_header(state: &App) {
+    let start = state.editor_page.header_start.clone();
+    start.set_spacing(6);
+
+    let history = gtk::MenuButton::new();
+    history.set_icon_name("document-open-recent-symbolic");
+    history.set_tooltip_text(Some("History"));
+    history.set_popover(Some(&build_history(state)));
+    start.append(&history);
+
+    start.append(&build_bar_rating(state));
+
     let end = state.editor_page.header_end.clone();
     end.set_spacing(6);
     end.append(&build_history_group(state));
+    end.append(&build_before_group(state));
 
-    state.editor_page.before.set_label("Before");
-    state.editor_page.before.set_tooltip_text(Some("Show the frame as shot (hold Space)"));
-    state.editor_page.before.connect_toggled(glib::clone!(
+    let (group, export) = export_buttons(state, |state| export_now(state));
+    state.export.button.replace(Some(export));
+    refresh_export_button(state);
+    end.append(&group);
+
+    fill_info_popover(state);
+    install_photo_actions(state);
+    fill_photo_menu(state);
+    name_icon_buttons(start.upcast_ref());
+    name_icon_buttons(end.upcast_ref());
+}
+
+fn build_before_group(state: &App) -> gtk::Box {
+    let group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    group.add_css_class("linked");
+
+    let before = &state.editor_page.before;
+    before.set_label("Before");
+    before.set_tooltip_text(Some("Show the frame as shot (hold Space)"));
+    before.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
             if button.is_active() {
@@ -329,40 +369,30 @@ pub(super) fn fill_header_end(state: &App) {
             }
         }
     ));
-    end.append(&state.editor_page.before);
+    group.append(before);
 
-    let (group, export) = export_buttons(state, |state| export_now(state));
-    state.export.button.replace(Some(export));
-    refresh_export_button(state);
-    end.append(&group);
-
-    fill_info_popover(state);
-    let history = build_history(state);
-    for popover in [&state.editor_page.info_popover, &history] {
-        popover.set_parent(&end);
-        popover.set_position(gtk::PositionType::Bottom);
-    }
-    install_photo_actions(state, &history);
-    fill_photo_menu(state);
-    name_icon_buttons(end.upcast_ref());
-}
-
-pub(super) fn show_from_header(state: &App, popover: &gtk::Popover) {
-    let end = &state.editor_page.header_end;
-    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(end.width() - 1, 0, 1, end.height())));
-    popover.popup();
+    let beside = gio::Menu::new();
+    beside.append(Some("Keep as Reference"), Some("editor.reference"));
+    beside.append(Some("Compare with Camera"), Some("editor.camera"));
+    let more = gtk::MenuButton::new();
+    more.set_icon_name("pan-down-symbolic");
+    more.set_tooltip_text(Some("Compare beside it: a reference frame, or the camera's own rendering"));
+    more.set_menu_model(Some(&beside));
+    more.add_css_class("before-more");
+    group.append(&more);
+    group
 }
 
 pub(super) fn toggle_info(state: &App) {
-    let info = &state.editor_page.info_popover;
-    if info.is_visible() {
+    let info = &state.editor_page.info_button;
+    if info.is_active() {
         info.popdown();
     } else {
-        show_from_header(state, info);
+        info.popup();
     }
 }
 
-fn install_photo_actions(state: &App, history: &gtk::Popover) {
+fn install_photo_actions(state: &App) {
     let actions = &state.editor_page.actions;
 
     let copy = gio::SimpleAction::new("copy-settings", None);
@@ -386,21 +416,6 @@ fn install_photo_actions(state: &App, history: &gtk::Popover) {
     wire_reference_toggles(state);
     actions.add_action(&gio::PropertyAction::new("reference", &state.reference.button, "active"));
     actions.add_action(&gio::PropertyAction::new("camera", &state.reference.camera_button, "active"));
-
-    let steps = gio::SimpleAction::new("history", None);
-    steps.connect_activate(glib::clone!(
-        #[strong] state,
-        #[weak] history,
-        move |_, _| show_from_header(&state, &history)
-    ));
-    actions.add_action(&steps);
-
-    let info = gio::SimpleAction::new("info", None);
-    info.connect_activate(glib::clone!(
-        #[strong] state,
-        move |_, _| toggle_info(&state)
-    ));
-    actions.add_action(&info);
 }
 
 fn keyed(label: &str, action: &str, key: &str) -> gio::MenuItem {
@@ -410,11 +425,8 @@ fn keyed(label: &str, action: &str, key: &str) -> gio::MenuItem {
 }
 
 fn fill_photo_menu(state: &App) {
-    let photo = &state.editor_page.photo_menu;
-
     let edit = gio::Menu::new();
     edit.append_item(&keyed("Copy Settings", "editor.copy-settings", "<Control>c"));
-    edit.append_submenu(Some("Rating"), &build_rating_menu());
     edit.append_submenu(Some("Zoom"), &build_zoom_menu());
     let guides = gio::Menu::new();
     for (label, value) in [("None", 0u8), ("Thirds", 1), ("Grid", 2)] {
@@ -423,27 +435,7 @@ fn fill_photo_menu(state: &App) {
         guides.append_item(&item);
     }
     edit.append_submenu(Some("Guides"), &guides);
-
-    let beside = gio::Menu::new();
-    beside.append(Some("Keep as Reference"), Some("editor.reference"));
-    beside.append(Some("Compare with Camera"), Some("editor.camera"));
-
-    let look = gio::Menu::new();
-    look.append(Some("History"), Some("editor.history"));
-    look.append_item(&keyed("Photo Info", "editor.info", "i"));
-
-    for (at, section) in [edit, beside, look].iter().enumerate() {
-        photo.insert_section(at as i32, None, section);
-    }
-}
-
-pub(super) fn write_rating_item(state: &App, said: &str) {
-    let Some(edit) = state.editor_page.photo_menu.item_link(0, gio::MENU_LINK_SECTION).and_downcast::<gio::Menu>() else {
-        return;
-    };
-    edit.remove(1);
-    let label = if said.is_empty() { "Rating".to_string() } else { format!("Rating \u{00b7} {said}") };
-    edit.insert_submenu(1, Some(&label), &build_rating_menu());
+    state.editor_page.photo_menu.insert_section(0, None, &edit);
 }
 
 fn fill_info_popover(state: &App) {
@@ -458,31 +450,9 @@ fn fill_info_popover(state: &App) {
 
     facts.set_size_request(380, -1);
     scroller.set_child(Some(&facts));
-    state.editor_page.info_popover.set_child(Some(&scroller));
-}
-
-fn build_rating_menu() -> gio::Menu {
-    let ratings = gio::Menu::new();
-    let stars = gio::Menu::new();
-    for value in (0..=5i32).rev() {
-        let label = match value {
-            0 => "No rating".to_string(),
-            n => format!("{} {}", "\u{2605}".repeat(n as usize), n),
-        };
-        let item = keyed(&label, "win.photo-rate", &value.to_string());
-        item.set_action_and_target_value(Some("win.photo-rate"), Some(&value.to_variant()));
-        stars.append_item(&item);
-    }
-    ratings.append_section(None, &stars);
-
-    let flags = gio::Menu::new();
-    for (label, which, key) in [("Pick", "pick", "p"), ("Reject", "reject", "x"), ("Clear flag", "none", "u")] {
-        let item = keyed(label, "win.photo-flag", key);
-        item.set_action_and_target_value(Some("win.photo-flag"), Some(&which.to_variant()));
-        flags.append_item(&item);
-    }
-    ratings.append_section(None, &flags);
-    ratings
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&scroller));
+    state.editor_page.info_button.set_popover(Some(&popover));
 }
 
 fn build_zoom_menu() -> gio::Menu {
@@ -498,15 +468,28 @@ fn build_zoom_menu() -> gio::Menu {
     levels
 }
 
-pub(super) fn zoom_badge(state: &App) -> gtk::Label {
-    let badge = state.zooming.label.clone();
+pub(super) fn zoom_badge(state: &App) -> gtk::Box {
+    let badge = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     badge.add_css_class("osd");
     badge.add_css_class("zoom-badge");
     badge.set_halign(gtk::Align::Center);
     badge.set_valign(gtk::Align::Start);
     badge.set_margin_top(12);
     badge.set_can_target(false);
-    badge.set_visible(false);
+    let (label, spinner) = (state.zooming.label.clone(), state.zooming.waiting.spinner.clone());
+    label.set_visible(false);
+    badge.append(&spinner);
+    badge.append(&label);
+
+    let fit = glib::clone!(
+        #[weak] badge,
+        #[weak] label,
+        #[weak] spinner,
+        move || badge.set_visible(label.get_visible() || spinner.get_visible())
+    );
+    fit();
+    label.connect_visible_notify(glib::clone!(#[strong] fit, move |_| fit()));
+    spinner.connect_visible_notify(move |_| fit());
     badge
 }
 
@@ -551,10 +534,18 @@ pub(super) struct State {
     pub(super) library_crumb: gtk::Button,
     pub(super) photo_crumb: gtk::Button,
 
+    pub(super) header_start: gtk::Box,
     pub(super) header_end: gtk::Box,
     pub(super) photo_menu: gio::Menu,
     pub(super) actions: gio::SimpleActionGroup,
-    pub(super) info_popover: gtk::Popover,
+
+    pub(super) rating: gtk::Box,
+    pub(super) stars: Rc<Vec<gtk::Button>>,
+    pub(super) pick: gtk::Button,
+    pub(super) reject: gtk::Button,
+    pub(super) shown: Rc<Cell<u8>>,
+
+    pub(super) info_button: gtk::MenuButton,
     pub(super) before: gtk::ToggleButton,
 }
 
@@ -573,10 +564,16 @@ impl State {
             banner_eye: gtk::ToggleButton::new(),
             library_crumb: gtk::Button::new(),
             photo_crumb: gtk::Button::new(),
+            header_start: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             header_end: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             photo_menu: gio::Menu::new(),
             actions: gio::SimpleActionGroup::new(),
-            info_popover: gtk::Popover::new(),
+            rating: gtk::Box::new(gtk::Orientation::Horizontal, 0),
+            stars: Rc::new((1..=5).map(|_| gtk::Button::new()).collect()),
+            pick: gtk::Button::new(),
+            reject: gtk::Button::new(),
+            shown: Rc::new(Cell::new(0)),
+            info_button: gtk::MenuButton::new(),
             before: gtk::ToggleButton::new(),
         }
     }

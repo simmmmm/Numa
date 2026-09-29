@@ -6,7 +6,7 @@ pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
     let folder_row = |title: &str, dir: PathBuf| folder_row(window, title, dir);
     dialog.add(&general_page(state, &dialog));
     dialog.add(&addons_page(state, &dialog, &folder_row));
-    dialog.add(&storage_page(&folder_row));
+    dialog.add(&storage_page(state, &folder_row));
     dialog.present(Some(window));
 }
 
@@ -105,10 +105,11 @@ fn addons_page(
     page
 }
 
-fn storage_page(folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::PreferencesPage {
+fn storage_page(state: &App, folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     page.set_title("Storage");
     page.set_icon_name(Some("drive-harddisk-symbolic"));
+    page.add(&previews_group(state));
 
     let storage = adw::PreferencesGroup::new();
     storage.set_title("Numa's Files");
@@ -147,6 +148,100 @@ fn storage_page(folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::Pr
     )));
     page.add(&uninstall);
     page
+}
+
+const PREVIEW_STOPS: [u64; 7] = [0, 512 << 20, 1 << 30, 2 << 30, 5 << 30, 10 << 30, 20 << 30];
+const PREVIEW_BUDGET: &str = "preview-budget";
+
+pub(super) fn start_preview_budget(catalog: &Catalog) {
+    if let Some(bytes) = catalog.setting(PREVIEW_BUDGET).and_then(|bytes| bytes.parse().ok()) {
+        numa::io::previews::set_budget(bytes);
+    }
+}
+
+fn previews_group(state: &App) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Previews");
+    group.set_description(Some(
+        "A photograph opened before opens from its developed preview instead of being developed again. \
+         They are kept in each library's own .numa folder, on the drive with the photographs.",
+    ));
+    let row = adw::ActionRow::new();
+    row.set_title("Room in each library");
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, (PREVIEW_STOPS.len() - 1) as f64, 1.0);
+    scale.set_round_digits(0);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk::PositionType::Left);
+    scale.set_format_value_func(|_, at| match PREVIEW_STOPS[at.round() as usize] {
+        0 => "Off".to_string(),
+        bytes => format!("{} GB", bytes as f64 / (1u64 << 30) as f64),
+    });
+    for at in 0..PREVIEW_STOPS.len() {
+        scale.add_mark(at as f64, gtk::PositionType::Bottom, None);
+    }
+    scale.set_width_request(240);
+    scale.set_valign(gtk::Align::Center);
+    let now = numa::io::previews::budget();
+    let at = PREVIEW_STOPS.iter().position(|stop| *stop >= now).unwrap_or(PREVIEW_STOPS.len() - 1);
+    scale.set_value(at as f64);
+    row.add_suffix(&scale);
+    show_previews(state, &row);
+
+    scale.connect_value_changed(glib::clone!(
+        #[strong] state,
+        #[weak] row,
+        move |scale| {
+
+            let at = scale.value().round();
+            if scale.value() != at {
+                scale.set_value(at);
+                return;
+            }
+            let bytes = PREVIEW_STOPS[at as usize];
+            if bytes == numa::io::previews::budget() {
+                return;
+            }
+            numa::io::previews::set_budget(bytes);
+            let _ = state.catalog.set_setting(PREVIEW_BUDGET, &bytes.to_string());
+
+            let libraries: Vec<PathBuf> = state.libraries.all.borrow().iter().map(|library| library.path.clone()).collect();
+            glib::spawn_future_local(glib::clone!(
+                #[strong] state,
+                #[weak] row,
+                async move {
+                    let _ = gio::spawn_blocking(move || {
+                        for library in libraries {
+                            numa::io::previews::trim(&library.join(numa::io::catalog::LIBRARY_DIR).join("previews"), bytes);
+                        }
+                    })
+                    .await;
+                    show_previews(&state, &row);
+                }
+            ));
+        }
+    ));
+    group.add(&row);
+    group
+}
+
+fn show_previews(state: &App, row: &adw::ActionRow) {
+    let Some(library) = state.libraries.current.borrow().as_ref().map(|library| library.path.clone()) else {
+        row.set_subtitle("Per library · no library is open");
+        return;
+    };
+    let dir = library.join(numa::io::catalog::LIBRARY_DIR).join("previews");
+    glib::spawn_future_local(glib::clone!(
+        #[weak] row,
+        async move {
+            let Ok((bytes, count)) = gio::spawn_blocking(move || numa::io::previews::usage(&dir)).await else { return };
+            row.set_subtitle(&match count {
+                0 if numa::io::previews::budget() == 0 => "Per library · off, so none are kept".to_string(),
+                0 => "Per library · none kept in this one yet".to_string(),
+                1 => format!("Per library · {} used here · one photograph", glib::format_size(bytes)),
+                _ => format!("Per library · {} used here · {count} photographs", glib::format_size(bytes)),
+            });
+        }
+    ));
 }
 
 fn opening_group(dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {

@@ -18,11 +18,94 @@ impl OpenPhoto {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    Presets,
+    Luts,
+}
+
+const NO_LUT: &str = "None";
+
+impl Kind {
+    fn names(self) -> Vec<String> {
+        match self {
+            Kind::Presets => numa::io::presets::list(&numa::io::presets::dir()),
+            Kind::Luts => std::iter::once(NO_LUT.to_string()).chain(numa::io::luts::list()).collect(),
+        }
+    }
+
+    pub(super) fn folder(self) -> PathBuf {
+        match self {
+            Kind::Presets => numa::io::presets::dir(),
+            Kind::Luts => numa::core::paths::luts_dir(),
+        }
+    }
+
+    fn file(self, name: &str) -> Option<PathBuf> {
+        match self {
+            Kind::Presets => Some(self.folder().join(format!("{name}.json"))),
+            Kind::Luts if name == NO_LUT => None,
+            Kind::Luts => Some(self.folder().join(name)),
+        }
+    }
+
+    pub(super) fn title(self, name: &str) -> (String, String) {
+        match (self, name.split_once('/')) {
+            (Kind::Presets, Some((group, title))) => (title.to_string(), group.to_string()),
+            (Kind::Presets, None) => (name.to_string(), String::new()),
+            (Kind::Luts, _) => (name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_string(), String::new()),
+        }
+    }
+
+    fn on(self, photo: &OpenPhoto, name: &str) -> Option<Document> {
+        match self {
+            Kind::Presets => {
+                let preset = numa::io::presets::load(&self.folder(), name).ok()?;
+                let mut document = photo.preset_base().clone();
+                document.copy_from(&preset.document, preset.parts);
+                Some(document)
+            }
+            Kind::Luts => {
+                let mut document = photo.document.clone();
+                document.lut = (name != NO_LUT).then(|| numa::core::lut::LutChoice { name: name.to_string(), amount: 100.0 });
+                Some(document)
+            }
+        }
+    }
+
+    fn apply(self, state: &App, name: &str) {
+        match self {
+            Kind::Presets => {
+                let label = name.rsplit('/').next().unwrap_or(name).to_string();
+                match numa::io::presets::load(&self.folder(), name) {
+                    Ok(preset) => apply_edit(state, &preset.document, preset.parts, &format!("“{label}” applied to"), Some(&label)),
+                    Err(err) => state.toast(&err),
+                }
+            }
+            Kind::Luts => lut::choose(state, (name != NO_LUT).then_some(name)),
+        }
+    }
+
+    fn refresh(self, state: &App) {
+        match self {
+            Kind::Presets => fill_presets_page(state),
+            Kind::Luts => lut::fill(state),
+        }
+    }
+}
+
 pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> gtk::Box {
-    let names = numa::io::presets::list(&numa::io::presets::dir());
+    browser(state, Kind::Presets, done)
+}
+
+pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static) -> gtk::Box {
+    let names = kind.names();
     let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search presets and groups"));
+    search.set_placeholder_text(Some(match kind {
+        Kind::Presets => "Search presets and groups",
+        Kind::Luts => "Search LUTs",
+    }));
     column.append(&search);
 
     if names.is_empty() {
@@ -44,7 +127,7 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
         let filtered = gtk::FilterListModel::new(Some(model), Some(filter));
         let selection = gtk::NoSelection::new(Some(filtered.clone()));
 
-        let factory = card_factory(state);
+        let factory = card_factory(state, kind);
         factory.connect_bind(glib::clone!(
             #[strong] state,
             move |_, item| {
@@ -53,10 +136,7 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
             let Some(row) = item.child().and_downcast::<gtk::Box>() else { return };
 
             row.set_widget_name(&name);
-            let (group, title) = match name.split_once('/') {
-                Some((group, title)) => (group.to_string(), title.to_string()),
-                None => (String::new(), name.to_string()),
-            };
+            let (title, group) = kind.title(&name);
             if let Some(label) = row.first_child().and_then(|card| card.next_sibling()).and_downcast::<gtk::Label>() {
                 label.set_text(&title);
             }
@@ -67,7 +147,7 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
             let Some(card) = row.first_child().and_downcast::<gtk::Picture>() else { return };
 
             card.set_paintable(gtk::gdk::Paintable::NONE);
-            fill_card(&state, &card, &name);
+            fill_card(&state, kind, &card, &name);
         }));
 
         let list = gtk::GridView::new(Some(selection), Some(factory));
@@ -83,11 +163,7 @@ pub(super) fn preset_browser(state: &App, done: impl Fn() + Clone + 'static) -> 
                     return;
                 };
                 done();
-                let label = name.rsplit('/').next().unwrap_or(&name).to_string();
-                match numa::io::presets::load(&numa::io::presets::dir(), &name) {
-                    Ok(preset) => apply_edit(&state, &preset.document, preset.parts, &format!("“{label}” applied to"), Some(&label)),
-                    Err(err) => state.toast(&err),
-                }
+                kind.apply(&state, &name);
             }
         );
         list.connect_activate({
@@ -123,7 +199,7 @@ thread_local! {
 
 const HOVER_REST: u64 = 160;
 
-pub(super) fn preview_preset(state: &App, name: &str) {
+pub(super) fn preview_preset(state: &App, kind: Kind, name: &str) {
     if name.is_empty() || state.open.borrow().is_none() {
         return;
     }
@@ -140,16 +216,11 @@ pub(super) fn preview_preset(state: &App, name: &str) {
                 if HOVER.with(|hover| hover.get()) != booking {
                     return;
                 }
-                let Ok(preset) = numa::io::presets::load(&numa::io::presets::dir(), &name) else {
-                    return;
-                };
                 let paintable = {
                     let open = state.open.borrow();
                     let Some(photo) = open.as_ref() else { return };
 
-                    let mut document =
-                        photo.preset_base().clone();
-                    document.copy_from(&preset.document, preset.parts);
+                    let Some(document) = kind.on(photo, &name) else { return };
 
                     let scale = photo.proxy.width.max(photo.proxy.height) as f32
                         / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
@@ -163,7 +234,7 @@ pub(super) fn preview_preset(state: &App, name: &str) {
                         }
                     };
                     crate::ui::pixel_paintable::PixelPaintable::new(texture_from(
-                        render::apply_stack(&document, working, scale),
+                        &render::apply_stack(&document, working, scale),
                     ))
                 };
 
@@ -194,10 +265,7 @@ pub(super) fn edit_here(state: &App) -> Result<Document, String> {
     if let Some(photo) = state.open.borrow().as_ref() {
         return Ok(photo.document.clone());
     }
-    let id = selected_cards(state)
-        .first()
-        .and_then(|child| child.widget_name().parse::<i64>().ok())
-        .ok_or("Select a photo to make a preset from")?;
+    let id = selected_ids(state).first().copied().ok_or("Select a photo to make a preset from")?;
     state.catalog.load_edits(id)?.ok_or_else(|| "That photo has no edits to keep".to_string())
 }
 
@@ -226,6 +294,7 @@ pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindo
         move |_, _| {
             let dialog = gtk::FileDialog::new();
             dialog.set_title("Import presets");
+            start_in_downloads(&dialog);
             let filter = gtk::FileFilter::new();
             filter.set_name(Some("Presets — Numa, Lightroom, Capture One"));
             for suffix in ["json", "xmp", "lrtemplate", "costyle", "costylepack"] {
@@ -248,6 +317,7 @@ pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindo
         move |_, _| {
             let dialog = gtk::FileDialog::new();
             dialog.set_title("Import a folder of presets");
+            start_in_downloads(&dialog);
             let (state, parent) = (state.clone(), window.clone());
             dialog.select_multiple_folders(Some(&window), gio::Cancellable::NONE, move |chosen| {
                 let Ok(folders) = chosen else { return };
@@ -335,7 +405,7 @@ fn import_presets(state: &App, window: &adw::ApplicationWindow, paths: Vec<PathB
     });
 }
 
-fn card_factory(state: &App) -> gtk::SignalListItemFactory {
+fn card_factory(state: &App, kind: Kind) -> gtk::SignalListItemFactory {
 let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(glib::clone!(
         #[strong] state,
@@ -368,13 +438,14 @@ let factory = gtk::SignalListItemFactory::new();
         hover.connect_enter(glib::clone!(
             #[strong] state,
             #[weak] row,
-            move |_, _, _| preview_preset(&state, &row.widget_name())
+            move |_, _, _| preview_preset(&state, kind, &row.widget_name())
         ));
         hover.connect_leave(glib::clone!(
             #[strong] state,
             move |_| end_preview(&state)
         ));
         row.add_controller(hover);
+        row.add_controller(throw_away(&state, kind, &row));
 
         item.downcast_ref::<gtk::ListItem>().map(|item| item.set_child(Some(&row)));
     }));
@@ -382,20 +453,71 @@ let factory = gtk::SignalListItemFactory::new();
     factory
 }
 
+pub(super) fn start_in_downloads(dialog: &gtk::FileDialog) {
+    let folder = glib::user_special_dir(glib::UserDirectory::Downloads)
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(glib::home_dir);
+    dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+}
+
+fn throw_away(state: &App, kind: Kind, row: &gtk::Box) -> gtk::GestureClick {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(glib::clone!(
+        #[strong] state,
+        #[weak] row,
+        move |gesture, _, x, y| {
+            let name = row.widget_name().to_string();
+            let Some(file) = kind.file(&name) else { return };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let button = gtk::Button::with_label("Move to Trash");
+            button.add_css_class("flat");
+            let popover = gtk::Popover::new();
+            popover.set_child(Some(&button));
+            popover.set_parent(&row);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.connect_closed(|popover| popover.unparent());
+            button.connect_clicked(glib::clone!(
+                #[strong] state,
+                #[weak] popover,
+                move |_| {
+                    popover.popdown();
+                    let (title, _) = kind.title(&name);
+                    match gio::File::for_path(&file).trash(gio::Cancellable::NONE) {
+                        Ok(()) => state.toast(&format!("“{title}” moved to the Trash")),
+                        Err(err) => state.toast(&format!("Could not move “{title}” to the Trash: {err}")),
+                    }
+                    kind.refresh(&state);
+                }
+            ));
+            popover.popup();
+        }
+    ));
+    click
+}
+
 const CARD: (i32, i32) = (130, 87);
 const CARD_EDGE: u32 = 360;
 
 thread_local! {
 
-    static CANVAS: RefCell<Option<(String, LinearImage)>> = const { RefCell::new(None) };
+    static CANVAS: RefCell<Option<(String, Arc<LinearImage>)>> = const { RefCell::new(None) };
 
     static CARDS: RefCell<HashMap<String, gtk::gdk::Texture>> = RefCell::new(HashMap::new());
+
+    static WAITING: RefCell<std::collections::VecDeque<(Kind, String, glib::WeakRef<gtk::Picture>)>> = const { RefCell::new(std::collections::VecDeque::new()) };
+    static DRAWING: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(super) fn forget_cards(state: &App) {
     let key = state.open.borrow().as_ref().map(|photo| {
         let stack = photo.preset_base();
-        format!("{}\u{1f}{}", source_key(&photo.source), serde_json::to_string(stack).unwrap_or_default())
+        format!(
+            "{}\u{1f}{}\u{1f}{}",
+            source_key(&photo.source),
+            serde_json::to_string(stack).unwrap_or_default(),
+            serde_json::to_string(&photo.document).unwrap_or_default()
+        )
     });
     let stale = CANVAS.with(|canvas| match (&key, canvas.borrow().as_ref()) {
         (Some(key), Some((was, _))) => key != was,
@@ -415,56 +537,64 @@ fn source_key(source: &Source) -> String {
     }
 }
 
-fn render_card(state: &App, name: &str) -> Option<gtk::gdk::Texture> {
-    if let Some(texture) = CARDS.with(|cards| cards.borrow().get(name).cloned()) {
-        return Some(texture);
-    }
-    let preset = numa::io::presets::load(&numa::io::presets::dir(), name).ok()?;
-
+fn card_job(state: &App, kind: Kind, name: &str) -> Option<(String, Document, Arc<LinearImage>)> {
     let open = state.open.borrow();
     let photo = open.as_ref()?;
     let key = format!(
-        "{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}",
         source_key(&photo.source),
-        serde_json::to_string(photo.preset_base()).unwrap_or_default()
+        serde_json::to_string(photo.preset_base()).unwrap_or_default(),
+        serde_json::to_string(&photo.document).unwrap_or_default()
     );
     let small = CANVAS.with(|canvas| {
         let mut canvas = canvas.borrow_mut();
         if canvas.as_ref().map(|(was, _)| was != &key).unwrap_or(true) {
             let small = photo.proxy.downscaled(CARD_EDGE).unwrap_or_else(|| (*photo.proxy).clone());
-            *canvas = Some((key, small));
+            *canvas = Some((key.clone(), Arc::new(small)));
         }
         canvas.as_ref().map(|(_, image)| image.clone())
     })?;
-
-    let mut document = photo.preset_base().clone();
-    document.copy_from(&preset.document, preset.parts);
-    let rendered = render::develop(&document, &small, &render_inputs(&document));
-    let texture = texture_from(rendered);
-    CARDS.with(|cards| cards.borrow_mut().insert(name.to_string(), texture.clone()));
-    Some(texture)
+    Some((key, kind.on(photo, name)?, small))
 }
 
-fn fill_card(state: &App, card: &gtk::Picture, name: &str) {
-    if let Some(texture) = CARDS.with(|cards| cards.borrow().get(name).cloned()) {
+fn card_key(kind: Kind, name: &str) -> String {
+    format!("{}\u{1f}{name}", kind as u8)
+}
+
+fn fill_card(state: &App, kind: Kind, card: &gtk::Picture, name: &str) {
+    if let Some(texture) = CARDS.with(|cards| cards.borrow().get(&card_key(kind, name)).cloned()) {
         card.set_paintable(Some(&texture));
         return;
     }
-    let name = name.to_string();
-    glib::idle_add_local_once(glib::clone!(
-        #[strong] state,
-        #[weak] card,
-        move || {
-            let Some(row) = card.parent() else { return };
-            if row.widget_name() != name {
-                return;
+    WAITING.with_borrow_mut(|waiting| waiting.push_back((kind, name.to_string(), card.downgrade())));
+    if DRAWING.replace(true) {
+        return;
+    }
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        while let Some((kind, name, card)) = WAITING.with_borrow_mut(|waiting| waiting.pop_front()) {
+            let shows = |card: &gtk::Picture| card.parent().is_some_and(|row| row.widget_name() == name);
+            let Some(card) = card.upgrade().filter(shows) else { continue };
+            if let Some(texture) = CARDS.with(|cards| cards.borrow().get(&card_key(kind, &name)).cloned()) {
+                card.set_paintable(Some(&texture));
+                continue;
             }
+            let Some((key, document, small)) = card_job(&state, kind, &name) else { continue };
+            let Ok(rendered) = gio::spawn_blocking(move || render::develop(&document, &*small, &render_inputs(&document))).await else {
+                continue;
+            };
 
-            if let Some(texture) = timed("a preset card", || render_card(&state, &name)) {
+            if CANVAS.with(|canvas| canvas.borrow().as_ref().map(|(was, _)| was != &key).unwrap_or(true)) {
+                continue;
+            }
+            let texture = texture_from(&rendered);
+            CARDS.with(|cards| cards.borrow_mut().insert(card_key(kind, &name), texture.clone()));
+            if shows(&card) {
                 card.set_paintable(Some(&texture));
             }
         }
-    ));
+        DRAWING.set(false);
+    });
 }
 
 pub(super) fn fill_presets_page(state: &App) {

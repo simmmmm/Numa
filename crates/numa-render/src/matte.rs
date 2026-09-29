@@ -25,9 +25,13 @@ const INWARD: usize = 8;
 const TILE: usize = 1024;
 
 #[cfg(not(target_os = "ios"))]
-const BIREFNET: &str = "birefnet.onnx";
+const BIREFNET: &[&str] = &["birefnet_f32.onnx", "birefnet.onnx"];
 #[cfg(target_os = "ios")]
-const BIREFNET: &str = "birefnet_lite_512.onnx";
+const BIREFNET: &[&str] = &["birefnet_lite_512.onnx"];
+
+fn birefnet() -> &'static str {
+    BIREFNET.iter().copied().find(|name| numa_core::paths::model_file(&[name]).is_some()).unwrap_or(BIREFNET[0])
+}
 
 const ISNET: [&str; 2] = ["isnet.onnx", "isnet-general-use.onnx"];
 
@@ -46,7 +50,7 @@ enum Subject {
 impl Subject {
     fn file(self) -> &'static str {
         match self {
-            Subject::BiRefNet => BIREFNET,
+            Subject::BiRefNet => birefnet(),
             Subject::IsNet => ISNET[0],
         }
     }
@@ -90,11 +94,11 @@ fn isnet_kept(allowed: bool, on_disk: bool) -> bool {
 }
 
 fn chosen() -> Option<Subject> {
-    choose(numa_core::paths::model_file(&[BIREFNET]).is_some(), isnet_here(), room())
+    choose(numa_core::paths::model_file(BIREFNET).is_some(), isnet_here(), room())
 }
 
 pub fn is_installed() -> bool {
-    numa_core::paths::model_file(&[BIREFNET]).is_some() || isnet_here()
+    numa_core::paths::model_file(BIREFNET).is_some() || isnet_here()
 }
 
 pub fn answering() -> String {
@@ -103,7 +107,7 @@ pub fn answering() -> String {
 
 fn named(chosen: Option<Subject>, isnet: bool) -> String {
     match chosen {
-        Some(Subject::BiRefNet) if isnet => format!("{BIREFNET}+{}", ISNET[0]),
+        Some(Subject::BiRefNet) if isnet => format!("{}+{}", birefnet(), ISNET[0]),
         Some(subject) => subject.file().to_string(),
         None => String::new(),
     }
@@ -114,7 +118,7 @@ fn load(subject: Subject) -> Option<std::sync::Arc<Model>> {
     static ISNET_PLAN: numa_infer::Kept = numa_infer::Kept::new();
     match subject {
         Subject::BiRefNet => {
-            let path = numa_core::paths::model_file(&[BIREFNET])?;
+            let path = numa_core::paths::model_file(BIREFNET)?;
             BIREFNET_PLAN.get_or_init(|| {
 
                 if let Err(err) = numa_infer::rewrite::prepare(&path) {
@@ -124,6 +128,12 @@ fn load(subject: Subject) -> Option<std::sync::Arc<Model>> {
 
                 for old in ISNET.iter().filter_map(|name| numa_core::paths::model_file(&[name])) {
                     let _ = std::fs::remove_file(old);
+                }
+
+                if path.ends_with(BIREFNET[0]) {
+                    for old in BIREFNET[1..].iter().filter_map(|name| numa_core::paths::model_file(&[name])) {
+                        let _ = std::fs::remove_file(old);
+                    }
                 }
                 Some(model)
             })
@@ -138,14 +148,25 @@ fn load(subject: Subject) -> Option<std::sync::Arc<Model>> {
 const VITMATTE: &str = "vitmatte_small.onnx";
 
 #[cfg_attr(target_vendor = "apple", allow(dead_code))]
-fn vitmatte() -> Option<std::sync::Arc<Model>> {
+fn vitmatte(size: (usize, usize)) -> Option<std::sync::Arc<Model>> {
     static PLAN: numa_infer::Kept = numa_infer::Kept::new();
-    PLAN.get_or_init(|| {
-        let model = Model::load(&numa_core::paths::model_file(&[VITMATTE])?)?;
+    let load = || {
+        let model = Model::load_sized(&numa_core::paths::model_file(&[VITMATTE])?, size)?;
 
         let _ = std::fs::remove_file(numa_core::paths::models_dir().join("birefnet_lite_matting.onnx"));
         Some(model)
-    })
+    };
+    let plan = PLAN.get_or_init(load)?;
+    if plan.answers(size) {
+        return Some(plan);
+    }
+    PLAN.release();
+    PLAN.get_or_init(load)
+}
+
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn tile(width: usize, height: usize) -> (usize, usize) {
+    (TILE.min(height / 32 * 32), TILE.min(width / 32 * 32))
 }
 
 pub fn refine(photo: &RgbImage, coarse: &Alpha) -> Option<Alpha> {
@@ -155,8 +176,10 @@ pub fn refine(photo: &RgbImage, coarse: &Alpha) -> Option<Alpha> {
 pub fn finer(frame: &RgbImage, matte: &Alpha) -> Option<Alpha> {
     #[cfg(not(target_vendor = "apple"))]
     {
-        let plan = vitmatte()?;
-        by_vitmatte(&plan, &Band::of(frame, matte)?)
+        numa_core::paths::model_file(&[VITMATTE])?;
+        let band = Band::of(frame, matte)?;
+        let plan = vitmatte(tile(band.width, band.height))?;
+        by_vitmatte(&plan, &band)
     }
     #[cfg(target_vendor = "apple")]
     {
@@ -261,8 +284,7 @@ impl<'a> Band<'a> {
 fn by_vitmatte(plan: &Model, band: &Band) -> Option<Alpha> {
     let (width, height) = (band.width, band.height);
     let trimap = band.trimap();
-    let side_w = TILE.min(width / 32 * 32);
-    let side_h = TILE.min(height / 32 * 32);
+    let (side_h, side_w) = tile(width, height);
     let mut answers = Vec::new();
     for (x, y) in band.tiles(side_w, side_h) {
         let mut input = ndarray::Array4::<f32>::zeros((1, 4, side_h, side_w));
@@ -841,8 +863,16 @@ mod tests {
             let photo = image::open(&path).unwrap().to_rgb8();
             let started = std::time::Instant::now();
             let found = subject(&photo, (photo.width() / 4) as usize, (photo.height() / 4) as usize);
+            let took = started.elapsed();
+
+            if let (Ok(out), Some(alpha)) = (std::env::var("OUT"), found.as_ref()) {
+                let grey = image::GrayImage::from_fn(alpha.width as u32, alpha.height as u32, |x, y| {
+                    image::Luma([(alpha.data[y as usize * alpha.width + x as usize].clamp(0.0, 1.0) * 255.0).round() as u8])
+                });
+                grey.save(std::path::Path::new(&out).join(path.file_name().unwrap()).with_extension("png")).unwrap();
+            }
             let covered = found.map(|alpha| alpha.data.iter().sum::<f32>() / alpha.data.len() as f32);
-            println!("{}: {covered:?} in {:.0?}", path.display(), started.elapsed());
+            println!("{}: {covered:?} in {took:.0?}", path.display());
         }
     }
 
@@ -850,8 +880,7 @@ mod tests {
     #[ignore]
     fn refine_edge_candidates() {
         let (Ok(frames), Ok(method)) = (std::env::var("FRAMES"), std::env::var("METHOD")) else { return };
-        let plan = (method == "vitmatte")
-            .then(|| Model::load(std::path::Path::new(&std::env::var("MODEL").expect("MODEL"))).expect("loads"));
+        let model = std::env::var("MODEL");
         for path in frames.split(':') {
             let frame = image::open(path).unwrap().to_rgb8();
             let started = std::time::Instant::now();
@@ -861,9 +890,13 @@ mod tests {
                     let grey = image::open(path.replace("-frame.png", "-coarse.png")).unwrap().to_luma8();
                     let coarse = Alpha::new(grey.width() as usize, grey.height() as usize, grey.pixels().map(|p| p[0] as f32 / 255.0).collect());
                     let band = Band::of(&frame, &coarse).expect("a band");
-                    match &plan {
-                        Some(plan) => by_vitmatte(plan, &band).expect("an answer"),
-                        None => by_closed_form(&band),
+                    match method.as_str() {
+                        "vitmatte" => {
+                            let size = tile(band.width, band.height);
+                            let plan = Model::load_sized(std::path::Path::new(model.as_ref().expect("MODEL")), size).expect("loads");
+                            by_vitmatte(&plan, &band).expect("an answer")
+                        }
+                        _ => by_closed_form(&band),
                     }
                 }
             };
@@ -900,7 +933,7 @@ mod tests {
             .collect());
         let band = Band::of(&frame, &coarse).expect("a band");
         let mut answers = vec![("closed form", by_closed_form(&band))];
-        match vitmatte() {
+        match vitmatte(tile(side, side)) {
             Some(plan) => answers.push(("ViTMatte", by_vitmatte(&plan, &band).expect("an answer"))),
             None => eprintln!("no {VITMATTE}: only the closed form"),
         }
@@ -966,7 +999,7 @@ mod tests {
         assert_eq!(choose(true, isnet, Some(ROOM - 1)), None);
         assert_eq!(choose(false, isnet, None), None);
         assert_eq!(after_declined(Subject::BiRefNet, isnet, None), None);
-        assert_eq!(named(Some(Subject::BiRefNet), isnet), BIREFNET);
+        assert_eq!(named(Some(Subject::BiRefNet), isnet), birefnet());
 
         assert!(isnet_kept(true, true));
         assert_eq!(ISNET_ALLOWED, !cfg!(target_vendor = "apple"));
@@ -974,8 +1007,8 @@ mod tests {
 
     #[test]
     fn the_key_names_who_can_answer() {
-        assert_eq!(named(Some(Subject::BiRefNet), false), BIREFNET);
-        assert_eq!(named(Some(Subject::BiRefNet), true), format!("{BIREFNET}+isnet.onnx"));
+        assert_eq!(named(Some(Subject::BiRefNet), false), birefnet());
+        assert_eq!(named(Some(Subject::BiRefNet), true), format!("{}+isnet.onnx", birefnet()));
         assert_eq!(named(Some(Subject::IsNet), true), "isnet.onnx");
         assert_eq!(named(None, false), "");
     }

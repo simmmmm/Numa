@@ -17,6 +17,8 @@ const GPU_ENABLED: &str = "gpu-acceleration";
 
 const GPU_GUARD: &str = "gpu-attempt";
 
+const DECODE_GUARD: &str = "gpu-decode-attempt";
+
 fn download_dir(file: &str) -> PathBuf {
     if file.ends_with(".tar.gz") { numa::core::paths::data_dir() } else { numa::core::paths::models_dir() }
 }
@@ -480,10 +482,10 @@ fn gpu_rows(state: &App, dialog: &adw::PreferencesDialog) -> Vec<gtk::Widget> {
     let switch = adw::SwitchRow::new();
     switch.set_title("Use GPU acceleration");
     switch.set_subtitle(
-        "Off, or where the graphics card will not run a model, the processor does it \
-         instead — slower, and the same answer. Takes effect the next time Numa starts.",
+        "Opening photographs, and with the download the models too. Off, or where the \
+         graphics card will not do it, the processor does it instead — slower, and the \
+         same picture. Takes effect the next time Numa starts.",
     );
-    switch.set_sensitive(model_on_disk(&GPU_PLUGIN_WHEEL[0]).is_some());
     switch.set_active(state.catalog.setting(GPU_ENABLED).as_deref() != Some("no"));
     switch.connect_active_notify(glib::clone!(
         #[strong] state,
@@ -510,12 +512,11 @@ pub(super) fn at_startup(state: &App, window: &adw::ApplicationWindow) {
 
 pub(super) fn start_gpu(catalog: &Catalog) {
     let models = numa::core::paths::models_dir();
-    if numa::infer::gpu_plugin(&models).is_none() {
-        return;
-    }
     let guard = numa::core::paths::data_dir().join(GPU_GUARD);
-    if guard.exists() {
+    let decode_guard = numa::core::paths::data_dir().join(DECODE_GUARD);
+    if guard.exists() || decode_guard.exists() {
         let _ = std::fs::remove_file(&guard);
+        let _ = std::fs::remove_file(&decode_guard);
         let _ = catalog.set_setting(GPU_ENABLED, "no");
         SAFE_MODE.set(true);
         return;
@@ -523,7 +524,10 @@ pub(super) fn start_gpu(catalog: &Catalog) {
     if catalog.setting(GPU_ENABLED).as_deref() == Some("no") {
         return;
     }
-    numa::infer::enable_gpu(&models, &guard);
+    numa::io::raw::warm_up_gpu(Some(decode_guard));
+    if numa::infer::gpu_plugin(&models).is_some() {
+        numa::infer::enable_gpu(&models, &guard);
+    }
 }
 
 pub(super) fn profiles_group(

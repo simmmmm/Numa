@@ -41,34 +41,7 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     welcome.set_child(Some(&add));
     page.append(&welcome);
 
-    state.grid.wall.add_css_class("photo-rows");
-    state.grid.wall.set_margin_top(12);
-    state.grid.wall.set_margin_bottom(12);
-    state.grid.wall.set_margin_start(12);
-    state.grid.wall.set_margin_end(12);
-
-    let scroller = state.grid.scroller.clone();
-    scroller.set_hexpand(true);
-    scroller.set_vexpand(true);
-
-    let viewport = gtk::Viewport::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
-    viewport.set_scroll_to_focus(false);
-    viewport.set_child(Some(&state.grid.wall));
-    scroller.set_child(Some(&viewport));
-
-    let adjustment = scroller.vadjustment();
-    adjustment.connect_value_changed(glib::clone!(
-        #[strong] state,
-        move |_| schedule_thumbnails(&state)
-    ));
-    adjustment.connect_changed(glib::clone!(
-        #[strong] state,
-        move |_| schedule_thumbnails(&state)
-    ));
-    scroller.connect_map(glib::clone!(
-        #[strong] state,
-        move |_| schedule_thumbnails(&state)
-    ));
+    let scroller = build_grid_scroller(state);
 
     let drop = gtk::DropTarget::new(gtk::gdk::FileList::static_type(), gtk::gdk::DragAction::COPY);
     drop.connect_drop(glib::clone!(
@@ -119,11 +92,50 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
 
     state.grid.wall.connect_card_activated(glib::clone!(
         #[strong] state,
-        move |_, card| open_in_editor(&state, card)
+        move |_, index| {
+            if let Some(id) = id_at(&state, index) {
+                open_photo(&state, id);
+            }
+        }
     ));
     install_photo_menu(state, window);
 
     page
+}
+
+fn build_grid_scroller(state: &App) -> gtk::ScrolledWindow {
+
+    state.grid.wall.add_css_class("photo-rows");
+
+    state.grid.wall.set_factory(
+        make_card,
+        glib::clone!(
+            #[strong] state,
+            move |card, index| bind_card(&state, card, index)
+        ),
+    );
+
+    let scroller = state.grid.scroller.clone();
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+
+    scroller.set_child(Some(&state.grid.wall));
+
+    let adjustment = scroller.vadjustment();
+    adjustment.connect_value_changed(glib::clone!(
+        #[strong] state,
+        move |_| schedule_thumbnails(&state)
+    ));
+    adjustment.connect_changed(glib::clone!(
+        #[strong] state,
+        move |_| schedule_thumbnails(&state)
+    ));
+    scroller.connect_map(glib::clone!(
+        #[strong] state,
+        move |_| schedule_thumbnails(&state)
+    ));
+    time_scrolling(&scroller, &adjustment, "grid");
+    scroller
 }
 
 pub(super) fn debug_assert_missing_actions(menu: &gio::Menu, window: &adw::ApplicationWindow) {
@@ -245,8 +257,8 @@ fn photo_actions(
     edit.connect_activate(glib::clone!(
         #[strong] state,
         move |_, _| {
-            let Some(child) = selected_cards(&state).first().cloned() else { return };
-            open_in_editor(&state, &child);
+            let Some(id) = selected_ids(&state).first().copied() else { return };
+            open_photo(&state, id);
         }
     ));
 
@@ -386,9 +398,9 @@ fn install_photo_menu_popover(state: &App, menu: gio::Menu) {
         #[strong] state,
         #[weak] rows_popover,
         move |_, _, x, y| {
-            let Some(card) = state.grid.wall.card_at(x, y) else { return };
-            if !state.grid.wall.is_selected(&card) {
-                state.grid.wall.select_only(&card);
+            let Some(index) = state.grid.wall.index_at_point(x, y) else { return };
+            if !state.grid.wall.is_selected(index) {
+                state.grid.wall.select_only(index);
             }
             rows_popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             rows_popover.popup();
@@ -397,27 +409,24 @@ fn install_photo_menu_popover(state: &App, menu: gio::Menu) {
     state.grid.wall.add_controller(click);
 }
 
-pub(super) fn selected_cards(state: &App) -> Vec<gtk::Widget> {
-    state.grid.wall.selected()
+pub(super) fn selected_ids(state: &App) -> Vec<i64> {
+    let lazy = state.grid.lazy.borrow();
+    state.grid.wall.selected().into_iter().filter_map(|index| lazy.get(index).map(|card| card.id)).collect()
 }
 
 pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
-    let selected = selected_cards(state);
+    let selected = selected_ids(state);
     if selected.is_empty() {
         state.toast("Select a photo first");
         return;
     }
-    if refused_offline(state, selected_ids(state), "moving to the trash") {
+    if refused_offline(state, selected.iter().copied(), "moving to the trash") {
         return;
     }
 
     let doomed: Vec<(i64, PathBuf)> = {
         let cards = state.grid.cards.borrow();
-        selected
-            .iter()
-            .filter_map(|child| child.widget_name().parse::<i64>().ok())
-            .filter_map(|id| cards.get(&id).map(|(photo, _)| (id, photo.path.clone())))
-            .collect()
+        selected.iter().filter_map(|id| cards.get(id).map(|photo| (*id, photo.path.clone()))).collect()
     };
     if doomed.is_empty() {
         return;
@@ -450,31 +459,47 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
         if response != "trash" {
             return;
         }
+        let (state, doomed) = (state.clone(), doomed.clone());
+        glib::spawn_future_local(async move {
 
-        let mut trashed = 0usize;
-        let mut failures = Vec::new();
-        for (id, path) in &doomed {
+            let paths: Vec<PathBuf> = doomed.iter().map(|(_, path)| path.clone()).collect();
+            let label = match paths.len() {
+                1 => "Moving it to the trash…".to_string(),
+                many => format!("Moving {many} photographs to the trash…"),
+            };
+            let Ok(results) = busy(&state, &label, move || {
+                paths.iter().map(|path| gio::File::for_path(path).trash(gio::Cancellable::NONE).map_err(|err| err.to_string())).collect::<Vec<_>>()
+            })
+            .await
+            else {
+                return;
+            };
 
-            match gio::File::for_path(path).trash(gio::Cancellable::NONE) {
-                Ok(()) => {
-                    if let Err(err) = state.catalog.remove_photo(*id) {
-                        log::warn!("{}: {err}", path.display());
+            let mut trashed = 0usize;
+            let mut failures = Vec::new();
+
+            for ((id, path), result) in doomed.iter().zip(results) {
+                match result {
+                    Ok(()) => {
+                        if let Err(err) = state.catalog.remove_photo(*id) {
+                            log::warn!("{}: {err}", path.display());
+                        }
+                        trashed += 1;
                     }
-                    trashed += 1;
+                    Err(err) => failures.push(format!("{}: {err}", path.display())),
                 }
-                Err(err) => failures.push(format!("{}: {err}", path.display())),
             }
-        }
 
-        reload_grid(&state);
-        state.toast(&match failures.as_slice() {
-            [] => format!("Moved {trashed} photo(s) to the trash"),
-            [only] => format!("Could not delete — {only}"),
-            many => format!("Moved {trashed}, could not delete {}", many.len()),
+            reload_grid(&state);
+            state.toast(&match failures.as_slice() {
+                [] => format!("Moved {trashed} photo(s) to the trash"),
+                [only] => format!("Could not delete — {only}"),
+                many => format!("Moved {trashed}, could not delete {}", many.len()),
+            });
+            for failure in &failures {
+                log::warn!("{failure}");
+            }
         });
-        for failure in &failures {
-            log::warn!("{failure}");
-        }
     });
 
     dialog.present(Some(window));

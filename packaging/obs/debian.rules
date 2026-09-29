@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	sh packaging/obs/build.sh build
+
+override_dh_auto_install:
+	sh packaging/obs/build.sh install debian/numa
+
+# ONNX Runtime is Numa's own copy, in /usr/lib/numa.
+override_dh_shlibdeps:
+	dh_shlibdeps -l$(CURDIR)/debian/numa/usr/lib/numa
+
+override_dh_auto_test override_dh_auto_clean:

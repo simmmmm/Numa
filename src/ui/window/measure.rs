@@ -66,12 +66,9 @@ pub(super) fn report_panel(state: &App) {
                             toggle_one_to_one(&state, x, y);
                         }
                     }
-
-                    if let Ok(ticks) = std::env::var("NUMA_DRAG") {
-                        measure_drag(&state, ticks.parse::<usize>().unwrap_or(60));
-                    }
+                    measure_cost(&state);
                     if let Ok(name) = std::env::var("NUMA_PRESET") {
-                        preview_preset(&state, &name);
+                        preview_preset(&state, Kind::Presets, &name);
                     }
                     if let Some((name, _, _, _)) = PANEL_TABS.iter().find(|tab| tab.0 == wanted) {
                         show_panel_tab(&state, name);
@@ -115,9 +112,32 @@ pub(super) fn report_panel(state: &App) {
     }
 }
 
+fn measure_cost(state: &App) {
+    if let Ok(ticks) = std::env::var("NUMA_DRAG") {
+        measure_drag(state, ticks.parse::<usize>().unwrap_or(60));
+    }
+    if let Ok(seconds) = std::env::var("NUMA_IDLE") {
+        measure_idle(state, seconds.parse::<u64>().unwrap_or(10));
+    }
+}
+
 fn measure_drag(state: &App, ticks: usize) {
+
+    let state = state.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        let soft = needs_full_resolution(&state, state.zooming.level.get()) && !state.render.rendered_from_full.get();
+        if soft || state.render.loading_full.get() || state.render.coming.borrow().is_some() || state.render.in_flight.get() {
+            return glib::ControlFlow::Continue;
+        }
+        drag(&state, ticks);
+        glib::ControlFlow::Break
+    });
+}
+
+fn drag(state: &App, ticks: usize) {
     let gaps = Rc::new(RefCell::new(Vec::with_capacity(ticks)));
     let last = Cell::new(std::time::Instant::now());
+    let cost = DragCost::begin(state);
     glib::timeout_add_local(
         std::time::Duration::from_millis(16),
         glib::clone!(
@@ -125,18 +145,90 @@ fn measure_drag(state: &App, ticks: usize) {
             move || {
                 let mut gaps = gaps.borrow_mut();
                 gaps.push(last.replace(std::time::Instant::now()).elapsed().as_secs_f64() * 1000.0);
-                let exposure = (gaps.len() % 20) as f64 * 0.1 - 1.0;
-                state.sliders.tone.exposure.set_value(exposure);
+
+                match std::env::var("NUMA_DRAG_WHAT").as_deref() {
+                    Ok("temperature") => state.sliders.balance.temperature.set_value(5000.0 + (gaps.len() % 20) as f64 * 50.0),
+                    _ => state.sliders.tone.exposure.set_value((gaps.len() % 20) as f64 * 0.1 - 1.0),
+                }
                 if gaps.len() < ticks {
                     return glib::ControlFlow::Continue;
                 }
                 gaps.sort_by(f64::total_cmp);
                 println!("DRAG {ticks} ticks, 16 ms apart: median {:.1} ms, worst {:.1} ms", gaps[ticks / 2], gaps[ticks - 1]);
+                cost.report(&state);
                 glib::timeout_add_local_once(std::time::Duration::from_millis(500), || std::process::exit(0));
                 glib::ControlFlow::Break
             }
         ),
     );
+}
+
+fn measure_idle(state: &App, seconds: u64) {
+    let state = state.clone();
+    glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+        let paints = Rc::new(Cell::new(0u32));
+        let counter = paints.clone();
+        if let Some(clock) = state.canvas.frame_clock() {
+            clock.connect_paint(move |_| counter.set(counter.get() + 1));
+        }
+        let (at, spent) = (std::time::Instant::now(), raw::cpu_ms());
+        glib::timeout_add_local_once(std::time::Duration::from_secs(seconds), move || {
+            let (wall, cpu) = (at.elapsed().as_secs_f64(), (raw::cpu_ms() - spent) as f64 / 1000.0);
+            println!("IDLE {wall:.1} s: {} paints, {cpu:.3} CPU-s ({:.2} % of a core)", paints.get(), cpu / wall * 100.0);
+            std::process::exit(0);
+        });
+    });
+}
+
+struct DragCost {
+    at: std::time::Instant,
+    epoch: f64,
+    cpu: f64,
+    planned: u64,
+    presented: u64,
+    on_card: u64,
+    paints: Rc<Cell<u32>>,
+}
+
+impl DragCost {
+    fn begin(state: &App) -> Self {
+        let paints = Rc::new(Cell::new(0u32));
+        if let Some(clock) = state.canvas.frame_clock() {
+            let counter = paints.clone();
+            clock.connect_after_paint(move |_| counter.set(counter.get() + 1));
+        }
+        Self {
+            at: std::time::Instant::now(),
+            epoch: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64()),
+            cpu: process_cpu(),
+            planned: state.render.planned.get(),
+            presented: state.render.presented.get(),
+            on_card: card_render::renders_on_card(),
+            paints,
+        }
+    }
+
+    fn report(&self, state: &App) {
+        let wall = self.at.elapsed().as_secs_f64();
+        let cpu = process_cpu() - self.cpu;
+        println!(
+            "DRAGCOST start {:.3} end {:.3} wall {wall:.2} s cpu {cpu:.2} s ({:.1} cores); {} paints, {} renders planned, {} put up, {} on the card",
+            self.epoch,
+            self.epoch + wall,
+            cpu / wall,
+            self.paints.get(),
+            state.render.planned.get() - self.planned,
+            state.render.presented.get() - self.presented,
+            card_render::renders_on_card() - self.on_card,
+        );
+    }
+}
+
+fn process_cpu() -> f64 {
+    let mut at = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+
+    unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut at) };
+    at.tv_sec as f64 + at.tv_nsec as f64 * 1e-9
 }
 
 fn report_room(state: &App) {
@@ -172,8 +264,10 @@ pub(super) fn open_requested(state: &App) {
         None => at.parse::<i64>().ok(),
     });
     let Some(id) = open_at else { return };
+
+    let delay = std::env::var("NUMA_OPEN_DELAY").ok().and_then(|ms| ms.parse().ok()).unwrap_or(100);
     glib::timeout_add_local(
-        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(delay),
         glib::clone!(
             #[strong] state,
             move || {

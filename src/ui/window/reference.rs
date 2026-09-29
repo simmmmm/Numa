@@ -122,7 +122,7 @@ pub(super) fn set_reference(state: &App) {
     only_active(state, Some(&state.reference.button));
     write_zoom_label(state);
 
-    *state.reference.texture.borrow_mut() = Some(texture_from(frame));
+    *state.reference.texture.borrow_mut() = Some(texture_from(&frame));
     queue_reference(state);
     state.reference.caption.set_text(&match name {
         Some(name) => format!("Reference \u{00b7} {name}"),
@@ -181,7 +181,7 @@ pub(super) fn show_camera(state: &App) {
             }
             match found {
                 Ok(Ok(Some(image))) => {
-                    *state.reference.texture.borrow_mut() = Some(texture_from(image.into_rgb8()));
+                    *state.reference.texture.borrow_mut() = Some(texture_from(&image.into_rgb8()));
                     queue_reference(&state);
                     write_zoom_label(&state);
                 }

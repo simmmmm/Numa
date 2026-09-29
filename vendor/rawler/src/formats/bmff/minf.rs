@@ -1,0 +1,65 @@
+use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, dinf::DinfBox, stbl::StblBox, vendor::VendorBox, vmhd::VmhdBox};
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Seek, SeekFrom};
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MinfBox {
+  pub header: BoxHeader,
+  pub vmhd: Option<VmhdBox>,
+
+  pub dinf: DinfBox,
+  pub stbl: StblBox,
+  pub vendor: Vec<VendorBox>,
+}
+
+impl MinfBox {
+  pub const TYP: FourCC = FourCC::with(['m', 'i', 'n', 'f']);
+}
+
+impl<R: Read + Seek> ReadBox<&mut R> for MinfBox {
+  fn read_box(mut reader: &mut R, header: BoxHeader) -> Result<Self> {
+    let mut vmhd = None;
+
+    let mut dinf = None;
+    let mut stbl = None;
+
+    let mut vendors = Vec::new();
+
+    let mut current = reader.stream_position()?;
+
+    while current < header.end_offset() {
+
+      let header = BoxHeader::parse(&mut reader)?;
+
+      match header.typ {
+        VmhdBox::TYP => {
+          vmhd = Some(VmhdBox::read_box(&mut reader, header)?);
+        }
+        DinfBox::TYP => {
+          dinf = Some(DinfBox::read_box(&mut reader, header)?);
+        }
+        StblBox::TYP => {
+          stbl = Some(StblBox::read_box(&mut reader, header)?);
+        }
+        _ => {
+          debug!("Vendor box found in minf: {:?}", header.typ);
+          let vendor = VendorBox::read_box(&mut reader, header)?;
+          vendors.push(vendor);
+        }
+      }
+
+      current = reader.stream_position()?;
+    }
+
+    reader.seek(SeekFrom::Start(header.end_offset()))?;
+
+    Ok(Self {
+      header,
+      vmhd,
+      dinf: dinf.ok_or_else(|| BmffError::Parse("dinf box not found, corrupt file?".into()))?,
+      stbl: stbl.ok_or_else(|| BmffError::Parse("stbl box not found, corrupt file?".into()))?,
+      vendor: vendors,
+    })
+  }
+}

@@ -41,9 +41,12 @@ pub(super) fn build_compare(state: &App) -> gtk::Revealer {
 pub(super) fn open_compare(state: &App) {
     let chosen: Vec<(i64, PathBuf, i64)> = {
         let lazy = state.grid.lazy.borrow();
-        selected_cards(state)
-            .iter()
-            .filter_map(|card| lazy.iter().find(|thumb| thumb.widget == *card))
+        state
+            .grid
+            .wall
+            .selected()
+            .into_iter()
+            .filter_map(|index| lazy.get(index))
             .map(|thumb| (thumb.id, thumb.path.clone(), thumb.mtime))
             .collect()
     };
@@ -206,9 +209,9 @@ fn refresh_compare(state: &App) {
     let compare = &state.compare;
     let cards = state.grid.cards.borrow();
     for (index, pane) in compare.panes.borrow().iter().enumerate() {
-        if let Some((photo, badge)) = cards.get(&pane.id) {
+        if let Some(photo) = cards.get(&pane.id) {
             let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-            pane.caption.set_text(&format!("{name}   {}", badge.text()));
+            pane.caption.set_text(&format!("{name}   {}", badge_text(photo.rating, photo.flag)));
         }
         let under = index == compare.under.get();
         for (class, on) in [("heading", under), ("dim-label", !under)] {
@@ -242,10 +245,10 @@ pub(super) fn compare_key(state: &App, key: gtk::gdk::Key) -> glib::Propagation 
     match key {
         Key::Escape | Key::c | Key::C => close_compare(state),
         Key::Return | Key::KP_Enter => {
-            let card = state.grid.lazy.borrow().iter().find(|thumb| Some(thumb.id) == under).map(|thumb| thumb.widget.clone());
+            let id = under.filter(|id| state.grid.cards.borrow().contains_key(id));
             close_compare(state);
-            if let Some(card) = card {
-                open_in_editor(state, &card);
+            if let Some(id) = id {
+                open_photo(state, id);
             }
         }
         Key::Left | Key::Right | Key::Up | Key::Down | Key::Page_Up | Key::Page_Down | Key::space => {}

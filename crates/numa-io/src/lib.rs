@@ -21,6 +21,7 @@ pub mod masks;
 pub mod models;
 pub mod notes;
 pub mod presets;
+pub mod previews;
 pub mod raw;
 pub mod thumbs;
 pub mod update;

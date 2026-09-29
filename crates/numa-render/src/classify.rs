@@ -4,8 +4,7 @@ use image::{imageops, RgbImage};
 
 use numa_core::mask::Alpha;
 use numa_infer::Model;
-use crate::matte;
-use crate::segment::{Segmentation, MATTEABLE};
+use crate::segment::Segmentation;
 
 const ANIMAL: u16 = 126;
 
@@ -62,27 +61,23 @@ pub struct Guess {
 }
 
 pub fn animal(found: &Segmentation) -> Option<Guess> {
+
+    let region = region(found)?;
     let model = plan()?;
-    let best = groups(&model, found.photo(), &region(found)?)?.into_iter().next()?;
+    let best = groups(&model, found.photo(), &region)?.into_iter().next()?;
     log::debug!("the subject is most like {}, {:.0} %", best.name, best.confidence * 100.0);
     (best.confidence >= CONFIDENT).then_some(best)
 }
 
 fn region(found: &Segmentation) -> Option<Alpha> {
-    let things = found.found();
-    if things.iter().any(|thing| thing.classes.contains(&ANIMAL)) {
-
-        let coarse = found.coarse(&[ANIMAL]);
-        let peak = coarse.data.iter().copied().fold(0.0f32, f32::max).max(f32::EPSILON);
-        let data = coarse.data.iter().map(|value| value / peak).collect();
-        return Some(Alpha::new(coarse.width, coarse.height, data));
-    }
-    if things.iter().any(|thing| thing.classes.iter().any(|c| MATTEABLE.contains(c))) {
+    if !found.found().iter().any(|thing| thing.classes.contains(&ANIMAL)) {
         return None;
     }
 
-    let photo = found.photo();
-    matte::subject(photo, (photo.width() / 4).max(1) as usize, (photo.height() / 4).max(1) as usize)
+    let coarse = found.coarse(&[ANIMAL]);
+    let peak = coarse.data.iter().copied().fold(0.0f32, f32::max).max(f32::EPSILON);
+    let data = coarse.data.iter().map(|value| value / peak).collect();
+    Some(Alpha::new(coarse.width, coarse.height, data))
 }
 
 fn groups(model: &Model, photo: &RgbImage, region: &Alpha) -> Option<Vec<Guess>> {
@@ -216,7 +211,7 @@ mod tests {
             let person: f32 = found.present().iter().filter(|(c, _)| *c == 12).map(|(_, s)| s).sum();
 
             let forced = std::env::var("MATTE").is_ok().then(|| {
-                matte::subject(photo, photo.width() as usize / 4, photo.height() as usize / 4)
+                crate::matte::subject(photo, photo.width() as usize / 4, photo.height() as usize / 4)
             });
             let Some(region) = forced.unwrap_or_else(|| region(&found)) else {
                 println!("{name}: no chip to name (animal {:.2} %, person {:.2} %)", animal * 100.0, person * 100.0);

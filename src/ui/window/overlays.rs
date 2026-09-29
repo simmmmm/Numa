@@ -548,7 +548,7 @@ pub(super) fn show_baseline(state: &App) {
                 / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
             photo.baseline = Some(
 
-                crate::ui::pixel_paintable::PixelPaintable::new(texture_from(render::apply_stack(
+                crate::ui::pixel_paintable::PixelPaintable::new(texture_from(&render::apply_stack(
                     &original,
                     &working,
                     proxy_scale,

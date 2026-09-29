@@ -155,12 +155,11 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     let kinds = gtk::Stack::new();
     kinds.set_vexpand(true);
     kinds.add_named(presets, Some("presets"));
+
     let luts = page_column();
+    luts.set_vexpand(true);
     luts.append(&lut::build(state));
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_child(Some(&luts));
-    kinds.add_named(&scroller, Some("luts"));
+    kinds.add_named(&luts, Some("luts"));
     let first = &state.panel.looks_first;
     for (label, name) in [("Presets", "presets"), ("LUTs", "luts")] {
         let button = match name {
@@ -172,9 +171,14 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
             button.set_group(Some(first));
         }
         button.connect_toggled(glib::clone!(
+            #[strong] state,
             #[weak] kinds,
             move |button| {
                 if button.is_active() {
+
+                    if name == "luts" {
+                        lut::fill(&state);
+                    }
                     kinds.set_visible_child_name(name);
                 }
             }
@@ -206,7 +210,7 @@ pub(super) fn show_panel_tab(state: &App, name: &str) {
     }
 
     match name {
-        "masks" if segment::is_installed() => ensure_segmentation(state),
+        "masks" if segment::is_installed() => ensure_found(state),
         "retouch" => ensure_faces(state),
         _ => {}
     }

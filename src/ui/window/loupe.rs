@@ -33,8 +33,21 @@ pub(super) fn build_loupe(state: &App) -> gtk::Revealer {
 
     state.loupe.caption.add_css_class("loupe-caption");
     state.loupe.caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    state.loupe.caption.set_halign(gtk::Align::Center);
-    loupe.append(&state.loupe.caption);
+
+    let caption = gtk::CenterBox::new();
+    caption.set_halign(gtk::Align::Center);
+    let slot = || {
+        let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        slot.set_size_request(24, -1);
+        slot
+    };
+    let start = slot();
+    state.loupe.zoom.waiting.spinner.set_halign(gtk::Align::Start);
+    start.append(&state.loupe.zoom.waiting.spinner);
+    caption.set_start_widget(Some(&start));
+    caption.set_center_widget(Some(&state.loupe.caption));
+    caption.set_end_widget(Some(&slot()));
+    loupe.append(&caption);
     state.loupe.burst.set_halign(gtk::Align::Center);
     state.loupe.burst.set_visible(false);
     loupe.append(&state.loupe.burst);
@@ -379,8 +392,8 @@ pub(super) fn build_loupe_bar(state: &App) -> gtk::Box {
         #[strong] state,
         move |_| {
 
-            if let Some(card) = selected_cards(&state).first() {
-                open_in_editor(&state, card);
+            if let Some(id) = selected_ids(&state).first().copied() {
+                open_photo(&state, id);
             }
             close_loupe(&state);
         }
@@ -467,10 +480,7 @@ pub(super) fn loupe_rating(state: &App) -> (u8, Flag) {
 
 fn marks_at(state: &App, at: usize) -> (u8, Flag) {
     let Some(id) = id_at(state, at) else { return (0, Flag::None) };
-    let cards = state.grid.cards.borrow();
-    let Some((_, badge)) = cards.get(&id) else { return (0, Flag::None) };
-    let text = badge.text();
-    (rating_from_badge(&text), flag_from_badge(&text))
+    state.grid.cards.borrow().get(&id).map_or((0, Flag::None), |photo| (photo.rating, photo.flag))
 }
 
 fn flag_at(state: &App, at: usize) -> Flag {
@@ -478,29 +488,19 @@ fn flag_at(state: &App, at: usize) -> Flag {
 }
 
 pub(super) fn show_in_loupe(state: &App, id: i64) -> bool {
-    let card = state
-        .grid.lazy
-        .borrow()
-        .iter()
-        .position(|card| card.widget.widget_name() == id.to_string())
-        .map(|at| (at, state.grid.lazy.borrow()[at].widget.clone()));
-    let Some((at, card)) = card else { return false };
-    state.grid.wall.select_only(&card);
-    state.grid.wall.reveal(&card);
+    let Some(at) = state.grid.lazy.borrow().iter().position(|card| card.id == id) else { return false };
+    state.grid.wall.select_only(at);
+    state.grid.wall.reveal(at);
     show_loupe(state, at);
     true
 }
 
 pub(super) fn open_loupe(state: &App) {
-    let selected = selected_cards(state);
-    let Some(first) = selected.first() else {
+    let Some(at) = state.grid.wall.selected().first().copied() else {
         state.toast("Select a photo first");
         return;
     };
-    let at = state.grid.lazy.borrow().iter().position(|card| card.widget == *first);
-    if let Some(at) = at {
-        show_loupe(state, at);
-    }
+    show_loupe(state, at);
 }
 
 pub(super) fn show_loupe(state: &App, at: usize) {
@@ -539,9 +539,8 @@ pub(super) fn show_loupe(state: &App, at: usize) {
 }
 
 fn hold(state: &App, index: usize) {
-    let Some((id, path, mtime)) = state.grid.lazy.borrow().get(index).and_then(|card| {
-        Some((card.widget.widget_name().parse::<i64>().ok()?, card.path.clone(), card.mtime))
-    }) else {
+    let Some((id, path, mtime)) = state.grid.lazy.borrow().get(index).map(|card| (card.id, card.path.clone(), card.mtime))
+    else {
         return;
     };
     if state.loupe.textures.borrow().contains_key(&id) {
@@ -615,8 +614,8 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
         gtk::gdk::Key::Right | gtk::gdk::Key::Page_Down => step_loupe(state, true),
         gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
 
-            if let Some(card) = selected_cards(state).first() {
-                open_in_editor(state, card);
+            if let Some(id) = selected_ids(state).first().copied() {
+                open_photo(state, id);
             }
             close_loupe(state);
         }
@@ -704,21 +703,18 @@ pub(super) fn step_loupe(state: &App, forward: bool) {
 }
 
 fn go_to(state: &App, index: usize) {
-    let card = state.grid.lazy.borrow().get(index).map(|card| card.widget.clone());
-    if let Some(card) = card {
-        state.grid.wall.select_only(&card);
-        state.grid.wall.reveal(&card);
-    }
+    state.grid.wall.select_only(index);
+    state.grid.wall.reveal(index);
     show_loupe(state, index);
 }
 
 pub(super) fn id_at(state: &App, at: usize) -> Option<i64> {
-    state.grid.lazy.borrow().get(at).and_then(|card| card.widget.widget_name().parse().ok())
+    state.grid.lazy.borrow().get(at).map(|card| card.id)
 }
 
 fn burst_at(state: &App, at: usize) -> Option<(i64, i64)> {
     let id = id_at(state, at)?;
-    let burst = state.grid.cards.borrow().get(&id)?.0.burst?;
+    let burst = state.grid.cards.borrow().get(&id)?.burst?;
     Some((numa::io::catalog::library_of(id), burst))
 }
 
@@ -734,7 +730,7 @@ fn burst_run(state: &App, at: usize) -> std::ops::Range<usize> {
 fn best_in(state: &App, run: std::ops::Range<usize>) -> Option<usize> {
     let cards = state.grid.cards.borrow();
     run.into_iter()
-        .find(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|(photo, _)| photo.best_of_burst))
+        .find(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|photo| photo.best_of_burst))
 }
 
 pub(super) fn note_mark(state: &App, ids: &[i64], action: Action) {
@@ -789,7 +785,7 @@ fn reject_rest(state: &App) {
     let unmarked: Vec<i64> = {
         let cards = state.grid.cards.borrow();
         run.filter_map(|index| id_at(state, index))
-            .filter(|id| cards.get(id).is_some_and(|(_, badge)| flag_from_badge(&badge.text()) == Flag::None))
+            .filter(|id| cards.get(id).is_some_and(|photo| photo.flag == Flag::None))
             .collect()
     };
 
@@ -818,8 +814,8 @@ fn refresh_burst(state: &App, at: usize) {
     let mut pips = Vec::new();
     let mut best = None;
     for (n, index) in run.clone().enumerate() {
-        let Some((photo, badge)) = id_at(state, index).and_then(|id| cards.get(&id)) else { continue };
-        let glyph = match flag_from_badge(&badge.text()) {
+        let Some(photo) = id_at(state, index).and_then(|id| cards.get(&id)) else { continue };
+        let glyph = match photo.flag {
             Flag::Picked => "\u{2691}",
             Flag::Rejected => "\u{2715}",
             Flag::None => "\u{25cb}",
@@ -845,8 +841,8 @@ fn refresh_burst(state: &App, at: usize) {
 
 fn echo_note(state: &App, at: usize) -> Option<String> {
     let cards = state.grid.cards.borrow();
-    let (photo, _) = cards.get(&id_at(state, at)?)?;
-    let (other, _) = cards.get(&photo.echo?)?;
+    let photo = cards.get(&id_at(state, at)?)?;
+    let other = cards.get(&photo.echo?)?;
     let when = |photo: &Photo| photo.taken.unwrap_or(photo.mtime);
     let apart = when(other) - when(photo);
     let minutes = apart.unsigned_abs() / 60;
@@ -862,16 +858,17 @@ fn echo_note(state: &App, at: usize) -> Option<String> {
 pub(super) fn refresh_loupe_bar(state: &App) {
     state.loupe.picked_frame.queue_draw();
     let Some(at) = state.loupe.at.get() else { return };
-    let id = state.grid.lazy.borrow().get(at).and_then(|card| card.widget.widget_name().parse::<i64>().ok());
-    let Some(id) = id else { return };
+    let Some(id) = id_at(state, at) else { return };
     let name = {
         let cards = state.grid.cards.borrow();
-        let Some((photo, _)) = cards.get(&id) else { return };
+        let Some(photo) = cards.get(&id) else { return };
         photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
     };
     let (rating, flag) = loupe_rating(state);
 
-    match loupe_zoom::sharpening(state) {
+    let sharpening = loupe_zoom::sharpening(state);
+    loupe_zoom::wait_while(state, sharpening);
+    match sharpening {
         true => state.loupe.caption.set_text(&format!("{name} \u{b7} developing at full size\u{2026}")),
         false => state.loupe.caption.set_text(&name),
     }

@@ -1,0 +1,36 @@
+Numa's own camera profiles, v1
+
+Numa's own work. Each profile was fitted by Numa (tests/camera_profile_fit.rs,
+RENDER-012/015) from raw files that raw.pixls.us publishes under CC0 1.0
+(public domain), against the JPEG each camera embedded in its own file. No
+other camera profile, and no photograph under any other licence, went into
+them. They are offered as options beside a camera's matrix and any other
+profile; Numa never chooses one of them by itself.
+
+Each is shipped only because it beat the camera's matrix on held-out frames
+(frames the fit never saw), as mean chroma error against the camera's JPEG —
+refitted on 27 September on the cameras' tone curve (RENDER-004), on which the
+matrix alone is already nearer the JPEGs than it was. The E-M1 Mark II's is
+gone: fitted then against Numa's own rendering, since rawler reads no preview
+from an ORF, and fitted again against the camera's it did not beat the matrix.
+
+Numa EOS R5.dcp       Canon EOS R5        0.0386 -> 0.0241 (2 held out)  raws 4692 4694 4695 4696 4697 4698
+Numa D850.dcp         Nikon D850          0.0402 -> 0.0285 (1 held out)  raws 1835 1836 1839 1841
+Numa ILCE-7RM3.dcp    Sony ILCE-7RM3      0.0199 -> 0.0149 (1 held out)  raws 2043 2045 2046
+Numa X-S10.dcp        Fujifilm X-S10      0.0571 -> 0.0297 (1 held out)  raws 4188 4189 4190
+Numa X-T4.dcp         Fujifilm X-T4       0.0929 -> 0.0766 (1 held out)  raws 3913 3914 3918
+Numa X-T5.dcp         Fujifilm X-T5       0.0228 -> 0.0160 (3 held out)  the photographer's own, see below
+
+The X-T5 profile is the one exception to the raw.pixls.us rule: it was fitted
+from ten of the photographer's own X-T5 frames (Provia, Color 0) against the
+JPEG each carries, three of them held out, on the cameras' tone curve
+(RENDER-004, 27 September). Against the camera's HEIF of the same frames the
+median colour difference (CIEDE2000) goes from 1.86 to 1.07, where Capture One's
+Provia is 1.06 and Lightroom's Adobe Color 1.47.
+
+The raws: https://raw.pixls.us/getfile.php/<number>/nice/ (CC0 1.0,
+https://creativecommons.org/publicdomain/zero/1.0/).
+
+© 2026 Tijmen. All rights reserved. Included with Numa; not for separate
+redistribution. (The CC0 raws above are the raw.pixls.us contributors'; the
+profiles fitted from them are not CC0.)

@@ -1,0 +1,22 @@
+pkgname=numa
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="RAW photo editor and library"
+arch=(x86_64)
+url="https://github.com/simmmmm/Numa"
+license=(GPL-3.0-or-later)
+depends=(gtk4 libadwaita vulkan-icd-loader hicolor-icon-theme)
+makedepends=(rust openssl)
+options=(!debug !lto)
+source=("numa-$pkgver.tar.xz")
+sha256sums=(SKIP)
+
+build() {
+    cd "numa-$pkgver"
+    sh packaging/obs/build.sh build
+}
+
+package() {
+    cd "numa-$pkgver"
+    sh packaging/obs/build.sh install "$pkgdir"
+}

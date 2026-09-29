@@ -14,6 +14,11 @@ use crate::dcp;
 use numa_core::image::LinearImage;
 use numa_core::space::ColourSpace;
 
+mod embedded;
+mod orf;
+mod proxy;
+pub mod region;
+
 const BASELINE_EV: f32 = 1.241;
 
 fn raw_extensions() -> &'static [&'static str] {
@@ -68,6 +73,8 @@ pub fn embedded_preview(path: &Path) -> Result<Option<DynamicImage>, String> {
             .or(small)
             .or_else(|| embedded(decoder.thumbnail_image(&source, &params).ok().flatten())),
     };
+
+    let image = image.or_else(|| orf::maker_note_jpeg(path).and_then(|jpeg| image::load_from_memory(&jpeg).ok()));
     let Some(image) = image else { return Ok(None) };
 
     let orientation = decoder
@@ -83,8 +90,8 @@ fn developed_preview(path: &Path) -> Result<DynamicImage, String> {
 
     static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let linear = decode_linear(path)?;
-    let proxy = linear.downscaled(1920).unwrap_or(linear);
+
+    let (proxy, _) = proxy_from_mosaic(path, 1920)?;
     let document = numa_core::document::Document::new(path.display().to_string());
 
     Ok(DynamicImage::ImageRgb8(numa_render::develop(&document, proxy, &Default::default())))
@@ -311,6 +318,13 @@ fn open_upright(path: &Path) -> Result<(image::DynamicImage, ColourSpace), Strin
     Ok((image, space))
 }
 
+pub fn load_thumbnail(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
+    match is_raw(path).then(|| embedded::at_least(path, max_edge)).flatten() {
+        Some(image) => Ok(image.thumbnail(max_edge, max_edge).into_rgb8()),
+        None => load_scaled(path, max_edge),
+    }
+}
+
 pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
     let (image, space) = if is_raw(path) {
         (preview(path)?, ColourSpace::Srgb)
@@ -340,10 +354,10 @@ mod tests {
     #[test]
     fn the_exposure_match_lifts_the_median_to_the_cameras() {
         let grey = |value: f32| LinearImage::new(4, 4, vec![value; 48]);
-        let factor = match_camera_exposure(0.18, &grey(0.09), None).unwrap();
+        let factor = match_camera_exposure(0.18, &grey(0.09).data, EXPOSURE_STRIDE, None).unwrap();
         assert!((factor - 2.0).abs() < 1e-5, "{factor}");
-        assert_eq!(match_camera_exposure(0.18, &grey(0.0001), None), Some(2.5f32.exp2()));
-        assert_eq!(match_camera_exposure(0.18, &grey(0.0), None), None);
+        assert_eq!(match_camera_exposure(0.18, &grey(0.0001).data, EXPOSURE_STRIDE, None), Some(2.5f32.exp2()));
+        assert_eq!(match_camera_exposure(0.18, &grey(0.0).data, EXPOSURE_STRIDE, None), None);
     }
 
     #[test]
@@ -711,6 +725,8 @@ pub enum Demosaic {
     Draft,
 
     Best,
+
+    Proxy(u32),
 }
 
 pub fn decode_linear(path: &Path) -> Result<LinearImage, String> {
@@ -726,6 +742,52 @@ pub fn decode_for_editing(path: &Path) -> Result<LinearImage, String> {
 
 pub fn decode_linear_best(path: &Path) -> Result<LinearImage, String> {
     decode_with(path, Demosaic::Best).map(|(image, _)| image)
+}
+
+pub fn editor_proxy(path: &Path, edge: u32) -> Result<(LinearImage, (u32, u32)), String> {
+    proxy_by(path, edge, card_makes_proxies())
+}
+
+pub fn proxy_from_mosaic(path: &Path, edge: u32) -> Result<(LinearImage, (u32, u32)), String> {
+    proxy_by(path, edge, false)
+}
+
+pub fn proxy_from_card(path: &Path, edge: u32) -> Result<(LinearImage, (u32, u32)), String> {
+    proxy_by(path, edge, true)
+}
+
+fn proxy_by(path: &Path, edge: u32, card: bool) -> Result<(LinearImage, (u32, u32)), String> {
+    let (image, full) = match is_raw(path) {
+        true => decode_sized(path, Demosaic::Proxy(edge), card).map(|(image, _, full)| (image, full))?,
+        false => decode_linear_any(path).map(|image| {
+            let full = (image.width, image.height);
+            (image, full)
+        })?,
+    };
+
+    Ok((image.downscaled(edge).unwrap_or(image), full))
+}
+
+fn card_makes_proxies() -> bool {
+    let wanted = match cfg!(target_vendor = "apple") {
+        true => !numa_core::power::phone(),
+        false => !numa_core::power::frugal(),
+    };
+    wanted && card_ready()
+}
+
+pub fn card_ready() -> bool {
+    #[cfg(feature = "gpu")]
+    return gpu::ready();
+    #[cfg(not(feature = "gpu"))]
+    false
+}
+
+pub fn card_frugal() -> bool {
+    #[cfg(feature = "gpu")]
+    return gpu::frugal();
+    #[cfg(not(feature = "gpu"))]
+    numa_core::power::frugal()
 }
 
 pub fn decode_with_exposure(path: &Path) -> Result<(LinearImage, Option<f32>), String> {
@@ -777,7 +839,7 @@ impl Laps {
             return;
         }
         let total: f32 = self.parts.iter().map(|(_, ms, _)| ms).sum();
-        let parts: Vec<String> = self
+        let mut parts: Vec<String> = self
             .parts
             .iter()
             .map(|(name, ms, cpu)| match *ms >= 5.0 {
@@ -785,6 +847,8 @@ impl Laps {
                 false => format!("{name} {ms:.0}"),
             })
             .collect();
+
+        parts.push(format!("cpu {:.0}", self.parts.iter().map(|(_, _, cpu)| cpu).sum::<f32>()));
         log::info!(
             "{what} {} in {total:.0} ms: {}",
             path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default(),
@@ -793,7 +857,27 @@ impl Laps {
     }
 }
 
-fn cpu_ms() -> f32 {
+thread_local! {
+
+    static STOP: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn stoppable<R>(stop: Arc<std::sync::atomic::AtomicBool>, work: impl FnOnce() -> R) -> R {
+    STOP.with(|flag| *flag.borrow_mut() = Some(stop));
+    let result = work();
+    STOP.with(|flag| flag.borrow_mut().take());
+    result
+}
+
+pub fn stopped() -> Result<(), String> {
+    let stop = STOP.with(|flag| flag.borrow().as_ref().is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Relaxed)));
+    if stop {
+        return Err("let go".to_string());
+    }
+    Ok(())
+}
+
+pub fn cpu_ms() -> f32 {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
 
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
@@ -804,22 +888,61 @@ fn cpu_ms() -> f32 {
     ms(usage.ru_utime) + ms(usage.ru_stime)
 }
 
+#[cfg(feature = "gpu")]
+mod gpu;
+
+pub fn warm_up_gpu(marker: Option<std::path::PathBuf>) {
+    #[cfg(feature = "gpu")]
+    gpu::warm_up(marker);
+    #[cfg(not(feature = "gpu"))]
+    let _ = marker;
+}
+
+pub fn open_gpu() -> Option<String> {
+    #[cfg(feature = "gpu")]
+    return gpu::open();
+    #[cfg(not(feature = "gpu"))]
+    None
+}
+
+pub fn release_gpu() {
+    #[cfg(feature = "gpu")]
+    gpu::release();
+}
+
+pub fn gpu_follows_power() {
+    #[cfg(feature = "gpu")]
+    gpu::rewarm();
+}
+
+const EXPOSURE_STRIDE: usize = 37;
+
+type Decoded = (LinearImage, Option<f32>, (u32, u32));
+
 fn decode_with(path: &Path, demosaic: Demosaic) -> Result<(LinearImage, Option<f32>), String> {
+    decode_sized(path, demosaic, demosaic == Demosaic::Best).map(|(image, exposure, _)| (image, exposure))
+}
+
+fn decode_sized(path: &Path, demosaic: Demosaic, card: bool) -> Result<Decoded, String> {
     std::thread::scope(|scope| {
         let midtone = scope.spawn(|| camera_midtone(path));
-        decode_beside(path, demosaic, || midtone.join().ok().flatten())
+        decode_beside(path, demosaic, card, || midtone.join().ok().flatten())
     })
 }
 
 fn decode_beside(
     path: &Path,
     demosaic: Demosaic,
+    card: bool,
     camera_midtone: impl FnOnce() -> Option<f32>,
-) -> Result<(LinearImage, Option<f32>), String> {
+) -> Result<Decoded, String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
     let mut laps = Laps::start();
 
-    let (developed, profile, rendering, flips, film_mode, exposure, markesteijn) = {
+    let (mut camera_midtone, mut asked) = (Some(camera_midtone), None);
+    let mut wanted = || *asked.get_or_insert_with(|| camera_midtone.take().and_then(|midtone| midtone()));
+
+    let (developed, profile, rendering, flips, film_mode, exposure, markesteijn, small) = {
         let source = rawler::rawsource::RawSource::new(path).map_err(|e| fail(e.to_string()))?;
         let decoder = rawler::get_decoder(&source).map_err(|e| fail(e.to_string()))?;
         laps.lap("read");
@@ -827,6 +950,7 @@ fn decode_beside(
             .raw_image(&source, &RawDecodeParams::default(), false)
             .map_err(|e| fail(e.to_string()))?;
         laps.lap("decode");
+        stopped()?;
 
         let mut profile = camera_profile(&raw);
 
@@ -852,51 +976,28 @@ fn decode_beside(
             .and_then(|meta| relative_exposure(&meta.exif));
         laps.lap("metadata");
 
-        let demosaiced = match demosaic {
-            Demosaic::Best => markesteijn_demosaic(&raw, path),
-            Demosaic::Draft => None,
-        };
+        #[cfg(feature = "gpu")]
+        if card {
+            if let Some((image, full)) = gpu::develop(&raw, path, demosaic, flips, profile.as_ref(), &mut wanted, &mut laps, false) {
+                laps.report("decode", path);
+                return Ok((dressed(image, profile, rendering, film_mode), exposure, full));
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        let _ = card;
 
-        let markesteijn_ran = demosaiced.is_some();
-
-        let (demosaiced, raw) = match demosaiced {
-            Some(pixels) => (Some(pixels), None),
-            None => match ppg_develop(raw).map_err(fail)? {
-                Ok(pixels) => (Some(pixels), None),
-                Err(raw) => (None, Some(raw)),
-            },
-        };
-        let developed = match (demosaiced, raw) {
-            (Some(pixels), _) => pixels,
-            (None, None) => unreachable!("a frame is either developed or handed back"),
-            (None, Some(raw)) => {
-                let steps: Vec<ProcessingStep> = RawDevelop::default()
-                    .steps
-                    .into_iter()
-                    .filter(|step| {
-                        !matches!(
-                            step,
-                            ProcessingStep::SRgb
-                                | ProcessingStep::Calibrate
-                                | ProcessingStep::WhiteBalance
-                        )
-                    })
-                    .collect();
-
-                match RawDevelop::new_with(&steps)
-                    .develop_intermediate(&raw)
-                    .map_err(|e| fail(e.to_string()))?
-                {
-                    Intermediate::ThreeColor(pixels) => pixels,
-                    _ => return Err(fail("unsupported sensor colour layout".to_string())),
-                }
+        let (developed, markesteijn_ran, small) = match proxy::develop(raw, path, demosaic, &mut laps) {
+            Ok((pixels, full, samples)) => (pixels, false, Some((full, samples))),
+            Err(raw) => {
+                let (developed, markesteijn_ran) = demosaic_on_processor(raw, path, demosaic)?;
+                laps.lap("demosaic");
+                (developed, markesteijn_ran, None)
             }
         };
-
-        laps.lap("demosaic");
-        (developed, profile, rendering, flips, film_mode, exposure, markesteijn_ran)
+        (developed, profile, rendering, flips, film_mode, exposure, markesteijn_ran, small)
     };
     laps.lap("free raw");
+    stopped()?;
 
     let dim = developed.dim();
     let baseline = 2.0f32.powf(BASELINE_EV);
@@ -906,29 +1007,79 @@ fn decode_beside(
     let image = LinearImage::new(dim.w as u32, dim.h as u32, scaled);
     laps.lap("baseline");
 
-    let mut image = undo_the_lens(image, path, markesteijn, baseline, &mut laps);
+    stopped()?;
+    let mut image = match &small {
+        Some(_) => image,
+        None => undo_the_lens(image, path, markesteijn, baseline, &mut laps),
+    };
+    stopped()?;
 
-    let factor = camera_midtone().and_then(|wanted| match_camera_exposure(wanted, &image, profile.as_ref())).unwrap_or(1.0);
+    let full = small.as_ref().map_or((image.width, image.height), |((width, height), _)| (*width as u32, *height as u32));
+
+    let (read, stride) = small.as_ref().map_or((&image.data[..], EXPOSURE_STRIDE), |(_, samples)| (&samples[..], 1));
+    let factor = wanted()
+        .and_then(|wanted| match_camera_exposure(wanted, read, stride, profile.as_ref()))
+        .unwrap_or(1.0);
     if factor != 1.0 {
         image.data.par_iter_mut().for_each(|value| *value *= factor);
     }
     laps.lap("exposure match");
 
-    let image = image.with_clip(baseline * factor);
-
-    let image = image
-        .into_oriented(flips.0, flips.1, flips.2)
-        .with_rendering(rendering)
-        .with_film_mode(film_mode);
+    let image = image.with_clip(baseline * factor).into_oriented(flips.0, flips.1, flips.2);
     laps.lap("orient");
     laps.report("decode", path);
-    Ok((
-        match profile {
-            Some(profile) => image.with_profile(profile),
-            None => image,
+    let full = if flips.0 { (full.1, full.0) } else { full };
+    Ok((dressed(image, profile, rendering, film_mode), exposure, full))
+}
+
+fn dressed(image: LinearImage, profile: Option<CameraProfile>, rendering: Option<Arc<DngProfile>>, film_mode: Option<String>) -> LinearImage {
+    let image = image.with_rendering(rendering).with_film_mode(film_mode);
+    match profile {
+        Some(profile) => image.with_profile(profile),
+        None => image,
+    }
+}
+
+fn demosaic_on_processor(
+    raw: rawler::RawImage,
+    path: &Path,
+    demosaic: Demosaic,
+) -> Result<(rawler::pixarray::Color2D<f32, 3>, bool), String> {
+    let fail = |err: String| format!("{}: {}", path.display(), err);
+    let demosaiced = match demosaic {
+
+        Demosaic::Best | Demosaic::Proxy(_) => markesteijn_demosaic(&raw, path),
+        Demosaic::Draft => None,
+    };
+
+    let markesteijn_ran = demosaiced.is_some();
+
+    let (demosaiced, raw) = match demosaiced {
+        Some(pixels) => (Some(pixels), None),
+        None => match ppg_develop(raw).map_err(fail)? {
+            Ok(pixels) => (Some(pixels), None),
+            Err(raw) => (None, Some(raw)),
         },
-        exposure,
-    ))
+    };
+    let developed = match (demosaiced, raw) {
+        (Some(pixels), _) => pixels,
+        (None, None) => unreachable!("a frame is either developed or handed back"),
+        (None, Some(raw)) => rawler_develop(&raw).map_err(fail)?,
+    };
+    Ok((developed, markesteijn_ran))
+}
+
+fn rawler_develop(raw: &rawler::RawImage) -> Result<rawler::pixarray::Color2D<f32, 3>, String> {
+    let steps: Vec<ProcessingStep> = RawDevelop::default()
+        .steps
+        .into_iter()
+        .filter(|step| !matches!(step, ProcessingStep::SRgb | ProcessingStep::Calibrate | ProcessingStep::WhiteBalance))
+        .collect();
+
+    match RawDevelop::new_with(&steps).develop_intermediate(raw).map_err(|e| e.to_string())? {
+        Intermediate::ThreeColor(pixels) => Ok(pixels),
+        _ => Err("unsupported sensor colour layout".to_string()),
+    }
 }
 
 fn flat(pixels: rawler::pixarray::Color2D<f32, 3>) -> Vec<f32> {
@@ -1261,6 +1412,13 @@ pub fn decode_linear_any(path: &Path) -> Result<LinearImage, String> {
     let mut image = LinearImage::new(rgb.width(), rgb.height(), data);
     image.display_referred = true;
     Ok(image)
+}
+
+pub(crate) fn rendering_of(path: &Path) -> Option<Arc<DngProfile>> {
+    let source = rawler::rawsource::RawSource::new(path).ok()?;
+    let decoder = rawler::get_decoder(&source).ok()?;
+    let raw = decoder.raw_image(&source, &RawDecodeParams::default(), true).ok()?;
+    find_rendering(&raw).filter(|_| !dump_without_rendering())
 }
 
 fn find_rendering(raw: &rawler::RawImage) -> Option<Arc<DngProfile>> {
@@ -1635,16 +1793,15 @@ fn find_film_mode_tag(bytes: &[u8]) -> Option<u16> {
     makernote_tag(bytes, 0x1401).and_then(|values| values.first().map(|v| *v as u16))
 }
 
-fn match_camera_exposure(wanted: f32, image: &LinearImage, profile: Option<&CameraProfile>) -> Option<f32> {
+fn match_camera_exposure(wanted: f32, pixels: &[f32], stride: usize, profile: Option<&CameraProfile>) -> Option<f32> {
 
     const LIMIT_EV: f32 = 2.5;
 
     let to_srgb = profile.map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |p| p.transform(None));
     let luma = [0, 1, 2].map(|c| 0.2126 * to_srgb[0][c] + 0.7152 * to_srgb[1][c] + 0.0722 * to_srgb[2][c]);
-    let mut scene: Vec<f32> = image
-        .data
+    let mut scene: Vec<f32> = pixels
         .chunks_exact(3)
-        .step_by(37)
+        .step_by(stride)
         .map(|p| luma[0] * p[0] + luma[1] * p[1] + luma[2] * p[2])
         .collect();
     if scene.is_empty() {
@@ -1823,7 +1980,8 @@ fn read_summary(path: &Path) -> Option<Summary> {
         iso: exif.iso_speed_ratings.map(u32::from).or(exif.iso_speed),
         exposure_bias: signed(&exif.exposure_bias),
         taken: exif.date_time_original.clone(),
-        film_mode: film_mode(path).map(str::to_string),
+
+        film_mode: (metadata.make == "Fujifilm").then(|| film_mode(path)).flatten().map(str::to_string),
         sensor,
         file_size: std::fs::metadata(path).ok().map(|meta| meta.len()),
     })

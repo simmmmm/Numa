@@ -29,8 +29,72 @@
   <url type="homepage">https://github.com/simmmmm/Numa</url>
   <launchable type="desktop-id">com.tijmen.Numa.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>PolyForm-Noncommercial-1.0.0</project_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.32.0" date="2026-09-29">
+      <description>
+        <p>
+          Numa is open source now, under the GNU General Public License,
+          version 3 or later, and Numa's own camera profiles are part of it.
+          It can be installed as a package on Fedora, openSUSE, Debian, Ubuntu
+          and Arch, from the openSUSE Build Service.
+        </p>
+      </description>
+    </release>
+    <release version="0.31.0" date="2026-09-29">
+      <description>
+        <p>
+          Most edits now render on the graphics card, including masks, point
+          colour, grading, noise reduction and HDR; light edits stay on the
+          processor, where they cost less energy. A mask's Temperature and Tint
+          now work on turned and cropped photographs. Clicks and edge
+          refinement on the card give the same masks as on the processor, the
+          subject mask is found at full precision, and two cameras' raws that
+          could stop Numa now open.
+        </p>
+      </description>
+    </release>
+    <release version="0.30.2" date="2026-09-29">
+      <description>
+        <p>
+          A photograph opened while a mask is being found waits a moment for
+          the graphics card instead of developing on the processor, which kept
+          the processor busy.
+        </p>
+      </description>
+    </release>
+    <release version="0.30.1" date="2026-09-29">
+      <description>
+        <p>
+          The editor's picture is now rendered on the graphics card where the
+          edit allows it, so dragging a slider costs the processor next to
+          nothing.
+        </p>
+      </description>
+    </release>
+    <release version="0.30.0" date="2026-09-29">
+      <description>
+        <p>
+          The library grid and the filmstrip only build the cards on screen, so
+          a library of tens of thousands of photographs opens in under a second
+          and scrolls smoothly. Each library also keeps its own filter.
+        </p>
+      </description>
+    </release>
+    <release version="0.29.0" date="2026-09-28">
+      <description>
+        <p>
+          Faster and lighter on the battery. Photographs open and switch much
+          sooner: faster raw decoders, the develop on the graphics card, the
+          editor developed at the size it is shown, previews kept beside the
+          library, and 1:1 developing only what is on screen. On battery or in
+          power-saver mode Numa does no work ahead. A spinner shows where Numa is
+          busy, the library follows its folders without rescanning every minute,
+          the Masks tab no longer runs models on every photograph, and JPEG and
+          JPEG XL export are quicker. Olympus thumbnails come from the camera.
+        </p>
+      </description>
+    </release>
     <release version="0.28.0" date="2026-09-28">
       <description>
         <p>

@@ -49,8 +49,7 @@ impl Display {
             let row = self.matrix[channel];
             let value = row[0] * linear[0] + row[1] * linear[1] + row[2] * linear[2];
 
-            let step = (value.clamp(0.0, 1.0) * (STEPS - 1) as f32).round() as usize;
-            self.encode[channel][step]
+            self.encode[channel][nearest_step(value)]
         })
     }
 
@@ -60,6 +59,28 @@ impl Display {
             pixel.copy_from_slice(&out);
         });
     }
+}
+
+#[inline]
+fn nearest_step(value: f32) -> usize {
+    let scaled = value.max(0.0).min(1.0) * (STEPS - 1) as f32;
+    let whole = scaled as i32;
+    (whole + i32::from(scaled - whole as f32 >= 0.5)) as usize
+}
+
+pub fn to_bgra(image: &RgbImage, display: Option<&Display>) -> Vec<u8> {
+    const PIXELS: usize = 1 << 14;
+    let mut out = vec![0u8; image.as_raw().len() / 3 * 4];
+    out.par_chunks_mut(PIXELS * 4).zip(image.as_raw().par_chunks(PIXELS * 3)).for_each(|(out, rgb)| {
+        for (bgra, rgb) in out.chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
+            let [red, green, blue] = match display {
+                Some(display) => display.pixel([rgb[0], rgb[1], rgb[2]]),
+                None => [rgb[0], rgb[1], rgb[2]],
+            };
+            bgra.copy_from_slice(&[blue, green, red, 255]);
+        }
+    });
+    out
 }
 
 enum Curve {
@@ -243,6 +264,47 @@ mod tests {
             let started = std::time::Instant::now();
             display.apply(&mut frame);
             println!("{width} × {height}: {:?}", started.elapsed());
+        }
+    }
+
+    #[test]
+    fn the_four_byte_frame_is_the_three_byte_frame() {
+        let frame = RgbImage::from_fn(300, 70, |x, y| image::Rgb([x as u8, (y * 3) as u8, (x ^ y) as u8]));
+        let bgra = to_bgra(&frame, None);
+        for (rgb, bgra) in frame.as_raw().chunks_exact(3).zip(bgra.chunks_exact(4)) {
+            assert_eq!([bgra[2], bgra[1], bgra[0], bgra[3]], [rgb[0], rgb[1], rgb[2], 255]);
+        }
+        let wide = Display {
+            name: "wide".to_string(),
+            decode: std::array::from_fn(|code| ColourSpace::Srgb.decode(code as f32 / 255.0)),
+            matrix: [[0.72, 0.28, 0.0], [0.03, 0.96, 0.01], [0.02, 0.07, 0.91]],
+            encode: std::array::from_fn(|_| backwards(&Curve::Parametric(0, [2.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))),
+        };
+        let mut applied = frame.clone();
+        wide.apply(&mut applied);
+        let bgra = to_bgra(&frame, Some(&wide));
+        for (rgb, bgra) in applied.as_raw().chunks_exact(3).zip(bgra.chunks_exact(4)) {
+            assert_eq!([bgra[2], bgra[1], bgra[0], bgra[3]], [rgb[0], rgb[1], rgb[2], 255]);
+        }
+    }
+
+    #[test]
+    fn the_nearest_step_is_the_rounded_one() {
+        let rounded = |value: f32| (value.clamp(0.0, 1.0) * (STEPS - 1) as f32).round() as usize;
+        for bits in (0..=1.0f32.to_bits()).step_by(7) {
+            let value = f32::from_bits(bits);
+            assert_eq!(nearest_step(value), rounded(value), "{value:e}");
+        }
+        for step in 0..STEPS {
+            let half = (step as f32 + 0.5) / (STEPS - 1) as f32;
+            let mut value = f32::from_bits(half.to_bits() - 64);
+            for _ in 0..128 {
+                assert_eq!(nearest_step(value), rounded(value), "{value:e}");
+                value = f32::from_bits(value.to_bits() + 1);
+            }
+        }
+        for value in [-1.0, -0.0, 0.5 - f32::EPSILON / 4.0, 1.0 + f32::EPSILON, 7.0, f32::INFINITY, f32::NAN] {
+            assert_eq!(nearest_step(value), rounded(value), "{value:e}");
         }
     }
 

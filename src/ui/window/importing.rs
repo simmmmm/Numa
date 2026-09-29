@@ -2,7 +2,7 @@ use super::*;
 use numa::io::import::{self, Found, Place, Shoot};
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 thread_local! {
@@ -15,10 +15,17 @@ pub(super) fn watch_cards(state: &App) {
     monitor.connect_mount_added(glib::clone!(
         #[strong] state,
         move |_, mount| {
+
+            rescan_in_background(&state, false);
             if let Some(root) = card_root(mount) {
                 offer(&state, &mount.name(), root);
             }
         }
+    ));
+
+    monitor.connect_mount_removed(glib::clone!(
+        #[strong] state,
+        move |_, _| follow_drive(&state)
     ));
     MONITOR.with(|kept| *kept.borrow_mut() = Some(monitor));
 }
@@ -43,7 +50,8 @@ fn card_root(mount: &gio::Mount) -> Option<PathBuf> {
     let has = |dir: &Path| dir.join("DCIM").is_dir();
     let camera = matches!(mount.root().uri_scheme().as_deref(), Some("gphoto2" | "mtp"));
     let slots = || std::fs::read_dir(&root).ok().is_some_and(|mut entries| entries.any(|entry| entry.is_ok_and(|entry| has(&entry.path()))));
-    (has(&root) || camera || slots()).then_some(root)
+
+    (camera || has(&root) || slots()).then_some(root)
 }
 
 fn cards() -> Vec<(String, PathBuf)> {
@@ -117,6 +125,8 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
             let fresh = adw::PreferencesGroup::new();
             fresh.set_title("Reading the card…");
 
+            fresh.set_header_suffix(Some(&spinner("Reading the card")));
+
             page.remove(&*body.borrow());
             page.remove(&names_group);
             page.add(&fresh);
@@ -126,6 +136,7 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
             let read = read.clone();
             glib::spawn_future_local(async move {
                 let card = read_card(&state, path).await;
+                fresh.set_header_suffix(gtk::Widget::NONE);
                 let places = fill(&state, &dialog, &fresh, &card);
                 go.set_label(&match card.already.iter().filter(|there| there.is_none()).count() {
                     0 => "Nothing new to import".to_string(),
@@ -310,25 +321,35 @@ fn fill(state: &App, dialog: &adw::Dialog, group: &adw::PreferencesGroup, card: 
 
 fn run_import(state: &App, card: Card, places: Vec<Place>, pattern: String) {
     let total: usize = card.shoots.iter().map(|shoot| shoot.photos.len()).sum();
-    let progress = adw::Toast::new(&format!("Importing {total} photographs…"));
-    progress.set_timeout(0);
-    progress.set_button_label(Some("Stop"));
+
+    let (progress, text, bar) = progress_toast(state, &Cancel::default());
+    text.set_text(&format!("Importing {total} photographs…"));
     let stop = Arc::new(AtomicBool::new(false));
-    let count = Arc::new(AtomicUsize::new(0));
     progress.connect_button_clicked(glib::clone!(
         #[strong] stop,
         move |_| stop.store(true, Ordering::Relaxed)
     ));
-    state.toasts.add_toast(progress.clone());
-    glib::timeout_add_local(std::time::Duration::from_millis(250), glib::clone!(
-        #[strong] count,
-        #[weak] progress,
-        #[upgrade_or] glib::ControlFlow::Break,
-        move || {
-            progress.set_title(&format!("Importing {} of {total}…", count.load(Ordering::Relaxed)));
-            glib::ControlFlow::Continue
+    let (text, bar) = (glib::SendWeakRef::from(text.downgrade()), glib::SendWeakRef::from(bar.downgrade()));
+    let moved = move |done: usize| {
+        let (text, bar) = (text.clone(), bar.clone());
+        glib::MainContext::default().invoke(move || {
+            if let (Some(text), Some(bar)) = (text.upgrade(), bar.upgrade()) {
+                text.set_text(&format!("Importing {done} of {total}"));
+                bar.set_fraction(done as f64 / total.max(1) as f64);
+            }
+        });
+    };
+
+    let mut roots: Vec<(PathBuf, numa::io::catalog::Known)> = Vec::new();
+    for place in &places {
+        let (root, known) = match place {
+            Place::Library(library) => (library.path.clone(), state.catalog.known_files(library).unwrap_or_default()),
+            Place::New(path) => (path.clone(), Default::default()),
+        };
+        if !roots.iter().any(|(already, _)| *already == root) {
+            roots.push((root, known));
         }
-    ));
+    }
 
     let state = state.clone();
     let offset = offset();
@@ -358,37 +379,54 @@ fn run_import(state: &App, card: Card, places: Vec<Place>, pattern: String) {
                 (photos, folder)
             })
             .collect();
-        let copied = gio::spawn_blocking(move || {
+        let (copied, scans) = gio::spawn_blocking(move || {
             let mut copied = numa::io::catalog::Copied::default();
             let mut before = 0;
             for (photos, folder) in &jobs {
                 let listed: Vec<(&Found, OsString)> = photos.iter().map(|(photo, name)| (photo, name.clone())).collect();
                 let _ = std::fs::create_dir_all(folder);
-                let one = import::copy(&listed, folder, || stop.load(Ordering::Relaxed), |done| count.store(before + done, Ordering::Relaxed));
+                let one = import::copy(&listed, folder, || stop.load(Ordering::Relaxed), |done| moved(before + done));
                 before += photos.len();
                 copied.photos += one.photos;
                 copied.existing.extend(one.existing);
                 copied.failed.extend(one.failed);
             }
-            copied
+
+            let scans: Vec<(PathBuf, numa::io::catalog::Scan)> =
+                roots.into_iter().map(|(root, known)| {
+                    let found = numa::io::catalog::scan(&root, &known);
+                    (root, found)
+                }).collect();
+            (copied, scans)
         })
         .await
         .unwrap_or_default();
         progress.dismiss();
-        finish(&state, &places, copied);
+        finish(&state, &places, copied, &scans);
     });
 }
 
-fn finish(state: &App, places: &[Place], copied: numa::io::catalog::Copied) {
+fn finish(state: &App, places: &[Place], copied: numa::io::catalog::Copied, scans: &[(PathBuf, numa::io::catalog::Scan)]) {
     let mut opened = None;
     let mut into: Vec<String> = Vec::new();
+    let mut applied: Vec<&Path> = Vec::new();
     for place in places {
         let library = match place {
             Place::Library(library) => Ok(library.clone()),
             Place::New(path) if path.is_dir() => state.catalog.add_library(path),
             Place::New(_) => continue,
         };
-        match library.and_then(|library| state.catalog.sync_library(&library).map(|_| library)) {
+
+        let apply = |library: Library| {
+            match scans.iter().find(|(root, _)| *root == library.path) {
+                Some((root, found)) if !applied.contains(&root.as_path()) => {
+                    applied.push(root.as_path());
+                    state.catalog.apply_scan(&library, found).map(|_| library)
+                }
+                _ => Ok(library),
+            }
+        };
+        match library.and_then(apply) {
             Ok(library) => {
                 into.push(library.label());
                 opened.get_or_insert(library.id);

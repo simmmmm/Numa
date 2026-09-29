@@ -26,7 +26,7 @@ impl PointColour {
         Self { target: oklch(linear_srgb), ..Default::default() }
     }
 
-    fn is_idle(&self) -> bool {
+    pub fn is_idle(&self) -> bool {
         self.hue == 0.0 && self.saturation == 0.0 && self.luminance == 0.0
     }
 

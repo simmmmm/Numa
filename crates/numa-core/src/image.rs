@@ -110,7 +110,7 @@ impl LinearImage {
             clip: self.clip,
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
-            white_point: None,
+            white_point: self.white_point,
             display_referred: self.display_referred,
         }
     }
@@ -131,7 +131,7 @@ impl LinearImage {
             clip: self.clip,
             rendering: self.rendering,
             film_mode: self.film_mode,
-            white_point: None,
+            white_point: self.white_point,
             display_referred: self.display_referred,
         }
     }
@@ -169,7 +169,7 @@ impl LinearImage {
             clip: self.clip,
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
-            white_point: None,
+            white_point: self.white_point,
             display_referred: self.display_referred,
         }
     }
@@ -210,29 +210,18 @@ impl LinearImage {
     }
 
     pub fn downscaled(&self, max_edge: u32) -> Option<LinearImage> {
-        let longest = self.width.max(self.height);
-        if longest <= max_edge || longest == 0 {
-            return None;
-        }
-
-        let scale = max_edge as f64 / longest as f64;
-        let width = ((self.width as f64 * scale).round() as u32).max(1);
-        let height = ((self.height as f64 * scale).round() as u32).max(1);
-
-        let x_ratio = self.width as f64 / width as f64;
-        let y_ratio = self.height as f64 / height as f64;
+        let (width, height) = proxy_size(self.width, self.height, max_edge)?;
+        let (columns, rows) = (box_edges(self.width, width), box_edges(self.height, height));
 
         let mut data = vec![0.0f32; (width as usize) * (height as usize) * 3];
 
         data.par_chunks_mut(width as usize * 3)
             .enumerate()
             .for_each(|(y, row)| {
-                let y0 = (y as f64 * y_ratio) as u32;
-                let y1 = (((y as f64 + 1.0) * y_ratio).ceil() as u32).min(self.height).max(y0 + 1);
+                let (y0, y1) = rows[y];
 
                 for x in 0..width as usize {
-                    let x0 = (x as f64 * x_ratio) as u32;
-                    let x1 = (((x as f64 + 1.0) * x_ratio).ceil() as u32).min(self.width).max(x0 + 1);
+                    let (x0, x1) = columns[x];
 
                     let mut sum = [0.0f64; 3];
                     let mut count = 0.0f64;
@@ -262,10 +251,29 @@ impl LinearImage {
             clip: self.clip,
             rendering: self.rendering.clone(),
             film_mode: self.film_mode.clone(),
-            white_point: None,
+            white_point: self.white_point,
             display_referred: self.display_referred,
         })
     }
+}
+
+pub fn proxy_size(width: u32, height: u32, max_edge: u32) -> Option<(u32, u32)> {
+    let longest = width.max(height);
+    if longest <= max_edge || longest == 0 {
+        return None;
+    }
+    let scale = max_edge as f64 / longest as f64;
+    Some((((width as f64 * scale).round() as u32).max(1), ((height as f64 * scale).round() as u32).max(1)))
+}
+
+pub fn box_edges(from: u32, to: u32) -> Vec<(u32, u32)> {
+    let ratio = from as f64 / to as f64;
+    (0..to)
+        .map(|at| {
+            let start = (at as f64 * ratio) as u32;
+            (start, (((at as f64 + 1.0) * ratio).ceil() as u32).min(from).max(start + 1))
+        })
+        .collect()
 }
 
 pub(crate) fn source_map(

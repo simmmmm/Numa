@@ -16,4 +16,5 @@ pub mod guided;
 pub mod denoise;
 pub mod lens;
 pub mod paths;
+pub mod power;
 pub mod lut;
