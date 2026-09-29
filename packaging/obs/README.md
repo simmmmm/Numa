@@ -1,7 +1,9 @@
 # Distribution packages (openSUSE Build Service)
 
-One OBS package builds Numa for Fedora, openSUSE, Debian, Ubuntu and Arch, and
-keeps a repository per distribution that updates with the system. OBS takes
+One OBS package, [`home:Numa/numa`](https://build.opensuse.org/package/show/home:Numa/numa),
+builds Numa for Fedora, openSUSE, Debian, Ubuntu and Arch, and keeps a
+repository per distribution that updates with the system. Users add it from the
+[download page](https://software.opensuse.org/download.html?project=home:Numa&package=numa). OBS takes
 only open source, which is why Numa has been GPL-3.0-or-later since 29
 September 2026.
 
@@ -15,9 +17,10 @@ September 2026.
 
 ## A release
 
+`dev/publish.sh` does all of it, with the other platforms. By hand:
+
 ```sh
-dev/publish.sh                   # the public copy, ../Numa-public
-packaging/obs/sources.sh         # target/obs: the tarball and the recipes
+dev/publish-dev.sh copy          # ../Numa-public, and from it target/obs
 packaging/obs/test.sh            # optional: all five built in containers
 ```
 
@@ -30,26 +33,26 @@ where Numa looks from its binary.
 Then into the OBS checkout, with [osc](https://github.com/openSUSE/osc):
 
 ```sh
-cd ~/obs/home:<user>/numa
-rm -f * && cp ../../../path/to/Numa/target/obs/* .
+osc checkout home:Numa numa -o <somewhere>     # once
+cd <somewhere> && rm -f * && cp <Numa>/target/obs/* .
 osc addremove && osc commit -m "Numa <version>"
 ```
 
-## Setting it up once
+`osc` is on PyPI (`pipx install osc`, with `pipx inject osc keyring` so the
+password stays in the keyring). The account is `Numa`, with a capital N.
 
-1. An openSUSE account at build.opensuse.org, which gives `home:<user>`.
-2. There, **Create Package** `numa`, and under **Repositories** add Fedora
-   (current), openSUSE Tumbleweed, Debian Testing, Ubuntu 26.04 and Arch, each
-   for x86_64.
-3. `osc checkout home:<user>/numa` asks for the password once.
+## The project
 
-The package page then has **Download package**, with the lines to add the
-repository on each distribution.
+`home:Numa` builds for Fedora_44, openSUSE_Tumbleweed, Debian_Testing,
+xUbuntu_26.04 and Arch, all x86_64 (`osc meta prj home:Numa`). Its project
+config says `Prefer: hdf5` for Arch, where something deep in the dependencies
+could be either hdf5 or hdf5-openmpi and OBS will not choose.
 
 ## Not yet
 
-- **Debian 13 and Ubuntu 24.04.** Their Rust is too old (1.85 and 1.91; the
-  gtk4-rs crates want 1.92). Debian 13 has 1.94 in trixie-backports, which OBS
+- **Debian 13, Ubuntu 24.04 and Fedora 43.** Their Rust is too old (1.85,
+  1.91, and 1.90 on OBS, which has Fedora 43 without its updates; the gtk4-rs
+  crates want 1.92). Debian 13 has 1.94 in trixie-backports, which OBS
   can use once the project lists that repository; Ubuntu 24.04 has nothing
   newer. The Flatpak and the AppImage cover both meanwhile.
 - **aarch64.** Microsoft publishes ONNX Runtime for it too; the spec is

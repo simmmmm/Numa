@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{
   super::{BmffError, BoxHeader, ReadBox, Result},
   cctp::CctpBox,
@@ -28,7 +31,7 @@ pub struct Cr3DescBox {
 }
 
 impl Cr3DescBox {
-
+  //pub const TYP: FourCC = FourCC::with(['u', 'u', 'i', 'd']);
   pub const UUID: [u8; 16] = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
 }
 
@@ -46,6 +49,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for Cr3DescBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 

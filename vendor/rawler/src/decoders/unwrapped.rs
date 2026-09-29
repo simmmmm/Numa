@@ -157,7 +157,7 @@ pub fn decode_unwrapped(file: &RawSource) -> Result<RawImageData> {
     46 => Ok(RawImageData::Integer(
       mos::MosDecoder::do_decode(data, true, width, height, false)?.into_inner(),
     )),
-
+    //47  => Ok(RawImageData::Integer(iiq::IiqDecoder::decode_compressed(data, height*4, 0, width, height, false).into_inner())),
     48 => decode_nef(data, width, height, Endian::Little, 12),
     49 => decode_nef(data, width, height, Endian::Little, 14),
     50 => decode_nef(data, width, height, Endian::Big, 12),

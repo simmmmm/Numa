@@ -4,8 +4,9 @@ Numa's own work. Each profile was fitted by Numa (tests/camera_profile_fit.rs,
 RENDER-012/015) from raw files that raw.pixls.us publishes under CC0 1.0
 (public domain), against the JPEG each camera embedded in its own file. No
 other camera profile, and no photograph under any other licence, went into
-them. They are offered as options beside a camera's matrix and any other
-profile; Numa never chooses one of them by itself.
+them. They are offered beside a camera's matrix and any other profile, and
+since RENDER-016 Automatic takes Numa's own first where a body has one
+(Preferences, General, Colour, Camera profile can choose otherwise).
 
 Each is shipped only because it beat the camera's matrix on held-out frames
 (frames the fit never saw), as mean chroma error against the camera's JPEG —
@@ -14,12 +15,41 @@ matrix alone is already nearer the JPEGs than it was. The E-M1 Mark II's is
 gone: fitted then against Numa's own rendering, since rawler reads no preview
 from an ORF, and fitted again against the camera's it did not beat the matrix.
 
-Numa EOS R5.dcp       Canon EOS R5        0.0386 -> 0.0241 (2 held out)  raws 4692 4694 4695 4696 4697 4698
-Numa D850.dcp         Nikon D850          0.0402 -> 0.0285 (1 held out)  raws 1835 1836 1839 1841
-Numa ILCE-7RM3.dcp    Sony ILCE-7RM3      0.0199 -> 0.0149 (1 held out)  raws 2043 2045 2046
-Numa X-S10.dcp        Fujifilm X-S10      0.0571 -> 0.0297 (1 held out)  raws 4188 4189 4190
-Numa X-T4.dcp         Fujifilm X-T4       0.0929 -> 0.0766 (1 held out)  raws 3913 3914 3918
-Numa X-T5.dcp         Fujifilm X-T5       0.0228 -> 0.0160 (3 held out)  the photographer's own, see below
+The five fitted from raw.pixls.us beside the X-T5 on 27 September (EOS R5,
+D850, ILCE-7RM3, X-S10, X-T4) are gone since 29 September: each was held out on a frame of the same
+session it was fitted on. The ILCE-7RM3's, measured on a frame of another scene,
+did not beat the matrix; the other four have no second scene to measure on. The
+X-T5's, measured on two of the photographer's later frames and three CC0 ones,
+still does (0.0375 -> 0.0308, Adobe Standard 0.0372).
+
+The twenty beside the X-T5 were added on 29 September (RENDER-023), from up to
+four raws a body: each beat the matrix and, where one is installed, the
+RawTherapee profile, on a held-out frame of a scene the fit never saw (taken
+more than half an hour from every fitted frame). 220 bodies were fitted; most
+of the rest were held back because every raw of the body shows one scene, so
+no frame could be held out honestly.
+
+Numa X-T5.dcp            Fujifilm X-T5           0.0228 -> 0.0160 (3 held out)  the photographer's own, see below
+Numa ILCE-6300.dcp       Sony ILCE-6300          0.0260 -> 0.0258 (1 held out)  raws 783 979
+Numa ILCE-6400A.dcp      Sony ILCE-6400A         0.0839 -> 0.0761 (1 held out)  raws 7826 7895
+Numa ILCE-7M3.dcp        Sony ILCE-7M3           0.0333 -> 0.0271 (1 held out)  raws 2414 2415 2418
+Numa EOS 850D.dcp        Canon EOS 850D          0.0618 -> 0.0600 (1 held out)  raws 4867 4868
+Numa EOS M50.dcp         Canon EOS M50           0.0248 -> 0.0223 (1 held out)  raws 2663 4656 4657
+Numa EOS R.dcp           Canon EOS R             0.0239 -> 0.0133 (1 held out)  raws 4515 4543 4643 4668
+Numa 1 V1.dcp            Nikon 1 V1              0.0267 -> 0.0186 (1 held out)  raws 2210 2217
+Numa D200.dcp            Nikon D200              0.0413 -> 0.0345 (1 held out)  raws 8079 824
+Numa D3400.dcp           Nikon D3400             0.0349 -> 0.0291 (1 held out)  raws 1561 1876
+Numa D5000.dcp           Nikon D5000             0.0639 -> 0.0617 (1 held out)  raws 1341 2825
+Numa Z fc.dcp            Nikon Z fc              0.0753 -> 0.0708 (1 held out)  raws 4812 4813 8563 8566
+Numa FC7303.dcp          DJI FC7303              0.0700 -> 0.0613 (1 held out)  raws 4785 4898
+Numa C (Typ 112).dcp     Leica C (Typ 112)       0.0154 -> 0.0148 (1 held out)  raws 3017 4963
+Numa E-M10 Mark IV.dcp   Olympus E-M10 Mark IV   0.0289 -> 0.0270 (1 held out)  raws 4126 4132
+Numa DMC-LX3.dcp         Panasonic DMC-LX3       0.0759 -> 0.0635 (1 held out)  raws 1395 1808
+Numa DMC-TX1.dcp         Panasonic DMC-TX1       0.0557 -> 0.0409 (1 held out)  raws 3103 3105 3106 3107
+Numa K-5 II s.dcp        Pentax K-5 II s         0.0275 -> 0.0249 (1 held out)  raws 1184 1198
+Numa K-70.dcp            Pentax K-70             0.0817 -> 0.0563 (1 held out)  raws 1141 1142 1753
+Numa K-S1.dcp            Pentax K-S1             0.0830 -> 0.0615 (1 held out)  raws 1365 4365
+Numa K20D.dcp            Pentax K20D             0.0421 -> 0.0339 (1 held out)  raws 1143 2879
 
 The X-T5 profile is the one exception to the raw.pixls.us rule: it was fitted
 from ten of the photographer's own X-T5 frames (Provia, Color 0) against the

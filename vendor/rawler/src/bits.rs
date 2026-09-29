@@ -1,3 +1,13 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2025 Daniel Vogelbacher <daniel@chaospixel.com>
+//
+// Floating-Point trait was ported from rawspeed:
+// https://github.com/darktable-org/rawspeed/blob/6815b8ca1469234768edc9ddce8b7efb419381bf/src/librawspeed/common/FloatingPoint.h
+// Copyright (C) 2017 Vasily Khoruzhick
+// Copyright (C) 2020 Roman Lebedev
+
+//! Low-level bit operations
+
 use std::iter::repeat;
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
@@ -26,6 +36,7 @@ pub fn clamp(val: i32, min: i32, max: i32) -> i32 {
   res
 }
 
+/// Calculate the required bits to encode as many states.
 pub fn log2ceil(mut states: usize) -> usize {
   let mut bits = 0;
   if states > 0 {
@@ -227,6 +238,11 @@ impl LookupTable {
     }
   }
 
+  //  pub fn lookup(&self, value: u16) -> u16 {
+  //    let (val, _, _) = self.table[value as usize];
+  //    val
+  //  }
+
   #[inline(always)]
   pub fn dither(&self, value: u16, rand: &mut u32) -> u16 {
     let (_, sbase, sdelta) = self.table[value as usize];
@@ -238,6 +254,24 @@ impl LookupTable {
   }
 }
 
+/// A trait defining compile-time parameters for a floating-point representation.
+///
+/// This trait provides associated constants that describe the bit layout of a floating-point type,
+/// including the total storage width, the number of bits for the fraction (mantissa), and the exponent.
+/// It also provides derived constants for the sign bit, precision, exponent bias, and bit positions.
+///
+/// # Associated Constants
+/// - `STORAGE_WIDTH`: Total number of bits used to store the floating-point value.
+/// - `FRACTION_WIDTH`: Number of bits used for the fraction (mantissa).
+/// - `EXPONENT_WIDTH`: Number of bits used for the exponent.
+/// - `STORAGE_BYTES`: Number of bytes required (rounded up) for storage.
+/// - `SIGN_BITS`: Number of bits used for the sign (always 1).
+/// - `PRECISION`: Number of significant bits in the mantissa (fraction width + 1 for the implicit bit).
+/// - `EXPONENT_MAX`: Maximum value of the exponent (before bias).
+/// - `BIAS`: Bias value applied to the exponent.
+/// - `FRACTION_POS`: Bit position where the fraction starts (always 0).
+/// - `EXPONENT_POS`: Bit position where the exponent starts.
+/// - `SIGN_BIT_POS`: Bit position of the sign bit (highest bit).
 pub(crate) trait FloatingPointParameters {
   const STORAGE_WIDTH: usize;
   const FRACTION_WIDTH: usize;
@@ -252,11 +286,19 @@ pub(crate) trait FloatingPointParameters {
   const EXPONENT_MAX: usize = (1 << (Self::EXPONENT_WIDTH - 1)) - 1;
   const BIAS: i32 = Self::EXPONENT_MAX as i32;
   #[allow(dead_code)]
-  const FRACTION_POS: usize = 0;
+  const FRACTION_POS: usize = 0; // FractionPos is always 0.
   const EXPONENT_POS: usize = Self::FRACTION_WIDTH;
   const SIGN_BIT_POS: usize = Self::STORAGE_WIDTH - 1;
 }
 
+/// A generic struct representing a binary number with customizable storage width, fraction width, and exponent width.
+///
+/// # Type Parameters
+/// - `STORAGE_WITH`: The total number of bits used for storage.
+/// - `FRACTION_WIDTH`: The number of bits allocated for the fractional part.
+/// - `EXPONENT_WIDTH`: The number of bits allocated for the exponent part.
+///
+/// This struct can be used to represent custom floating-point or fixed-point binary formats.
 pub(crate) struct BinaryN<const STORAGE_WITH: usize, const FRACTION_WIDTH: usize, const EXPONENT_WIDTH: usize> {}
 
 impl<const STORAGE_WITH: usize, const FRACTION_WIDTH: usize, const EXPONENT_WIDTH: usize> FloatingPointParameters
@@ -280,20 +322,25 @@ pub(crate) fn extend_binary_floating_point<NARROW: FloatingPointParameters, WIDE
   let narrow_exponent = (value >> NARROW::EXPONENT_POS) & ((1 << NARROW::EXPONENT_WIDTH) - 1);
   let narrow_fraction = value & ((1 << NARROW::FRACTION_WIDTH) - 1);
 
+  // Normalized or zero
   let mut wide_exponent = ((narrow_exponent as i32) - NARROW::BIAS + WIDE::BIAS) as u32;
   let mut wide_fraction = narrow_fraction << (WIDE::FRACTION_WIDTH - NARROW::FRACTION_WIDTH);
 
   if narrow_exponent == ((1 << NARROW::EXPONENT_WIDTH) - 1) {
-
+    // Infinity or NaN
     wide_exponent = (1 << WIDE::EXPONENT_WIDTH) - 1;
-
+    // Narrow fraction is kept/widened!
   } else if narrow_exponent == 0 {
     if narrow_fraction == 0 {
-
+      // +-Zero
       wide_exponent = 0;
       wide_fraction = 0;
     } else {
-
+      // Subnormal numbers
+      // We can represent it as a normalized value in wider type,
+      // we have to shift fraction until we get 1.new_fraction
+      // and decrement exponent for each shift.
+      // FIXME; what is the implicit precondition here?
       wide_exponent = (1 - NARROW::BIAS + WIDE::BIAS) as u32;
       while 0 == (wide_fraction & (1 << WIDE::FRACTION_WIDTH)) {
         wide_exponent -= 1;

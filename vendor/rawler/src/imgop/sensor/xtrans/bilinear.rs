@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2026 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use multiversion::multiversion;
 use rayon::prelude::*;
 use std::time::Instant;
@@ -8,6 +11,20 @@ use crate::{
   pixarray::{Color2D, PixF32, RgbF32},
 };
 
+/// Bilinear demosaicing implementation for Fujifilm X-Trans sensor data.
+///
+/// X-Trans sensors use a 6x6 color filter array (CFA) pattern instead of the
+/// more common 2x2 Bayer pattern. This demosaicing algorithm uses simple bilinear
+/// interpolation over a 5x5 neighborhood to reconstruct missing color channels
+/// at each pixel.
+///
+/// # Quality
+///
+/// Bilinear interpolation is the simplest demosaicing approach and produces
+/// lower quality results compared to more advanced algorithms (e.g. directional
+/// or frequency-domain methods). It tends to produce color fringing and
+/// zipper artifacts at edges. However, it is fast and suitable for previews
+/// or when speed is more important than quality.
 #[derive(Default)]
 pub struct XTransBilinearDemosaic {}
 
@@ -18,7 +35,16 @@ impl XTransBilinearDemosaic {
 }
 
 impl Demosaic<f32, 3> for XTransBilinearDemosaic {
-
+  /// Demosaic X-Trans sensor data using bilinear interpolation.
+  ///
+  /// # Parameters
+  /// - `pixels`: Single-channel mosaic pixel data (f32).
+  /// - `cfa`: The color filter array describing the X-Trans pattern.
+  /// - `colors`: Plane-to-color mapping (unused, assumed RGB).
+  /// - `roi`: Region of interest within `pixels` to demosaic.
+  ///
+  /// # Panics
+  /// Panics if the CFA pattern is not an RGB pattern.
   #[allow(unused)]
   fn demosaic(&self, pixels: &PixF32, cfa: &CFA, colors: &PlaneColor, roi: Rect) -> Color2D<f32, 3> {
     if !cfa.is_rgb() {
@@ -31,6 +57,17 @@ impl Demosaic<f32, 3> for XTransBilinearDemosaic {
   }
 }
 
+/// Perform bilinear interpolation on X-Trans mosaic data.
+///
+/// For each pixel in the output, this function averages all same-color samples
+/// within a 5x5 window (±2 pixels in each direction) centered on the target
+/// pixel. The window is clamped at image boundaries.
+///
+/// The CFA pattern is shifted according to the ROI origin so that the correct
+/// color channel is assigned regardless of where the ROI falls within the
+/// full-frame CFA pattern.
+///
+/// Uses SIMD acceleration via `multiversion` when available (AVX2, SSE, NEON).
 #[multiversion(targets("x86_64+avx+avx2+fma", "x86+sse", "aarch64+neon"))]
 fn interpolate_bilinear(input: &PixF32, cfa: &CFA, roi: Rect) -> Color2D<f32, 3> {
   let cfa_roi = cfa.shift(roi.p.x, roi.p.y);

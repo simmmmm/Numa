@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, FourCC, ReadBox, Result, read_box_header_ext};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -40,7 +44,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MdhdBox {
       )
     };
     let _language_code = reader.read_u16::<BigEndian>()?;
-
+    //let language = language_string(language_code); // TODO
     let language = String::from("FIXME");
 
     reader.seek(SeekFrom::Start(header.end_offset()))?;

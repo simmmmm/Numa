@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2024 Daniel Vogelbacher <daniel@chaospixel.com>
+// Originally written in C in dcraw.c by Dave Coffin
+
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::mem::swap;
@@ -131,7 +135,7 @@ impl<'a> QtkDecoder<'a> {
   }
 
   pub fn decompress_quicktake_150(&self, src: &PaddedBuf, width: usize, height: usize, dummy: bool) -> Result<PixU16> {
-
+    // Model 150 always compress with cbpp=3
     let cbpp = 3;
     crate::decompressors::radc::decompress(src, width, height, cbpp, dummy)
   }
@@ -180,7 +184,7 @@ impl<'a> QtkDecoder<'a> {
           pix[row - 1][col + 3] = val;
         }
       }
-      pix[row][width + 2 + (row & 1)] = val;
+      pix[row][width + 2 + (row & 1)] = val; // last column
     }
 
     for rb in 0..2 {
@@ -227,7 +231,7 @@ impl<'a> QtkDecoder<'a> {
       let mut random = ((pix[row + 2][2] as u32) << 16) | (pix[row + 2][3]) as u32;
       for (x, p) in line.iter_mut().zip(pix[row + 2][2..width + 2].iter()) {
         *x = tbl.dither(*p as u16, &mut random);
-
+        //*x = CURVE[*p as usize]; // no dither
       }
     });
 

@@ -1,0 +1,103 @@
+{
+  "parts": {
+    "white_balance": false,
+    "tone": true,
+    "colour": true,
+    "curve": false,
+    "detail": false,
+    "geometry": false
+  },
+  "document": {
+    "source": {
+      "path": ""
+    },
+    "operations": [
+      {
+        "type": "Basic",
+        "contrast": 12,
+        "vibrance": 10
+      },
+      {
+        "type": "Mixer",
+        "bands": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            10,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            40,
+            -35,
+            0
+          ],
+          [
+            20,
+            0,
+            0
+          ],
+          [
+            -20,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "monochrome": false,
+        "grey": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "type": "Grading",
+        "shadows": {
+          "hue": 188,
+          "saturation": 45,
+          "luminance": 0
+        },
+        "midtones": {
+          "hue": 0,
+          "saturation": 0,
+          "luminance": 0
+        },
+        "highlights": {
+          "hue": 33,
+          "saturation": 35,
+          "luminance": 0
+        },
+        "global": {
+          "hue": 0,
+          "saturation": 0,
+          "luminance": 0
+        },
+        "blending": 50,
+        "balance": 0
+      }
+    ]
+  }
+}

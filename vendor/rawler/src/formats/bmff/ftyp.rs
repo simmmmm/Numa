@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -22,7 +26,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for FtypBox {
     if header.size % 4 != 0 {
       return Err(BmffError::Parse("invalid ftyp size".into()));
     }
-    let brand_count = (header.size - 16) / 4;
+    let brand_count = (header.size - 16) / 4; // header + major + minor
 
     let mut brands = Vec::new();
     for _ in 0..brand_count {

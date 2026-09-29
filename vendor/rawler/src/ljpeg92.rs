@@ -1,3 +1,32 @@
+// Lossless JPEG encoder for 1-component
+// ITU T.81 Annex H from 1992
+//
+// Originally written by Andrew Baldwin as lj92.c
+// Ported to Rust by Daniel Vogelbacher
+//
+// (c) 2014 Andrew Baldwin
+// (c) 2021 Daniel Vogelbacher
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+// of the Software, and to permit persons to whom the Software is furnished to do
+// so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+//! Lossless JPEG (LJPEG) compressor
+
 use byteorder::{BigEndian, WriteBytesExt};
 use multiversion::multiversion;
 use std::{
@@ -8,8 +37,11 @@ use thiserror::Error;
 
 use crate::{bitarray::BitArray16, inspector};
 
+/// Cache for bit count table.
 const NUM_BITS_TBL: [u16; 256] = build_num_bits_tbl();
 
+/// Construct a cache table for bit count lookup.
+/// Code logic copied from Adobe DNG SDK.
 const fn build_num_bits_tbl() -> [u16; 256] {
   let mut tbl = [0; 256];
   let mut i = 1;
@@ -34,14 +66,18 @@ const fn build_num_bits_tbl() -> [u16; 256] {
   tbl
 }
 
+/// Find the number of bits needed for the magnitude of the coefficient
+/// This utilizes the caching table which should be faster than
+/// calculating it manually.
 fn lookup_ssss(diff: i16) -> u16 {
-  let diff_abs = (diff as i32).unsigned_abs() as usize;
+  let diff_abs = (diff as i32).unsigned_abs() as usize; // Convert to i32 because abs() can be overflow i16
   if diff_abs >= 256 {
     NUM_BITS_TBL[(diff_abs >> 8) & 0xFF] + 8
   } else {
     NUM_BITS_TBL[diff_abs & 0xFF]
   }
-
+  // manual way:
+  // let ssss = if diff == 0 { 0 } else { 32 - (diff as i32).abs().leading_zeros() };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -76,69 +112,113 @@ impl From<u8> for Predictor {
   }
 }
 
+/// Error variants for compressor
 #[derive(Debug, Error)]
 pub enum CompressorError {
-
+  /// Overflow of input, size constraints...
   #[error("Overflow error: {}", _0)]
   Overflow(String),
 
+  /// Error on internal cursor type
   #[error("I/O error")]
   Io(#[from] std::io::Error),
 }
 
+/// Result type for Compressor results
 type Result<T> = std::result::Result<T, CompressorError>;
 
+/// Encoder for Lossless JPEG
+///
+/// With this type you can get a instance of `LjpegCompressor`.
+/// The encode() method consumes the instance and
+/// returns the encoded JPEG data.
 pub struct LjpegCompressor<'a> {
-
+  /// Raw image input
   image: &'a [u16],
-
+  /// Width of input image
   width: usize,
-
+  /// height of input image
   height: usize,
-
+  /// Number of components (1-4, only 1 is supported)
   components: usize,
-
+  /// Bitdepth of input image
   bitdepth: u8,
-
+  /// Point transformation parameter
+  /// **Warning:** This is untested, use with caution
   point_transform: u8,
-
+  /// Predictor
   predictor: Predictor,
-
+  /// Extra width after each line before next line starts
   padding: usize,
-
+  /// Component state (histogram, hufftable)
   comp_state: Vec<ComponentState>,
 
   cache: Vec<i16>,
 }
 
+/// HUFFENC and HUFFBITS
 #[derive(Debug, Default, Clone)]
 struct HuffCode {
   enc: u16,
   bits: u16,
 }
 
+/// Huffman table builder
+///
+/// Builds an optimal Huffman table for encoding for a given
+/// list of symbol frequencies.
 #[derive(Default, Debug)]
 struct HuffTableBuilder {
-
+  /// Frequency of occurrence of symbol V.
+  ///
+  /// Used while building the table. Initialized with the raw histogram
+  /// counts for each ssss (0..=16). The last slot (index 17) is the
+  /// reserved code point — per T.81 K.1 it is seeded with frequency 1 so
+  /// it is strictly smaller than any real non-zero bin. The K.1 pair-merge
+  /// loop therefore always picks it first, guaranteeing that no real code
+  /// word can ever be all "1" bits.
+  ///
+  /// Frequencies are kept as integers.
   freq: [u64; Self::CLASSES + 1],
 
+  /// Code size of symbol V
+  /// Size (in bits) for each ssss.
   codesize: [usize; Self::CLASSES + 1],
 
+  /// Index to next symbol in chain of all symbols in current branch of code tree
+  /// Other frequencies, used during table buildup.
   others: [Option<usize>; Self::CLASSES + 1],
 
+  /// Numbers of codes of each size
   bits: Vec<u8>,
 
+  /// List of values (ssss) sorted in ascending
+  /// code length.
+  /// Unused values (at the end of array) are set
+  /// to `None`.
   huffval: [Option<u8>; Self::CLASSES],
 
+  /// Code for each symbol
+  /// Is is a combination of Huffbits and Huffenc
   huffcode: [HuffCode; Self::CLASSES + 1],
 
+  /// Maps a value (ssss) to a symbol.
+  /// This symbol can be used as index into
+  /// `huffcode` to get the actual code for encoding.
   huffsym: [Option<usize>; Self::CLASSES],
 }
 
 impl HuffTableBuilder {
+  /// Count of classes for Lossless JPEG
+  /// For regular JPEG, V goes from 0 to 256. For lossless,
+  /// we only have 17 classes for ssss (0-16).
+  const CLASSES: usize = 17; // Sample classes for Lossless JPEG
 
-  const CLASSES: usize = 17;
-
+  /// Construct new Huffman table for given histogram.
+  ///
+  /// The histogram bins are used verbatim as integer frequencies
+  /// and the reserved code point is seeded with 1 so it is
+  /// strictly smaller than any real non-zero bin (T.81 K.1).
   fn new(histogram: [usize; Self::CLASSES]) -> Self {
     let mut ins = Self::default();
     ins.bits.resize(33, 0);
@@ -149,21 +229,24 @@ impl HuffTableBuilder {
     ins
   }
 
+  /// Figure K.1 - Procedure to find Huffman code sizes
   fn gen_codesizes(&mut self) {
     loop {
-
+      // Indices and frequencies of the two smallest non-zero bins.
+      // Sentinel = u64::MAX so any real value compares smaller.
       let mut v1freq: u64 = u64::MAX;
       let mut v2freq: u64 = u64::MAX;
       let mut v1: Option<usize> = None;
       let mut v2: Option<usize> = None;
-
+      // Search v1. Forward iteration with `<=` keeps the highest index on
+      // ties, matching T.81 K.1's tie-breaking rule.
       for (i, f) in self.freq.iter().enumerate().filter(|(_i, f)| **f > 0) {
         if *f <= v1freq {
           v1freq = *f;
           v1 = Some(i);
         }
       }
-
+      // Search v2
       for (i, f) in self.freq.iter().enumerate().filter(|(i, f)| **f > 0 && Some(*i) != v1) {
         if *f <= v2freq {
           v2freq = *f;
@@ -175,10 +258,11 @@ impl HuffTableBuilder {
 
       match (&mut v1, &mut v2) {
         (Some(v1), Some(v2)) => {
-
+          // Combine frequency values
           self.freq[*v1] += self.freq[*v2];
           self.freq[*v2] = 0;
 
+          // Increment code sizes for all codewords in this tree branch
           loop {
             self.codesize[*v1] += 1;
             if let Some(other) = self.others[*v1] {
@@ -198,7 +282,7 @@ impl HuffTableBuilder {
           }
         }
         _ => {
-          break;
+          break; // exit loop, all frequencies are processed
         }
       }
     }
@@ -208,13 +292,14 @@ impl HuffTableBuilder {
     }
   }
 
+  /// Figure K.2 - Procedure to find the number of codes of each size
   fn count_bits(&mut self) {
-
+    // K2
     for i in 0..18 {
       if self.codesize[i] > 0 {
         self.bits[self.codesize[i] as usize] += 1;
       }
-    }
+    } // end of K2
 
     self.adjust_bits();
 
@@ -224,11 +309,19 @@ impl HuffTableBuilder {
     }
   }
 
+  /// Section K.2 Figure K.4 Sorting of input values according to code size
+  /// The input values are sorted according to code size as shown in Figure
+  /// K.4.  HUFFVAL is the list containing the input values associated with
+  /// each code word, in order of increasing code length.
+  ///
+  /// At this point, the list of code lengths (BITS) and the list of values
+  /// (HUFFVAL) can be used to generate the code tables.  These procedures
+  /// are described in Annex C.
   fn sort_input(&mut self) {
     let mut k = 0;
     for i in 1..=32 {
       for j in 0..=16 {
-
+        // ssss
         if self.codesize[j] == i {
           self.huffval[k] = Some(j as u8);
           k += 1;
@@ -237,6 +330,7 @@ impl HuffTableBuilder {
     }
   }
 
+  /// Section C.2 Figure C.1 Generation of table of Huffman code sizes
   fn gen_size_table(&mut self) -> usize {
     let mut k = 0;
     let mut i = 1;
@@ -254,6 +348,7 @@ impl HuffTableBuilder {
     k
   }
 
+  /// Section C.2 Figure C.2 Generation of table of Huffman codes
   fn gen_code_table(&mut self) {
     let mut k = 0;
     let mut code = 0;
@@ -280,6 +375,7 @@ impl HuffTableBuilder {
     }
   }
 
+  /// Section C.2 Figure C.3 Ordering procedure for encoding code tables
   fn order_codes(&mut self, _lastk: usize) {
     for (i, ssss) in self.huffval.iter().enumerate() {
       if let Some(ssss) = ssss {
@@ -288,12 +384,24 @@ impl HuffTableBuilder {
     }
   }
 
+  /// Section K.2 Figure K.3 Procedure for limiting code lengths to 16 bits
+  ///
+  /// Figure K.3 gives the procedure for adjusting the BITS list so that no
+  /// code is longer than 16 bits.  Since symbols are paired for the
+  /// longest Huffman code, the symbols are removed from this length
+  /// category two at a time.  The prefix for the pair (which is one bit
+  /// shorter) is allocated to one of the pair; then (skipping the BITS
+  /// entry for that prefix length) a code word from the next shortest
+  /// non-zero BITS entry is converted into a prefix for two code words one
+  /// bit longer.  After the BITS list is reduced to a maximum code length
+  /// of 16 bits, the last step removes the reserved code point from the
+  /// code length count.
   fn adjust_bits(&mut self) {
     let mut i = 32;
 
     while i > 16 {
       if self.bits[i] > 0 {
-        let mut j = i - 2;
+        let mut j = i - 2; // See K.3: J = I - 1; J  = J - 1;
         while self.bits[j] == 0 {
           j -= 1;
         }
@@ -312,6 +420,7 @@ impl HuffTableBuilder {
     self.bits[i] -= 1;
   }
 
+  /// Build Huffman table
   fn build(mut self) -> [BitArray16; HuffTableBuilder::CLASSES] {
     inspector!("Start building table");
     self.gen_codesizes();
@@ -351,6 +460,8 @@ impl HuffTableBuilder {
     table
   }
 
+  /// This is a manual optimized table for most regular images
+  /// Useful for testing only.
   fn _generic_table(histogram: [usize; Self::CLASSES], _resolution: f32) -> [BitArray16; HuffTableBuilder::CLASSES] {
     let mut dist: Vec<(usize, usize)> = histogram.iter().enumerate().map(|(a, b)| (a, *b)).collect();
     dist.sort_by(|a, b| b.1.cmp(&a.1));
@@ -381,14 +492,16 @@ impl HuffTableBuilder {
   }
 }
 
+/// State for one component of the image
 #[derive(Default, Clone, Debug)]
 struct ComponentState {
-
+  /// Histogram of component
   histogram: [usize; 17],
-
+  /// Huffman table for component
   hufftable: [BitArray16; HuffTableBuilder::CLASSES],
 }
 
+/// Bitstream for JPEG encoded data
 pub struct BitstreamJPEG<'a> {
   inner: &'a mut dyn Write,
   next: u8,
@@ -406,19 +519,19 @@ impl<'a> BitstreamJPEG<'a> {
 
   pub fn write(&mut self, mut bits: usize, value: u64) -> std::io::Result<()> {
     while bits > 0 {
-
+      // flush buffer if full
       if self.used == 8 {
         self.internal_flush()?;
       }
-
+      // how many bits are free?
       let free = 8 - self.used;
-
+      // take exactly
       let take = min(bits, free);
-
+      // peeked bits from value
       let peek = ((value >> (bits - take)) & ((1 << take) - 1)) as u8;
-
+      // add peeked bits to buffer
       self.next |= peek << (free - take);
-
+      // reduce consumed bits
       bits -= take;
       self.used += take;
     }
@@ -428,7 +541,7 @@ impl<'a> BitstreamJPEG<'a> {
   fn internal_flush(&mut self) -> std::io::Result<()> {
     self.inner.write_u8(self.next)?;
     if self.next == 0xFF {
-
+      // Byte stuffing
       self.inner.write_u8(0x00)?;
     }
     self.used = 0;
@@ -445,7 +558,9 @@ impl<'a> BitstreamJPEG<'a> {
 }
 
 impl<'a> LjpegCompressor<'a> {
-
+  /// Create a new LJPEG encoder
+  ///
+  /// skip_len is given as byte count after a row width.
   pub fn new(
     image: &'a [u16],
     width: usize,
@@ -496,16 +611,19 @@ impl<'a> LjpegCompressor<'a> {
     })
   }
 
+  /// Get the components as Range<usize>
   fn component_range(&self) -> std::ops::Range<usize> {
     0..self.components
   }
 
+  /// Encode input data and consume instance
   pub fn encode(mut self) -> Result<Vec<u8>> {
     let mut encoded = Cursor::new(Vec::with_capacity(self.resolution() * self.components));
     self.scan_frequency()?;
     for comp in self.component_range() {
       self.build_hufftable(comp);
-
+      //self.create_default_table(comp)?;
+      //self.create_encode_table(comp)?;
     }
 
     self.write_header(&mut encoded)?;
@@ -514,11 +632,13 @@ impl<'a> LjpegCompressor<'a> {
     Ok(encoded.into_inner())
   }
 
+  /// Resolution of input image
   #[inline(always)]
   fn resolution(&self) -> usize {
     self.height * self.width
   }
 
+  /// Scan frequency for Huff table
   fn scan_frequency(&mut self) -> Result<()> {
     let mut cache = vec![0; self.resolution() * self.components];
 
@@ -550,7 +670,7 @@ impl<'a> LjpegCompressor<'a> {
         4 => match_predictor!(4, self.predictor),
         _ => unreachable!(),
       }
-
+      // Only copy rowsize values and ignore padding.
       cache[row * rowsize..row * rowsize + rowsize].copy_from_slice(&diffs[..rowsize]);
 
       for (i, diff) in diffs.iter().take(rowsize).enumerate() {
@@ -584,7 +704,7 @@ impl<'a> LjpegCompressor<'a> {
     }
     let huffgen = HuffTableBuilder::new(self.comp_state[comp].histogram);
     let table = huffgen.build();
-
+    //let table = HuffTableBuilder::_generic_table(self.comp_state[comp].histogram.clone(), self.resolution() as f32);
     #[cfg(feature = "inspector")]
     for (i, code) in table.iter().enumerate() {
       inspector!("table[{}]={}", i, code);
@@ -592,32 +712,36 @@ impl<'a> LjpegCompressor<'a> {
     self.comp_state[comp].hufftable = table;
   }
 
+  /// Write JPEG header
   fn write_header(&mut self, encoded: &mut dyn Write) -> Result<()> {
-    encoded.write_u16::<BigEndian>(0xffd8)?;
-    encoded.write_u16::<BigEndian>(0xffc3)?;
+    encoded.write_u16::<BigEndian>(0xffd8)?; // SOI
+    encoded.write_u16::<BigEndian>(0xffc3)?; // SOF_3 Lossless (sequential), Huffman coding
 
-    encoded.write_u16::<BigEndian>(2 + 6 + self.components as u16 * 3)?;
-    encoded.write_u8(self.bitdepth)?;
+    // Write SOF
+    encoded.write_u16::<BigEndian>(2 + 6 + self.components as u16 * 3)?; // Lf, frame header length
+    encoded.write_u8(self.bitdepth)?; // Sample precision P
     encoded.write_u16::<BigEndian>(self.height as u16)?;
     encoded.write_u16::<BigEndian>(self.width as u16)?;
 
-    encoded.write_u8(self.components as u8)?;
+    encoded.write_u8(self.components as u8)?; // Components Nf
     for c in self.component_range() {
-      encoded.write_u8(c as u8)?;
-      encoded.write_u8(0x11)?;
-      encoded.write_u8(0)?;
+      encoded.write_u8(c as u8)?; // Component ID
+      encoded.write_u8(0x11)?; // H_i / V_i, Sampling factor 0001 0001
+      encoded.write_u8(0)?; // Quantisation table Tq (not used for lossless)
     }
 
     for comp in self.component_range() {
-
+      // Write HUFF
       encoded.write_u16::<BigEndian>(0xffc4)?;
 
       let bit_sum: u16 = self.comp_state[comp].hufftable.iter().filter(|e| !e.is_empty()).count() as u16;
       inspector!("Bitsum: {}", bit_sum);
 
-      encoded.write_u16::<BigEndian>(2 + (1 + 16) + bit_sum)?;
-      encoded.write_u8(comp as u8)?;
+      encoded.write_u16::<BigEndian>(2 + (1 + 16) + bit_sum)?; // Lf, frame header length
+      encoded.write_u8(comp as u8)?; // Table ID
 
+      // Write for each of the 16 possible code lengths how many codes
+      // exists with the correspoding length.
       for bit_len in 1..=16 {
         let count = self.comp_state[comp].hufftable.iter().filter(|entry| entry.len() == bit_len).count();
         inspector!("COUNT: {}={}", bit_len, count);
@@ -640,25 +764,28 @@ impl<'a> LjpegCompressor<'a> {
       }
     }
 
-    encoded.write_u16::<BigEndian>(0xffda)?;
-    encoded.write_u16::<BigEndian>(0x0006 + (self.components as u16 * 2))?;
-    encoded.write_u8(self.components as u8)?;
+    // Write SCAN
+    encoded.write_u16::<BigEndian>(0xffda)?; // SCAN
+    encoded.write_u16::<BigEndian>(0x0006 + (self.components as u16 * 2))?; // Ls, scan header length
+    encoded.write_u8(self.components as u8)?; // Ns, Component count
     for c in self.component_range() {
-      encoded.write_u8(c as u8)?;
-      encoded.write_u8((c as u8) << 4)?;
+      encoded.write_u8(c as u8)?; // Cs_i, Component selector
+      encoded.write_u8((c as u8) << 4)?; // Td, Ta, DC/AC entropy table selector
     }
-    encoded.write_u8(self.predictor.as_u8())?;
-    encoded.write_u8(0)?;
+    encoded.write_u8(self.predictor.as_u8())?; // Ss, Predictor for lossless
+    encoded.write_u8(0)?; // Se, ignored for lossless
     debug_assert!(self.point_transform <= 15);
-    encoded.write_u8(0x00 | (self.point_transform & 0xF))?;
+    encoded.write_u8(0x00 | (self.point_transform & 0xF))?; // Ah=0, Al=Point transform
     Ok(())
   }
 
+  /// Write JPEG post
   fn write_post(&mut self, encoded: &mut dyn Write) -> Result<()> {
-    encoded.write_u16::<BigEndian>(0xffd9)?;
+    encoded.write_u16::<BigEndian>(0xffd9)?; // EOI
     Ok(())
   }
 
+  /// Write JPEG body
   fn write_body(&mut self, encoded: &mut dyn Write) -> Result<()> {
     let mut bitstream = BitstreamJPEG::new(encoded);
     for (i, diff) in self.cache.iter().enumerate() {
@@ -668,37 +795,48 @@ impl<'a> LjpegCompressor<'a> {
       let (bits, value) = (enc.len(), enc.get_lsb() as u64);
       debug_assert!(bits > 0);
       bitstream.write(bits, value)?;
+      //inspector!("huff bits: {}, value: {:b}", bits, value);
 
+      // If the number of bits is 16, there is only one possible difference
+      // value (-32786), so the lossless JPEG spec says not to output anything
+      // in that case.  So we only need to output the diference value if
+      // the number of bits is between 1 and 15. This also writes nothing
+      // for ssss==0.
       debug_assert!(ssss <= 16);
       if (ssss & 15) != 0 {
-
+        // sign encoding
         let diff = if *diff < 0 { *diff as i32 - 1 } else { *diff as i32 };
         bitstream.write(ssss as usize, (diff & (0x0FFFF >> (16 - ssss))) as u64)?;
       }
     }
-
+    // Flush the final bits
     bitstream.flush()?;
     Ok(())
   }
 }
 
+/// Calculate the difference value between a sample and the predictor
+/// value. This function is optimized for one and two component input
+/// as this the case for most image data.
+/// `linesize` is the count of values including padding data at the end
 #[multiversion(targets("x86_64+avx+avx2+fma+bmi1+bmi2", "x86_64+avx+avx2", "x86+sse", "aarch64+neon"))]
-
+//#[clone(target = "[x86|x86_64]+avx+avx2+fma+bmi1+bmi2+avx512f+avx512bw")]
 fn ljpeg92_diff<const NCOMP: usize, const PX: u8>(
-  row_prev: &[u16],
-  row_curr: &[u16],
-  diffs: &mut [i16],
-  linesize: usize,
-  point_transform: u8,
-  bitdepth: u8,
+  row_prev: &[u16],    // Previous row (for index 0 it's the same reference as row_curr)
+  row_curr: &[u16],    // Current row
+  diffs: &mut [i16],   // Output buffer for difference values
+  linesize: usize,     // Count of values including padding data at the end
+  point_transform: u8, // Point transform
+  bitdepth: u8,        // Bit depth
 ) {
   debug_assert_eq!(linesize % NCOMP, 0);
-  let pixels = linesize / NCOMP;
+  let pixels = linesize / NCOMP; // How many pixels are in the line
   let samplecnt = pixels * NCOMP;
-  let row_prev = &row_prev[..samplecnt];
-  let row_curr = &row_curr[..samplecnt];
+  let row_prev = &row_prev[..samplecnt]; // Hint for compiler: each slice has identical bounds (SIMD).
+  let row_curr = &row_curr[..samplecnt]; // Slice range must be identical for SIMD optimizations.
   let diffs = &mut diffs[..samplecnt];
 
+  // In debug, check that no sample overflows max_value
   #[cfg(debug_assertions)]
   row_curr.iter().for_each(|sample| {
     let max_value = ((1u32 << (bitdepth - point_transform)) - 1) as u16;
@@ -707,20 +845,22 @@ fn ljpeg92_diff<const NCOMP: usize, const PX: u8>(
     }
   });
 
+  // First row always use predictor 1
+  // Set first column to initial values
   if row_curr.as_ptr() == row_prev.as_ptr() {
     for comp in 0..NCOMP {
       let px = (1u16 << (bitdepth - point_transform - 1)) as i32;
       let sample = pred_x::<NCOMP>(row_prev, row_curr, comp, point_transform);
       diffs[0 + comp] = (sample - px) as i16;
     }
-
+    // Process remaining pixels
     for idx in NCOMP..samplecnt {
       let px = pred_a::<NCOMP>(row_prev, row_curr, idx, point_transform);
       let sample = pred_x::<NCOMP>(row_prev, row_curr, idx, point_transform);
       diffs[idx] = (sample - px) as i16;
     }
   } else {
-
+    // Not on first row, the first column uses predictor 2
     for comp in 0..NCOMP {
       let px = pred_b::<NCOMP>(row_prev, row_curr, 0 + comp, point_transform);
       let sample = pred_x::<NCOMP>(row_prev, row_curr, comp, point_transform);
@@ -740,47 +880,65 @@ fn ljpeg92_diff<const NCOMP: usize, const PX: u8>(
         let ra = pred_a::<NCOMP>(prev, curr, idx, pt);
         let rb = pred_b::<NCOMP>(prev, curr, idx, pt);
         let rc = pred_c::<NCOMP>(prev, curr, idx, pt);
-        ra + ((rb - rc) >> 1)
+        ra + ((rb - rc) >> 1) // Adobe DNG SDK uses int32 and shifts, so we will do, too.
       },
       6 => |prev: &[u16], curr: &[u16], idx: usize, pt: u8| -> i32 {
         let ra = pred_a::<NCOMP>(prev, curr, idx, pt);
         let rb = pred_b::<NCOMP>(prev, curr, idx, pt);
         let rc = pred_c::<NCOMP>(prev, curr, idx, pt);
-        rb + ((ra - rc) >> 1)
+        rb + ((ra - rc) >> 1) // Adobe DNG SDK uses int32 and shifts, so we will do, too.
       },
       7 => |prev: &[u16], curr: &[u16], idx: usize, pt: u8| -> i32 {
         let ra = pred_a::<NCOMP>(prev, curr, idx, pt);
         let rb = pred_b::<NCOMP>(prev, curr, idx, pt);
-        (ra + rb) >> 1
+        (ra + rb) >> 1 // Adobe DNG SDK uses int32 and shifts, so we will do, too.
       },
-
+      // Other predictors are not supported and catched in previous code path.
       _ => unreachable!(),
     };
-
+    // First pixel is processed, now process the remaining pixels.
     for idx in NCOMP..samplecnt {
       let px = predictor(row_prev, row_curr, idx, point_transform);
       let sample = pred_x::<NCOMP>(row_prev, row_curr, idx, point_transform);
-
+      // The difference between the prediction value and
+      // the input is calculated modulo 2^16. So we can cast i32
+      // down to i16 to truncate the upper 16 bits (H.1.2.1, last paragraph).
       diffs[idx] = (sample - px) as i16;
     }
   }
 }
 
+/// Get Rx by current line
+/// Figure H.1
+/// | c | b |
+/// | a | x |
 #[inline(always)]
 fn pred_x<const NCOMP: usize>(_prev: &[u16], curr: &[u16], idx: usize, point_transform: u8) -> i32 {
   unsafe { (curr.get_unchecked(idx) >> point_transform) as i32 }
 }
 
+/// Get Ra predictor by current line
+/// Figure H.1
+/// | c | b |
+/// | a | x |
 #[inline(always)]
 fn pred_a<const NCOMP: usize>(_prev: &[u16], curr: &[u16], idx: usize, point_transform: u8) -> i32 {
   unsafe { (curr.get_unchecked(idx - NCOMP) >> point_transform) as i32 }
 }
 
+/// Get Rb predictor by previous line
+/// Figure H.1
+/// | c | b |
+/// | a | x |
 #[inline(always)]
 fn pred_b<const NCOMP: usize>(prev: &[u16], _curr: &[u16], idx: usize, point_transform: u8) -> i32 {
   unsafe { (prev.get_unchecked(idx) >> point_transform) as i32 }
 }
 
+/// Get Rc predictor by previous line
+/// Figure H.1
+/// | c | b |
+/// | a | x |
 #[inline(always)]
 fn pred_c<const NCOMP: usize>(prev: &[u16], _curr: &[u16], idx: usize, point_transform: u8) -> i32 {
   unsafe { (prev.get_unchecked(idx - NCOMP) >> point_transform) as i32 }
@@ -790,6 +948,7 @@ fn pred_c<const NCOMP: usize>(prev: &[u16], _curr: &[u16], idx: usize, point_tra
 mod tests {
   use super::*;
 
+  /// We reuse the decompressor to check both...
   use crate::decompressors::ljpeg::LjpegDecompressor;
 
   #[test]
@@ -812,9 +971,9 @@ mod tests {
     assert_eq!(buf[1], 0b01011101);
     assert_eq!(buf[2], 0b01000000);
     assert_eq!(buf[3], 0xFF);
-    assert_eq!(buf[4], 0x00);
+    assert_eq!(buf[4], 0x00); // stuffing
     assert_eq!(buf[5], 0xFF);
-    assert_eq!(buf[6], 0x00);
+    assert_eq!(buf[6], 0x00); // stuffing
     assert_eq!(buf[7], 0x00);
     Ok(())
   }
@@ -840,6 +999,30 @@ mod tests {
     }
     Ok(())
   }
+
+  // #[test]
+  // fn encode_4x4() -> std::result::Result<(), Box<dyn std::error::Error>> {
+  //   let _ = SimpleLogger::new().init().unwrap_or(());
+  //   let h = 4;
+  //   let w = 4;
+  //   let c = 1;
+  //   let input_image = [
+  //     0x4321, 0xde54, 0x8432, 0xed94, 0xb465, 0x2342, 0xaa02, 0x0054, 0x5487, 0xbb09, 0xe323, 0x9954, 0x8adc, 0x8000, 0x8001, 0xbd09,
+  //   ];
+  //   let enc = LjpegCompressor::new(&input_image, w, h, c, 16, 1, 0)?;
+  //   let result = enc.encode();
+  //   assert!(result.is_ok());
+  //   let jpeg = result?;
+  //   let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
+  //   let mut outbuf = vec![0; w * h * c];
+  //   dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
+  //   assert_eq!(outbuf[0], input_image[0]);
+  //   assert_eq!(outbuf[1], input_image[1]);
+  //   for i in 0..outbuf.len() {
+  //     assert_eq!(outbuf[i], input_image[i]);
+  //   }
+  //   Ok(())
+  // }
 
   #[test]
   fn encode_16x16_16bit_black_decode_2component() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -931,7 +1114,8 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("input: {:?}", input_image);
+    //debug!("output: {:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -941,7 +1125,8 @@ mod tests {
   #[test]
   fn encode_all_differences() -> std::result::Result<(), Box<dyn std::error::Error>> {
     crate::init_test_logger();
-
+    // This simulates an input where every 17 SSSS classes are used because each difference
+    // value exists (see ITU-T81 H.1.2.2 Table H.2, p. 138).
     let input_image = vec![
       0, 0, 1, 0, 2, 0, 4, 0, 8, 0, 16, 0, 32, 0, 64, 0, 128, 0, 256, 0, 512, 0, 1024, 0, 2048, 0, 4096, 0, 8192, 0, 16384, 0, 32768,
     ];
@@ -965,7 +1150,9 @@ mod tests {
   #[test]
   fn encode_ssss_16() -> std::result::Result<(), Box<dyn std::error::Error>> {
     crate::init_test_logger();
-
+    // This simulates an input where every 17 SSSS classes are used because each difference
+    // value exists (see ITU-T81 H.1.2.2 Table H.2, p. 138).
+    //let input_image = vec![0, 0, 0, 32768, 0, 0];
     let input_image = vec![0, 0, 0, 32768];
     let h = 1;
     let w = input_image.len();
@@ -987,7 +1174,7 @@ mod tests {
   #[test]
   fn encode_difference_above_32768() -> std::result::Result<(), Box<dyn std::error::Error>> {
     crate::init_test_logger();
-
+    // Test values larger than i16::MAX
     let input_image = vec![0, 0, 0, 32768 + 1, 0, 0, 0, u16::MAX, u16::MAX, 1, u16::MAX, 1, 0];
     let h = 1;
     let w = input_image.len();
@@ -1000,7 +1187,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1023,7 +1210,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1049,7 +1236,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], expected_image[i]);
     }
@@ -1073,7 +1260,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1097,7 +1284,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1121,7 +1308,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1145,7 +1332,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1169,7 +1356,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1193,7 +1380,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1217,7 +1404,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1239,11 +1426,11 @@ mod tests {
     assert!(result.is_ok());
     let jpeg = result?;
 
-    let w = w / 2;
+    let w = w / 2; // we only want the first part of the image
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     assert_eq!(outbuf, expected_output);
 
     Ok(())
@@ -1265,7 +1452,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }
@@ -1289,7 +1476,7 @@ mod tests {
     let dec = LjpegDecompressor::new_full(&jpeg, false, false)?;
     let mut outbuf = vec![0; h * w * c];
     dec.decode(&mut outbuf, 0, w * c, w * c, h, false)?;
-
+    //debug!("{:?}", outbuf);
     for i in 0..outbuf.len() {
       assert_eq!(outbuf[i], input_image[i]);
     }

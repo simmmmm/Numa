@@ -11,7 +11,9 @@ use super::DynResourceExt as _;
 #[derive(Debug)]
 pub struct DynAcquiredSurfaceTexture {
     pub texture: Box<dyn DynSurfaceTexture>,
-
+    /// The presentation configuration no longer matches
+    /// the surface properties exactly, but can still be used to present
+    /// to the surface successfully.
     pub suboptimal: bool,
 }
 

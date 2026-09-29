@@ -1,0 +1,27 @@
+{
+  "parts": {
+    "white_balance": false,
+    "tone": true,
+    "colour": true,
+    "curve": false,
+    "detail": false,
+    "geometry": false
+  },
+  "document": {
+    "source": {
+      "path": ""
+    },
+    "operations": [
+      {
+        "type": "Basic",
+        "contrast": 22,
+        "highlights": -18,
+        "shadows": 12,
+        "whites": 8,
+        "blacks": -10,
+        "vibrance": 35,
+        "saturation": 5
+      }
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "parts": {
+    "white_balance": false,
+    "tone": true,
+    "colour": true,
+    "curve": false,
+    "detail": false,
+    "geometry": false
+  },
+  "document": {
+    "source": {
+      "path": ""
+    },
+    "operations": [
+      {
+        "type": "Basic",
+        "shadows": 8,
+        "vibrance": 10
+      },
+      {
+        "type": "Grading",
+        "shadows": {
+          "hue": 25,
+          "saturation": 8,
+          "luminance": 0
+        },
+        "midtones": {
+          "hue": 35,
+          "saturation": 10,
+          "luminance": 0
+        },
+        "highlights": {
+          "hue": 0,
+          "saturation": 0,
+          "luminance": 0
+        },
+        "global": {
+          "hue": 40,
+          "saturation": 28,
+          "luminance": 0
+        },
+        "blending": 50,
+        "balance": 0
+      }
+    ]
+  }
+}

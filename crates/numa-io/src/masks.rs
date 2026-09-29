@@ -2,34 +2,76 @@ use numa_core::mask::{Mask, Shape};
 use numa_render::segment;
 
 pub fn mask_name(mask: &Mask) -> String {
+    mask_called(mask).to_string()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaskName {
+
+    Own(String),
+
+    Kind(&'static str),
+
+    Found(segment::Named),
+}
+
+pub fn mask_called(mask: &Mask) -> MaskName {
 
     if let Some(name) = mask.name.as_ref().filter(|name| !name.trim().is_empty()) {
-        return name.trim().to_string();
+        return MaskName::Own(name.trim().to_string());
     }
-    match &mask.shape {
-        Shape::Linear { .. } => "Linear".to_string(),
-        Shape::Radial { .. } => "Radial".to_string(),
-        Shape::Segment { classes } => segment::name_for(classes),
+    MaskName::Kind(match &mask.shape {
+        Shape::Linear { .. } => "Linear",
+        Shape::Radial { .. } => "Radial",
+        Shape::Segment { classes } => return MaskName::Found(segment::named(classes)),
 
-        Shape::Subject if mask.inverted => "Background".to_string(),
-        Shape::Subject => "Subject".to_string(),
+        Shape::Subject if mask.inverted => "Background",
+        Shape::Subject => "Subject",
 
-        Shape::Painted if mask.strokes.is_empty() && !mask.points.is_empty() => "Click".to_string(),
-        Shape::Painted => "Brush".to_string(),
-        Shape::ColourRange { .. } => "Colour range".to_string(),
-        Shape::LuminanceRange { .. } => "Luminance range".to_string(),
+        Shape::Painted if mask.strokes.is_empty() && !mask.points.is_empty() => "Click",
+        Shape::Painted => "Brush",
+        Shape::ColourRange { .. } => "Colour range",
+        Shape::LuminanceRange { .. } => "Luminance range",
+    })
+}
+
+impl std::fmt::Display for MaskName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaskName::Own(name) => f.write_str(name),
+            MaskName::Kind(word) => f.write_str(word),
+            MaskName::Found(named) => named.fmt(f),
+        }
     }
 }
 
 pub fn mask_label(masks: &[Mask], index: usize) -> String {
-    let name = mask_name(&masks[index]);
+    mask_label_parts(masks, index).to_string()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaskLabel {
+    pub name: MaskName,
+    pub number: Option<usize>,
+}
+
+pub fn mask_label_parts(masks: &[Mask], index: usize) -> MaskLabel {
+    let name = mask_called(&masks[index]);
+
+    let reads = name.to_string();
     let same: Vec<usize> =
-        (0..masks.len()).filter(|other| mask_name(&masks[*other]) == name).collect();
-    match same.len() > 1 {
-        true => {
-            format!("{name} {}", same.iter().position(|other| *other == index).unwrap_or(0) + 1)
+        (0..masks.len()).filter(|other| mask_name(&masks[*other]) == reads).collect();
+    let number = (same.len() > 1)
+        .then(|| same.iter().position(|other| *other == index).unwrap_or(0) + 1);
+    MaskLabel { name, number }
+}
+
+impl std::fmt::Display for MaskLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.number {
+            Some(number) => write!(f, "{} {number}", self.name),
+            None => self.name.fmt(f),
         }
-        false => name,
     }
 }
 
@@ -107,5 +149,19 @@ mod tests {
         let plain = [radial(None), radial(None)];
         assert_eq!(mask_label(&plain, 0), "Radial 1");
         assert_eq!(mask_label(&plain, 1), "Radial 2");
+
+        assert_eq!(
+            mask_label_parts(&three, 2),
+            MaskLabel { name: MaskName::Own("Bird".into()), number: Some(2) }
+        );
+        assert_eq!(
+            mask_label_parts(&plain, 0),
+            MaskLabel { name: MaskName::Kind("Radial"), number: Some(1) }
+        );
+        let found = [Mask::new(Shape::Segment { classes: vec![12, 126] })];
+        assert_eq!(
+            mask_label_parts(&found, 0).name,
+            MaskName::Found(segment::Named::Classes { labels: vec!["person", "animal"], more: 0 })
+        );
     }
 }

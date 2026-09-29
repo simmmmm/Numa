@@ -382,7 +382,8 @@ mod tests {
         }
         let fx2 = raws.join("Sony/ILME-FX2/8807-Sony - ILME-FX2 - 14bit uncompressed (3:2).ARW");
         if fx2.exists() {
-            assert!(super::super::proxy_from_mosaic(&fx2, 2400).is_err());
+            let (proxy, size) = super::super::proxy_from_mosaic(&fx2, 2400).unwrap();
+            assert_eq!((proxy.width, size), (2400, (7008, 4672)));
         }
     }
 

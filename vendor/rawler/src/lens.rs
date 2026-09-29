@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::fmt::Display;
 
 use lazy_static::lazy_static;
@@ -18,61 +21,62 @@ pub fn get_lenses() -> &'static Vec<LensDescription> {
   &LENSES_DB
 }
 
+/// Resolver for Lens information
 #[derive(Default, Debug, Clone)]
 pub struct LensResolver {
-
+  /// Unique lens keyname, if known
   lens_keyname: Option<String>,
-
+  /// Name of the lens make, if known
   lens_make: Option<String>,
-
+  /// Name of the lens model, if known
   lens_model: Option<String>,
-
+  /// Lens ID, if known
   lens_id: Option<LensId>,
-
+  /// Nikon ID
   nikon_id: Option<String>,
-
+  /// Olympus ID
   olympus_id: Option<String>,
-
+  /// Lens EXIF info, if known
   lens_info: Option<[Rational; 4]>,
-
+  /// Camera make, if known
   camera_make: Option<String>,
-
+  /// Camera model, if known
   camera_model: Option<String>,
-
+  /// Mounts, if known
   mounts: Option<Vec<String>>,
-
+  /// Focal lenth for taken photo
   focal_len: Option<Rational>,
-
+  /// Aperture for taken photo
   aperture: Option<Rational>,
 }
 
 #[allow(dead_code)]
 struct LensMatcher<'a> {
-
+  /// Name of the lens model, if known
   lens_name: Option<&'a str>,
-
+  /// Name of the lens make, if known
   lens_make: Option<&'a str>,
-
+  /// Lens ID, if known
   lens_id: Option<LensId>,
-
+  /// Nikon ID
   nikon_id: Option<String>,
-
+  /// Olympus ID
   olympus_id: Option<String>,
-
+  /// Lens EXIF info, if known
   lens_info: Option<[Rational; 4]>,
-
+  /// Camera make, if known
   camera_make: Option<&'a str>,
-
+  /// Camera model, if known
   camera_model: Option<&'a str>,
-
+  /// Mounts, if known
   mounts: Option<&'a [String]>,
-
+  /// Focal lenth for taken photo
   #[allow(dead_code)]
   focal_len: Option<Rational>,
 }
 
 impl LensResolver {
-
+  /// Create new empty LensResolver
   pub fn new() -> Self {
     Self::default()
   }
@@ -80,7 +84,8 @@ impl LensResolver {
   pub fn with_camera(mut self, camera: &Camera) -> Self {
     self.camera_make = Some(camera.clean_make.clone());
     self.camera_model = Some(camera.clean_model.clone());
-
+    // For cameras with fixed lens, an optional camera param can be specified
+    // which is the key into the lens database.
     if let Some(key) = camera.param_str("fixed_lens_key").map(String::from) {
       self.lens_keyname = Some(key);
     }
@@ -162,13 +167,16 @@ impl LensResolver {
     }
   }
 
+  /// Resolve to a final LensDescription
+  ///
+  /// Returns None, if resolver was unable to find a lens.
   pub fn resolve(&self) -> Option<&'static LensDescription> {
     let first_try = self.resolve_internal();
     if first_try.is_some() {
       first_try
     } else {
       let second_try = match self.lens_matcher() {
-
+        // Pentax *ist D and DS reports some lens as id=4 while it should be 7.
         LensMatcher {
           camera_model: Some("*ist DS"),
           lens_id: Some((4, subid)),
@@ -191,25 +199,30 @@ impl LensResolver {
     }
   }
 
+  /// Resolve the lens internally.
   fn resolve_internal(&self) -> Option<&'static LensDescription> {
-
+    // First try, if we have an exact name, we use just this
     if let Some(name) = self.lens_keyname.as_ref().filter(|s| !s.is_empty()) {
       if let Some(db_entry) = LENSES_DB.iter().find(|entry| entry.identifiers.name == Some(name.into())) {
         return Some(db_entry);
       }
     }
 
+    // Nikon lens IDs are special, try this next
     if let Some(nikon_id) = &self.nikon_id {
       if let Some(db_entry) = LENSES_DB.iter().find(|entry| entry.identifiers.nikon_id == Some(nikon_id.clone())) {
         return Some(db_entry);
       }
     }
 
+    // Olympus lens IDs are special, try this next
     if let Some(olympus_id) = &self.olympus_id {
       if let Some(db_entry) = LENSES_DB.iter().find(|entry| entry.identifiers.olympus_id == Some(olympus_id.clone())) {
         return Some(db_entry);
       }
     }
+
+    // If we have a lens id (common) then we can filter as much as possible
 
     let matches: Vec<&LensDescription> = LENSES_DB
       .iter()
@@ -229,7 +242,7 @@ impl LensResolver {
           .is_none_or(|focal| *focal >= entry.focal_range[0] && *focal <= entry.focal_range[1])
       })
       .filter(|entry| {
-        self.aperture.as_ref().is_none_or(|ap| *ap >= entry.aperture_range[0])
+        self.aperture.as_ref().is_none_or(|ap| *ap >= entry.aperture_range[0]) // equal or greater then lowest possible aperture
       })
       .collect();
     match matches.len() {
@@ -301,24 +314,26 @@ impl LensIdentifier {
   }
 }
 
+/// Description of a lens
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LensDescription {
-
+  /// Identifiers
   pub identifiers: LensIdentifier,
-
+  /// Lens mount
   pub mount: String,
-
+  /// Lens make
   pub lens_make: String,
-
+  /// Lens model (without make)
   pub lens_model: String,
-
+  /// Focal range (min, max)
   pub focal_range: [Rational; 2],
-
+  /// Aperture range (for min focal and max focal)
   pub aperture_range: [Rational; 2],
-
+  /// Full qualified model name (with make)
   pub lens_name: String,
 }
 
+/// Internal function to parse and build global lens database
 fn build_lens_database() -> Option<Vec<LensDescription>> {
   let toml = match LENSES_TOML.parse::<Value>() {
     Ok(val) => val,
@@ -328,7 +343,7 @@ fn build_lens_database() -> Option<Vec<LensDescription>> {
   let mut lenses = Vec::new();
 
   for lens in toml.get("lenses")?.as_array()? {
-
+    //let key = lens.get("key")?.as_str()?.into();
     let id_name = lens.get("key").and_then(Value::as_str).map(String::from);
     let id_val1 = lens.get("lens_id").and_then(Value::as_integer).map(|v| v as u32);
     let id_val2 = lens.get("lens_subid").and_then(Value::as_integer).map(|v| v as u32);

@@ -127,11 +127,12 @@ receives the binary to be able to relink it against a *modified* copy of that
 library. Dynamic linking satisfies that on its own — the library is a separate
 file to swap. Static linking does not, so a bare binary handed to someone is
 short of the obligation. The cheap way to satisfy it is to pass the source along
-with the AppImage; it is your code and any licence will do.
+with the AppImage, or a pointer to the tagged public source.
 
-**The application itself is GPL-3.0-or-later.** Whoever passes the AppImage
-on passes on the source with it (or a written offer of it), and the tag the
-release was built from is that source.
+**The application itself is GPL-3.0-or-later.** Its licence is in
+`usr/share/licenses/com.tijmen.Numa/LICENSE`. Whoever passes the AppImage on
+passes on the source with it (or a written offer of it), and the tag the
+release was built from is that source; it covers rawler's relinking too.
 
 RawTherapee's camera profiles are GPL-3 and travel with their licence text and
 attribution; they are data files read at runtime rather than part of the

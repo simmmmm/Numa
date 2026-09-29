@@ -1,40 +1,51 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
+// Original Crx decoder crx.cpp was written by Alexey Danilchenko for libraw.
+// Rewritten in Rust by Daniel Vogelbacher, based on logic found in
+// crx.cpp and documentation done by Laurent Clévy (https://github.com/lclevy/canon_cr3).
+
 use super::{
   BandParam, CodecParams, Result,
   mdat::{Plane, Tile},
 };
 
+/// This structure holds the inverse transformation state
+/// Each level has it's own state, so for 3 levels of DWT
+/// 3 instances are required.
 #[derive(Debug, Clone)]
 pub(crate) struct WaveletTransform {
-
+  /// Contains the decoded data from LL band
+  /// or from a previous level decode.
   band0_buf: Vec<i32>,
-
+  /// Contains the decoded data for HL band of current level
   band1_buf: Vec<i32>,
-
+  /// Contains the decoded data for LH band of current level
   band2_buf: Vec<i32>,
-
+  /// Contains the decoded data for HH band of current level
   band3_buf: Vec<i32>,
-
+  /// 8 temporary buffers for inverse transformation (5/3?)
   band0_pos: usize,
   band1_pos: usize,
   band2_pos: usize,
   band3_pos: usize,
 
   line_buf: [Vec<i32>; 8],
-
+  /// Current line position
   cur_line: usize,
-
+  /// TODO ???
   cur_h: usize,
-
+  /// TODO ???
   flt_tap_h: usize,
-
+  /// Height of the final image for the current level
   height: usize,
-
+  /// Width of the final image for the current level
   width: usize,
 }
 
 impl WaveletTransform {
   pub(crate) fn new(height: usize, width: usize) -> Self {
-
+    // Line buffers for inverse transformation
     let line_buf = [
       vec![0; width],
       vec![0; width],
@@ -46,7 +57,8 @@ impl WaveletTransform {
       vec![0; width],
     ];
     Self {
-
+      // We use empty vectors, they will be replaced
+      // with the result of a line decode.
       band0_buf: Vec::new(),
       band1_buf: Vec::new(),
       band2_buf: Vec::new(),
@@ -132,11 +144,12 @@ impl CodecParams {
       if level > 0 {
         self.idwt_53_filter_decode(tile, plane, params, iwt_transforms, level - 1)?;
       } else {
-
+        // LL band
         let sband = &plane.subbands[cur_band];
         iwt_transforms[level].band0_buf = self.decode_line_with_iquantization(sband, &mut params[cur_band], q_step_level)?;
       }
 
+      // HL, LH and HH band
       iwt_transforms[level].band1_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 1], &mut params[cur_band + 1], q_step_level)?;
       iwt_transforms[level].band2_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 2], &mut params[cur_band + 2], q_step_level)?;
       iwt_transforms[level].band3_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 3], &mut params[cur_band + 3], q_step_level)?;
@@ -146,7 +159,10 @@ impl CodecParams {
   }
 
   pub(super) fn idwt_53_horizontal(&self, tile: &Tile, la: usize, lb: usize, wvlt: &mut WaveletTransform) {
-
+    //let mut b0pos = 0;
+    //let mut b1pos = 0;
+    //let mut b2pos = 0;
+    //let mut b3pos = 0;
     let mut lapos = 0;
     let mut lbpos = 0;
     wvlt.reset_bufs();
@@ -156,7 +172,7 @@ impl CodecParams {
       wvlt.line_buf[lb][0] = wvlt.band2(0);
     } else {
       if tile.tiles_left {
-
+        // Untested
         wvlt.line_buf[la][0] = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
         wvlt.line_buf[lb][0] = wvlt.band2(0) - ((wvlt.band3(0) + wvlt.band3(1) + 2) >> 2);
         wvlt.band1_pos += 1;
@@ -168,7 +184,9 @@ impl CodecParams {
       wvlt.band0_pos += 1;
       wvlt.band2_pos += 1;
 
+      //println!("config: tile: {}, {}, band1 width: {}", tile.id, wvlt.width - 3, wvlt.band1_buf.len());
       for _i in (0..(wvlt.width - 3)).step_by(2) {
+        //println!("val: {}, band1_pos: {}, band1_size: {}", _i, wvlt.band1_pos, wvlt.band1_buf.len());
 
         let delta = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
         wvlt.line_buf[la][lapos + 1] = wvlt.band1(0) + ((delta + wvlt.line_buf[la][lapos]) >> 1);
@@ -184,7 +202,7 @@ impl CodecParams {
         lbpos += 2;
       }
       if tile.tiles_right {
-
+        // Untested
         let delta_a = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
         wvlt.line_buf[la][lapos + 1] = wvlt.band1(0) + ((delta_a + wvlt.line_buf[la][lapos + 0]) >> 1);
 
@@ -218,7 +236,7 @@ impl CodecParams {
   ) -> Result<()> {
     assert!(level > 0);
     if level == 0 {
-
+      // This code is not called from pathes where level is 0. But we keep this check.
       return Ok(());
     }
 
@@ -250,6 +268,7 @@ impl CodecParams {
           wvlt.band3_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 3], &mut params[cur_band + 3], q_step_level)?;
           wvlt.band2_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 2], &mut params[cur_band + 2], q_step_level)?;
 
+          // process L band
           if wvlt.width <= 1 {
             wvlt.line_buf[l2][0] = wvlt.band2(0);
           } else {
@@ -285,6 +304,7 @@ impl CodecParams {
             }
           }
 
+          // process H band
           for i in 0..wvlt.width {
             wvlt.line_buf[h0][i] = wvlt.line_buf[l0][i] - ((wvlt.line_buf[l1][i] + wvlt.line_buf[l2][i] + 2) >> 2);
           }
@@ -297,10 +317,12 @@ impl CodecParams {
           self.idwt_53_filter_transform(tile, plane, params, iwt_transforms, cur_level)?;
         }
       } else {
+        // This is unused in real world
 
         wvlt.band1_buf = self.decode_line_with_iquantization(&plane.subbands[cur_band + 1], &mut params[cur_band + 1], q_step_level)?;
         let mut h0_pos = 0;
 
+        // process H band
         if wvlt.width <= 1 {
           wvlt.line_buf[h0][0] = wvlt.band0(0);
         } else {
@@ -322,7 +344,7 @@ impl CodecParams {
           }
 
           if tile.tiles_right {
-
+            // untested
             let delta = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
             wvlt.line_buf[h0][h0_pos + 1] = wvlt.band1(0) + ((wvlt.line_buf[h0][h0_pos + 0] + delta) >> 1);
             wvlt.line_buf[h0][h0_pos + 2] = delta;
@@ -372,12 +394,14 @@ impl CodecParams {
           let l0 = 0;
           let l1 = 1;
           let mut l0_pos = 0;
+          //let mut l1_pos = 0;
 
+          // process L bands
           if wvlt.width <= 1 {
             wvlt.line_buf[l0][0] = wvlt.band0(0);
           } else {
             if tile.tiles_left {
-
+              // untested
               wvlt.line_buf[l0][l0_pos] = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
               wvlt.band1_pos += 1;
             } else {
@@ -393,7 +417,7 @@ impl CodecParams {
               l0_pos += 2;
             }
             if tile.tiles_right {
-
+              // untested
               let delta = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
               wvlt.line_buf[l0][l0_pos + 1] = wvlt.band1(0) + ((wvlt.line_buf[l0][l0_pos + 0] + delta) >> 1);
               if wvlt.width & 1 == 1 {
@@ -407,6 +431,9 @@ impl CodecParams {
               wvlt.line_buf[l0][l0_pos + 1] = wvlt.band1(0) + wvlt.line_buf[l0][l0_pos + 0];
             }
           }
+
+          // process H bands
+          //wvlt.reset_bufs();
 
           wvlt.line_buf.swap(1, 2);
 
@@ -428,13 +455,16 @@ impl CodecParams {
             wvlt.line_buf[h1][i] = wvlt.line_buf[h0][i] + wvlt.line_buf[l2][i];
           }
 
+          // The original libraw CRX decoder copies the pointer from line_buf[2] to [1].
+          // But it doesn't makes sense, so we swap the buffers as we do on other locations.
           wvlt.line_buf.swap(1, 2);
+          //wvlt.line_buf[1] = wvlt.line_buf[2].clone();
 
           wvlt.cur_h += 2;
           wvlt.cur_line += 2;
           wvlt.flt_tap_h = (wvlt.flt_tap_h + 2) % 5;
         }
-      }
+      } // end if !tile.tiles_bottom
     } else {
       if level > 0 {
         if iwt_transforms[level - 1].cur_h == 0 {
@@ -448,19 +478,20 @@ impl CodecParams {
 
       let l0 = 0;
       let l1 = 1;
-
+      //let l2 = 2;
       let mut l0_pos = 0;
       let mut l1_pos = 0;
-
+      //let mut l2_pos = 0;
       let h0 = wvlt.flt_tap_h + 3;
       let h1 = (wvlt.flt_tap_h + 1) % 5 + 3;
       let h2 = (wvlt.flt_tap_h + 2) % 5 + 3;
 
+      // process L bands
       if wvlt.width <= 1 {
         wvlt.line_buf[l0][0] = wvlt.band0(0);
         wvlt.line_buf[l1][0] = wvlt.band2(0);
       } else {
-
+        // untested
         if tile.tiles_left {
           wvlt.line_buf[l0][0] = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
           wvlt.line_buf[l1][0] = wvlt.band2(0) - ((wvlt.band3(0) + wvlt.band3(1) + 2) >> 2);
@@ -484,7 +515,7 @@ impl CodecParams {
           l1_pos += 2;
         }
         if tile.tiles_right {
-
+          // untested
           let delta_a = wvlt.band0(0) - ((wvlt.band1(0) + wvlt.band1(1) + 2) >> 2);
           wvlt.line_buf[l0][l0_pos + 1] = wvlt.band1(0) + ((delta_a + wvlt.line_buf[l0][l0_pos + 0]) >> 1);
 
@@ -509,6 +540,7 @@ impl CodecParams {
         }
       }
 
+      // process H bands
       let wvlt = &mut iwt_transforms[level];
 
       wvlt.line_buf.swap(1, 2);

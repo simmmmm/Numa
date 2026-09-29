@@ -212,6 +212,39 @@ Optimistic, since the held-out frames share trips with the fitted ones — and
 these are looks at Color 0, not a neutral profile, which needs frames shot for
 the purpose.
 
+### Every body (RENDER-023)
+
+`fit_camera_profile_from_samples` fits one body from a folder of raw.pixls.us
+CC0 raws; 29 September it ran over 220 bodies of up to four raws each. What the
+run taught the fitter:
+
+- **A held-out frame of the same scene measures nothing.** Most bodies' raws
+  are one shot in several compressions, seconds apart; holding one of those out
+  tests the fit on a copy of what it was fitted on. The fitter now holds out a
+  frame taken more than half an hour from every other, and says in its RESULT
+  line whether it found one. 176 of the 220 beat the matrix (and RawTherapee's
+  profile) on their held-out frame; only 20 of those did so on a scene of its
+  own, and only those ship.
+- **The preview does not always follow the colour-space setting.** Of 129
+  frames whose camera was set to Adobe RGB, 101 previews read nearer the matrix
+  as sRGB. The fitter reads such a JPEG both ways and keeps the nearer.
+- **Some frames are not a fit's business**: a Fujifilm film simulation (39
+  frames; 16 of 29 Fujifilm bodies had no Provia frame at Color 0), a black and
+  white JPEG, a JPEG cropped to another aspect than the raw (50 frames, mostly
+  CHDK DNGs and 16:9 settings), an Olympus High Res Shot, whose decode comes out
+  in the wrong colours (matrix error 2.0 against 0.01-0.12; FT-030), and 108
+  raws with no camera JPEG to fit against or no decode.
+- **More profiles cost the lookup almost nothing.** The first lookup of a body
+  reads every installed profile's header (PERF-023). Best of three rounds:
+  3.2 ms with the six, 3.6 ms with 26, 3.9 ms with 225 of Numa's own beside
+  RawTherapee's 161; a later body 0.8 → 1.6 ms.
+- **The first six were measured the same way, and five did not survive it.**
+  Each had been held out on a frame 1 to 8 minutes from its fitted ones. Only
+  the A7R III and the X-T5 have a raw of another scene: the A7R III's lost to
+  the matrix there (0.0105 against 0.0101), the X-T5's won on all five frames
+  (0.0375 → 0.0308, Adobe Standard 0.0372). The A7R III's went, and so did the
+  EOS R5's, D850's, X-S10's and X-T4's, which nothing can measure honestly yet.
+
 ## Orientation
 
 A sensor always reads out the same way round, so a portrait frame is stored
@@ -4990,7 +5023,8 @@ frame included, hashes as before.
 
 ### Left
 
-- The ILME-FX2 in rawler (no camera entry).
+- ~~The ILME-FX2 in rawler (no camera entry).~~ Done: "The Sony ILME-FX2
+  in rawler" below.
 - A mask's curves still cost 0.30 CPU-s a draft frame over the rest of the
   mask: the round trip's `log2` and `exp2` and the guess. `Plan::heavy` now
   counts them at 320 ns a draft pixel rather than 1 600, which still sends
@@ -5064,3 +5098,129 @@ memory as it was; on the processor float32 is the faster of the two.
   one but the Downloads page.
 - Mixed float16/float32 files answer nothing through ONNX Runtime 1.28 on the
   card; not chased, since nothing mixed passes.
+
+## Smaller model downloads — 29 September
+
+Branch `model-compress` (START-017). Copies of all 17 model files, every
+SHA-256 the one `models.rs` names; zstd 1.5.7 for packing, `ruzstd` 0.9 in
+Numa for unpacking; every run under the machine lock and `dev/capped.sh`.
+Scripts and numbers: `numa-scratch/research-2/model-compress/`.
+
+**Lossless.** Model weights are floats, and zstd finds little in a float's
+four bytes as they come: the exponent byte repeats, the low mantissa bytes
+are noise, and interleaved each hides the other. Grouped by position — every
+first byte of a tensor, then every second, … (HDF5's and Blosc's shuffle) —
+the exponents sit together. `dev/pack-models.py` finds each float tensor's
+bytes by reading the ONNX protobuf (a `.onnx.data` file by the `.onnx`
+beside it), writes a header of those ranges and the file with them grouped,
+through zstd. `numa_io::models::unpack` undoes it a tensor at a time.
+
+| all 17 files | zstd 3 | zstd 9 | zstd 19 |
+|---|---|---|---|
+| as they are (2 008.9 MB) | 1 748.1 | 1 746.8 | 1 747.2 |
+| **bytes grouped** | 1 616.0 | 1 605.9 | **1 592.3** |
+
+Per model grouped at 19: BiRefNet 972.7 → 742.4 MB (−24 %), lite 191.8 →
+149.5, LaMa 208.0 → 173.0, Restormer 107.1 → 88.6, ViTMatte 103.9 → 87.5,
+PP-ResNet 102.6 → 85.9, the rest −15 to −22 %. Unpacking all 17 in Numa:
+4.2 s on one core, BiRefNet 1.13 s; each lands on the original's digest.
+
+**Float16 weights, float32 arithmetic.** A `.f16.zst` keeps the weights of
+the convolutions and matrix products (≥ 1 024 elements; everything else,
+index arithmetic included, stays float32) as float16, and unpack widens them
+back: the file on disk is an ordinary float32 model with those values, so the
+card, the processor and BiRefNet's rewrite work as before. Half the bytes —
+but the answer moves by what rounding the weights moves it, and it was taken
+only where that is less than the card already moves it from the processor
+and every decision is the same. Measured against the originals on the
+processor:
+
+| model | float16 weights against float32 | the card against the processor |
+|---|---|---|
+| BiRefNet (75 frames) | IoU 0.9923 and 0.9961 on two frames | 1.0000 on all 75 (PERF-071) |
+| SlimSAM (219 clicks) | two clicks 0.91 and 0.95 | 219 ≥ 0.999 (MASK-020) |
+| EfficientViT (75 frames) | 3 found chips differ, worst IoU 0.92 | none, 0.9999 |
+| LaMa (16 fills) | up to 19 codes inside the hole | 1 code |
+| ViTMatte (12 edge tiles) | 1 code, 4.5e-3 | 1.2e-5 (MASK-021) |
+| **SCUNet** (16 crops) | **1 code on 1.1 %, 84 dB** | its float16 file: 2 codes, 60 dB |
+| Restormer, RealPLKSR | 1 code, 89 / 98 dB | not measured (the card was busy) |
+| YuNet, SFace, eye, PP-ResNet, YOLOX | same faces, matches, eyes, animals, boxes | never on the card |
+| BiRefNet lite, 512 (iPad) | ≥ 0.999 on all 75, 14 codes at most | processor only |
+
+So SCUNet's weights come as float16 (73.1 → 31.7 MB) and everything else
+whole. Weights of BiRefNet's matrix products alone or convolutions alone
+were no better (0.9899, 0.9978 on the same frame).
+
+### Left
+
+- The 17 packs are for the mirror; until they are on it every download
+  falls back to the original, as before.
+- The iPad fetches through `numa-ffi` in Numa-mac, which still asks for the
+  originals; `models::packed` and `models::unpack` are there for it.
+- Restormer and RealPLKSR could take float16 weights if the card turns out
+  to move them by a code as well.
+
+## Sentences in parts, for other languages — 29 September
+
+APP-007. The Apple app puts every word through a String Catalog, so a
+language is added there rather than in code; the photographer's, 29
+September: "alles van die i18n strings maken en voor nu alles Engels houden".
+What the crates said came across as finished English sentences — "Exposure
+and 3 more", "Added Sky 2", "person + animal", a tooltip of numbers — and a
+catalog can only look up a sentence it knows whole.
+
+So the crates say those things in parts, and the English is the parts'
+`Display`: `history::Step` and `Change` (a word, or what was done to which
+mask), `masks::MaskName` and `MaskLabel`, `segment::Named`, and
+`notes::DetailLine` with its numbers. `steps()`, `mask_label`, `name_for` and
+`cull_detail` are unchanged to their callers and format from the parts, so
+the two cannot drift: the Linux interface reads exactly what it did, and the
+tests that pin its wording (`src/ui/window/tests.rs`, `segment`, `masks`)
+pass as they were. The tooltip was checked against the function it replaced
+over 108 000 combinations of measurements before that function went: the
+same text for every one.
+
+The words themselves — "Exposure", "Sky", "soft" — stay English in the
+crates. They are fixed, so the app looks each one up under its English, and
+Numa-mac's `numa-ffi` has a test that fails when the panel, Storage, the
+models, the masks or the profile picker hand over a word its catalog does not
+hold.
+
+### Left
+
+- Errors are sentences, often with a system's message inside; they stay
+  English.
+- Analyse's closing line is assembled in `analysis::summary` from parts that
+  are already values (`learn::Outcome`); the Apple app words it from those.
+
+## The Sony ILME-FX2 in rawler — 29 September
+
+Branch `sony-fx2` (IO-008). dnglab has no entry for the body, on `main`
+or on any branch, so `vendor/rawler` got one (`NUMA-CHANGES.md`): the
+matrices of rawler's own ILCE-7CM2, which has the same 33 MP sensor. Its D65
+is the matrix LibRaw and rawspeed give the FX2. Release builds, every run
+under the machine lock and `dev/capped.sh`. Notes and logs:
+`numa-scratch/research-2/fx2/`.
+
+- **All four FX2 frames of raw.pixls.us** (8807 uncompressed, 8808
+  compressed, 8809 lossless, 8810 lossless at 4608 × 3072) decode, make a
+  proxy at 2400, 1920 and 1024, and render (`render_bench HASH=1`). Beside
+  the camera's JPEG the matrix is right (chroma error 0.055 on three frames,
+  0.086 on the fourth).
+- **Nothing else moves.** `render_bench HASH=1` on the ten test raws, two
+  7M4s, a 7CM2, an FX3 and an FX30, before and after: 165 lines, identical.
+- **The corpus sweep** (`every_frame_in_a_list_makes_a_proxy`, `NUMA_GPU=0`,
+  fixes-30's 559 files plus 8809 and 8810, one thread): 1 590 proxies and 93
+  errors before, 1 602 and 81 after, no panics either way. The twelve are the
+  FX2's; no new error.
+- **No profile of Numa's own yet (RENDER-023).** The fitter fits it (matrix
+  0.0864 → 0.0845 on the held-out frame), but the four frames are one scene
+  within 35 minutes, so the held-out one measures a scene the fit saw. It
+  waits for a second scene, as 156 other bodies do.
+
+Still failing as a camera rawler does not know, of the sweep's bodies: the
+ILCE-7M5 (its ARW6 compression has no decoder in rawler, dnglab issue #681),
+the Coolpix P7700, the Pentax K2000, the Panasonic DC-FZ45 and DMC-GM1S (the
+body is there under another name or aspect), and four Hasselblads (X1D II
+50C, CFV-50c twice, CFV 100C: model strings rawler does not match). Nothing
+for them upstream to take.

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, FourCC, ReadBox, Result, read_box_header_ext};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};
@@ -16,6 +20,8 @@ impl HdlrBox {
 impl<R: Read + Seek> ReadBox<&mut R> for HdlrBox {
   fn read_box(reader: &mut R, header: BoxHeader) -> Result<Self> {
     let (version, flags) = read_box_header_ext(reader)?;
+
+    // TODO?
 
     reader.seek(SeekFrom::Start(header.end_offset()))?;
 

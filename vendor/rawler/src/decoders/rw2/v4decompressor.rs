@@ -45,7 +45,7 @@ pub(crate) fn decode_panasonic_v4(buf: &[u8], width: usize, height: usize, split
       Ok(())
     }),
   )
-  .expect("Failed to decode")
+  .expect("Failed to decode") // Decoder should never fail
 }
 
 pub struct BitPumpPanasonic<'a> {

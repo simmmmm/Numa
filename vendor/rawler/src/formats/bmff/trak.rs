@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, mdia::MdiaBox, tkhd::TkhdBox, vendor::VendorBox};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -8,6 +12,8 @@ pub struct TrakBox {
   pub header: BoxHeader,
   pub tkhd: TkhdBox,
 
+  //#[serde(skip_serializing_if = "Option::is_none")]
+  //pub edts: Option<EdtsBox>,
   pub mdia: MdiaBox,
   pub vendor: Vec<VendorBox>,
 }
@@ -26,8 +32,11 @@ impl<R: Read + Seek> ReadBox<&mut R> for TrakBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
+
+      //let ftyp = Some(FtypBox::read_box(&mut file, header)?);
 
       match header.typ {
         TkhdBox::TYP => {

@@ -163,7 +163,7 @@ pub fn map_vk_surface_formats(
 ) -> Option<(wgt::TextureFormat, wgt::SurfaceColorSpace)> {
     use ash::vk::Format as F;
     use wgt::TextureFormat as Tf;
-
+    // Format list we care about pulled from https://vulkan.gpuinfo.org/listsurfaceformats.php.
     let format = match sf.format {
         F::B8G8R8A8_UNORM => Tf::Bgra8Unorm,
         F::B8G8R8A8_SRGB => Tf::Bgra8UnormSrgb,
@@ -238,7 +238,7 @@ impl crate::ColorAttachment<'_, super::TextureView> {
 }
 
 pub fn derive_image_layout(usage: wgt::TextureUses, format: wgt::TextureFormat) -> vk::ImageLayout {
-
+    // Note: depth textures are always sampled with RODS layout
     let is_color = !format.is_depth_stencil_format();
     match usage {
         wgt::TextureUses::UNINITIALIZED => vk::ImageLayout::UNDEFINED,
@@ -508,15 +508,17 @@ pub fn map_present_mode(mode: wgt::PresentMode) -> vk::PresentModeKHR {
 }
 
 pub fn map_vk_present_mode(mode: vk::PresentModeKHR) -> Option<wgt::PresentMode> {
-
+    // Not exposed in Ash yet.
     const FIFO_LATEST_READY: vk::PresentModeKHR = vk::PresentModeKHR::from_raw(1_000_361_000);
 
+    // See https://registry.khronos.org/vulkan/specs/latest/man/html/VkPresentModeKHR.html
     match mode {
         vk::PresentModeKHR::IMMEDIATE => Some(wgt::PresentMode::Immediate),
         vk::PresentModeKHR::MAILBOX => Some(wgt::PresentMode::Mailbox),
         vk::PresentModeKHR::FIFO => Some(wgt::PresentMode::Fifo),
         vk::PresentModeKHR::FIFO_RELAXED => Some(wgt::PresentMode::FifoRelaxed),
 
+        // Modes that aren't exposed yet.
         vk::PresentModeKHR::SHARED_DEMAND_REFRESH => None,
         vk::PresentModeKHR::SHARED_CONTINUOUS_REFRESH => None,
         FIFO_LATEST_READY => None,
@@ -699,6 +701,8 @@ pub fn map_subresource_range(
     }
 }
 
+// Special subresource range mapping for dealing with barriers
+// so that we account for the "hidden" depth aspect in emulated Stencil8.
 pub(super) fn map_subresource_range_combined_aspect(
     range: &wgt::ImageSubresourceRange,
     format: wgt::TextureFormat,
@@ -748,7 +752,7 @@ pub fn map_address_mode(mode: wgt::AddressMode) -> vk::SamplerAddressMode {
         wgt::AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
         wgt::AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
         wgt::AddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
-
+        // wgt::AddressMode::MirrorClamp => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
     }
 }
 
@@ -1084,6 +1088,9 @@ pub fn map_acceleration_structure_usage_to_barrier(
 mod tests {
     use super::*;
 
+    /// `map_vk_color_space` and `map_surface_color_space` must stay mutually
+    /// inverse so that a color space reported in the surface capabilities is
+    /// exactly what the swapchain is created with.
     #[test]
     fn color_space_round_trip() {
         for vk_color_space in [

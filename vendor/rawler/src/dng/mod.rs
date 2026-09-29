@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2023 Daniel Vogelbacher <daniel@chaospixel.com>
+
 pub mod convert;
 pub mod original;
 pub mod writer;
@@ -12,6 +15,10 @@ pub const DNG_VERSION_V1_4: [u8; 4] = [1, 4, 0, 0];
 pub const DNG_VERSION_V1_5: [u8; 4] = [1, 5, 0, 0];
 pub const DNG_VERSION_V1_6: [u8; 4] = [1, 6, 0, 0];
 
+/// Convert internal crop rectangle to DNG active area
+///
+/// DNG ActiveArea  is:
+///  Top, Left, Bottom, Right
 pub fn rect_to_dng_area(area: &Rect) -> [u16; 4] {
   [
     area.p.y as u16,
@@ -19,7 +26,16 @@ pub fn rect_to_dng_area(area: &Rect) -> [u16; 4] {
     area.p.y as u16 + area.d.h as u16,
     area.p.x as u16 + area.d.w as u16,
   ]
-
+  /*
+  [
+    image.crops[0] as u16, // top
+    image.crops[3] as u16, // left
+    //(image.height-image.crops[0]-image.crops[2]) as u16, // bottom
+    //(image.width-image.crops[1]-image.crops[3]) as u16, // Right
+    (image.height - (image.crops[2])) as u16, // bottom coord
+    (image.width - (image.crops[1])) as u16,  // Right coord
+  ]
+  */
 }
 
 #[cfg(feature = "clap")]
@@ -70,13 +86,29 @@ impl clap::ValueEnum for CropMode {
   }
 }
 
+/*
+impl FromStr for CropMode {
+  type Err = String;
+
+  fn from_str(mode: &str) -> std::result::Result<Self, Self::Err> {
+    Ok(match mode {
+      "best" => Self::Best,
+      "activearea" => Self::ActiveArea,
+      "none" => Self::None,
+      _ => return Err(format!("Unknown CropMode value: {}", mode)),
+    })
+  }
+}
+ */
+
+/// Quality of preview images
 const PREVIEW_JPEG_QUALITY: f32 = 0.75;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-
+/// Compression mode for DNG
 pub enum DngCompression {
-
+  /// No compression is applied
   Uncompressed,
-
+  /// Lossless JPEG-92 compression
   Lossless,
-
+  // Lossy
 }

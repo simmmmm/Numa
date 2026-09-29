@@ -1,6 +1,6 @@
 use super::*;
 
-use numa::io::models::{ModelFile, MIRROR, MODELS, PROFILES as PROFILES_ARCHIVE};
+use numa::io::models::{packed, ModelFile, MIRROR, MODELS, PROFILES as PROFILES_ARCHIVE};
 
 const GPU_PLUGIN_WHEEL: [ModelFile; 2] = [(
     "onnxruntime_ep_webgpu-0.3.0-py3-none-manylinux_2_28_x86_64.whl",
@@ -72,7 +72,11 @@ fn profiles_available() -> bool {
 }
 
 fn megabytes(files: &[ModelFile]) -> u64 {
-    (files.iter().map(|(_, _, bytes, _)| bytes).sum::<u64>() + 500_000) / 1_000_000
+    (files.iter().map(fetched_bytes).sum::<u64>() + 500_000) / 1_000_000
+}
+
+fn fetched_bytes(file: &ModelFile) -> u64 {
+    packed(file.0).map_or(file.2, |packed| packed.2)
 }
 
 fn files_of(names: &[&str]) -> Vec<ModelFile> {
@@ -233,7 +237,7 @@ fn download_model(
     cancel: Cancel,
     done: impl FnOnce(Result<(), String>) + 'static,
 ) {
-    let total: u64 = files.iter().map(|(_, _, bytes, _)| bytes).sum();
+    let total: u64 = files.iter().map(fetched_bytes).sum();
     let running: Rc<RefCell<Option<gio::Subprocess>>> = Rc::default();
     let ticker = {
         let (files, running, cancel) = (files.clone(), running.clone(), cancel.clone());
@@ -245,11 +249,13 @@ fn download_model(
             }
             let got: u64 = files
                 .iter()
-                .map(|entry @ (file, _, bytes, _)| {
+                .map(|entry @ (file, ..)| {
+                    let bytes = fetched_bytes(entry);
                     if model_on_disk(entry).is_some() {
-                        return *bytes;
+                        return bytes;
                     }
-                    std::fs::metadata(download_dir(file).join(format!("{file}.part"))).map_or(0, |meta| meta.len())
+                    let part = |name: &str| std::fs::metadata(download_dir(file).join(format!("{name}.part"))).map_or(0, |meta| meta.len());
+                    (packed(file).map_or(0, |zst| part(zst.1)) + part(file)).min(bytes)
                 })
                 .sum();
             progress(got.min(total), total);
@@ -271,17 +277,42 @@ fn download_model(
                 let mirror = format!("{MIRROR}/{file}");
                 let mut error = String::new();
                 let mut fetched = false;
-                let urls = if mirror == *url { vec![*url] } else { vec![mirror.as_str(), *url] };
+
+                if let Some((_, name, _, packed_sha, unpacked_sha)) = packed(file) {
+                    let zst = dir.join(format!("{name}.part"));
+                    let finished = match fetch(&running, &zst, &format!("{MIRROR}/{name}")).await {
+                        Ok(()) => checked(&zst, packed_sha).await,
+                        failed => failed,
+                    };
+                    if cancel.stopped() {
+                        return Err("stopped".to_string());
+                    }
+                    let finished = match finished {
+                        Ok(()) => {
+                            let (from, to) = (zst.clone(), part.clone());
+                            match gio::spawn_blocking(move || numa::io::models::unpack(&from, &to)).await {
+                                Ok(Ok(())) => checked(&part, unpacked_sha).await,
+                                Ok(Err(err)) => Err(err.to_string()),
+                                Err(_) => Err("unpacking stopped".to_string()),
+                            }
+                        }
+                        failed => failed,
+                    };
+                    let _ = std::fs::remove_file(&zst);
+                    match finished {
+                        Ok(()) => fetched = true,
+                        Err(err) => {
+                            log::info!("{name}: {err}; fetching {file} itself");
+                            let _ = std::fs::remove_file(&part);
+                        }
+                    }
+                }
+                let urls = if fetched { vec![] } else if mirror == *url { vec![*url] } else { vec![mirror.as_str(), *url] };
                 for url in urls {
                     if cancel.stopped() {
                         return Err("stopped".to_string());
                     }
-                    let finished = run(
-                        &running,
-                        &["curl".as_ref(), "--fail".as_ref(), "--location".as_ref(), "--retry".as_ref(), "3".as_ref(),
-                          "--continue-at".as_ref(), "-".as_ref(), "--output".as_ref(), part.as_os_str(), url.as_ref()],
-                    )
-                    .await;
+                    let finished = fetch(&running, &part, url).await;
                     let finished = match finished {
                         Ok(()) => checked(&part, sha256).await,
                         failed => failed,
@@ -329,6 +360,15 @@ fn download_model(
         ticker.remove();
         done(result);
     });
+}
+
+async fn fetch(running: &Rc<RefCell<Option<gio::Subprocess>>>, part: &Path, url: &str) -> Result<(), String> {
+    run(
+        running,
+        &["curl".as_ref(), "--fail".as_ref(), "--location".as_ref(), "--retry".as_ref(), "3".as_ref(),
+          "--continue-at".as_ref(), "-".as_ref(), "--output".as_ref(), part.as_os_str(), url.as_ref()],
+    )
+    .await
 }
 
 async fn run(running: &Rc<RefCell<Option<gio::Subprocess>>>, argv: &[&std::ffi::OsStr]) -> Result<(), String> {

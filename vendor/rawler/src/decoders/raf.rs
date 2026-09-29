@@ -47,6 +47,7 @@ use super::RawMetadata;
 mod dbp;
 mod fuji_decompressor;
 
+/// RAF decoder
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RafDecoder<'a> {
@@ -58,6 +59,7 @@ pub struct RafDecoder<'a> {
   camera_compressed: Option<Camera>,
 }
 
+/// Check if file has RAF signature
 pub fn is_raf(file: &RawSource) -> bool {
   match file.subview(0, 8) {
     Ok(buf) => buf[0..8] == b"FUJIFILM"[..],
@@ -65,19 +67,27 @@ pub fn is_raf(file: &RawSource) -> bool {
   }
 }
 
+/// We need to inject a virtual IFD into main IFD.
+/// The RAF data block is not a regular TIFF structure but
+/// a proprietary structure. This tag id should be unlikely
+/// to appear in main IFD.
 const RAF_TAG_VIRTUAL_RAF_DATA: u16 = 0xfaaa;
 
+/// Parse a proprietary RAF data structure and return a virtual IFD.
+/// Unfortunately, Fujifilm forgot to add a type field to these
+/// tags, so we need to match by tag.
 pub fn parse_raf_format(file: &RawSource, offset: u32) -> Result<IFD> {
   let mut entries = BTreeMap::new();
   let stream = &mut file.reader();
   stream.seek(SeekFrom::Start(offset as u64))?;
-  let num = stream.read_u32::<BigEndian>()?;
+  let num = stream.read_u32::<BigEndian>()?; // Directory entries in this IFD
   if num > 4000 {
     return Err(format_args!("too many entries in IFD ({})", num).into());
   }
   for _ in 0..num {
     let tag = stream.read_u16::<BigEndian>()?;
     let len = stream.read_u16::<BigEndian>()? as usize;
+    //eprintln!("RAF tag: 0x{:X}, len: {}", tag, len);
 
     match RafTags::try_from(tag) {
       Ok(RafTags::RawImageFullSize)
@@ -102,7 +112,7 @@ pub fn parse_raf_format(file: &RawSource, offset: u32) -> Result<IFD> {
         };
         entries.insert(tag, entry);
       }
-
+      // This one is in other byte-order...
       Ok(RafTags::RAFData) => {
         let n = len / size_of::<u32>();
         let entry = Entry {
@@ -112,7 +122,7 @@ pub fn parse_raf_format(file: &RawSource, offset: u32) -> Result<IFD> {
         };
         entries.insert(tag, entry);
       }
-
+      // Skip other tags
       _ => {
         stream.seek(SeekFrom::Current(len as i64))?;
       }
@@ -130,6 +140,7 @@ pub fn parse_raf_format(file: &RawSource, offset: u32) -> Result<IFD> {
   })
 }
 
+// This won't work for many samples, don't use it.
 #[allow(dead_code)]
 fn get_compression(file: &RawSource) -> Result<u32> {
   let buf = file.subview(0, 0x6c + 4)?;
@@ -137,42 +148,49 @@ fn get_compression(file: &RawSource) -> Result<u32> {
   Ok(compression)
 }
 
+/// RAF format contains multiple TIFF and TIFF-like structures.
+/// This creates a IFD with all other IFDs found collected as SubIFDs.
 fn parse_raf(file: &RawSource) -> Result<IFD> {
   const RAF_TIFF1_PTR_OFFSET: u64 = 84;
   const RAF_TIFF2_PTR_OFFSET: u64 = 100;
   const RAF_TAGS_PTR_OFFSET: u64 = 92;
-
+  //const RAF_BLOCK_PTR_OFFSET2: u64 = 120; TODO: ?!?
   log::debug!("parse RAF");
   let stream = &mut file.reader();
   stream.seek(SeekFrom::Start(RAF_TIFF1_PTR_OFFSET))?;
   let offset = stream.read_u32::<BigEndian>()?;
 
+  // Main IFD
   let mut main = IFD::new_root(stream, offset + 12)?;
 
+  //main.dump::<TiffCommonTag>(10).iter().for_each(|line| eprintln!("MAIN: {}", line));
+
+  // There is a second TIFF structure, the pointer is stored at offset 100.
+  // If it is not a valid TIFF structure, the pointer itself is the RAF offset.
   stream.seek(SeekFrom::Start(RAF_TIFF2_PTR_OFFSET))?;
   let ioffset = stream.read_u32::<BigEndian>()?;
 
   match IFD::new_root_with_correction(stream, 0, ioffset, 0, 10, &[FujiIFD::FujiIFD.into()]) {
     Ok(val) => {
       log::debug!("Found valid FujiIFD (0xF000)");
-
+      //val.dump::<FujiIFD>(10).iter().for_each(|line| eprintln!("FujiIFD: {}", line));
       main.sub.insert(FujiIFD::FujiIFD as u16, vec![val]);
     }
     Err(_) => {
-
+      // We fake an FujiIFD to pass the StripOffsets
       log::debug!("Unable to find FujiIFD (0xF000), let's fake it");
       let mut entries = BTreeMap::<u16, Entry>::new();
       entries.insert(
         FujiIFD::StripOffsets as u16,
         Entry {
           tag: FujiIFD::StripOffsets as u16,
-          value: Value::Long(vec![ioffset]),
+          value: Value::Long(vec![ioffset]), // The ioffset is absolute to the file start.
           embedded: Some(RAF_TIFF2_PTR_OFFSET as u32),
         },
       );
       let fake = IFD {
         offset: 0,
-        base: 0,
+        base: 0, // For the faked IFD, the offsets are already absolute to the file start.
         corr: 0,
         next_ifd: 0,
         entries,
@@ -183,12 +201,12 @@ fn parse_raf(file: &RawSource) -> Result<IFD> {
       main.sub.insert(FujiIFD::FujiIFD as u16, vec![fake]);
     }
   }
-
+  // And we maybe have a RAF data block, try to parse it.
   stream.seek(SeekFrom::Start(RAF_TAGS_PTR_OFFSET))?;
   let raf_offset = stream.read_u32::<BigEndian>()?;
   match parse_raf_format(file, raf_offset) {
     Ok(val) => {
-
+      //val.dump::<RafTags>(10).iter().for_each(|line| eprintln!("RAFTAGS: {}", line));
       main.sub.insert(RAF_TAG_VIRTUAL_RAF_DATA, vec![val]);
     }
     Err(_) => {
@@ -202,6 +220,15 @@ fn parse_raf(file: &RawSource) -> Result<IFD> {
 impl<'a> RafDecoder<'a> {
   pub fn new(file: &RawSource, rawloader: &'a RawLoader) -> Result<RafDecoder<'a>> {
     let ifd = parse_raf(file)?;
+
+    /*
+    let mode = match get_compression(file)? {
+      0 => "uncompressed",
+      1 => "lossess",
+      2 => "lossy",
+      _ => "unknown",
+    };
+     */
 
     let camera = match rawloader.check_supported(&ifd) {
       Ok(camera) => camera,
@@ -219,7 +246,7 @@ impl<'a> RafDecoder<'a> {
       None
     }
     .ok_or("File has not makernotes")?;
-
+    //makernotes.dump::<RafMakernotes>(10).iter().for_each(|line| eprintln!("MKND: {}", line));
     Ok(RafDecoder {
       ifd,
       makernotes,
@@ -254,6 +281,9 @@ impl<'a> Decoder for RafDecoder<'a> {
       None => 16,
     };
 
+    // Rotation is only used for SuperCCD sensors, so we handle X-Trans CFA only here.
+    // Some cameras like X-T20 uses different CFA when compression is enabled, so we
+    // read the correct pattern from metadata.
     let corrected_cfa = if let Some(cfa) = self.get_xtrans_cfa()? {
       log::debug!(
         "Found X-Trans CFA pattern in metadata, use this instead of camera config file. Pattern is: {}",
@@ -264,12 +294,13 @@ impl<'a> Decoder for RafDecoder<'a> {
       self.camera.cfa.clone()
     };
 
+    // Strip offset is relative to IFD base
     let offset = raw.base as u64 + fetch_tiff_tag!(raw, FujiIFD::StripOffsets).force_u64(0);
     let src = if raw.has_entry(FujiIFD::StripByteCounts) {
       let strip_count = fetch_tiff_tag!(raw, FujiIFD::StripByteCounts).force_u64(0);
       file.subview_padded_or_dummy(offset, strip_count, dummy)?
     } else {
-
+      // Some models like DBP don't have a byte count, so we read until EOF
       file.subview_until_eof_padded_or_dummy(offset, dummy)?
     };
 
@@ -278,7 +309,9 @@ impl<'a> Decoder for RafDecoder<'a> {
     let mut camera = self.camera.clone();
 
     let image = if self.camera.find_hint("double_width") {
-
+      // Some fuji SuperCCD cameras include a second raw image next to the first one
+      // that is identical but darker to the first. The two combined can produce
+      // a higher dynamic range image. Right now we're ignoring it.
       decompress_16le_skiplines(&src, width, height, dummy)?
     } else if self.camera.find_hint("jpeg32") {
       match bps {
@@ -291,7 +324,7 @@ impl<'a> Decoder for RafDecoder<'a> {
       dbp::decode_dbp(&src, width, height, dummy)?
     } else if src.len() < bps * width * height / 8 {
       if !dummy {
-
+        //if let Some(camera) = rawloader.check_supported(&ifd)
         if let Some(cam_compr) = self.camera_compressed.clone() {
           camera = cam_compr;
         }
@@ -319,13 +352,17 @@ impl<'a> Decoder for RafDecoder<'a> {
     let blacklevel = self.get_blacklevel(&corrected_cfa)?;
     log::debug!("RAF Blacklevels: {:?}", blacklevel);
 
+    // For now, we put the rotated data into DNG. Much better solution
+    // would be to support staggered layouts, but this is not used much
+    // and complicated to implement, because we need rectangular CFA patterns like 2x4.
+    // The code path for staggered data is already implemented here, but remains unused.
     let rotate_for_dng = false;
     let cpp = 1;
     if self.camera.find_hint("fuji_rotation") || self.camera.find_hint("fuji_rotation_alt") {
       log::debug!("Apply Fuji image rotation");
       let (rotated, fuji_rot_width) = if rotate_for_dng {
         let pix = if self.camera.find_hint("fuji_rotation") {
-          fuji_raw_rotate(&image, dummy)
+          fuji_raw_rotate(&image, dummy) // Only required for fuji_rotation
         } else {
           image
         };
@@ -356,17 +393,21 @@ impl<'a> Decoder for RafDecoder<'a> {
         image.add_dng_tag(TiffCommonTag::CFAPattern, &[0_u8, 1, 2, 1, 2, 1, 0, 1][..]);
 
         todo!();
-
+        //image.add_dng_tag(DngTag::BlackLevel, image.blacklevel[0]);
+        //image.add_dng_tag(DngTag::BlackLevelRepeatDim, [1_u16, 1_u16]);
       }
 
+      // Reset crops because we have rotated the data.
       let rotated_dim = fuji_calc_dimension(image.width, fuji_rot_width.expect("fuji_rot_width must be Some when not rotating for DNG"));
       log::debug!("Image dimension after final rotation: {:?}", rotated_dim);
-
+      //image.active_area = camera.active_area.map(|area| Rect::new_with_borders(rotated_dim, &area));
       image.crop_area = camera.crop_area.map(|area| Rect::new_with_borders(rotated_dim, &area));
       image.active_area = None;
       Ok(image)
     } else {
+      //ok_image(self.camera.clone(), width, height, cpp, self.get_wb()?, image.into_inner())
 
+      //let mut camera = self.camera.clone();
       camera.cfa = corrected_cfa;
       let whitelevel = if self.camera.whitelevel.is_none() {
         match bps {
@@ -382,17 +423,26 @@ impl<'a> Decoder for RafDecoder<'a> {
       let photometric = RawPhotometricInterpretation::Cfa(CFAConfig::new_from_camera(&camera));
       let mut image = RawImage::new(camera, image, cpp, normalize_wb(self.get_wb()?), photometric, blacklevel, whitelevel, dummy);
 
+      // Overwrite crop if available in metadata
       if let Some(crop) = self.get_crop()? {
         log::debug!("RAW file metadata contains crop info, overriding toml definitions: {:?}", crop);
         image.crop_area = Some(crop);
       }
 
+      // Ideally, someone would expect that area is at bayer pattern
+      // boundary. This is not the case, so we don't check this here.
+      // if let Some(_area) = image.active_area.as_ref() {
+      //   assert_eq!(area.d.w % image.cfa.width , 0);
+      //   assert_eq!(area.d.h % image.cfa.height , 0);
+      // }
       Ok(image)
     }
   }
 
   fn raw_metadata(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<RawMetadata> {
-
+    // Fuji RAF has all EXIF tags we need and there is no LensID or something
+    // we can lookup. So this is an exception, we just pass the information.
+    // The lens tags are parsed by Exif::new() from the EXIF IFD.
     let exif = Exif::new(&self.ifd)?;
     let mdata = RawMetadata::new(&self.camera, exif);
     Ok(mdata)
@@ -463,6 +513,8 @@ impl<'a> RafDecoder<'a> {
     Ok(None)
   }
 
+  /// Get crop from metadata
+  /// Nearly all models have this parameter, except of FinePix HS10
   fn get_crop(&self) -> Result<Option<Rect>> {
     if let Some(raf) = &self.ifd.sub_ifds().get(&RAF_TAG_VIRTUAL_RAF_DATA).and_then(|ifds| ifds.get(0)) {
       let crops = raf.get_entry(RafTags::RawImageCropTopLeft);
@@ -477,6 +529,10 @@ impl<'a> RafDecoder<'a> {
     Ok(None)
   }
 
+  /// Get the X-Trans CFA pattern
+  /// This is encoded in RAF metadata block in XTransLayout.
+  /// For unknown reason, the values are stored in reverse order and
+  /// also falsely reported by exiftoool.
   fn get_xtrans_cfa(&self) -> Result<Option<CFA>> {
     Ok(
       if let Some(raf) = &self
@@ -494,7 +550,7 @@ impl<'a> RafDecoder<'a> {
                 0 => 'R',
                 1 => 'G',
                 2 => 'B',
-                _ => 'X',
+                _ => 'X', // Unknown, let CFA::new() fail...
               })
               .collect();
             Some(CFA::new(&patname))
@@ -524,7 +580,7 @@ impl<'a> RafDecoder<'a> {
   }
 
   fn read_embedded_jpeg<'b>(&self, file: &'b RawSource) -> Result<&'b [u8]> {
-
+    // The offset and len of JPEG preview is in the RAF structure
     let buf = file.subview(0, 84 + 8)?;
     let jpeg_off = BEu32(buf, 84) as u64;
     let jpeg_len = BEu32(buf, 84 + 4) as u64;
@@ -532,12 +588,14 @@ impl<'a> RafDecoder<'a> {
     Ok(file.subview(jpeg_off, jpeg_len)?)
   }
 
+  /// Returns (rotated_pixels, fuji_rotation_width) where fuji_rotation_width is the
+  /// split point T for computing the inscribed rectangle after 45° back-rotation.
   fn rotate_image(&self, src: &[u16], camera: &Camera, alt_layout: bool, width: usize, height: usize, dummy: bool) -> Result<(PixU16, usize)> {
     if let Some(active_area) = self.camera.active_area {
       let x = active_area[0];
       let y = active_area[1];
       let cropwidth = width - active_area[2] - x;
-      let cropheight = height - active_area[3] - y;
+      let cropheight = height - active_area[3] - y; // TODO: bug, invalid order of crop index
 
       assert_eq!(alt_layout, camera.find_hint("fuji_rotation_alt"));
 
@@ -582,7 +640,8 @@ impl<'a> RafDecoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   log::debug!("RAF raw wb: {:?}", raw_wb);
-
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
   let div = raw_wb[1];
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
@@ -597,6 +656,8 @@ crate::tags::tiff_tag_enum!(RafMakernotes);
 crate::tags::tiff_tag_enum!(FujiIFD);
 crate::tags::tiff_tag_enum!(RafTags);
 
+/// Specific RAF Makernotes tags.
+/// These are only related to the Makernote IFD.
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
@@ -688,6 +749,7 @@ pub enum RafMakernotes {
   Parallax = 0xb211,
 }
 
+/// These are only related to the additional FujiIFD in RAF files
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
@@ -707,6 +769,7 @@ pub enum FujiIFD {
   VignettingParams = 0xf010,
 }
 
+/// These are only related to the additional RAF-tags in RAF files
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
@@ -728,8 +791,10 @@ pub fn fuji_raw_rotate(img: &PixU16, dummy: bool) -> PixU16 {
   let mut out = alloc_image!(img.height, img.width, dummy);
   for row in 0..img.height {
     for col in 0..img.width {
-
-      *out.at_mut(col, row) = *img.at(row, col);
+      //*x.at_mut(row, col) = out[flip_index(row, col)];
+      //*x.at_mut(row, col) = out[(width - 1 - col) * height + (height - 1 - row)];
+      //*out.at_mut(img.width - 1 - col, img.height - 1 - row) = *img.at(row, col); //   out[row * width + col];
+      *out.at_mut(col, row) = *img.at(row, col); //   out[row * width + col];
     }
   }
   out

@@ -133,6 +133,7 @@ impl<'a> Decoder for KdcDecoder<'a> {
     }
     let mut off = offset.force_usize(4) + offset.force_usize(12);
 
+    // Offset hardcoding gotten from dcraw
     if self.camera.find_hint("easyshare_offset_hack") {
       off = if off < 0x15000 { 0x15000 } else { 0x17000 };
     }

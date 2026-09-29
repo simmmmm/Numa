@@ -125,9 +125,10 @@ impl<'a> Decoder for Rw2Decoder<'a> {
       }
     };
 
-    let compression = raw.get_entry(PanasonicTag::Compression).map(|entry| entry.force_u16(0)).unwrap_or_default();
+    let compression = raw.get_entry(PanasonicTag::Compression).map(|entry| entry.force_u16(0)).unwrap_or_default(); // TODO BUG
+    //let compression = fetch_tiff_tag!(raw, PanasonicTag::Compression).force_u16(0);
 
-    let raw_format = raw.get_entry(PanasonicTag::RawFormat).map(|entry| entry.force_u16(0)).unwrap_or_default();
+    let raw_format = raw.get_entry(PanasonicTag::RawFormat).map(|entry| entry.force_u16(0)).unwrap_or_default(); // TODO BUG
 
     let bps = fetch_tiff_tag!(raw, PanasonicTag::BitsPerSample).force_u32(0);
     let multishot = raw.get_entry(PanasonicTag::Multishot).map(|entry| entry.force_u32(0) == 65536).unwrap_or(false);
@@ -139,9 +140,9 @@ impl<'a> Decoder for Rw2Decoder<'a> {
         width = fetch_tiff_tag!(raw, TiffCommonTag::PanaWidth).force_usize(0);
         height = fetch_tiff_tag!(raw, TiffCommonTag::PanaLength).force_usize(0);
         let offset = fetch_tiff_tag!(raw, TiffCommonTag::PanaOffsets).force_usize(0);
-
+        //let size = fetch_tiff_tag!(raw, TiffCommonTag::StripByteCounts).force_usize(0);
         log::debug!("PanaOffset: {}", offset);
-        let src = file.subview_until_eof_padded_or_dummy(offset as u64, dummy)?;
+        let src = file.subview_until_eof_padded_or_dummy(offset as u64, dummy)?; // TODO add size and check all samples
         Rw2Decoder::decode_panasonic(file, &src, width, height, split, raw_format, bps, self.tiff.root_ifd(), dummy)?
       } else {
         let raw = self
@@ -151,9 +152,9 @@ impl<'a> Decoder for Rw2Decoder<'a> {
         width = fetch_tiff_tag!(raw, TiffCommonTag::PanaWidth).force_usize(0);
         height = fetch_tiff_tag!(raw, TiffCommonTag::PanaLength).force_usize(0);
         let offset = fetch_tiff_tag!(raw, TiffCommonTag::StripOffsets).force_usize(0);
-
+        //let size = fetch_tiff_tag!(raw, TiffCommonTag::StripByteCounts).force_usize(0);
         log::debug!("StripOffset: {}", offset);
-        let src = file.subview_until_eof_padded_or_dummy(offset as u64, dummy)?;
+        let src = file.subview_until_eof_padded_or_dummy(offset as u64, dummy)?; // TODO add size and check all samples
 
         if src.len() >= width * height * 2 {
           decompress_12le_unpacked_left_aligned(&src, width, height, dummy)?
@@ -214,7 +215,7 @@ impl<'a> Decoder for Rw2Decoder<'a> {
   fn raw_metadata(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<RawMetadata> {
     let mut exif = Exif::new(self.tiff.root_ifd())?;
     if exif.iso_speed.unwrap_or(0) == 0 && exif.iso_speed_ratings.unwrap_or(0) == 0 && exif.recommended_exposure_index.unwrap_or(0) == 0 {
-
+      // Use ISO from PanasonicRaw IFD
       if let Some(iso) = self.tiff.get_entry(PanasonicTag::ISO) {
         exif.iso_speed_ratings = Some(iso.force_u16(0));
       }
@@ -260,7 +261,7 @@ impl<'a> Rw2Decoder<'a> {
   }
 
   fn get_blacklevel(&self) -> Result<Option<BlackLevel>> {
-
+    // A +15 offset is required if the PanasonicTag::RawDataOffset tag is not present, or if the version is <=4.
     let raw_format = self.tiff.get_entry(PanasonicTag::RawFormat).map(|e| e.force_u16(0)).unwrap_or(0);
     let offset = if !self.tiff.has_entry(PanasonicTag::RawDataOffset) || raw_format <= 4 {
       15
@@ -283,6 +284,7 @@ impl<'a> Rw2Decoder<'a> {
     }
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     const MFT_MOUNT: &str = "MFT-mount";
     if let Some(ifd) = &self.camera_ifd {
@@ -374,7 +376,7 @@ impl<'a> Rw2Decoder<'a> {
       6 => decode_panasonic_v6(buf, width, height, bps, dummy)?,
       7 => decode_panasonic_v7(buf, width, height, bps, dummy)?,
       8 => decode_panasonic_v8(file, width, height, bps, ifd, dummy)?,
-      _ => todo!("Format {} is not implemented", raw_format),
+      _ => todo!("Format {} is not implemented", raw_format), // TODO: return error
     })
   }
 }
@@ -394,6 +396,7 @@ fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
 tiff_tag_enum!(PanasonicTag);
 tiff_tag_enum!(CameraIfdTag);
 
+/// Common tags, generally used in root IFD or SubIFDs
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum PanasonicTag {
@@ -426,9 +429,9 @@ pub enum PanasonicTag {
   CropRight = 0x0032,
 
   CF2StripHeight = 0x0037,
-  CF2Unknown1 = 0x0039,
-  CF2Unknown2 = 0x003a,
-  CF2ClipVal = 0x003b,
+  CF2Unknown1 = 0x0039, // Gamma table CF2_GammaSlope?
+  CF2Unknown2 = 0x003a, // Gamma table CF2_GammaPoint?
+  CF2ClipVal = 0x003b,  // CF2_GammaClipVal
   CF2HufInitVal0 = 0x003c,
   CF2HufInitVal1 = 0x003d,
   CF2HufInitVal2 = 0x003e,
@@ -450,6 +453,7 @@ pub enum PanasonicTag {
   Multishot = 0x0121,
 }
 
+/// Common tags, generally used in root IFD or SubIFDs
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum CameraIfdTag {

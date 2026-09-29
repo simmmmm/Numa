@@ -218,6 +218,16 @@ entry does not exist, and the messages that say what is missing name
   342 ms. The 0.78 s that used to be quoted is the time until the main loop
   goes idle, which is work behind a window that is already there.
 
+- ✅ **START-017**: Smaller model downloads, the same models. The mirror
+  keeps every model file packed beside the original: zstd over the file with
+  its float tensors' bytes grouped by position (the HDF5/Blosc shuffle),
+  unpacked once as it is fetched and checked against both digests. 2 009 MB
+  of models are 1 563 MB to fetch (BiRefNet 973 → 742). SCUNet's weights
+  come as float16 and are widened back, the rest byte for byte; float16
+  weights were measured for every model and taken only where the answer moves
+  less than the card already moves it. A mirror without the pack, or a Numa
+  from before, fetches the original as before.
+
 ### APP — Application shell
 
 - ✅ **APP-001**: App actions (`app.quit`, `app.about`) and accelerators.
@@ -295,6 +305,15 @@ entry does not exist, and the messages that say what is missing name
 - ✅ **APP-006**: Recent files integration. A photograph opened from outside and
   every exported file are added to the desktop's recent files, so the file
   manager's Recent and any file dialog offer them again.
+- 🟡 **APP-007**: Other languages. The photographer's, 29 September: the Apple
+  app only, every word through its String Catalog, English for now (Numa-mac,
+  `docs/APPLE_PLAN.md`). The crates hand over what they say in parts — a
+  history step (`history::Step`), a mask's label (`masks::MaskLabel`), what a
+  found mask holds (`segment::Named`), the numbers behind a cull note
+  (`notes::DetailLine`) — and Linux's English is those parts' `Display`, word
+  for word what it was; Analyse's closing line the app words from
+  `learn::Outcome`. Linux itself stays English. Open: errors are still
+  sentences.
 
 ### IO — Import, export, catalog
 
@@ -399,6 +418,21 @@ entry does not exist, and the messages that say what is missing name
 
   A sample frame per make is still the only thing that turns "every camera"
   from what the decoder promises into what has been seen.
+
+  The Sony ILME-FX2, which rawler did not know, has an entry in Numa's copy
+  (29 September): the 7CM2's matrices, the same sensor, the matrix LibRaw
+  gives the FX2. All four of its raw.pixls.us frames open; nothing else
+  renders differently (`docs/ENGINEERING.md`, "The Sony ILME-FX2 in rawler").
+
+  How many cameras that is, as the README, the metainfo and numa.photo say it
+  (850 on 29 September): each name a camera goes by, counted once — its
+  clean make and model and each of its aliases (the Canon 450D is also the
+  Rebel XSi), not its modes (sRAW, compressed) and not the raw make strings,
+  which name one maker several ways. Counted from rawler's camera files:
+
+  ```sh
+  python3 -c 'import tomllib,glob; print(len({(c["clean_make"],m) for f in glob.glob("vendor/rawler/data/cameras/**/*.toml",recursive=True) for c in [tomllib.load(open(f,"rb"))] for m in [c["clean_model"]]+[a[1] for a in c.get("model_aliases",[])]}))'
+  ```
 - ✅ **IO-009**: Library roots — add, rescan, originals left where they are.
 - ✅ **IO-010**: Demosaic backend settled: rawler, no libraw.
 - ✅ **IO-013**: Markesteijn demosaic for X-Trans at full size; bilinear for the
@@ -766,7 +800,8 @@ entry does not exist, and the messages that say what is missing name
   photograph with a face like it offers that name, saying it is a guess — Enter
   confirms, typing corrects. Only what was typed is stored; the name reaches
   photographs by likeness, so one named today reaches the ones taken last year.
-  SFace (OpenCV Zoo, Apache-2.0, 37 MB) aligned on YuNet's five points; see
+  SFace (OpenCV Zoo; weights Apache-2.0, training data research-only, so for
+  non-commercial use only; 37 MB) aligned on YuNet's five points; see
   ENGINEERING.md, "Faces and names", for the threshold and how it was measured.
   Everyone with a name is a place in the library picker (LIB-017) — worked out
   from the faces Analyse keeps, so a library needs a pass of Analyse first (the
@@ -1621,7 +1656,10 @@ dependency at all.
 
   Built for v1: six, the pilot's that beat the matrix on held-out frames
   (EOS R5, D850, A7R III, E-M1 II, X-S10, X-T4; not the G9, Z 7 or K-1, and
-  not the D-LUX, whose one frame was also its training frame). Fitted from
+  not the D-LUX, whose one frame was also its training frame). Of those and
+  the X-T5 only the X-T5's is left since RENDER-023: the others were held out
+  on a frame of the session they were fitted on. Twenty more
+  from every body the CC0 raws allow: RENDER-023. Fitted from
   CC0 raw.pixls.us frames only, never the DPReview studio frames.
   The photographer's own ("die zijn van mij nu, bundel ze met de apps maar
   publiceer ze niet los", 27 September): inside the apps only — Flatpak and
@@ -1697,6 +1735,29 @@ dependency at all.
   Built and tested on Linux; off in the Apple app until the MacBook has run
   the tolerance test and the timings on it (`docs/ENGINEERING.md`, "Metal
   for the Apple apps").
+- ✅ **RENDER-023**: Numa's own profile for every body the CC0 raws allow.
+  The raw.pixls.us corpus grew to up to four CC0 raws a body (663 more,
+  20.2 GB; Fujifilm, Sony, Canon and Nikon first), and every body with two
+  usable raws was fitted as RENDER-015's were, one frame held out: 220
+  bodies. The fitter now takes a Fujifilm frame only on Provia at Color 0
+  ("echte profielen"), skips a JPEG without colour, one not the frame's
+  shape, and a frame whose decode and JPEG disagree beyond any colour error
+  (Olympus High Res Shots, FT-030), reads a JPEG tagged Adobe RGB both ways
+  and keeps the reading nearer the matrix (101 of 129 such previews are
+  sRGB anyway), and holds out a frame of a scene no fitted frame shows.
+  Shipped when that frame beat the matrix, and RawTherapee's profile where
+  one is installed: 20 (Sony 3, Canon 3, Nikon 5, Fujifilm 0, others 9),
+  held-out chroma error 0.0488 → 0.0412 on average. 156 more beat both but
+  only on a frame of a scene they were fitted on — most bodies' raws are
+  one scene in several compressions — and wait for a second scene. With 220
+  more profiles installed a body's first lookup costs about 1 ms more
+  (`docs/ENGINEERING.md`, "Fitting a profile against the camera").
+  The same rule, applied to the profiles already shipped, took five out
+  (29 September): the EOS R5, D850, A7R III, X-S10 and X-T4 had each been
+  held out on a frame of their own session. On another scene the A7R III's
+  lost to the matrix (0.0105 against 0.0101); the other four have no second
+  scene on raw.pixls.us. The X-T5's held (0.0375 → 0.0308 on five frames of
+  other scenes, Adobe Standard 0.0372). 21 ship.
 
 ### OPTICS — Lens corrections
 
@@ -3310,7 +3371,8 @@ dependency at all.
   glow round it, because a lock with pink behind it does not stand out from
   her. Asked again from closer it said the same; a pixel's colour against the
   colours either side could not tell a strand from a pink bag. ViTMatte-S
-  (Apache-2.0, `vitmatte_small.onnx`) is asked a different question: the
+  (code MIT, weights for non-commercial use only, `vitmatte_small.onnx`) is
+  asked a different question: the
   photograph and a trimap — certainly her, certainly not, decide the band — and
   it answers with coverage per pixel. The trimap is the first matte's: its
   solid part less a fiftieth of the subject is certain, the empty background
@@ -3328,11 +3390,13 @@ dependency at all.
   On 26 September ViTMatte-S was replaced by BiRefNet lite's matting weights
   (MIT) everywhere, because ViTMatte's weights were trained on Adobe's
   Composition-1k, whose licence says models trained on it "may not be sold".
-  On 27 September Linux went back to ViTMatte: the Linux version is free
-  (PolyForm Noncommercial), and the replacement was clearly weaker on dense
+  On 27 September Linux went back to ViTMatte: the Linux version was then
+  free under PolyForm Noncommercial (since 29 September it is GPL-3.0-or-later,
+  and Add-ons marks ViTMatte-S for non-commercial use only), and the
+  replacement was clearly weaker on dense
   fur (a mean error of 0.16 in the fur of a made-up head against ViTMatte's
-  0.04 and the first look's 0.18). The paid Apple app, where the licence
-  does bind, has closed-form matting instead (Levin et al. 2008, patent
+  0.04 and the first look's 0.18). The paid Apple app, which is sold, has
+  closed-form matting instead (Levin et al. 2008, patent
   expired; `numa_render::closed_form`): the same trimap, solved from the
   photograph's colours, no model and nothing to download. Measured on 24
   portraits with loose hair from AIM-500 and P3M-500 against their true

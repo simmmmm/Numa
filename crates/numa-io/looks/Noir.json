@@ -1,0 +1,82 @@
+{
+  "parts": {
+    "white_balance": false,
+    "tone": true,
+    "colour": true,
+    "curve": false,
+    "detail": false,
+    "geometry": false
+  },
+  "document": {
+    "source": {
+      "path": ""
+    },
+    "operations": [
+      {
+        "type": "Basic",
+        "contrast": 32,
+        "highlights": -20,
+        "blacks": -18,
+        "vignette": -18,
+        "grain": 20,
+        "grain_size": 20
+      },
+      {
+        "type": "Mixer",
+        "bands": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "monochrome": true,
+        "grey": [
+          8,
+          5,
+          0,
+          0,
+          -20,
+          -35,
+          0,
+          0
+        ]
+      }
+    ]
+  }
+}

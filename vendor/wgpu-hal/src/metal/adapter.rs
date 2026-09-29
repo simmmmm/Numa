@@ -18,12 +18,39 @@ use crate::metal::QueueShared;
 
 use super::{OsFeatures, TimestampQuerySupport};
 
+/// Check if a device's class has a given method in its method table.
+///
+/// This mirrors the check that `objc2` performs internally (in debug builds)
+/// before sending a message. We use it to skip method calls that would panic
+/// on proxy objects like Apple's `CaptureMTLDevice`, which forwards messages
+/// at runtime but doesn't declare the methods in its class.
 fn device_class_responds_to(device: &ProtocolObject<dyn MTLDevice>, sel: Sel) -> bool {
     AnyObject::class(device.as_ref()).responds_to(sel)
 }
 
+/// Maximum number of command buffers for `MTLCommandQueue`s that we create.
+///
+/// If a [new command buffer] is requested when Metal has run out of command
+/// buffers, it waits indefinitely for one to become available. If the
+/// outstanding command buffers are actively executing on the GPU, this will
+/// happen relatively quickly. But if the outstanding command buffers will only
+/// be recovered upon GC, and attempting to get a new command buffer prevents
+/// forward progress towards that GC, there is a deadlock.
+///
+/// This is mostly a problem for the CTS, which frequently creates command
+/// buffers that it does not submit. It is unclear how likely command buffer
+/// exhaustion is in real applications.
+///
+/// This limit was increased from a previous value of 2048 for
+/// <https://bugzilla.mozilla.org/show_bug.cgi?id=1971452>.
+///
+/// [new command buffer]: https://developer.apple.com/documentation/metal/mtlcommandqueue/makecommandbuffer()?language=objc
 pub(super) const MAX_COMMAND_BUFFERS: usize = 4096;
 
+/// "Maximum number of entries in the buffer argument table, per graphics or kernel function"
+///
+/// Vertex buffers are placed at the end of the table (highest indices),
+/// counting down from MAX_BUFFERS - 1.
 pub const MAX_BUFFERS: u32 = 31;
 
 impl super::Adapter {
@@ -51,10 +78,29 @@ impl crate::Adapter for super::Adapter {
                 .newCommandQueueWithMaxCommandBufferCount(MAX_COMMAND_BUFFERS)
                 .unwrap();
 
+            // Acquiring the meaning of timestamp ticks is hard with Metal!
+            // The only thing there is a method correlating cpu & gpu timestamps (`device.sample_timestamps`).
+            // Users are supposed to call this method twice and calculate the difference,
+            // see "Converting GPU Timestamps into CPU Time":
+            // https://developer.apple.com/documentation/metal/gpu_counters_and_counter_sample_buffers/converting_gpu_timestamps_into_cpu_time
+            // Not only does this mean we get an approximate value, this is as also *very slow*!
+            // Chromium opted to solve this using a linear regression that they stop at some point
+            // https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:third_party/dawn/src/dawn/native/metal/DeviceMTL.mm;drc=76be2f9f117654f3fe4faa477b0445114fccedda;bpv=0;bpt=1;l=46
+            // Generally, the assumption is that timestamp values aren't changing over time, after all all other APIs provide stable values.
+            //
+            // We should do as Chromium does for the general case, but this requires quite some state tracking
+            // and doesn't even provide perfectly accurate values, especially at the start of the application when
+            // we didn't have the chance to sample a lot of values just yet.
+            //
+            // So instead, we're doing the dangerous but easy thing and use our "knowledge" of timestamps
+            // conversions on different devices, after all Metal isn't supported on that many ;)
+            // Based on:
+            // * https://github.com/gfx-rs/wgpu/pull/2528
+            // * https://github.com/gpuweb/gpuweb/issues/1325#issuecomment-761041326
             let timestamp_period = if self.shared.device.name().to_string().starts_with("Intel") {
                 83.333
             } else {
-
+                // Known for Apple Silicon (at least M1 & M2, iPad Pro 2018) and AMD GPUs.
                 1.0
             };
 
@@ -88,12 +134,14 @@ impl crate::Adapter for super::Adapter {
 
         let msl_version = self.shared.private_caps.msl_version;
         let pc = &self.shared.private_texture_format_caps;
-
+        // Affected formats documented at:
+        // https://developer.apple.com/documentation/metal/mtlreadwritetexturetier/mtlreadwritetexturetier1?language=objc
+        // https://developer.apple.com/documentation/metal/mtlreadwritetexturetier/mtlreadwritetexturetier2?language=objc
         let (read_write_tier1_if, read_write_tier2_if) = match pc.read_write_texture_tier {
             MTLReadWriteTextureTier::TierNone => (Tfc::empty(), Tfc::empty()),
             MTLReadWriteTextureTier::Tier1 => (Tfc::STORAGE_READ_WRITE, Tfc::empty()),
             MTLReadWriteTextureTier::Tier2 => (Tfc::STORAGE_READ_WRITE, Tfc::STORAGE_READ_WRITE),
-
+            // Unknown levels of support are likely higher than Tier 2.
             _ => (Tfc::STORAGE_READ_WRITE, Tfc::STORAGE_READ_WRITE),
         };
         let msaa_count = pc.sample_count_mask;
@@ -129,6 +177,7 @@ impl crate::Adapter for super::Adapter {
             Tfc::empty()
         };
 
+        // Metal defined pixel format capabilities
         let all_caps = Tfc::SAMPLED_LINEAR
             | Tfc::STORAGE_WRITE_ONLY
             | Tfc::COLOR_ATTACHMENT
@@ -350,17 +399,24 @@ impl crate::Adapter for super::Adapter {
         &self,
         surface: &super::Surface,
     ) -> Option<crate::SurfaceCapabilities> {
-
+        // `CAMetalLayer` color-matches layer contents to whatever display the
+        // window is on, with the compositor tone-mapping where needed, so
+        // Display-P3 and HDR (PQ/HLG) color spaces work regardless of the
+        // physical display's gamut and are not gated on it here.
         let format_caps = |format: wgt::TextureFormat| {
             let mut color_spaces =
                 wgt::SurfaceColorSpaces::SRGB | wgt::SurfaceColorSpaces::DISPLAY_P3;
             if format == wgt::TextureFormat::Rgba16Float {
-
+                // `Rgba16Float` enables Metal's extended dynamic range, in both
+                // linear (scRGB) and encoded (extended nonlinear sRGB) form,
+                // for the BT.709 and Display-P3 gamuts.
                 color_spaces |= wgt::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR
                     | wgt::SurfaceColorSpaces::EXTENDED_SRGB
                     | wgt::SurfaceColorSpaces::EXTENDED_DISPLAY_P3;
             }
-
+            // PQ/HLG only on the >=10-bit formats: 8-bit PQ would result in unusable
+            // banding. The ITUR_2100 color space constants require
+            // macOS 11.0/iOS 14.0.
             if matches!(
                 format,
                 wgt::TextureFormat::Rgba16Float | wgt::TextureFormat::Rgb10a2Unorm
@@ -389,7 +445,8 @@ impl crate::Adapter for super::Adapter {
 
         Some(crate::SurfaceCapabilities {
             formats,
-
+            // We use this here to govern the maximum number of drawables + 1.
+            // See https://developer.apple.com/documentation/quartzcore/cametallayer/maximumdrawablecount
             maximum_frame_latency: if available!(
                 macos = 10.13.2,
                 ios = 11.2,
@@ -398,10 +455,11 @@ impl crate::Adapter for super::Adapter {
             ) {
                 1..=2
             } else {
-
+                // 3 is the default value for maximum drawables in `CAMetalLayer` documentation
+                // iOS 10.3 was tested to use 3 on iphone5s
                 2..=2
             },
-
+            // We enable Immediate mode using `-[CAMetalLayer setDisplaySyncEnabled: false]`.
             present_modes: if OsFeatures::display_sync() {
                 vec![wgt::PresentMode::Fifo, wgt::PresentMode::Immediate]
             } else {
@@ -439,6 +497,7 @@ impl crate::Adapter for super::Adapter {
         wgt::BufferUses::INCLUSIVE | wgt::BufferUses::MAP_WRITE
     }
 
+    // Don't put barriers between inclusive uses
     fn get_ordered_texture_usages(&self) -> wgt::TextureUses {
         wgt::TextureUses::INCLUSIVE
             | wgt::TextureUses::COLOR_TARGET
@@ -509,12 +568,16 @@ const BGR10A2_ALL: &[MTLFeatureSet] = &[
     MTLFeatureSet::macOS_GPUFamily2_v1,
 ];
 
+/// "Indirect draw & dispatch arguments" in the Metal feature set tables
 const INDIRECT_DRAW_DISPATCH_SUPPORT: &[MTLFeatureSet] = &[
     MTLFeatureSet::iOS_GPUFamily3_v1,
     MTLFeatureSet::tvOS_GPUFamily2_v1,
     MTLFeatureSet::macOS_GPUFamily1_v1,
 ];
 
+/// "Base vertex/instance drawing" in the Metal feature set tables
+///
+/// in our terms, `base_vertex` and `first_instance` must be 0
 const BASE_VERTEX_FIRST_INSTANCE_SUPPORT: &[MTLFeatureSet] = INDIRECT_DRAW_DISPATCH_SUPPORT;
 
 const TEXTURE_CUBE_ARRAY_SUPPORT: &[MTLFeatureSet] = &[
@@ -555,7 +618,30 @@ impl super::CapabilitiesQuery {
             .any(|x| raw.supportsFeatureSet(x))
     }
 
+    /// Query the capabilities of the device.
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
+        // There are four different OSes we can target: macOS, iOS, tvOS and
+        // visionOS. This can be detected using `cfg!(target_os = "ios")`, or
+        // more conveniently using the `available!(...)` macro, which also
+        // checks that the OS version that the binary is currently running on
+        // is higher than or equal to the specified version.
+        //
+        // Along with the different OSes, there is also two other modes that
+        // applications can run in: the Simulator, and Mac Catalyst. This can
+        // be detected using `cfg!(target_env = "sim")` or
+        // `cfg!(target_env = "macabi")`.
+        //
+        // Finally, iOS applications can be run on macOS and visionOS directly
+        // using the "Designed for iPad" mode. This cannot be detected at
+        // compile-time.
+        //
+        // All of this means that it only makes sense to use `cfg!(...)` and
+        // `available!(...)` in here to check which Metal APIs are available;
+        // we cannot rely on it for knowing properties of the device. For
+        // that, we'll want to use `supportsFeatureSet` or `supportsFamily`.
+        //
+        // See the following link for further details:
+        // https://developer.apple.com/documentation/metal/developing-metal-apps-that-run-in-simulator
 
         let version = NSProcessInfo::processInfo().operatingSystemVersion();
         let os_type = super::OsType::new(version, device);
@@ -563,7 +649,7 @@ impl super::CapabilitiesQuery {
         let family_check = available!(macos = 10.15, ios = 13.0, tvos = 13.0, visionos = 1.0);
         let metal3 = family_check && device.supportsFamily(MTLGPUFamily::Metal3);
         let metal4 = family_check && device.supportsFamily(MTLGPUFamily::Metal4);
-        let mut sample_count_mask = crate::TextureFormatCapabilities::MULTISAMPLE_X4;
+        let mut sample_count_mask = crate::TextureFormatCapabilities::MULTISAMPLE_X4; // 1 and 4 samples are supported on all devices
         if device.supportsTextureSampleCount(2) {
             sample_count_mask |= crate::TextureFormatCapabilities::MULTISAMPLE_X2;
         }
@@ -591,7 +677,7 @@ impl super::CapabilitiesQuery {
         if available!(macos = 11.0, ios = 14.0, tvos = 14.0, visionos = 1.0)
             && device.supportsCounterSampling(MTLCounterSamplingPoint::AtStageBoundary)
         {
-
+            // If we don't support at stage boundary, don't support anything else.
             timestamp_query_support.insert(TimestampQuerySupport::STAGE_BOUNDARIES);
 
             if device.supportsCounterSampling(MTLCounterSamplingPoint::AtDrawBoundary) {
@@ -603,7 +689,7 @@ impl super::CapabilitiesQuery {
             if device.supportsCounterSampling(MTLCounterSamplingPoint::AtBlitBoundary) {
                 timestamp_query_support.insert(TimestampQuerySupport::ON_BLIT_ENCODER);
             }
-
+            // `TimestampQuerySupport::INSIDE_WGPU_PASSES` emerges from the other flags.
         }
 
         let argument_buffers = available!(macos = 10.13, ios = 11.0, tvos = 11.0, visionos = 1.0)
@@ -615,7 +701,7 @@ impl super::CapabilitiesQuery {
                 && (device.supportsFamily(MTLGPUFamily::Metal3)
                     || device.supportsFamily(MTLGPUFamily::Apple7)
                     || device.supportsFamily(MTLGPUFamily::Mac2))
-
+                    // Mesh shaders don't work on virtual devices even if they should be supported. CI thing
                 && !is_virtual;
 
         let msl_version = if available!(macos = 26.0, ios = 26.0, tvos = 26.0, visionos = 26.0) {
@@ -646,7 +732,7 @@ impl super::CapabilitiesQuery {
 
         Self {
             msl_version,
-
+            // macOS 10.11 doesn't support read-write resources
             fragment_rw_storage: available!(macos = 10.12, ios = 8.0, tvos = 8.0, visionos = 1.0),
             read_write_texture_tier: rw_texture_tier,
             msaa_desktop: os_type == super::OsType::Macos,
@@ -691,27 +777,27 @@ impl super::CapabilitiesQuery {
                     && device_class_responds_to(device, sel!(supportsBCTextureCompression))
                     && device.supportsBCTextureCompression()),
             format_eac_etc: os_type != super::OsType::Macos
-
+                // M1 in macOS supports EAC/ETC2
                 || (family_check && device.supportsFamily(MTLGPUFamily::Apple7)),
-
+            // A8(Apple2) and later always support ASTC pixel formats
             format_astc: (family_check && device.supportsFamily(MTLGPUFamily::Apple2))
                 || Self::supports_any(device, ASTC_PIXEL_FORMAT_FEATURES),
-
+            // A13(Apple6) M1(Apple7) and later always support HDR ASTC pixel formats
             format_astc_hdr: family_check && device.supportsFamily(MTLGPUFamily::Apple6),
-
+            // Apple3 and later supports compressed volume texture formats including ASTC Sliced 3D
             format_astc_3d: family_check && device.supportsFamily(MTLGPUFamily::Apple3),
             format_any8_unorm_srgb_all: Self::supports_any(device, ANY8_UNORM_SRGB_ALL),
             format_any8_unorm_srgb_no_write: !Self::supports_any(device, ANY8_UNORM_SRGB_ALL)
                 && os_type != super::OsType::Macos,
             format_any8_snorm_all: Self::supports_any(device, ANY8_SNORM_RESOLVE),
             format_r16_norm_all: os_type == super::OsType::Macos,
-
+            // No devices support r32's all capabilities
             format_r32_all: false,
-
+            // All devices support r32's write capability
             format_r32_no_write: false,
-
+            // iOS support r32float's write capability, macOS support r32float's all capabilities
             format_r32float_no_write_no_filter: false,
-
+            // Only iOS doesn't support r32float's filter  capability
             format_r32float_no_filter: os_type != super::OsType::Macos,
             format_r32float_all: os_type == super::OsType::Macos,
             format_rgba8_srgb_all: Self::supports_any(device, RGBA8_SRGB),
@@ -727,23 +813,23 @@ impl super::CapabilitiesQuery {
             format_rgb9e5_filter_only: os_type == super::OsType::Macos,
             format_rg32_color: true,
             format_rg32_color_write: true,
-
+            // Only macOS support rg32float's all capabilities
             format_rg32float_all: os_type == super::OsType::Macos,
-
+            // All devices support rg32float's color + blend capabilities
             format_rg32float_color_blend: true,
-
+            // Only iOS doesn't support rg32float's filter
             format_rg32float_no_filter: os_type != super::OsType::Macos,
             format_rgba32int_color: true,
-
+            // All devices support rgba32uint and rgba32sint's color + write capabilities
             format_rgba32int_color_write: true,
             format_rgba32float_color: true,
-
+            // All devices support rgba32float's color + write capabilities
             format_rgba32float_color_write: true,
-
+            // Only macOS support rgba32float's all capabilities
             format_rgba32float_all: os_type == super::OsType::Macos,
-
+            // https://developer.apple.com/documentation/metal/mtlpixelformat/depth16unorm
             format_depth16unorm: available!(macos = 10.12, ios = 13.0, tvos = 13.0, visionos = 1.0),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=12
             format_depth16unorm_filter: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Apple3)
@@ -752,15 +838,20 @@ impl super::CapabilitiesQuery {
             format_depth32float_none: os_type != super::OsType::Macos,
             format_bgr10a2_all: Self::supports_any(device, BGR10A2_ALL),
             format_bgr10a2_no_write: !Self::supports_any(device, BGR10A2_ALL),
-
+            // "Maximum number of entries in the texture argument table, per graphics or kernel function"
+            // The tuple is (sampled, storage).
+            // The default limit split in WebGPU is 80%-20%.
+            //  - The default maxSampledTexturesPerShaderStage in WebGPU is 16.
+            //  - The default maxStorageTexturesPerShaderStage in WebGPU is 4.
+            // Use a split of 75%-25% which can exactly split 128 and 96.
             max_textures_per_stage: if os_type == super::OsType::Macos
                 || (family_check && device.supportsFamily(MTLGPUFamily::Apple6))
             {
-                (96, 32)
+                (96, 32) // 128
             } else if family_check && device.supportsFamily(MTLGPUFamily::Apple4) {
-                (72, 24)
+                (72, 24) // 96
             } else {
-                (23, 8)
+                (23, 8) // 31
             },
             max_binding_array_elements: if argument_buffers == Some(MTLArgumentBuffersTier::Tier2) {
                 1_000_000
@@ -769,7 +860,7 @@ impl super::CapabilitiesQuery {
             } else {
                 31
             },
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=7
             max_sampler_binding_array_elements: if family_check
                 && device.supportsFamily(MTLGPUFamily::Apple9)
             {
@@ -784,7 +875,7 @@ impl super::CapabilitiesQuery {
             } else {
                 16
             },
-
+            // "Buffer alignment for copying an existing texture to a buffer"
             buffer_alignment: if matches!(os_type, super::OsType::Macos | super::OsType::VisionOs) {
                 256
             } else if family_check && device.supportsFamily(MTLGPUFamily::Apple3) {
@@ -792,7 +883,7 @@ impl super::CapabilitiesQuery {
             } else {
                 64
             },
-
+            // "Minimum constant buffer offset alignment"
             constant_buffer_offset_alignment: if matches!(
                 os_type,
                 super::OsType::Macos | super::OsType::VisionOs
@@ -806,11 +897,13 @@ impl super::CapabilitiesQuery {
             max_buffer_size: if available!(macos = 10.14, ios = 12.0, tvos = 12.0, visionos = 1.0) {
                 device.maxBufferLength() as u64
             } else if os_type == super::OsType::Macos {
-                1 << 30
+                1 << 30 // 1GB on macOS 10.11 and up
             } else {
-                1 << 28
+                1 << 28 // 256MB on iOS 8.0+
             },
-
+            // "Maximum 1D texture width" &
+            // "Maximum 2D texture width and height" &
+            // "Maximum cube map texture width and height"
             max_texture_size: if family_check && device.supportsFamily(MTLGPUFamily::Apple10) {
                 32768
             } else if Self::supports_any(
@@ -825,9 +918,9 @@ impl super::CapabilitiesQuery {
             } else {
                 8192
             },
-
+            // "Maximum 3D texture width, height, and depth"
             max_texture_3d_size: 2048,
-
+            // "Maximum number of layers per 1D texture array, 2D texture array, or 3D texture"
             max_texture_layers: 2048,
             max_fragment_input_components: if os_type == super::OsType::Macos
                 || device.supportsFeatureSet(MTLFeatureSet::iOS_GPUFamily4_v1)
@@ -836,7 +929,8 @@ impl super::CapabilitiesQuery {
             } else {
                 60
             },
-
+            // "Maximum number of color render targets per render pass descriptor"
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=7
             max_color_render_targets: if Self::supports_any(
                 device,
                 &[
@@ -849,30 +943,57 @@ impl super::CapabilitiesQuery {
             } else {
                 4
             },
-
+            // "Maximum total render target size, per pixel, when using multiple color render targets"
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=7
             max_color_attachment_bytes_per_sample: if family_check
                 && device.supportsFamily(MTLGPUFamily::Apple4)
             {
-                64
+                64 // 512 bits
             } else if family_check && device.supportsFamily(MTLGPUFamily::Apple2) {
-                32
+                32 // 256 bits
             } else if device.supportsFeatureSet(MTLFeatureSet::macOS_GPUFamily1_v1) {
-
-                8 * wgt::TextureFormat::MAX_TARGET_PIXEL_BYTE_COST as u8
+                // No Limit, use max_color_render_targets * MAX_TARGET_PIXEL_BYTE_COST
+                8 * wgt::TextureFormat::MAX_TARGET_PIXEL_BYTE_COST as u8 // 1024 bits
             } else {
-                16
+                16 // 128 bits
             },
-
+            // This limit is the minimum of:
+            // - "Maximum scalar or vector inputs to a fragment function"
+            // - "Maximum number of input components to a fragment function" / 4
+            //
+            // On non-Apple GPUs only, the Metal validation layers will error with:
+            //
+            // "number of shader varying components (125) exceeds limit (124).
+            // Note that on macOS the following attributes count towards the
+            // limit: [[position]], [[clip_distance]], [[point_size]],
+            // [[point_coord]], and, when read in the fragment shader,
+            // [[viewport_array_index]] & [[render_target_array_index]]."
+            //
+            // if the limit in the feature tables is crossed while also using
+            // one of the built-ins mentioned above.
+            //
+            // Note that the error says "on macOS" but it actually only applies
+            // to non-Apple GPUs.
+            //
+            // We only need to account for the position built-in since the others
+            // are either not used or they already count towards the limit
+            // calculation as specified by WebGPU.
             max_inter_stage_shader_variables: if family_check
                 && device.supportsFamily(MTLGPUFamily::Apple4)
             {
-                31
+                31 // min(124, 124 / 4)
             } else if device.supportsFeatureSet(MTLFeatureSet::macOS_GPUFamily1_v1) {
-                30
+                30 // min(32, 124 / 4) - 1
             } else {
-                15
+                15 // min(60, 60 / 4)
             },
-
+            // "Maximum threads per threadgroup"
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=6
+            // These are older checks but still hold true; no entry in this table supports
+            // more than 1024 threads.
+            // **Note:** this is used to emit the `[[max_total_threads_per_threadgroup]]`
+            // attribute. This is how we guarantee that compute dispatches will always run
+            // and not silently fail due to hardware register pressure or occupancy limits.
             max_threads_per_group: if Self::supports_any(
                 device,
                 &[
@@ -884,7 +1005,10 @@ impl super::CapabilitiesQuery {
             } else {
                 512
             },
-
+            // "Maximum total threadgroup memory allocation"
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=6
+            // These are older checks but still hold true; no entry in this table supports
+            // more than 32kb.
             max_total_threadgroup_memory: if Self::supports_any(
                 device,
                 &[
@@ -905,12 +1029,13 @@ impl super::CapabilitiesQuery {
                     MTLFeatureSet::tvOS_GPUFamily1_v2,
                 ],
             ),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             supports_binary_archives: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Apple3)
                     || device.supportsFamily(MTLGPUFamily::Mac2)),
-
+            // This is just trusted blindly since docs referencing supports_any have been removed
+            // but we don't want to remove feature support.
             supports_arrays_of_textures: Self::supports_any(
                 device,
                 &[
@@ -919,20 +1044,20 @@ impl super::CapabilitiesQuery {
                     MTLFeatureSet::macOS_GPUFamily1_v3,
                 ],
             ),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=3
             supports_arrays_of_textures_write: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Apple6)
                     || device.supportsFamily(MTLGPUFamily::Mac2)),
-
+            // Depth clipping is supported on all macOS GPU families and iOS family 4 and later
             supports_depth_clip_control: os_type == super::OsType::Macos
                 || device.supportsFeatureSet(MTLFeatureSet::iOS_GPUFamily4_v1),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             supports_shader_primitive_index: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Apple7)
                     || device.supportsFamily(MTLGPUFamily::Mac2)),
-
+            // https://developer.apple.com/documentation/metal/mtldevice/hasunifiedmemory
             has_unified_memory: if available!(
                 macos = 10.15,
                 ios = 13.0,
@@ -945,25 +1070,28 @@ impl super::CapabilitiesQuery {
                 None
             },
             timestamp_query_support,
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             supports_simd_scoped_operations: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Mac2)
                     || device.supportsFamily(MTLGPUFamily::Apple7)),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             int64: family_check && (metal3 || device.supportsFamily(MTLGPUFamily::Apple3)),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
+            // There is also a footnote that says
+            // "Some GPU devices in the Apple8 family support 64-bit atomic minimum and maximum..."
             int64_atomics_min_max: family_check
                 && (device.supportsFamily(MTLGPUFamily::Apple9)
                     || (device.supportsFamily(MTLGPUFamily::Apple8)
                         && device.supportsFamily(MTLGPUFamily::Mac2))),
             int64_atomics: family_check && device.supportsFamily(MTLGPUFamily::Apple9),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             float_atomics: family_check
                 && (metal3
                     || device.supportsFamily(MTLGPUFamily::Apple7)
                     || device.supportsFamily(MTLGPUFamily::Mac2)),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=5 (footnote)
+            // Supported on some Metal4, Apple7, Mac2, and some other platforms can be queried with device.supportsShaderBarycentricCoordinates().
             shader_barycentrics: metal4
                 || (family_check
                     && (device.supportsFamily(MTLGPUFamily::Apple7)
@@ -974,27 +1102,32 @@ impl super::CapabilitiesQuery {
                         sel!(supportsShaderBarycentricCoordinates),
                     )
                     && device.supportsShaderBarycentricCoordinates()),
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=3
+            // See https://github.com/gfx-rs/wgpu/pull/8725 for more details
             supports_memoryless_storage: metal4
                 || if family_check {
-
+                    // Apple A7 (MTLGPUFamily::Apple1) has been tested to have support.
                     device.supportsFamily(MTLGPUFamily::Apple1)
                 } else {
-
+                    // macOS: Always rely on family check
+                    // iOS/tvOS: API added in 10.0
+                    // visionOS: Always rely on family check
                     available!(ios = 10.0, tvos = 10.0)
                 },
             supported_vertex_amplification_factor: {
                 let mut factor = 1;
-
+                // https://developer.apple.com/documentation/metal/mtldevice/supportsvertexamplificationcount(_:)
                 if available!(macos = 10.15.4, ios = 13.0, tvos = 16.0, visionos = 1.0) {
-
+                    // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=8
+                    // The table specifies either none, 2, 8, or unsupported, implying it is a relatively small power of 2
+                    // The bitmask only uses 32 bits, so it can't be higher even if the device for some reason claims to support that.
                     while factor < 32 && device.supportsVertexAmplificationCount(factor * 2) {
                         factor *= 2
                     }
                 }
                 factor as u32
             },
-
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
             mesh_shaders,
             max_task_workgroup_count: if mesh_shaders
                 && (metal4 || device.supportsFamily(MTLGPUFamily::Apple2))
@@ -1020,7 +1153,7 @@ impl super::CapabilitiesQuery {
             supports_cooperative_matrix: family_check
                 && (device.supportsFamily(MTLGPUFamily::Apple7)
                     || device.supportsFamily(MTLGPUFamily::Mac2)),
-
+            // https://developer.apple.com/documentation/metal/mtlresidencyset
             supports_raytracing: if available!(
                 macos = 15.0,
                 ios = 18.0,
@@ -1036,6 +1169,7 @@ impl super::CapabilitiesQuery {
             },
             shader_per_vertex: family_check && device.supportsFamily(MTLGPUFamily::Apple10),
 
+            //https://developer.apple.com/documentation/metal/mtltexturetype/type2dmultisamplearray
             supports_multisample_array: available!(
                 macos = 10.14,
                 ios = 14.0,
@@ -1090,7 +1224,7 @@ impl super::CapabilitiesQuery {
         features.set(F::TEXTURE_COMPRESSION_ASTC_HDR, self.format_astc_hdr);
         features.set(F::TEXTURE_COMPRESSION_ASTC_SLICED_3D, self.format_astc_3d);
         features.set(F::TEXTURE_COMPRESSION_BC, self.format_bc);
-        features.set(F::TEXTURE_COMPRESSION_BC_SLICED_3D, self.format_bc);
+        features.set(F::TEXTURE_COMPRESSION_BC_SLICED_3D, self.format_bc); // BC guarantees Sliced 3D
         features.set(F::TEXTURE_COMPRESSION_ETC2, self.format_eac_etc);
 
         features.set(F::DEPTH_CLIP_CONTROL, self.supports_depth_clip_control);
@@ -1179,6 +1313,7 @@ impl super::CapabilitiesQuery {
             self.supported_vertex_amplification_factor > 1 && self.mesh_shaders,
         );
 
+        // Cooperative matrix (simdgroup matrix) requires MSL 2.3+
         features.set(
             F::EXPERIMENTAL_COOPERATIVE_MATRIX,
             self.supports_cooperative_matrix && self.msl_version >= MTLLanguageVersion::Version2_3,
@@ -1205,7 +1340,7 @@ impl super::CapabilitiesQuery {
             wgt::DownlevelFlags::CUBE_ARRAY_TEXTURES,
             self.texture_cube_array,
         );
-
+        // TODO: separate the mutable comparisons from immutable ones
         downlevel.flags.set(
             wgt::DownlevelFlags::COMPARISON_SAMPLERS,
             self.mutable_comparison_samplers,
@@ -1214,7 +1349,7 @@ impl super::CapabilitiesQuery {
             wgt::DownlevelFlags::INDIRECT_EXECUTION,
             self.indirect_draw_dispatch,
         );
-
+        // TODO: add another flag for `first_instance`
         downlevel.flags.set(
             wgt::DownlevelFlags::BASE_VERTEX,
             self.base_vertex_first_instance_drawing,
@@ -1238,6 +1373,13 @@ impl super::CapabilitiesQuery {
         let max_acceleration_structures_per_shader_stage;
         let max_buffers_and_acceleration_structures_per_shader_stage;
 
+        // Metal has a single buffer limit that we must split across 3 WebGPU limits:
+        //  - maxStorageBuffersPerShaderStage; must be at least 8
+        //  - maxUniformBuffersPerShaderStage; must be at least 12
+        //  - maxVertexBuffers; must be at least 8
+        // We also have to reserve 2 additional internal buffers:
+        //  - one for immediate data
+        //  - one for sizes of other buffers
         if instance_flags.contains(wgt::InstanceFlags::STRICT_WEBGPU_COMPLIANCE) {
             max_storage_buffers_per_shader_stage = 9;
             max_uniform_buffers_per_shader_stage = 12;
@@ -1254,22 +1396,25 @@ impl super::CapabilitiesQuery {
         }
 
         let limits = crate::auxil::adjust_raw_limits(wgt::Limits {
-
+            //
+            // WebGPU LIMITS:
+            // Based on https://gpuweb.github.io/gpuweb/correspondence/#limits
+            //
             max_texture_dimension_1d: self.max_texture_size as u32,
             max_texture_dimension_2d: self.max_texture_size as u32,
             max_texture_dimension_3d: self.max_texture_3d_size as u32,
             max_texture_array_layers: self.max_texture_layers as u32,
-
+            // No limit.
             max_bind_groups: u32::MAX,
-
+            // No limit. Once we start using argument buffers we should set this appropriately.
             max_bind_groups_plus_vertex_buffers: u32::MAX,
-
+            // No limit.
             max_bindings_per_bind_group: u32::MAX,
-
+            // No limit, use maxUniformBuffersPerShaderStage.
             max_dynamic_uniform_buffers_per_pipeline_layout: max_uniform_buffers_per_shader_stage,
-
+            // No limit, use maxStorageBuffersPerShaderStage.
             max_dynamic_storage_buffers_per_pipeline_layout: max_storage_buffers_per_shader_stage,
-
+            // "Maximum number of entries in the sampler state argument table, per graphics or kernel function"
             max_samplers_per_shader_stage: 16,
             max_sampled_textures_per_shader_stage: self.max_textures_per_stage.0,
             max_storage_textures_per_shader_stage: self.max_textures_per_stage.1,
@@ -1277,16 +1422,16 @@ impl super::CapabilitiesQuery {
             max_uniform_buffers_per_shader_stage,
             max_vertex_buffers,
             max_buffer_size: self.max_buffer_size,
-
+            // No limit, use maxBufferSize.
             max_uniform_buffer_binding_size: self.max_buffer_size,
-
+            // No limit, use maxBufferSize.
             max_storage_buffer_binding_size: self.max_buffer_size,
             min_uniform_buffer_offset_alignment: self.constant_buffer_offset_alignment,
-
+            // No documented limit. Use 32, which is the lowest allowed value.
             min_storage_buffer_offset_alignment: 32,
-
+            // "Maximum number of vertex attributes, per vertex descriptor"
             max_vertex_attributes: 31,
-
+            // No documented limit, matches Vulkan's minimum limit and D3D12's static limit.
             max_vertex_buffer_array_stride: 2048,
             max_inter_stage_shader_variables: self.max_inter_stage_shader_variables,
             max_color_attachments: self.max_color_render_targets as u32,
@@ -1297,10 +1442,12 @@ impl super::CapabilitiesQuery {
             max_compute_workgroup_size_x: self.max_threads_per_group,
             max_compute_workgroup_size_y: self.max_threads_per_group,
             max_compute_workgroup_size_z: self.max_threads_per_group,
-
+            // No documented limit, matches Vulkan's minimum limit and D3D12's static limit.
             max_compute_workgroups_per_dimension: 0xFFFF,
             max_immediate_size: 0x1000,
-
+            //
+            // NATIVE (Non-WebGPU) LIMITS:
+            //
             max_non_sampler_bindings: u32::MAX,
 
             max_binding_array_elements_per_shader_stage: self.max_binding_array_elements,
@@ -1308,10 +1455,13 @@ impl super::CapabilitiesQuery {
                 .max_sampler_binding_array_elements,
             max_binding_array_acceleration_structure_elements_per_shader_stage: 0,
 
+            // from https://developer.apple.com/documentation/metal/mtlaccelerationstructureusage/extendedlimits
             max_blas_primitive_count: 1 << 28,
             max_blas_geometry_count: 1 << 24,
             max_tlas_instance_count: 1 << 24,
-
+            // From 2.17.7 in https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
+            // > [Acceleration structures] are opaque objects that can be bound directly using
+            // buffer binding points or via argument buffers
             max_acceleration_structures_per_shader_stage,
             max_buffers_and_acceleration_structures_per_shader_stage,
 
@@ -1321,6 +1471,7 @@ impl super::CapabilitiesQuery {
                 0
             },
 
+            // Should be not too large
             max_task_workgroup_total_count: self.max_task_workgroup_count,
             max_task_workgroups_per_dimension: self.max_task_workgroup_count,
             max_mesh_workgroup_total_count: self.max_mesh_workgroup_count,
@@ -1329,13 +1480,13 @@ impl super::CapabilitiesQuery {
             max_task_invocations_per_dimension: if self.mesh_shaders { 1024 } else { 0 },
             max_mesh_invocations_per_workgroup: if self.mesh_shaders { 1024 } else { 0 },
             max_mesh_invocations_per_dimension: if self.mesh_shaders { 1024 } else { 0 },
-
+            // Using certain variables or debuggers can reduce the size by 32 bytes
             max_task_payload_size: self.max_task_payload_size,
             max_mesh_output_vertices: 256,
             max_mesh_output_primitives: 256,
             max_mesh_output_layers: self.max_texture_layers as u32,
             max_mesh_multiview_view_count: 0,
-
+            // unimplemented
             max_ray_dispatch_count: 0,
             max_ray_recursion_depth: 0,
         });
@@ -1345,14 +1496,16 @@ impl super::CapabilitiesQuery {
             alignments: crate::Alignments {
                 buffer_copy_offset: wgt::BufferSize::new(self.buffer_alignment).unwrap(),
                 buffer_copy_pitch: wgt::BufferSize::new(4).unwrap(),
-
+                // This backend has Naga incorporate bounds checks into the
+                // Metal Shading Language it generates, so from `wgpu_hal`'s
+                // users' point of view, references are tightly checked.
                 uniform_bounds_check_alignment: wgt::BufferSize::new(1).unwrap(),
                 raw_tlas_instance_size: u32::try_from(size_of::<
                     MTLIndirectAccelerationStructureInstanceDescriptor,
                 >())
                 .unwrap(),
                 ray_tracing_scratch_buffer_alignment: 1,
-
+                // Not yet supported
                 ray_tracing_pipeline_group_data_size: 0,
                 ray_tracing_pipeline_group_data_alignment: 0,
                 ray_tracing_pipeline_data_offset_alignment: 0,
@@ -1362,13 +1515,16 @@ impl super::CapabilitiesQuery {
         }
     }
 
+    /// Returns the supported cooperative matrix configurations for Metal.
+    ///
+    /// Metal's simdgroup_matrix supports 8x8 tiles with f16 and f32 element types.
     fn cooperative_matrix_properties(&self) -> Vec<wgt::CooperativeMatrixProperties> {
         if !self.supports_cooperative_matrix || self.msl_version < MTLLanguageVersion::Version2_3 {
             return Vec::new();
         }
 
         vec![
-
+            // 8x8 f32 configuration
             wgt::CooperativeMatrixProperties {
                 m_size: 8,
                 n_size: 8,
@@ -1377,7 +1533,7 @@ impl super::CapabilitiesQuery {
                 cr_type: wgt::CooperativeScalarType::F32,
                 saturating_accumulation: false,
             },
-
+            // 8x8 f16 configuration
             wgt::CooperativeMatrixProperties {
                 m_size: 8,
                 n_size: 8,
@@ -1386,7 +1542,7 @@ impl super::CapabilitiesQuery {
                 cr_type: wgt::CooperativeScalarType::F16,
                 saturating_accumulation: false,
             },
-
+            // Mixed precision: f16 inputs, f32 accumulator
             wgt::CooperativeMatrixProperties {
                 m_size: 8,
                 n_size: 8,
@@ -1483,7 +1639,7 @@ impl super::PrivateTextureFormatCapabilities {
             Tf::Rgb10a2Uint => MTL::RGB10A2Uint,
             Tf::Rgb10a2Unorm => MTL::RGB10A2Unorm,
             Tf::Rg11b10Ufloat => MTL::RG11B10Float,
-
+            // Ruint64 textures are emulated on metal
             Tf::R64Uint => MTL::RG32Uint,
             Tf::Rg32Uint => MTL::RG32Uint,
             Tf::Rg32Sint => MTL::RG32Sint,
@@ -1603,7 +1759,8 @@ impl super::PrivateTextureFormatCapabilities {
         use wgt::TextureFormat as Tf;
         use MTLPixelFormat as MTL;
         match (format, aspects) {
-
+            // map combined depth-stencil format to their stencil-only format
+            // see https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/WhatsNewiniOS10tvOS10andOSX1012/WhatsNewiniOS10tvOS10andOSX1012.html#//apple_ref/doc/uid/TP40014221-CH14-DontLinkElementID_77
             (Tf::Depth24PlusStencil8, Fa::STENCIL) => {
                 if self.format_depth24_stencil8 {
                     MTL::X24_Stencil8
@@ -1631,7 +1788,10 @@ impl super::PrivateDisabilities {
 
 impl super::OsType {
     fn new(version: NSOperatingSystemVersion, device: &ProtocolObject<dyn MTLDevice>) -> Self {
-
+        // Metal was first introduced in OS X 10.11 and iOS 8. The current version number of visionOS is 1.0.0. Additionally,
+        // on the Simulator, Apple only provides the Apple2 GPU capability, and the Apple2+ GPU capability covers the capabilities of Apple2.
+        // Therefore, the following conditions can be used to determine if it is visionOS.
+        // https://developer.apple.com/documentation/metal/developing_metal_apps_that_run_in_simulator
         let os_is_vision = version.majorVersion < 8 && device.supportsFamily(MTLGPUFamily::Apple2);
         let os_is_mac = device.supportsFeatureSet(MTLFeatureSet::macOS_GPUFamily1_v1);
         let os_is_tvos = device.supportsFeatureSet(MTLFeatureSet::tvOS_GPUFamily1_v1);

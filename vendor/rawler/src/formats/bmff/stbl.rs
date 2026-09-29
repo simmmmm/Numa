@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, co64::Co64Box, stsc::StscBox, stsd::StsdBox, stsz::StszBox, stts::SttsBox, vendor::VendorBox};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -8,7 +12,7 @@ pub struct StblBox {
   pub header: BoxHeader,
   pub stsd: StsdBox,
   pub stts: SttsBox,
-
+  //pub ctts: Option<CttsBox>,
   pub stsc: StscBox,
   pub stsz: StszBox,
   pub co64: Option<Co64Box>,
@@ -22,13 +26,14 @@ impl StblBox {
     if let Some(co64) = self.co64.as_ref() {
       assert!(sample > 0, "sample number must be greater than 0");
       let desc = self.stsc.get_entry_for_sample(sample);
-
+      // Chunk number for our sample
       let chunk = desc.first_chunk + (((sample - 1) - (desc.first_sample - 1)) / desc.samples_per_chunk);
-
+      // Index of sample inside chunk
       let chunk_sample_idx = (sample - desc.first_sample) % desc.samples_per_chunk;
-
+      // Offset of chunk
       let chunk_offset = co64.entries[chunk as usize - 1];
 
+      // Offset of sample in chunk
       let mut sample_offset = 0;
       for i in 0..chunk_sample_idx {
         sample_offset += self.stsz.sample_size(sample - chunk_sample_idx + i);
@@ -46,10 +51,11 @@ impl<R: Read + Seek> ReadBox<&mut R> for StblBox {
   fn read_box(mut reader: &mut R, header: BoxHeader) -> Result<Self> {
     let mut stsd = None;
     let mut stts = None;
-
+    // let mut ctts = None;
+    //let mut stss = None;
     let mut stsc = None;
     let mut stsz = None;
-
+    //let mut stco = None;
     let mut co64 = None;
 
     let mut vendors = Vec::new();
@@ -57,8 +63,11 @@ impl<R: Read + Seek> ReadBox<&mut R> for StblBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
+
+      //let ftyp = Some(FtypBox::read_box(&mut file, header)?);
 
       match header.typ {
         StsdBox::TYP => {

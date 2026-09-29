@@ -27,11 +27,13 @@ use crate::{
     TextureBinding,
 };
 
+/// Base trait for all resources, allows downcasting via [`Any`].
 pub trait DynResource: Any + WasmNotSendSync + 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+/// Utility macro for implementing `DynResource` for a list of types.
 macro_rules! impl_dyn_resource {
     ($($type:ty),*) => {
         $(
@@ -49,10 +51,18 @@ macro_rules! impl_dyn_resource {
 }
 pub(crate) use impl_dyn_resource;
 
+/// Extension trait for `DynResource` used by implementations of various dynamic resource traits.
 trait DynResourceExt {
-
+    /// # Panics
+    ///
+    /// - Panics if `self` is not downcastable to `T`.
     fn expect_downcast_ref<T: DynResource>(&self) -> &T;
 
+    /// Unboxes a `Box<dyn DynResource>` to a concrete type.
+    ///
+    /// # Safety
+    ///
+    /// - `self` must be the correct concrete type.
     unsafe fn unbox<T: DynResource + 'static>(self: Box<Self>) -> T;
 }
 
@@ -72,7 +82,15 @@ impl<R: DynResource + ?Sized> DynResourceExt for R {
         );
 
         let casted_ptr = Box::into_raw(self).cast::<T>();
-
+        // SAFETY: This is adheres to the safety contract of `Box::from_raw` because:
+        //
+        // - We are casting the value of a previously `Box`ed value, which guarantees:
+        //   - `casted_ptr` is not null.
+        //   - `casted_ptr` is valid for reads and writes, though by itself this does not mean
+        //     valid reads and writes for `T` (read on for that).
+        // - We don't change the allocator.
+        // - The contract of `Box::from_raw` requires that an initialized and aligned `T` is stored
+        //   within `casted_ptr`.
         *unsafe { Box::from_raw(casted_ptr) }
     }
 }

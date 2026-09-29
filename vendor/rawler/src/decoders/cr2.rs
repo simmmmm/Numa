@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use image::DynamicImage;
 use image::ImageBuffer;
 use image::Rgb;
@@ -52,6 +55,7 @@ pub(crate) use colordata::parse_colordata;
 const CANON_EF_MOUNT: &str = "ef-mount";
 const CANON_CN_MOUNT: &str = "cn-mount";
 
+/// CR2 Decoder
 pub struct Cr2Decoder<'a> {
   #[allow(dead_code)]
   rawloader: &'a RawLoader,
@@ -65,6 +69,7 @@ pub struct Cr2Decoder<'a> {
   model_id: Option<u32>,
 }
 
+/// CR2 format encapsulation for analyzer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cr2Format {
@@ -77,6 +82,14 @@ impl<'a> Decoder for Cr2Decoder<'a> {
   }
 
   fn raw_image(&self, file: &RawSource, _params: &RawDecodeParams, dummy: bool) -> Result<RawImage> {
+    /*
+    for (i, ifd) in self.tiff.chains().iter().enumerate() {
+      eprintln!("IFD {}", i);
+      for line in ifd_dump::<crate::tags::LegacyTiffRootTag>(ifd, 10) {
+        eprintln!("{}", line);
+      }
+    }
+     */
 
     let camera = &self.camera;
     let (raw, offset) = {
@@ -85,13 +98,14 @@ impl<'a> Decoder for Cr2Decoder<'a> {
       } else if let Some(raw) = self.tiff.find_first_ifd(TiffCommonTag::CFAPattern) {
         (raw, fetch_tiff_tag!(raw, TiffCommonTag::StripOffsets).force_usize(0))
       } else if let Some(off) = self.makernote.as_ref().and_then(|md| md.get_entry(TiffCommonTag::Cr2OldOffset)) {
-
+        // Old Canon TIF files contains the offset in makernote tags
         (self.tiff.root_ifd(), off.value.force_usize(0))
       } else {
         return Err(RawlerError::DecoderFailed("CR2: Couldn't find raw info".to_string()));
       }
     };
 
+    // We don't have an exact length, so read until end.
     let src = file.subview_until_eof(offset as u64)?;
 
     let (cpp, image) = {
@@ -104,6 +118,8 @@ impl<'a> Decoder for Cr2Decoder<'a> {
       debug!("CR2 final cpp: {}", cpp);
       debug!("CR2 dimension: {},{}", width / cpp, height);
 
+      // Numa (PERF-022): a plain raw frame in fields goes straight into its
+      // place, decoded on several threads, without the frame in between.
       if let Some(image) = self.fields_in_place(&decompressor, raw, width, height, dummy) {
         let wb = self.get_wb(file, camera)?;
         return self.finish(camera, 1, PixU16::new_with(image, width, height), wb, dummy);
@@ -114,6 +130,9 @@ impl<'a> Decoder for Cr2Decoder<'a> {
         decompressor.decode(ljpegout.pixels_mut(), 0, width, width, height, dummy)?;
       }
 
+      //crate::devtools::dump_image_u16(&ljpegout, width, height, "/tmp/cr2_before_striped.pnm");
+
+      // Linearize the output (applies only to D2000 as far as I can tell)
       if !dummy && camera.find_hint("linearization") {
         let table = {
           let linearization = fetch_tiff_tag!(raw, TiffCommonTag::GrayResponse);
@@ -146,16 +165,25 @@ impl<'a> Decoder for Cr2Decoder<'a> {
 
       debug!("CR2 dimension2: {},{}", width / cpp, height);
 
+      // Take each of the vertical fields and put them into the right location
+      // FIXME: Doing this at the decode would reduce about 5% in runtime but I haven't
+      //        been able to do it without hairy code
       if let Some(canoncol) = raw.get_entry(TiffCommonTag::Cr2StripeWidths) {
         debug!("Found Cr2StripeWidths tag: {:?}", canoncol.value);
         if canoncol.value.force_usize(0) == 0 {
           if cpp == 3 {
             self.convert_to_rgb(file, camera, &decompressor, width, height, ljpegout.pixels_mut(), dummy)?;
-
+            //width /= 3;
           }
           ljpegout.update_dimension(Dim2::new(width, height));
           (cpp, ljpegout)
-
+          /*
+          if camera.find_hint("double_line") {
+            (width, height, cpp, PixU16::new_with(ljpegout.into_inner(), width, height))
+          } else {
+            (width, height, cpp, ljpegout)
+          }
+           */
         } else {
           let mut out = alloc_image_plain!(width, height, dummy);
           if !dummy {
@@ -170,7 +198,7 @@ impl<'a> Decoder for Cr2Decoder<'a> {
 
             if decompressor.super_v() == 2 {
               debug!("CR2 v=2 decoder used, h={}", decompressor.super_h());
-
+              // We've decoded 2 lines at a time so we also need to copy two strips at a time
               let nfields = fieldwidths.len();
               let fieldwidth = fieldwidths[0];
               let mut fieldstart = 0;
@@ -185,7 +213,7 @@ impl<'a> Decoder for Cr2Decoder<'a> {
                     out[outpos..outpos + 3].copy_from_slice(&ljpegout[inpos2..inpos2 + 3]);
                     inpos += 3;
                     if inpos % ljpegwidth == 0 {
-
+                      // we've used a full input line and we're reading 2 by 2 so skip one
                       inpos += ljpegwidth;
                     }
                   }
@@ -198,9 +226,13 @@ impl<'a> Decoder for Cr2Decoder<'a> {
               let mut fieldstart = 0;
               let mut fieldpos = 0;
               for fieldwidth in fieldwidths {
-
+                // fix the inconsistent slice width in sRaw mode, ask Canon.
                 let fieldwidth = fieldwidth / sh * cpp;
-
+                // The output for full height of a vertical stripe is
+                // composed by the lines of all input stripes N:
+                // outb(line0) = slice[0](line[0])
+                // outb(line1) = slice[1](line[0])
+                // outb(line2) = slice[N-1](line[0])
                 for row in 0..height {
                   let outpos = row * width + fieldstart;
                   let inpos = fieldpos + row * fieldwidth;
@@ -215,15 +247,15 @@ impl<'a> Decoder for Cr2Decoder<'a> {
           }
           if cpp == 3 {
             self.convert_to_rgb(file, camera, &decompressor, width, height, out.pixels_mut(), dummy)?;
-
+            //width /= 3;
           }
           (cpp, out)
-
+          //(width, height, cpp, out)
         }
       } else {
         ljpegout.update_dimension(Dim2::new(width, height));
         (cpp, ljpegout)
-
+        // (width, height, cpp, PixU16::new_with(ljpegout.into_inner(), width, height))
       }
     };
 
@@ -245,7 +277,8 @@ impl<'a> Decoder for Cr2Decoder<'a> {
     if params.image_index != 0 {
       return Ok(None);
     }
-
+    // For CR2, there is a full resolution image in IFD0.
+    // This is compressed with old-JPEG compression (Compression = 6)
     let root_ifd = &self.tiff.root_ifd();
     let buf = root_ifd
       .singlestrip_data_rawsource(file)
@@ -278,9 +311,10 @@ enum Cr2Mode {
 }
 
 impl<'a> Cr2Decoder<'a> {
-
+  /// The frame and what is known about it, as a `RawImage`.
   fn finish(&self, camera: &Camera, cpp: usize, image: PixU16, wb: [f32; 4], dummy: bool) -> Result<RawImage> {
     debug!("CR2 WB: {:?}", wb);
+    //assert_eq!(image.width, width * cpp);
 
     let blacklevel = self.get_blacklevel(camera, cpp)?;
     let whitelevel = self.get_whitelevel(cpp)?;
@@ -301,11 +335,13 @@ impl<'a> Cr2Decoder<'a> {
       );
       img.crop_area = Some(file_crop);
     } else {
-
+      //panic!("Camera {} has no embedded crops, but all CR2 should contain them?!", self.camera.clean_make);
+      // 1D and D2000C has no crops!
     }
 
     if cpp == 3 {
-
+      // We have a sRAW or mRAW: the active_area from camera config is invalid now!
+      // We just apply the crop_area that comes from metadata, which is correct.
       img.active_area = img.crop_area;
     }
 
@@ -317,6 +353,10 @@ impl<'a> Cr2Decoder<'a> {
     Ok(img)
   }
 
+  /// Numa (PERF-022): a plain raw frame in vertical fields (`Cr2StripeWidths`)
+  /// decoded straight into its place (`LjpegDecompressor::decode_cr2_fields`).
+  /// `None` for sRAW, the models with a hint, and anything that does not
+  /// split; those go the way they always went.
   fn fields_in_place(&self, decompressor: &LjpegDecompressor, raw: &IFD, width: usize, height: usize, dummy: bool) -> Option<Vec<u16>> {
     if dummy
       || decompressor.super_h() != 1
@@ -351,9 +391,12 @@ impl<'a> Cr2Decoder<'a> {
     }
   }
 
+  /// Construct new CR2 decoder
+  /// This parses the RawFile again to include specific sub IFDs.
   pub fn new(file: &RawSource, _tiff: GenericTiffReader, rawloader: &'a RawLoader) -> Result<Cr2Decoder<'a>> {
     debug!("CR2 decoder choosen");
 
+    // Parse the TIFF again, with custom settings
     let tiff = GenericTiffReader::new(&mut file.reader(), 0, 0, None, &[33424])?;
 
     let exif = Self::new_exif_ifd(file, &tiff, rawloader)?;
@@ -389,6 +432,8 @@ impl<'a> Cr2Decoder<'a> {
     })
   }
 
+  /// Search for EXIF IFD, if not found, fallback to root IFD.
+  /// This is useful for EOS D2000 where EXIF tags are located in the root.
   fn new_exif_ifd(_file: &RawSource, tiff: &GenericTiffReader, _rawloader: &RawLoader) -> Result<IFD> {
     if let Some(exif_ifd) = tiff
       .root_ifd()
@@ -401,7 +446,13 @@ impl<'a> Cr2Decoder<'a> {
       debug!("No EXIF IFD found, fallback to root IFD");
       Ok(tiff.root_ifd().clone())
     }
-
+    /*
+    if let Some(exif_ifd) = tiff.root_ifd().get_ifd(LegacyTiffRootTag::ExifIFDPointer, &mut file.reader())? {
+      return Ok(exif_ifd);
+    } else {
+      return Ok(tiff.root_ifd().clone());
+    }
+     */
   }
 
   fn get_focal_len(&self) -> Result<Option<Rational>> {
@@ -414,6 +465,7 @@ impl<'a> Cr2Decoder<'a> {
     Ok(None)
   }
 
+  /// Get lens description by analyzing TIFF tags and makernotes
   fn get_lens_description(&self) -> Result<Option<&'static LensDescription>> {
     let exif_lens_name = if let Some(Entry {
       value: Value::Ascii(lens_id), ..
@@ -431,7 +483,7 @@ impl<'a> Cr2Decoder<'a> {
         debug!("Lens Info tag: {}", lens_info);
         let resolver = LensResolver::new()
           .with_lens_keyname(exif_lens_name)
-          .with_camera(&self.camera)
+          .with_camera(&self.camera) // must follow with_lens_keyname() as it my override key
           .with_lens_id((lens_info as u32, 0))
           .with_focal_len(self.get_focal_len()?)
           .with_mounts(&[CANON_CN_MOUNT.into(), CANON_EF_MOUNT.into()]);
@@ -444,6 +496,7 @@ impl<'a> Cr2Decoder<'a> {
     Ok(None)
   }
 
+  /// Parse the Canon makernote IFD
   fn new_makernote(file: &RawSource, tiff: &GenericTiffReader, exif_ifd: &IFD, _rawloader: &RawLoader) -> Result<Option<IFD>> {
     if let Some(entry) = exif_ifd.get_entry(TiffCommonTag::Makernote) {
       let offset = entry
@@ -456,6 +509,8 @@ impl<'a> Cr2Decoder<'a> {
     Ok(None)
   }
 
+  /// Read XMP data from TIFF entry
+  /// This is useful as it stores the image rating (if present).
   fn read_xpacket(_file: &RawSource, tiff: &GenericTiffReader, _rawloader: &RawLoader) -> Result<Option<Vec<u8>>> {
     if let Some(entry) = tiff.root_ifd().get_entry(TiffCommonTag::Xmp) {
       if let Entry { value: Value::Byte(xmp), .. } = entry {
@@ -468,6 +523,26 @@ impl<'a> Cr2Decoder<'a> {
     }
   }
 
+  /*
+  pub fn new_makernote(buf: &'a[u8], offset: usize, base_offset: usize, chain_level: isize, e: Endian) -> Result<LegacyTiffIFD<'a>> {
+    let mut off = 0;
+    let data = &buf[offset..];
+    let mut endian = e;
+
+    // Some have MM or II to indicate endianness - read that
+    if data[off..off+2] == b"II"[..] {
+      off +=2;
+      endian = Endian::Little;
+    } if data[off..off+2] == b"MM"[..] {
+      off +=2;
+      endian = Endian::Big;
+    }
+
+    Ok(LegacyTiffIFD::new(buf, offset+off, base_offset, 0, chain_level+1, endian, &vec![])?)
+  }
+  */
+
+  /// Build firmware value from string
   fn get_firmware(&self) -> Result<Option<u32>> {
     Ok(
       match self
@@ -485,6 +560,9 @@ impl<'a> Cr2Decoder<'a> {
     )
   }
 
+  /// Get the SRAW white balance coefficents from COLORDATA tag
+  /// The offsets are always at offset 78.
+  /// These coefficents are used for SRAW YUV2RGB conversion.
   fn get_sraw_wb(&self, rawfile: &RawSource, _cam: &Camera) -> Result<[f32; 4]> {
     if let Some(levels) = self
       .makernote
@@ -503,12 +581,15 @@ impl<'a> Cr2Decoder<'a> {
     Ok([f32::NAN, f32::NAN, f32::NAN, f32::NAN])
   }
 
+  /// Get the white balance coefficents from COLORDATA tag
+  /// The offsets are different, so we take the offset from camera params.
   fn get_wb(&self, rawfile: &RawSource, _cam: &Camera) -> Result<[f32; 4]> {
     if let Some(colordata) = self.makernote.as_ref().and_then(|mn| mn.get_entry(Cr2MakernoteTag::ColorData)) {
       let raw_wb = colordata::parse_colordata(colordata)?.wb;
       return Ok(normalize_wb(raw_wb));
     }
 
+    // TODO: check if these tags belongs to RootIFD or makernote
     if let Some(levels) = self.tiff.get_entry_raw(TiffCommonTag::Cr2PowerShotWB, &mut rawfile.reader())? {
       Ok([
         levels.get_force_u32(3) as f32,
@@ -519,11 +600,13 @@ impl<'a> Cr2Decoder<'a> {
     } else if let Some(levels) = self.tiff.get_entry(TiffCommonTag::Cr2OldWB) {
       Ok([levels.force_f32(0), levels.force_f32(1), levels.force_f32(2), f32::NAN])
     } else {
-
+      // At least the D2000 has no WB
       Ok([f32::NAN, f32::NAN, f32::NAN, f32::NAN])
     }
   }
 
+  /// Get the black level from COLORDATA tag
+  /// The offsets are different, so we take the offset from camera params.
   fn get_blacklevel(&self, cam: &Camera, cpp: usize) -> Result<Option<BlackLevel>> {
     if let Some(colordata) = self.makernote.as_ref().and_then(|mn| mn.get_entry(Cr2MakernoteTag::ColorData)) {
       if let Some(blacklevel) = colordata::parse_colordata(colordata)?.blacklevel {
@@ -541,6 +624,8 @@ impl<'a> Cr2Decoder<'a> {
     Ok(None)
   }
 
+  /// Get the white level from COLORDATA tag
+  /// The offsets are different, so we take the offset from camera params.
   fn get_whitelevel(&self, cpp: usize) -> Result<Option<WhiteLevel>> {
     if let Some(colordata) = self.makernote.as_ref().and_then(|mn| mn.get_entry(Cr2MakernoteTag::ColorData)) {
       if let Some(whitelevel) = colordata::parse_colordata(colordata)?.specular_whitelevel {
@@ -550,6 +635,8 @@ impl<'a> Cr2Decoder<'a> {
     Ok(None)
   }
 
+  /// Get the SENSOR information, if available
+  /// If not, fall back to sensor dimension reported by width/hight values.
   fn get_sensor_area(&self) -> Result<Option<Rect>> {
     if let Some(sensorinfo) = self.makernote.as_ref().and_then(|mn| mn.get_entry(Cr2MakernoteTag::SensorInfo)) {
       match &sensorinfo.value {
@@ -570,13 +657,16 @@ impl<'a> Cr2Decoder<'a> {
     }
   }
 
+  /// Interpolate YCbCr (YUV) data
   fn interpolate_yuv(&self, ljpeg: &LjpegDecompressor, width: usize, _height: usize, image: &mut [u16]) {
     if ljpeg.super_h() == 1 && ljpeg.super_v() == 1 {
-      return;
+      return; // No interpolation needed
     }
-
+    // Iterate over a block of 3 rows, smaller chunks are okay
+    // but must always a multiple of row width.
     image.par_chunks_mut(width * 3).for_each(|slice| {
-
+      // Do horizontal interpolation.
+      // [y1 Cb Cr ] [ y2 . . ] [y1 Cb Cr ] [ y2 . . ] ...
       if ljpeg.super_h() == 2 {
         debug_assert_eq!(slice.len() % width, 0);
         for row in 0..(slice.len() / width) {
@@ -589,7 +679,12 @@ impl<'a> Cr2Decoder<'a> {
           }
         }
       }
-
+      // Do vertical interpolation
+      //          pixel n      pixel n+1       pixel n+2    pixel n+3       ...
+      // row i  : [y1 Cb  Cr ] [ y2 Cb*  Cr* ] [y1 Cb  Cr ] [ y2 Cb*  Cr* ] ...
+      // row i+1: [y3 Cb* Cr*] [ y4 Cb** Cr**] [y3 Cb* Cr*] [ y4 Cb** Cr**] ...
+      // row i+2: [y1 Cb  Cr ] [ y2 Cb*  Cr* ] [y1 Cb  Cr ] [ y2 Cb*  Cr* ] ...
+      // row i+3: [y3 Cb* Cr*] [ y4 Cb** Cr**] [y3 Cb* Cr*] [ y4 Cb** Cr**] ...
       if ljpeg.super_v() == 2 && slice.len() == width * 3 {
         for col in (0..width).step_by(3) {
           let pix1 = col;
@@ -601,8 +696,35 @@ impl<'a> Cr2Decoder<'a> {
       }
     });
 
+    /* Old non-parallel code
+    if ljpeg.super_h() == 2 {
+      for row in 0..height {
+        for col in (6..width).step_by(6) {
+          let pix1 = row * width + col - 6;
+          let pix2 = pix1 + 3;
+          let pix3 = row * width + col;
+          image[pix2 + 1] = ((image[pix1 + 1] as i32 + image[pix3 + 1] as i32 + 1) / 2) as u16;
+          image[pix2 + 2] = ((image[pix1 + 2] as i32 + image[pix3 + 2] as i32 + 1) / 2) as u16;
+        }
+      }
+    }
+
+
+    if ljpeg.super_v() == 2 {
+      for row in (1..height - 1).step_by(2) {
+        for col in (0..width).step_by(3) {
+          let pix1 = (row - 1) * width + col;
+          let pix2 = row * width + col;
+          let pix3 = (row + 1) * width + col;
+          image[pix2 + 1] = ((image[pix1 + 1] as i32 + image[pix3 + 1] as i32 + 1) / 2) as u16;
+          image[pix2 + 2] = ((image[pix1 + 2] as i32 + image[pix3 + 2] as i32 + 1) / 2) as u16;
+        }
+      }
+    }
+    */
   }
 
+  /// Convert YCbCr (YUV) data to linear RGB
   fn convert_to_rgb(
     &self,
     rawfile: &RawSource,
@@ -638,6 +760,10 @@ impl<'a> Cr2Decoder<'a> {
       (coeffs[0] as i32, coeffs[1] as i32, coeffs[2] as i32)
     };
 
+    // Starting with 40D, sRaw format was introduced. This uses
+    // version 0. With 5D Mark II, version 1 gets used.
+    // And with 5D Mark III, back to version 0 method
+    // but without an offset of 512 for y.
     let version = if cam.find_hint("sraw_40d") {
       0
     } else if cam.find_hint("sraw_new") {
@@ -649,6 +775,9 @@ impl<'a> Cr2Decoder<'a> {
     let fw = self.get_firmware()?;
     debug!("Firmware: {:?}", fw);
 
+    // This magic comes from dcraw.
+    // Seems to because of rounding during interpolation, we need to
+    // adjust the hue a little bit (only guessing)
     let hue = match self.model_id {
       None => 0,
       Some(model_id) => {
@@ -661,13 +790,14 @@ impl<'a> Cr2Decoder<'a> {
     };
     debug!("SRAW hue correction: {:?}", hue);
 
+    // Now calculate RGB for each YUV tuple.
     image.par_chunks_exact_mut(3).for_each(|pix| {
       let y = pix[0] as i32;
       let cb = pix[1] as i32 - 16383;
       let cr = pix[2] as i32 - 16383;
       match version {
         0 => {
-          let y = y - 512;
+          let y = y - 512; // correction for 40D and others
           let r = c1 * (y + cr);
           let g = c2 * (y + ((-778 * cb - (cr << 11)) >> 12));
           let b = c3 * (y + cb);
@@ -676,7 +806,7 @@ impl<'a> Cr2Decoder<'a> {
           pix[2] = clampbits(b >> 8, 16);
         }
         1 => {
-
+          // found in EOS 5D Mark II
           let cb = (cb << 2) + hue;
           let cr = (cr << 2) + hue;
           let r = c1 * (y + ((50 * cb + 22929 * cr) >> 14));
@@ -687,7 +817,7 @@ impl<'a> Cr2Decoder<'a> {
           pix[2] = clampbits(b >> 8, 16);
         }
         2 => {
-
+          // found in EOS 5D Mark III and others
           let r = c1 * (y + cr);
           let g = c2 * (y + ((-778 * cb - (cr << 11)) >> 12));
           let b = c3 * (y + cb);
@@ -706,8 +836,9 @@ impl<'a> Cr2Decoder<'a> {
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   debug!("CR2 raw wb: {:?}", raw_wb);
-
-  let div = raw_wb[1];
+  // We never have more then RGB colors so far (no RGBE etc.)
+  // So we combine G1 and G2 to get RGB wb.
+  let div = raw_wb[1]; // G1 should be 1024 and we use this as divisor
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
     if v.is_normal() {
@@ -719,6 +850,8 @@ fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
 
 crate::tags::tiff_tag_enum!(Cr2MakernoteTag);
 
+/// Specific Canon CR2 Makernotes tags.
+/// These are only related to the Makernote IFD.
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
 #[repr(u16)]
 pub enum Cr2MakernoteTag {
@@ -804,3 +937,5 @@ pub enum Cr2MakernoteTag {
   AFConfig = 0x4028,
   RawBurstModeRoll = 0x403f,
 }
+
+//const CR2_MODEL_40D: u32 = 0x80000190;

@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 pub const IDENTITY_MATRIX_3: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
+/// Multiply two matrices a and b
 pub fn multiply<const X: usize, const A: usize, const B: usize>(a: &[[f32; X]; A], b: &[[f32; B]; X]) -> [[f32; B]; A] {
   let mut r = [[0.0; B]; A];
   for i in 0..A {
@@ -21,6 +25,7 @@ pub fn multiply_row1(a: &[[f32; 3]; 3], b: &[f32; 3]) -> [f32; 3] {
   ]
 }
 
+/// Normalize a matrix so that the sum of each row equals to 1.0
 pub fn normalize<const N: usize, const M: usize>(rgb2cam: [[f32; N]; M]) -> [[f32; N]; M] {
   let mut result = [[0.0; N]; M];
   for m in 0..M {
@@ -34,6 +39,7 @@ pub fn normalize<const N: usize, const M: usize>(rgb2cam: [[f32; N]; M]) -> [[f3
   result
 }
 
+/// Calculate pseudo-inverse of a given matrix
 pub fn pseudo_inverse<const N: usize>(matrix: [[f32; 3]; N]) -> [[f32; N]; 3] {
   let mut tmp: [[f32; 3]; N] = [Default::default(); N];
   let mut result: [[f32; N]; 3] = [[Default::default(); N]; 3];
@@ -80,6 +86,7 @@ pub fn pseudo_inverse<const N: usize>(matrix: [[f32; 3]; N]) -> [[f32; N]; 3] {
   result
 }
 
+/// Transpose a given input matrix
 pub fn transpose<const N: usize, const M: usize>(matrix: &[[f32; M]; N]) -> [[f32; N]; M] {
   let mut transposed = [[f32::NAN; N]; M];
   for n in 0..N {
@@ -90,10 +97,12 @@ pub fn transpose<const N: usize, const M: usize>(matrix: &[[f32; M]; N]) -> [[f3
   transposed
 }
 
+/// Transform a 2D matrix representation to 1D
 pub fn transform_2d<const N: usize, const M: usize>(matrix: &[[f32; M]; N]) -> Vec<f32> {
   matrix.iter().flat_map(|n| n.iter().cloned()).collect()
 }
 
+/// Transform a 1D matrix representation to 2D
 pub fn transform_1d<const N: usize, const M: usize>(matrix: &[f32]) -> Option<[[f32; M]; N]> {
   if matrix.len() != (N * M) {
     return None;

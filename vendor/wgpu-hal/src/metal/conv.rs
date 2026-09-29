@@ -32,7 +32,8 @@ pub fn map_texture_usage(format: wgt::TextureFormat, usage: wgt::TextureUses) ->
         MTLTextureUsage::ShaderWrite,
         usage.intersects(Tu::STORAGE_WRITE_ONLY | Tu::STORAGE_READ_WRITE),
     );
-
+    // needed for combined depth/stencil formats since we might
+    // create a stencil-only view from them
     mtl_usage.set(
         MTLTextureUsage::PixelFormatView,
         format.is_combined_depth_stencil_format(),
@@ -90,7 +91,7 @@ pub fn map_address_mode(address: wgt::AddressMode) -> MTLSamplerAddressMode {
         Fm::MirrorRepeat => MTL::MirrorRepeat,
         Fm::ClampToEdge => MTL::ClampToEdge,
         Fm::ClampToBorder => MTL::ClampToBorderColor,
-
+        //Fm::MirrorClamp => MTL::MirrorClampToEdge,
     }
 }
 
@@ -414,7 +415,9 @@ pub fn map_acceleration_structure_descriptor<'a>(
                         );
                     }
                     descriptor.setVertexStride(triangles.vertex_stride as usize);
-
+                    // Safety: MTLVertexFormat and MTLAttributeFormat are identical.
+                    // https://docs.rs/objc2-metal/latest/objc2_metal/struct.MTLAttributeFormat.html
+                    // https://docs.rs/objc2-metal/latest/objc2_metal/struct.MTLVertexFormat.html
                     descriptor.setVertexFormat(unsafe {
                         core::mem::transmute::<MTLVertexFormat, MTLAttributeFormat>(
                             map_vertex_format(triangles.vertex_format),
@@ -437,7 +440,7 @@ pub fn map_acceleration_structure_descriptor<'a>(
                     ) {
                         descriptor.allowDuplicateIntersectionFunctionInvocation();
                     }
-
+                    // descriptor.setIntersectionFunctionTableOffset(offset);
                     descriptor.into_super()
                 })
                 .collect::<alloc::vec::Vec<Retained<MTLAccelerationStructureGeometryDescriptor>>>();
@@ -468,7 +471,7 @@ pub fn map_acceleration_structure_descriptor<'a>(
                     ) {
                         descriptor.allowDuplicateIntersectionFunctionInvocation();
                     }
-
+                    // descriptor.setIntersectionFunctionTableOffset(offset);
                     descriptor.into_super()
                 })
                 .collect::<alloc::vec::Vec<Retained<MTLAccelerationStructureGeometryDescriptor>>>();

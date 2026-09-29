@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, FourCC, ReadBox, Result, read_box_header_ext};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -12,7 +16,8 @@ pub struct MvhdBox {
   pub modification_time: u64,
   pub timescale: u32,
   pub duration: u64,
-
+  //#[serde(with = "value_u32")]
+  //pub rate: FixedPointU16,
 }
 
 impl MvhdBox {
@@ -39,6 +44,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MvhdBox {
         reader.read_u32::<BigEndian>()? as u64,
       )
     };
+    //let rate = FixedPointU16::new_raw(reader.read_u32::<BigEndian>()?); // TODO
 
     reader.seek(SeekFrom::Start(header.end_offset()))?;
 
@@ -50,7 +56,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MvhdBox {
       modification_time,
       timescale,
       duration,
-
+      //rate,
     })
   }
 }

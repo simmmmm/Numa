@@ -1,12 +1,50 @@
+//! Library to extract the raw data and some metadata from digital camera
+//! images. Given an image in a supported format and camera you will be able to get
+//! everything needed to process the image
+//!
+//! # Example
+//! ```rust,no_run
+//! use std::env;
+//! use std::fs::File;
+//! use std::io::prelude::*;
+//! use std::io::BufWriter;
+//!
+//! fn main() {
+//!   let args: Vec<_> = env::args().collect();
+//!   if args.len() != 2 {
+//!     println!("Usage: {} <file>", args[0]);
+//!     std::process::exit(2);
+//!   }
+//!   let file = &args[1];
+//!   let image = rawler::decode_file(file).unwrap();
+//!
+//!   // Write out the image as a grayscale PPM
+//!   let mut f = BufWriter::new(File::create(format!("{}.ppm",file)).unwrap());
+//!   let preamble = format!("P6 {} {} {}\n", image.width, image.height, 65535).into_bytes();
+//!   f.write_all(&preamble).unwrap();
+//!   if let rawler::RawImageData::Integer(data) = image.data {
+//!     for pix in data {
+//!       // Do an extremely crude "demosaic" by setting R=G=B
+//!       let pixhigh = (pix>>8) as u8;
+//!       let pixlow  = (pix&0x0f) as u8;
+//!       f.write_all(&[pixhigh, pixlow, pixhigh, pixlow, pixhigh, pixlow]).unwrap()
+//!     }
+//!   } else {
+//!     eprintln!("Don't know how to process non-integer raw files");
+//!   }
+//! }
+//! ```
+
 #![deny(
-
+    //missing_docs,
     unstable_features,
-
+    //unused_import_braces,
+    //unused_qualifications
   )]
-
+// Clippy configuration
 #![allow(
   clippy::needless_doctest_main,
-  clippy::identity_op,
+  clippy::identity_op, // we often use x + 0 to better document an algorithm
   clippy::too_many_arguments,
   clippy::bool_assert_comparison,
   clippy::upper_case_acronyms,
@@ -17,10 +55,13 @@
   clippy::get_first,
   clippy::vec_init_then_push,
   clippy::only_used_in_recursion,
-
+  //clippy::seek_from_current, // TODO
   clippy::needless_lifetimes,
   clippy::type_complexity,
-
+  //clippy::cast_abs_to_unsigned,
+  //clippy::needless_return,
+  //clippy::derivable_impls,
+  //clippy::useless_vec,
 )]
 
 use decoders::Camera;
@@ -151,24 +192,47 @@ impl From<JfifError> for RawlerError {
   }
 }
 
+/// Take a path to a raw file and return a decoded image or an error
+///
+/// # Example
+/// ```rust,ignore
+/// let image = match rawler::decode_file("path/to/your/file.RAW") {
+///   Ok(val) => val,
+///   Err(e) => ... some appropriate action when the file is unreadable ...
+/// };
+/// ```
 pub fn decode_file<P: AsRef<Path>>(path: P) -> Result<RawImage> {
   LOADER.decode_file(path.as_ref())
 }
 
+/// Take a readable source and return a decoded image or an error
+///
+/// # Example
+/// ```rust,ignore
+/// let mut file = match File::open(path).unwrap();
+/// let image = match rawler::decode(&mut file) {
+///   Ok(val) => val,
+///   Err(e) => ... some appropriate action when the file is unreadable ...
+/// };
+/// ```
 pub fn decode(rawfile: &RawSource, params: &RawDecodeParams) -> Result<RawImage> {
   LOADER.decode(rawfile, params, false)
 }
 
+// Used to force lazy_static initializations. Useful for fuzzing.
 #[doc(hidden)]
 pub fn force_initialization() {
   lazy_static::initialize(&LOADER);
 }
 
+// Used for fuzzing targets that just want to test the actual decoders instead of the full formats
+// with all their TIFF and other crazyness
 #[doc(hidden)]
 pub fn decode_unwrapped(rawfile: &RawSource) -> Result<RawImageData> {
   LOADER.decode_unwrapped(rawfile)
 }
 
+// Used for fuzzing everything but the decoders themselves
 #[doc(hidden)]
 pub fn decode_dummy(rawfile: &RawSource) -> Result<RawImage> {
   LOADER.decode(rawfile, &RawDecodeParams::default(), true)

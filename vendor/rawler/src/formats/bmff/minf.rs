@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BmffError, BoxHeader, FourCC, ReadBox, Result, dinf::DinfBox, stbl::StblBox, vendor::VendorBox, vmhd::VmhdBox};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -8,6 +12,8 @@ pub struct MinfBox {
   pub header: BoxHeader,
   pub vmhd: Option<VmhdBox>,
 
+  //#[serde(skip_serializing_if = "Option::is_none")]
+  //pub smhd: Option<SmhdBox>,
   pub dinf: DinfBox,
   pub stbl: StblBox,
   pub vendor: Vec<VendorBox>,
@@ -20,7 +26,7 @@ impl MinfBox {
 impl<R: Read + Seek> ReadBox<&mut R> for MinfBox {
   fn read_box(mut reader: &mut R, header: BoxHeader) -> Result<Self> {
     let mut vmhd = None;
-
+    //let mut smhd = None;
     let mut dinf = None;
     let mut stbl = None;
 
@@ -29,6 +35,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MinfBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 

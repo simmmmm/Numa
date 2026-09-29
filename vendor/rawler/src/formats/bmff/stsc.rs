@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, FourCC, ReadBox, Result, read_box_header_ext};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -40,6 +44,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StscBox {
     let entry_count = reader.read_u32::<BigEndian>()?;
     let mut entries = Vec::with_capacity(entry_count as usize);
 
+    // Reader for a single stsc entry
     let mut read_entry = || -> Result<StscEntry> {
       Ok(StscEntry {
         first_chunk: reader.read_u32::<BigEndian>()?,
@@ -50,18 +55,18 @@ impl<R: Read + Seek> ReadBox<&mut R> for StscBox {
     };
 
     if entry_count > 0 {
-
+      // Read first entry and hold it back
       let mut holdback = read_entry()?;
       holdback.first_sample = 1;
 
       for _ in 1..entry_count {
         let mut entry = read_entry()?;
-
+        // Now we know the chunk count to calc the amount of samples in holdback
         entry.first_sample = holdback.first_sample + ((entry.first_chunk - holdback.first_sample) * holdback.samples_per_chunk);
         entries.push(holdback);
         holdback = entry;
       }
-
+      // Finalize entry list
       entries.push(holdback);
     }
 

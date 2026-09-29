@@ -892,10 +892,13 @@ mod tests {
                 data.extend_from_slice(&[value; 3]);
             }
         }
-        let image = LinearImage::new(4, 2, data);
+        let mut image = LinearImage::new(4, 2, data);
+        image.white_point = Some(crate::color::WhiteBalance { temperature: 5200.0, tint: 8.0 });
 
         let half = image.downscaled(2).unwrap();
         assert_eq!((half.width, half.height), (2, 1));
+
+        assert_eq!(half.white_point, image.white_point);
 
         assert_eq!(half.data[0], 0.0);
         assert_eq!(half.data[3], 1.0);

@@ -8,6 +8,9 @@ use crate::{
 
 use std::convert::TryInto;
 
+/// This struct contains the EXIF information.
+/// If a property accepts diffent data types, the type with
+/// the best accuracy is choosen.
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Exif {
   pub orientation: Option<u16>,
@@ -55,7 +58,7 @@ pub struct Exif {
   pub lens_model: Option<String>,
   pub gps: Option<ExifGPS>,
   pub user_comment: Option<String>,
-
+  //pub makernotes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -95,24 +98,27 @@ pub struct ExifGPS {
 }
 
 impl Exif {
-
+  /// Read EXIF data. As some EXIF tags located in the root IFD,
+  /// we accept both IFDs here.
   pub fn new(root_or_exif: &IFD) -> Result<Self> {
     let mut ins = Self::default();
     ins.extend_from_ifd(root_or_exif)?;
     if let Some(exif_ifd) = root_or_exif.get_sub_ifd(ExifTag::ExifOffset) {
       ins.extend_from_ifd(exif_ifd)?;
     }
-
+    // Search for GPSInfo tag, usually it is located in IFD0
     if let Some(gpsinfo_ifd) = root_or_exif.get_sub_ifd(ExifTag::GPSInfo) {
       ins.extend_from_gps_ifd(gpsinfo_ifd)?;
     }
     Ok(ins)
   }
 
+  /// Extend the EXIF info from this IFD. If the IFD contains a ExifIFD,
+  /// extend from this IFD, too.
   pub fn extend_from_ifd(&mut self, ifd: &IFD) -> Result<()> {
     let trim = |a: &String| -> String { a.trim().into() };
     for (tag, entry) in ifd.entries().iter() {
-
+      // First try EXIF tags
       if let Ok(tag) = ExifTag::try_from(*tag) {
         match (tag, &entry.value) {
           (ExifTag::Orientation, Value::Short(data)) => self.orientation = data.get(0).cloned(),
@@ -155,12 +161,14 @@ impl Exif {
           (ExifTag::OwnerName, Value::Ascii(data)) => self.owner_name = data.strings().get(0).map(trim),
           (ExifTag::SerialNumber, Value::Ascii(data)) => self.serial_number = data.strings().get(0).map(trim),
           (ExifTag::LensSerialNumber, Value::Ascii(data)) => self.lens_serial_number = data.strings().get(0).map(trim),
-
+          // Lens information from EXIF is used as-is. If the lens resolver is able to
+          // find a matching lens in the database, these values are overwritten later
+          // by extend_from_lens().
           (ExifTag::LensSpecification, Value::Rational(data)) => self.lens_spec = data.clone().try_into().ok(),
           (ExifTag::LensMake, Value::Ascii(data)) => self.lens_make = data.strings().get(0).map(trim).filter(|s| !s.is_empty()),
           (ExifTag::LensModel, Value::Ascii(data)) => self.lens_model = data.strings().get(0).map(trim).filter(|s| !s.is_empty()),
           (ExifTag::UserComment, Value::Ascii(data)) => self.user_comment = data.strings().get(0).map(trim),
-
+          //(ExifTag::MakerNotes, Value::Undefined(data)) => self.makernotes = Some(data.clone()),
           (tag, _value) => {
             log::debug!("Ignoring EXIF tag: {:?}", tag);
           }
@@ -170,10 +178,12 @@ impl Exif {
     Ok(())
   }
 
+  /// Extend the EXIF info from this IFD. If the IFD contains a ExifIFD,
+  /// extend from this IFD, too.
   pub fn extend_from_gps_ifd(&mut self, ifd: &IFD) -> Result<()> {
     for (tag, entry) in ifd.entries().iter() {
       if let Ok(tag) = ExifGpsTag::try_from(*tag) {
-
+        // We hit a GPS tag, make sure the gps property is initialized.
         if self.gps.is_none() {
           self.gps = Some(ExifGPS::default());
         }
@@ -221,6 +231,11 @@ impl Exif {
     Ok(())
   }
 
+  /// Overwrite the lens information with the resolved lens description.
+  ///
+  /// This is only called when the lens resolver was able to find a matching
+  /// lens in the database. Otherwise the lens information parsed from the
+  /// source EXIF data (if any) is kept.
   pub(crate) fn extend_from_lens(&mut self, lens: &LensDescription) {
     let lens_info: [Rational; 4] = [lens.focal_range[0], lens.focal_range[1], lens.aperture_range[0], lens.aperture_range[1]];
     self.lens_spec = Some(lens_info);

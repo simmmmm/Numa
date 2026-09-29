@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use crate::{formats::bmff::BmffError, formats::tiff::GenericTiffReader};
 
 use super::super::{BoxHeader, FourCC, ReadBox, Result};

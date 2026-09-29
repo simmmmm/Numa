@@ -13,3 +13,8 @@ override_dh_shlibdeps:
 	dh_shlibdeps -l$(CURDIR)/debian/numa/usr/lib/numa
 
 override_dh_auto_test override_dh_auto_clean:
+
+# dh_clean deletes every *.orig, and the vendored crates' checksums count
+# their Cargo.toml.orig.
+override_dh_clean:
+	dh_clean -X.orig

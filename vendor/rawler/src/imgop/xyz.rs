@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::convert::TryFrom;
 
+/// Illuminants for XYZ
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Illuminant {
   Unknown = 0,
@@ -92,6 +96,8 @@ impl Illuminant {
   }
 }
 
+// Constant matrix for converting sRGB to XYZ(D65):
+// http://www.brucelindbloom.com/Eqn_RGB_XYZ_Matrix.html
 #[allow(clippy::excessive_precision)]
 pub const SRGB_TO_XYZ_D65: [[f32; 3]; 3] = [
   [0.4124564, 0.3575761, 0.1804375],
@@ -134,44 +140,45 @@ pub const XYZ_TO_PROFOTORGB_D50: [[f32; 3]; 3] = [
   [0.0000000, 0.0000000, 1.2118128],
 ];
 
-pub const CIE_1931_TRISTIMULUS_A: [f32; 3] = [1.09850, 1.00000, 0.35585];
+pub const CIE_1931_TRISTIMULUS_A: [f32; 3] = [1.09850, 1.00000, 0.35585]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_B: [f32; 3] = [0.99072, 1.00000, 0.85223];
+pub const CIE_1931_TRISTIMULUS_B: [f32; 3] = [0.99072, 1.00000, 0.85223]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_C: [f32; 3] = [0.98074, 1.00000, 1.18232];
+pub const CIE_1931_TRISTIMULUS_C: [f32; 3] = [0.98074, 1.00000, 1.18232]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_D50: [f32; 3] = [0.96422, 1.00000, 0.82521];
+pub const CIE_1931_TRISTIMULUS_D50: [f32; 3] = [0.96422, 1.00000, 0.82521]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_D55: [f32; 3] = [0.95682, 1.00000, 0.92149];
+pub const CIE_1931_TRISTIMULUS_D55: [f32; 3] = [0.95682, 1.00000, 0.92149]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_D65: [f32; 3] = [0.95047, 1.00000, 1.08883];
+pub const CIE_1931_TRISTIMULUS_D65: [f32; 3] = [0.95047, 1.00000, 1.08883]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_D75: [f32; 3] = [0.94972, 1.00000, 1.22638];
+pub const CIE_1931_TRISTIMULUS_D75: [f32; 3] = [0.94972, 1.00000, 1.22638]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_E: [f32; 3] = [1.00000, 1.00000, 1.00000];
+pub const CIE_1931_TRISTIMULUS_E: [f32; 3] = [1.00000, 1.00000, 1.00000]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_F2: [f32; 3] = [0.99186, 1.00000, 0.67393];
+pub const CIE_1931_TRISTIMULUS_F2: [f32; 3] = [0.99186, 1.00000, 0.67393]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_F7: [f32; 3] = [0.95041, 1.00000, 1.08747];
+pub const CIE_1931_TRISTIMULUS_F7: [f32; 3] = [0.95041, 1.00000, 1.08747]; // X, Y, Z
 
-pub const CIE_1931_TRISTIMULUS_F11: [f32; 3] = [1.00962, 1.00000, 0.64350];
+pub const CIE_1931_TRISTIMULUS_F11: [f32; 3] = [1.00962, 1.00000, 0.64350]; // X, Y, Z
 
+/// incandescent / tungsten
 pub const CIE_1931_WHITE_POINT_A: (f32, f32) = (0.44757, 0.40745);
-
+/// obsolete, direct sunlight at noon
 pub const CIE_1931_WHITE_POINT_B: (f32, f32) = (0.34842, 0.35161);
-
+/// obsolete, average / North sky daylight
 pub const CIE_1931_WHITE_POINT_C: (f32, f32) = (0.31006, 0.31616);
-
+/// horizon light, ICC profile PCS
 pub const CIE_1931_WHITE_POINT_D50: (f32, f32) = (0.34567, 0.35850);
-
+/// mid-morning / mid-afternoon daylight
 pub const CIE_1931_WHITE_POINT_D55: (f32, f32) = (0.33242, 0.34743);
-
+/// noon daylight: television, sRGB color space
 pub const CIE_1931_WHITE_POINT_D65: (f32, f32) = (0.31271, 0.32902);
-
+/// North sky daylight
 pub const CIE_1931_WHITE_POINT_D75: (f32, f32) = (0.29902, 0.31485);
-
+/// high-efficiency blue phosphor monitors, BT.2035
 pub const CIE_1931_WHITE_POINT_D93: (f32, f32) = (0.28315, 0.29711);
-
+/// equal energy
 pub const CIE_1931_WHITE_POINT_E: (f32, f32) = (0.33333, 0.33333);
 
 #[allow(non_snake_case)]
@@ -189,6 +196,8 @@ pub fn xy_to_XYZ(x: f32, y: f32) -> [f32; 3] {
   xyY_to_XYZ(x, y, Y)
 }
 
+/// Convert a given xy whitepoint to white balance coefficents,
+/// adapted to
 pub fn xy_whitepoint_to_wb_coeff(x: f32, y: f32, colormatrix: &[[f32; 3]; 3]) -> [f32; 3] {
   let mut result = [0.0, 0.0, 0.0];
   if y > 0.0 {

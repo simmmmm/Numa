@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::{
   fs::File,
   io::{BufWriter, Write},
@@ -7,6 +10,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use image::{ImageBuffer, ImageFormat, Luma, Rgb};
 pub(crate) mod inspector;
 
+//#[cfg(test)]
 #[cfg(feature = "rawdb")]
 pub mod rawdb;
 

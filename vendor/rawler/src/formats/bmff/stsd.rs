@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2020 Alfred Gutierrez
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{
   BoxHeader, FourCC, ReadBox, Result,
   ext_cr3::{craw::CrawBox, ctmd::CtmdBox},
@@ -27,16 +31,18 @@ impl<R: Read + Seek> ReadBox<&mut R> for StsdBox {
   fn read_box(mut reader: &mut R, header: BoxHeader) -> Result<Self> {
     let (version, flags) = read_box_header_ext(reader)?;
 
+    // Canon CR3 boxes
     let mut craw = None;
     let mut ctmd = None;
 
     let mut vendors = Vec::new();
 
-    reader.read_u32::<BigEndian>()?;
+    reader.read_u32::<BigEndian>()?; // FIXME XXX entry_count
 
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 
@@ -49,7 +55,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StsdBox {
           assert_eq!(ctmd, None, "Found second CTMD box");
           ctmd = Some(CtmdBox::read_box(&mut reader, header)?);
         }
-
+        // TODO: Multiple CRAW boxes can occour in CRM files?! BMFF Spec says the SampleBox is an array.
         _ => {
           debug!("Vendor box found in stsd: {:?}", header.typ);
           let vendor = VendorBox::read_box(&mut reader, header)?;

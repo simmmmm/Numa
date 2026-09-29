@@ -1,25 +1,70 @@
 use crate::pumps::BitPump;
 use std::fmt;
 
+// Numa (PERF-021): 12 rather than 13. With the entries below the table is
+// 16 KB and stays in the first-level cache beside the stream; measured on one
+// thread, 12 bits beat 13 by 7 % on a CR2 and 2 % on a NEF, and 11 lost on the
+// NEF again.
 const DECODE_CACHE_BITS: u32 = 12;
 
+/// Numa (PERF-062): marks a decode cache entry that holds a code but not its
+/// difference, which is too long to fit beside it.
 const CODE_ONLY: u32 = 1 << 31;
 
 pub struct HuffTable {
-
+  // These two fields directly represent the contents of a JPEG DHT marker
   pub bits: [u32; 17],
   pub huffval: [u32; 256],
 
+  // Represent the weird shifts that are needed for some NEF files
   pub shiftval: [u32; 256],
 
+  // Enable the workaround for 16 bit decodes in DNG that need to consume those
+  // bits instead of the value being implied
   pub dng_bug: bool,
 
+  // In CRW we only use the len code so the cache is not needed
   pub disable_cache: bool,
 
+  // The remaining fields are computed from the above to allow more
+  // efficient coding and decoding and thus private
+
+  // The max number of bits in a huffman code and the table that converts those
+  // bits into how many bits to consume and the decoded length and shift
   pub nbits: u32,
 
+  // Fast lookup for self.peek_bits(nbits). This contains the huffval
+  // for all combinations of <code>+<extrabits>
+  // This is: (bits, len, shift) where:
+  //  bits: the actual count of bits to represent the code
+  //  len: extra bits for difference encoding
+  //  shift: special shift value for some Nikon models
+  //
+  // The huffman code (e.g. 0b1111111110) is the vector index inself, extended
+  // with all possible extra bit values. For example:
+  //   nbits = 4
+  //   code = 0b110
+  //   bits: 3
+  //   len: 1
+  // Then the array contains the values:
+  //   [0b110 0] = (3, 1, 0)
+  //   [0b110 1] = (3, 1, 0)
   pub hufftable: Vec<(u8, u8, u8)>,
 
+  // A pregenerated table that goes straight to decoding a diff without first
+  // finding a length, fetching bits, and sign extending them. The table is
+  // sized by DECODE_CACHE_BITS and can have 99%+ hit rate with 13 bits
+  //
+  // Numa (PERF-021): one u32 an entry — the bits to consume above, the
+  // difference below, 0 for a code that is not cached — where an
+  // `Option<(u8, i16)>` took six bytes.
+  //
+  // Numa (PERF-062): and where the code fits in the cache's bits but its
+  // difference does not, the entry still says what the code is —
+  // `CODE_ONLY`, its length, shift and difference length — so only the
+  // difference is left to read, not the whole code again through
+  // `hufftable`, which is 64 K entries for a 16-bit table and misses the
+  // cache. The idea is rawspeed's (`PrefixCodeLUTDecoder`), not its code.
   decodecache: [u32; 1 << DECODE_CACHE_BITS],
 
   initialized: bool,
@@ -89,6 +134,7 @@ impl HuffTable {
     Ok(tbl)
   }
 
+  /// Numa (PERF-022): whether `other` reads every code as this table does.
   pub fn same_code(&self, other: &HuffTable) -> bool {
     self.bits == other.bits
       && self.huffval == other.huffval
@@ -98,7 +144,7 @@ impl HuffTable {
   }
 
   pub fn initialize(&mut self) -> Result<(), String> {
-
+    // Find out the max code length and allocate a table with that size
     self.nbits = 16;
     for i in 0..16 {
       if self.bits[16 - i] != 0 {
@@ -108,12 +154,13 @@ impl HuffTable {
     }
     self.hufftable = vec![(0, 0, 0); 1 << self.nbits];
 
+    // Fill in the table itself
     let mut h = 0;
     let mut pos = 0;
     for len in 0..self.nbits {
-
+      // Fill for each number of huffman codes of length i (=len+1)
       for _ in 0..self.bits[len as usize + 1] {
-
+        // Fill for all possible extra bits, payload is always the same for fast lookup bases on peek_bits(self.nbits)
         for _ in 0..(1 << (self.nbits - len - 1)) {
           self.hufftable[h] = (len as u8 + 1, self.huffval[pos] as u8, self.shiftval[pos] as u8);
           h += 1;
@@ -122,6 +169,8 @@ impl HuffTable {
       }
     }
 
+    // Create the decode cache by running the slow code over all the possible
+    // values DECODE_CACHE_BITS wide
     if !self.disable_cache {
       let mut pump = MockPump::empty();
       let mut i = 0;
@@ -129,18 +178,20 @@ impl HuffTable {
         pump.set(i, DECODE_CACHE_BITS);
         let (bits, decode) = self.huff_decode_slow(&mut pump);
         if pump.validbits() >= 0 {
-
+          // Special case: for -32768 no SSSS bits are stored.
           let consume = match (decode, self.dng_bug) {
             (-32768, false) => bits as u32 - 16,
             _ => bits as u32,
           };
-
+          // A code that reads no bits is left to the slow path, which reads
+          // it the same way.
           if consume > 0 {
             self.decodecache[i as usize] = (consume << 16) | (decode as i16 as u16 as u32);
           }
         }
         if self.decodecache[i as usize] == 0 {
-
+          // The code alone, when it ends within these bits: its entry in
+          // `hufftable` is the same whatever follows it.
           let code = if self.nbits >= DECODE_CACHE_BITS {
             (i as usize) << (self.nbits - DECODE_CACHE_BITS)
           } else {
@@ -208,12 +259,12 @@ impl HuffTable {
       0 => 0,
       16 => {
         if self.dng_bug {
-          pump.get_bits(16);
+          pump.get_bits(16); // consume can fail because we haven't peeked yet
         }
         -32768
       }
       len => {
-
+        // decode the difference and extend sign bit
         let fulllen: i32 = len as i32 + shift as i32;
         let shift: i32 = shift as i32;
         let bits = pump.get_bits(len as u32) as i32;

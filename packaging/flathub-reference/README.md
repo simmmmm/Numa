@@ -34,7 +34,7 @@ The build has no network.
   would go in `/app/lib`, where Numa looks first (`numa_infer::gpu_plugin`).
 - **The source.** Here it is the working tree. On Flathub it has to be a public
   URL at a fixed commit: `https://github.com/simmmmm/Numa.git`, after
-  `dev/publish.sh --push`. The `cargo-sources.json` must then be generated from
+  `dev/publish.sh`. The `cargo-sources.json` must then be generated from
   that commit's `Cargo.lock`.
 
 ## Checked

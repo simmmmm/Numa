@@ -205,7 +205,7 @@ where
 
   pub fn into_crop(self, area: Rect) -> Self {
     if self.dim() == area.d && area.p == Point::zero() {
-      self
+      self // No-Op
     } else {
       crop(&self, area)
     }
@@ -252,11 +252,11 @@ where
       let ch_a;
       let ch_b;
       if row & 1 == 0 {
-
+        // For even rows, we take top-left and top-right channel data.
         ch_a = &ch0[offset..offset + half_width];
         ch_b = &ch1[offset..offset + half_width];
       } else {
-
+        // For odd rows, we take bottom-left and bottom-right channel data.
         ch_a = &ch2[offset..offset + half_width];
         ch_b = &ch3[offset..offset + half_width];
       }
@@ -274,6 +274,15 @@ where
     Ok(pixbuf.clone())
   }
 }
+
+/*
+impl<T> Index<usize> for Pix2D<T> {
+  type Output = T;
+  fn index<'a>(&'a self, i: usize) -> &'a T {
+    &self.data[i]
+  }
+}
+ */
 
 impl<I, T> std::ops::Index<I> for Pix2D<T>
 where
@@ -297,6 +306,23 @@ where
   }
 }
 
+/*
+impl<T> Default for Pix2D<T>
+where
+  T: Default,
+{
+  fn default() -> Self {
+    Self {
+      width: 0,
+      height: 0,
+      data: Default::default(),
+      initialized: false,
+    }
+  }
+}
+ */
+
+/// An ugly hack to get multiple mutable references to Pix2D
 pub struct SharedPix2D<T: SubPixel> {
   pub inner: UnsafeCell<Pix2D<T>>,
 }
@@ -309,6 +335,10 @@ where
     Self { inner: inner.into() }
   }
 
+  /// Get inner Pix2D<> reference
+  ///
+  /// # Safety
+  /// Only use this inside Rayon parallel iterators.
   #[allow(clippy::mut_from_ref)]
   pub unsafe fn inner_mut(&self) -> &mut Pix2D<T> {
     unsafe { &mut *self.inner.get() }
@@ -431,6 +461,7 @@ where
     self.data.par_chunks_exact_mut(self.width).enumerate().for_each(|(row, data)| op(row, data));
   }
 
+  // TODO: use par_iterator
   #[inline(always)]
   pub fn for_each_index<F>(&mut self, op: F)
   where
@@ -499,6 +530,7 @@ where
   }
 }
 
+/// An ugly hack to get multiple mutable references to Pix2D
 pub struct SharedColor2D<T: SubPixel, const N: usize> {
   pub inner: UnsafeCell<Color2D<T, N>>,
 }
@@ -511,6 +543,10 @@ where
     Self { inner: inner.into() }
   }
 
+  /// Get inner Pix2D<> reference
+  ///
+  /// # Safety
+  /// Only use this inside Rayon parallel iterators.
   #[allow(clippy::mut_from_ref)]
   pub unsafe fn inner_mut(&self) -> &mut Color2D<T, N> {
     unsafe { &mut *self.inner.get() }
@@ -541,6 +577,9 @@ where
     }
   }
 
+  /// Get a pixel from raw pointer
+  /// # Safety
+  /// TODO
   #[inline(always)]
   pub unsafe fn at(&self, row: usize, col: usize) -> &[T; N] {
     unsafe {
@@ -555,7 +594,9 @@ unsafe impl<T, const N: usize> Sync for Color2DPtr<T, N> {}
 #[macro_export]
 macro_rules! alloc_image_f32_plain {
   ($width:expr, $height:expr, $dummy: expr) => {{
-
+    // if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
+    //   panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
+    // }
     if $dummy {
       $crate::pixarray::PixF32::new_uninit($width, $height)
     } else {
@@ -567,7 +608,9 @@ macro_rules! alloc_image_f32_plain {
 #[macro_export]
 macro_rules! alloc_image_plain {
   ($width:expr, $height:expr, $dummy: expr) => {{
-
+    // if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
+    //   panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
+    // }
     if $dummy {
       $crate::pixarray::PixU16::new_uninit($width, $height)
     } else {
@@ -579,7 +622,9 @@ macro_rules! alloc_image_plain {
 #[macro_export]
 macro_rules! alloc_image_plain_typed {
   ($T:tt, $width:expr, $height:expr, $dummy: expr) => {{
-
+    // if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
+    //   panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
+    // }
     if $dummy {
       $crate::pixarray::Pix2D::<T>::new_uninit($width, $height)
     } else {

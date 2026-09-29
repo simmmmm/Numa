@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{BoxHeader, ReadBox, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};

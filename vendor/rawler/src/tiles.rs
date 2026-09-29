@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use std::{iter, ops::Range};
 
 use crate::pixarray::{LineMut, SubPixel};
@@ -5,6 +8,7 @@ use crate::pixarray::{LineMut, SubPixel};
 #[derive(Debug)]
 pub struct ErrorNotTileable;
 
+/// Image tile generator
 pub struct ImageTiler<'a, T> {
   data: &'a [T],
   width: usize,
@@ -57,7 +61,11 @@ impl<'a, T> ImageTiler<'a, T>
 where
   T: Copy + Default,
 {
-
+  /// Materialize the tile at linear index `idx` (row-major).
+  ///
+  /// Stateless: borrows `&self` only, so callers can build tiles from many
+  /// threads in parallel (rayon `par_iter`). Edge-padding and last-row
+  /// replication follow the same rules as the iterator.
   pub fn build_tile(&self, idx: usize) -> Vec<T> {
     let mut buf = Vec::with_capacity(self.th * self.tw * self.cpp);
 
@@ -101,6 +109,22 @@ where
   }
 }
 
+/// A trait for types that can be partitioned into mutable tiles.
+///
+/// This trait allows splitting a collection or buffer of subpixels into
+/// mutable tiles of specified dimensions, returning an iterator over the tiles.
+///
+/// # Type Parameters
+/// - `'a`: Lifetime of the data being tiled.
+/// - `T`: The subpixel type, which must implement the `SubPixel` trait.
+///
+/// # Required Methods
+/// - `into_tiles_iter_mut`: Consumes `self` and returns a mutable iterator over tiles,
+///   or an error if the data cannot be tiled with the given dimensions.
+///
+/// # Errors
+/// Returns `ErrorNotTileable` if the data cannot be partitioned into tiles
+/// with the specified width, tile width, or tile height.
 pub trait TilesMut<'a, T>
 where
   T: SubPixel,
@@ -108,6 +132,7 @@ where
   fn into_tiles_iter_mut(self, width: usize, cpp: usize, tile_width: usize, tile_height: usize) -> std::result::Result<IntoTilesIter<'a, T>, ErrorNotTileable>;
 }
 
+/// Implementation for mutable slices of T: SubPixel
 impl<'a, T> TilesMut<'a, T> for &'a mut [T]
 where
   T: SubPixel,
@@ -130,6 +155,20 @@ where
   }
 }
 
+/// An iterator that splits a mutable slice into tiles of specified width and height.
+///
+/// # Type Parameters
+/// - `T`: The type of elements in the slice.
+///
+/// # Fields
+/// - `count`: The current tile index or count of tiles processed.
+/// - `width`: The width of the original image or data slice.
+/// - `tile_width`: The width of each tile.
+/// - `tile_height`: The height of each tile.
+/// - `original`: A mutable reference to the original data slice to be tiled.
+///
+/// This iterator yields mutable references to tiles within the original slice,
+/// allowing for in-place modification of each tile.
 pub struct IntoTilesIter<'a, T> {
   count: usize,
   width: usize,
@@ -140,14 +179,19 @@ pub struct IntoTilesIter<'a, T> {
 }
 
 impl<'a, T> IntoTilesIter<'a, T> {
-
+  /// Returns the total tile count
   fn tile_count(&self) -> usize {
     self.original.len() / self.cpp / (self.tile_height * self.tile_width)
   }
 }
 
+/// We know the exact amount of tiles that can be
+/// produced, so we mark the iterator as ExactSizeIterator
 impl<'a, T> ExactSizeIterator for IntoTilesIter<'a, T> where T: Send {}
 
+// unsafe impl<'a, T> TrustedLen for IntoTilesIter<'a, T> where T: Send {}
+
+/// A iterator that gives owned Tiles
 impl<'a, T> Iterator for IntoTilesIter<'a, T> {
   type Item = Tile<'a, T>;
 
@@ -166,11 +210,11 @@ impl<'a, T> Iterator for IntoTilesIter<'a, T> {
     if start_index >= self.original.len() {
       return None;
     } else {
-
+      // The next tile line has always a distance equal to full image width.
       let next_line_distance = self.width * self.cpp;
       let first_line_begin = &mut self.original[start_index..];
       if first_line_begin.len() < self.tile_height * next_line_distance - (tile_x * self.tile_width * self.cpp) {
-
+        // The tile input buffer is too small. Maybe an issue with component-per-pixels?
         panic!("Tile buffer too small.")
       }
       let first_line = &mut first_line_begin[..self.tile_width * self.cpp];
@@ -190,11 +234,22 @@ impl<'a, T> Iterator for IntoTilesIter<'a, T> {
   }
 }
 
+/// Represents a rectangular tile within an image buffer.
+///
+/// # Type Parameters
+/// - `'a`: Lifetime of the data the tile references.
+/// - `T`: Pixel type contained in the tile.
+///
+/// # Fields
+/// - `first_line`: Pointer to the first line (row) of the tile's pixel data.
+/// - `tile_height`: Number of rows in the tile.
+/// - `width`: Width of the entire pixel buffer (not just the tile).
+/// - `_phantom`: Marker to associate the lifetime `'a` and type `[T]` with the struct.
 pub struct Tile<'a, T> {
-
+  // contains tile_width as well
   first_line: *mut [T],
   tile_height: usize,
-  width: usize,
+  width: usize, // of the pixbuf
   cpp: usize,
   _phantom: std::marker::PhantomData<&'a [T]>,
 }
@@ -205,8 +260,17 @@ impl<'a, T> Tile<'a, T> {
   }
 }
 
+// TODO: Add safety note
 unsafe impl<T: Send> Send for Tile<'_, T> {}
 
+/// An iterator that allows mutable access to the lines of a `Tile`.
+///
+/// # Type Parameters
+/// * `T` - The type of the elements contained in the tile.
+///
+/// # Fields
+/// * `tile` - The tile being iterated over.
+/// * `current_line` - The index of the current line in the tile.
 pub struct TileIterMut<'a, T> {
   tile: Tile<'a, T>,
   current_line: usize,
@@ -223,10 +287,14 @@ where
       return None;
     }
 
+    // Calculating the next line offset is easy - each tile has same width/height,
+    // so the distance is simply the full width of the image.
     let next_line_distance = self.tile.width * self.tile.cpp;
     let line_ptr = unsafe { (self.tile.first_line as *mut T).offset((self.current_line * next_line_distance) as isize) };
     self.current_line += 1;
 
+    // This is safe because we check in the constructor if the line_ptr
+    // can be advanced until tile end line.
     Some(unsafe { std::slice::from_raw_parts_mut(line_ptr, self.tile.first_line.len()) })
   }
 

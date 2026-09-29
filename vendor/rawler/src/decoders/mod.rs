@@ -92,6 +92,16 @@ macro_rules! fetch_tiff_tag_variant {
   };
 }
 
+/*
+macro_rules! fetch_ifd {
+  ($tiff:expr, $tag:expr) => {
+    $tiff
+      .find_first_ifd($tag)
+      .ok_or(format!("Couldn't find ifd with tag {}", stringify!($tag)).to_string())?
+  };
+}
+ */
+
 pub mod ari;
 pub mod arw;
 mod camera;
@@ -138,6 +148,8 @@ const SUPPORTED_FILES_EXT: [&str; 29] = [
   "RW2", "RWL", "SRW", "3FR", "FFF", "X3F", "QTK",
 ];
 
+/// Get list of supported file extensions. All names
+/// are upper-case.
 pub fn supported_extensions() -> &'static [&'static str] {
   &SUPPORTED_FILES_EXT[..]
 }
@@ -248,7 +260,7 @@ impl RawMetadata {
     if let Some(lens) = &lens {
       exif.extend_from_lens(lens);
     } else {
-
+      // No lens found in database, keep the lens information from source EXIF (if any).
       log::warn!(
         "Lens resolver found no matching lens, falling back to EXIF lens data: make: {:?}, model: {:?}, spec: {:?}",
         exif.lens_make,
@@ -275,7 +287,7 @@ impl RawMetadata {
       .transpose()
       .map_err(|err| RawlerError::DecoderFailed(err.to_string()))?;
     if let Some(mtime) = mtime {
-
+      // Probe for available timezone information
       let tz = if let Some(offset) = self.exif.timezone_offset.as_ref().and_then(|x| x.get(1)) {
         if let Some(tz) = FixedOffset::east_opt(*offset as i32 * 3600) {
           Some(tz)
@@ -294,7 +306,7 @@ impl RawMetadata {
       } else {
         None
       };
-
+      // Any timezone? Then correct...
       if let Some(tz) = tz {
         let x = tz
           .from_local_datetime(&mtime)
@@ -322,6 +334,8 @@ pub trait Decoder: Send {
     Ok(1)
   }
 
+  /// Gives the metadata for a Raw. This is not the original data but
+  /// a generalized set of metadata attributes.
   fn raw_metadata(&self, file: &RawSource, params: &RawDecodeParams) -> Result<RawMetadata>;
 
   fn xpacket(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<Vec<u8>>> {
@@ -333,6 +347,7 @@ pub trait Decoder: Send {
     Ok(None)
   }
 
+  // TODO: clarify preview and full image
   fn full_image(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     warn!("Decoder has no full image support");
     Ok(None)
@@ -352,6 +367,10 @@ pub trait Decoder: Send {
   fn format_hint(&self) -> FormatHint;
 }
 
+/// Possible orientations of an image
+///
+/// Values are taken from the IFD tag Orientation (0x0112) in most cases but they can be
+/// obtained from other metadata in the file.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[allow(missing_docs)]
 pub enum Orientation {
@@ -367,7 +386,8 @@ pub enum Orientation {
 }
 
 impl Orientation {
-
+  /// Convert a u16 from the IFD tag Orientation (0x0112) into its corresponding
+  /// enum value
   pub fn from_u16(orientation: u16) -> Orientation {
     match orientation {
       1 => Orientation::Normal,
@@ -382,6 +402,8 @@ impl Orientation {
     }
   }
 
+  /// Extract orienation from a TiffIFD. If the given TiffIFD has an invalid
+  /// value or contains no orientation data `Orientation::Unknown` is returned
   fn from_tiff(tiff: &IFD) -> Orientation {
     match tiff.get_entry(TiffCommonTag::Orientation) {
       Some(entry) => Orientation::from_u16(entry.force_usize(0) as u16),
@@ -389,6 +411,10 @@ impl Orientation {
     }
   }
 
+  /// Convert orientation to an image flip operation tuple. The first field is
+  /// if x and y coordinates should be swapped (transposed). The second and
+  /// third field is horizontal and vertical flipping respectively. For a
+  /// correct result, flipping must be done before transposing.
   pub fn to_flips(&self) -> (bool, bool, bool) {
     match *self {
       Orientation::Normal | Orientation::Unknown => (false, false, false),
@@ -402,6 +428,7 @@ impl Orientation {
     }
   }
 
+  /// Does the opposite of to_flips()
   pub fn from_flips(flips: (bool, bool, bool)) -> Self {
     match flips {
       (false, false, false) => Orientation::Normal,
@@ -415,6 +442,7 @@ impl Orientation {
     }
   }
 
+  /// Convert orientation to the Tiff Orientation value
   pub fn to_u16(&self) -> u16 {
     match *self {
       Orientation::Unknown => 0,
@@ -459,6 +487,25 @@ pub(crate) fn ok_cfa_image_with_blacklevels(camera: Camera, cpp: usize, wb_coeff
   );
   Ok(img)
 }
+
+/*
+pub(crate) fn ok_cfa_image_with_black_white(camera: Camera, cpp: usize, wb_coeffs: [f32; 4], black: u32, white: u32, image: PixU16, dummy: bool) -> Result<RawImage> {
+  assert_eq!(cpp, 1);
+  let blacklevel = BlackLevel::new(&vec![black; cpp], 1, 1, cpp);
+  let whitelevel = WhiteLevel::new(vec![white; cpp]);
+  let img = RawImage::new(
+    camera.clone(),
+    image,
+    cpp,
+    wb_coeffs,
+    RawPhotometricInterpretation::Cfa(CFAConfig::new_from_camera(&camera)),
+    Some(blacklevel),
+    Some(whitelevel),
+    dummy,
+  );
+  Ok(img)
+}
+   */
 
 pub(crate) fn dynamic_image_from_jpeg_interchange_format(ifd: &IFD, rawsource: &RawSource) -> Result<DynamicImage> {
   let offset = fetch_tiff_tag!(ifd, ExifTag::JPEGInterchangeFormat).force_usize(0) as u64;
@@ -511,7 +558,7 @@ pub(crate) fn dynamic_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result
     },
     RawImageData::Float(samples) => match cpp {
       3 => Ok(DynamicImage::ImageRgb32F(
-
+        // This may not work, rescaling required.
         ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(tiff_width as u32, tiff_height as u32, samples)
           .ok_or(RawlerError::DecoderFailed(format!("Create RGB image failed")))?,
       )),
@@ -520,6 +567,42 @@ pub(crate) fn dynamic_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result
   }
 }
 
+/// Decodes a complete image from a TIFF IFD into a [`RawImageData`] buffer.
+///
+/// Inspects the IFD for the compression method, sample format, storage layout
+/// (strips vs. tiles), bit depth, and photometric interpretation, then
+/// dispatches to the appropriate decompressor. After decompression the pixel
+/// buffer is cropped to the nominal image dimensions (removing any codec
+/// padding), and optional post-processing steps are applied:
+///
+/// * **Linearisation** — if a `Linearization` tag is present its lookup table
+///   is applied to every `u16` pixel.
+/// * **Deinterleaving** — if DNG 1.7.1 `RowInterleaveFactor` /
+///   `ColumnInterleaveFactor` tags indicate 2×2 interleaving, pixels are
+///   reordered.
+///
+/// # Supported combinations
+///
+/// | Sample format | Compression                    | Storage        |
+/// |---------------|--------------------------------|----------------|
+/// | `Uint` (u16)  | None                           | Strips / Tiles |
+/// | `Uint` (u16)  | ModernJPEG (lossy or lossless) | Strips / Tiles |
+/// | `Uint` (u16)  | LossyJPEG                      | Strips / Tiles |
+/// | `Uint` (u16)  | JPEG-XL                        | Strips / Tiles |
+/// | `IEEEFP` (f32)| None                           | Strips / Tiles |
+/// | `IEEEFP` (f32)| Deflate                        | Tiles          |
+///
+/// All other combinations return an error.
+///
+/// # Arguments
+/// * `ifd` - The IFD that describes the image. Must contain at minimum
+///   `ImageWidth`, `ImageLength`, `SamplesPerPixel`, `BitsPerSample`, and the
+///   relevant strip/tile offset tags.
+/// * `rawsource` - The raw file data used to read compressed pixel bytes.
+///
+/// # Errors
+/// Returns an error if required tags are missing, the compression /
+/// storage combination is unsupported, or any decompressor fails.
 pub fn plain_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result<RawImageData> {
   let dummy = false;
   let endian = ifd.endian;
@@ -575,27 +658,30 @@ pub fn plain_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result<RawImage
         }
       };
 
+      // We need to crop first, before we do stuff like deinterleaving.
+      // Padded pixels on output by LJPEG compression will corrupt deinterleave.
       pixbuf = pixbuf.into_crop(Rect::new(Point::zero(), Dim2::new(tiff_width * cpp, tiff_height)));
 
       if let Some(lintable) = ifd.get_entry(TiffCommonTag::Linearization) {
         apply_linearization(&mut pixbuf, &lintable.value, bits);
       }
 
+      // DNG 1.7.1 may store JPEG-XL data in interleaved format
       let col_ilf = ifd.get_entry(DngTag::ColumnInterleaveFactor).map(|tag| tag.force_u16(0)).unwrap_or(1);
       let row_ilf = ifd.get_entry(DngTag::RowInterleaveFactor).map(|tag| tag.force_u16(0)).unwrap_or(1);
       match (row_ilf, col_ilf) {
         (1, 1) => {}
         (2, 2) => {
-
+          // Make sure pixbuf is properly cropped (e.g. LJPEG padding)
           pixbuf = deinterleave2x2(&pixbuf)?;
         }
         _ => todo!(),
       }
       return Ok(RawImageData::Integer(pixbuf.into_inner()));
     }
-
+    // Floating Point (IEEE) storage
     SampleFormat::IEEEFP => {
-
+      //let mut pixbuf: PixF32 = alloc_image_f32_plain!(decode_width * cpp, decode_height, false);
       let mut pixbuf = match (compression, ifd.data_mode()?) {
         (CompressionMethod::None, DataMode::Strips) => decode_strips::<f32>(rawsource, ifd, PackedDecompressor::new(bits, endian), dummy)?,
         (CompressionMethod::None, DataMode::Tiles) => decode_tiles::<f32>(rawsource, ifd, PackedDecompressor::new(bits, endian), dummy)?,
@@ -612,7 +698,11 @@ pub fn plain_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result<RawImage
         }
       };
 
+      // We need to crop first, before we do stuff like deinterleaving.
+      // Padded pixels on output by LJPEG compression will corrupt deinterleave.
       pixbuf = pixbuf.into_crop(Rect::new(Point::zero(), Dim2::new(tiff_width * cpp, tiff_height)));
+
+      // TODO: other corrections (see u16 code above)?
 
       return Ok(RawImageData::Float(pixbuf.into_inner()));
     }
@@ -620,6 +710,22 @@ pub fn plain_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result<RawImage
   }
 }
 
+/// Decodes a strip-organised raw image into a flat pixel buffer.
+///
+/// Reads strip offsets and byte counts from `raw` (TIFF tags `StripOffsets`,
+/// `StripByteCounts`, `RowsPerStrip`, `ImageWidth`, `ImageLength`, and
+/// `SamplesPerPixel`) and decompresses every strip with `dc`.
+///
+/// # Arguments
+/// * `file` - Source file handle used to read strip data.
+/// * `raw` - The IFD describing the image (must contain the tags listed above).
+/// * `dc` - A decompressor valid for any borrow lifetime.
+/// * `dummy` - When `true`, allocates an uninitialised output buffer and skips
+///   decompression (used for probing / benchmarking).
+///
+/// # Errors
+/// Returns an error if required TIFF tags are missing, strip data cannot be
+/// read, or the decompressor returns an error for any strip.
 pub(super) fn decode_strips<T>(file: &RawSource, raw: &IFD, dc: impl for<'a> Decompressor<'a, T>, dummy: bool) -> Result<Pix2D<T>>
 where
   T: SubPixel,
@@ -630,11 +736,12 @@ where
   let cpp = fetch_tiff_tag!(raw, TiffCommonTag::SamplesPerPixel).force_usize(0);
   let rows_per_strip = raw.get_entry(TiffCommonTag::RowsPerStrip).map(|tag| tag.force_usize(0)).unwrap_or(height);
   let line_width = width * cpp;
-
+  // If we have a continous buffer, we can optimize decompression of multiple strips.
   if let Some(src) = cont
     && dc.can_skip_rows()
   {
-
+    // Some decompressors performing badly when skip_rows is > 0, because they need to
+    // decompress the skipped rows anyway.
     Ok(decompress_lines_fn(width * cpp, height, dummy, &|line, row| {
       dc.decompress(src, row, std::iter::once(line), line_width)
     })?)
@@ -646,6 +753,26 @@ where
   }
 }
 
+/// Decodes a tile-organised raw image into a flat pixel buffer.
+///
+/// Reads tile geometry and data offsets from `raw` (TIFF tags `TileWidth`,
+/// `TileLength`, `TileOffsets`, `TileByteCounts`, `ImageWidth`, `ImageLength`,
+/// and `SamplesPerPixel`) and decompresses every tile with `dc`.
+///
+/// An error is returned early if the number of tile offsets does not match the
+/// expected column × row tile count.
+///
+/// # Arguments
+/// * `file` - Source file handle used to read tile data.
+/// * `raw` - The IFD describing the image (must contain the tags listed above).
+/// * `dc` - A decompressor valid for any borrow lifetime.
+/// * `dummy` - When `true`, allocates an uninitialised output buffer and skips
+///   decompression (used for probing / benchmarking).
+///
+/// # Errors
+/// Returns an error if required TIFF tags are missing, the tile count does not
+/// match the offset table, tile data cannot be read, or the decompressor
+/// returns an error for any tile.
 pub(super) fn decode_tiles<T>(file: &RawSource, raw: &IFD, dc: impl for<'a> Decompressor<'a, T>, dummy: bool) -> Result<Pix2D<T>>
 where
   T: SubPixel,
@@ -655,7 +782,7 @@ where
   let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
   let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
   let cpp = fetch_tiff_tag!(raw, TiffCommonTag::SamplesPerPixel).force_usize(0);
-  let twidth = fetch_tiff_tag!(raw, TiffCommonTag::TileWidth).force_usize(0);
+  let twidth = fetch_tiff_tag!(raw, TiffCommonTag::TileWidth).force_usize(0); // * cpp;
   let tlength = fetch_tiff_tag!(raw, TiffCommonTag::TileLength).force_usize(0);
 
   let (decode_width, decode_height) = (((width - 1) / twidth + 1) * twidth, ((height - 1) / tlength + 1) * tlength);
@@ -675,7 +802,7 @@ where
 
   let line_width = twidth * cpp;
   tiles.enumerate().par_bridge().try_for_each(|(tile_id, tile)| {
-
+    //eprintln!("Decode tile id {}", tile_id);
     dc.decompress(tiles_src[tile_id], 0, tile.into_iter_mut(), line_width)
   })?;
 
@@ -702,15 +829,16 @@ pub(crate) fn apply_linearization(image: &mut PixU16, tbl: &Value, bits: u32) {
   }
 }
 
+/// The struct that holds all the info about the cameras and is able to decode a file
 #[derive(Debug, Clone, Default)]
 pub struct RawLoader {
   cameras: HashMap<(String, String, String), Camera>,
-  #[allow(dead_code)]
+  #[allow(dead_code)] // TODO: remove once naked cams supported again
   naked: HashMap<usize, Camera>,
 }
 
 impl RawLoader {
-
+  /// Creates a new raw loader using the camera information included in the library
   pub fn new() -> RawLoader {
     let toml = match CAMERAS_TOML.parse::<toml::Value>() {
       Ok(val) => val,
@@ -724,7 +852,7 @@ impl RawLoader {
       .as_array()
       .expect("'cameras' must be an array")
     {
-
+      // Create a list of all the camera modes including the base one
       let mut cammodes = Vec::new();
       let ct = camera.as_table().expect("each camera entry must be a table");
       cammodes.push(ct);
@@ -734,9 +862,10 @@ impl RawLoader {
         }
       }
 
+      // Start with the basic camera
       let mut cam = Camera::new();
       cam.update_from_toml(cammodes[0]);
-
+      // Create a list of alias names including the base one
       let mut camnames = vec![(cam.model.clone(), cam.clean_model.clone())];
       if let Some(val) = ct.get("model_aliases") {
         for alias in val.as_array().expect("'model_aliases' must be an array") {
@@ -747,6 +876,7 @@ impl RawLoader {
         }
       }
 
+      // For each combination of alias and mode (including the base ones) create Camera
       for (model, clean_model) in camnames {
         for ct in cammodes.clone() {
           let mut mcam = cam.clone();
@@ -770,10 +900,12 @@ impl RawLoader {
     RawLoader { cameras: map, naked }
   }
 
+  /// Get list of cameras
   pub fn get_cameras(&self) -> &HashMap<(String, String, String), Camera> {
     &self.cameras
   }
 
+  /// Returns a decoder for a given buffer
   pub fn get_decoder<'b>(&'b self, rawfile: &RawSource) -> Result<Box<dyn Decoder + 'b>> {
     if mrw::is_mrw(rawfile) {
       let dec = Box::new(mrw::MrwDecoder::new(rawfile, self)?);
@@ -849,6 +981,7 @@ impl RawLoader {
           return Ok(Box::new(dng::DngDecoder::new(rawfile, tiff, self)?));
         }
 
+        // The DCS560C is really a CR2 camera so we just special case it here
         if let Some(model) = tiff.get_entry(TiffCommonTag::Model) {
           if model.get_string().ok() == Some(&String::from("DCS560C")) {
             return use_decoder!(cr2::Cr2Decoder, rawfile, tiff, self);
@@ -883,7 +1016,7 @@ impl RawLoader {
             "Panasonic" => return use_decoder!(rw2::Rw2Decoder, rawfile, tiff, self),
             "LEICA" => return use_decoder!(rw2::Rw2Decoder, rawfile, tiff, self),
             "LEICA CAMERA AG" => return use_decoder!(rw2::Rw2Decoder, rawfile, tiff, self),
-
+            //"FUJIFILM" => return use_decoder!(raf::RafDecoder, rawfile, tiff, self),
             "NIKON" => return use_decoder!(nrw::NrwDecoder, rawfile, tiff, self),
             "Nikon" => return use_decoder!(nef::NefDecoder, rawfile, tiff, self),
             "NIKON CORPORATION" => return use_decoder!(nef::NefDecoder, rawfile, tiff, self),
@@ -902,7 +1035,7 @@ impl RawLoader {
         }
 
         if tiff.has_entry(TiffCommonTag::Software) {
-
+          // Last ditch effort to identify Leaf cameras without Make and Model
           if fetch_tiff_tag!(tiff, TiffCommonTag::Software).as_string() == Some(&"Camera Library".to_string()) {
             return use_decoder!(mos::MosDecoder, rawfile, tiff, self);
           }
@@ -913,6 +1046,7 @@ impl RawLoader {
       }
     }
 
+    // If all else fails see if we match by filesize to one of those CHDK style files
     let data = rawfile.buf();
     if let Some(cam) = self.naked.get(&data.len()) {
       return Ok(Box::new(nkd::NakedDecoder::new(cam.clone(), self)?));
@@ -926,6 +1060,7 @@ impl RawLoader {
     })
   }
 
+  /// Check support
   fn check_supported_with_everything<'a>(&'a self, make: &str, model: &str, mode: &str) -> Result<Camera> {
     match self.cameras.get(&(make.to_string(), model.to_string(), mode.to_string())) {
       Some(cam) => Ok(cam.clone()),
@@ -954,7 +1089,9 @@ impl RawLoader {
     decoder.raw_image(rawfile, params, dummy)
   }
 
+  /// Decodes an input into a RawImage
   pub fn decode(&self, rawfile: &RawSource, params: &RawDecodeParams, dummy: bool) -> Result<RawImage> {
+    //let buffer = Buffer::new(reader)?;
 
     match panic::catch_unwind(AssertUnwindSafe(|| self.decode_unsafe(rawfile, params, dummy))) {
       Ok(val) => val,
@@ -962,17 +1099,21 @@ impl RawLoader {
     }
   }
 
+  /// Decodes a file into a RawImage
   pub fn decode_file(&self, path: &Path) -> Result<RawImage> {
     let rawfile = RawSource::new(path)?;
     self.decode(&rawfile, &RawDecodeParams::default(), false)
   }
 
+  /// Decodes a file into a RawImage
   pub fn raw_image_count_file(&self, path: &Path) -> Result<usize> {
     let rawfile = RawSource::new(path).map_err(|err| RawlerError::with_io_error("raw_image_count_file()", path, err))?;
     let decoder = self.get_decoder(&rawfile)?;
     decoder.raw_image_count()
   }
 
+  // Decodes an unwrapped input (just the image data with minimal metadata) into a RawImage
+  // This is only useful for fuzzing really
   #[doc(hidden)]
   pub fn decode_unwrapped(&self, rawfile: &RawSource) -> Result<RawImageData> {
     match panic::catch_unwind(AssertUnwindSafe(|| unwrapped::decode_unwrapped(rawfile))) {

@@ -26,7 +26,7 @@ use super::RawDecodeParams;
 use super::RawMetadata;
 use super::ok_cfa_image;
 
-const MRW_MAGIC: u32 = 0x004D524D;
+const MRW_MAGIC: u32 = 0x004D524D; // !memcmp (head,"\0MRM",4))?
 
 pub fn is_mrw(file: &RawSource) -> bool {
   match file.subview(0, 4) {
@@ -74,6 +74,7 @@ impl<'a> MrwDecoder<'a> {
     }
   }
 
+  /// Makernotes for MRW starts with "MLY" ASCII string
   fn get_mly_wb(ifd: &IFD, rawfile: &RawSource, data_offset: u64) -> Result<[u16; 4]> {
     if let Some(makernotes) = ifd.get_entry_recursive(TiffCommonTag::Makernote) {
       debug_assert_eq!(makernotes.get_data()[0..3], [b'M', b'L', b'Y']);
@@ -155,26 +156,28 @@ impl<'a> MrwDecoder<'a> {
     let mut tiffpos: usize = 0;
 
     let mut currpos: usize = 8;
-
+    // At most we read 20 bytes from currpos so check we don't step outside that
     while currpos + 20 < data_offset {
       let tag: u32 = BEu32(buf, currpos);
       let len: u32 = BEu32(buf, currpos + 4);
 
       match tag {
         0x505244 => {
-
+          // PRD
           raw_height = BEu16(buf, currpos + 16) as usize;
           raw_width = BEu16(buf, currpos + 18) as usize;
           packed = buf[currpos + 24] == 12;
         }
         0x574247 => {
-
+          // WBG
           for i in 0..4 {
             wb_vals[i] = BEu16(buf, currpos + 12 + i * 2);
           }
         }
         0x545457 => {
-
+          // TTW
+          // Base value for offsets needs to be at the beginning of the
+          // TIFF block, not the file
           tiffpos = currpos + 8;
         }
         _ => {}
@@ -236,11 +239,28 @@ impl<'a> Decoder for MrwDecoder<'a> {
     FormatHint::MRW
   }
 
+  /*
+  /// File is EXIF structure, but contains no valid JPEG image, so this is useless...
+  fn full_image(&self, file: &RawSource) -> Result<Option<image::DynamicImage>> {
+    if is_mrw(file) {
+      Ok(None)
+    } else if is_exif(file) {
+      let buf = file.as_vec()?;
+      dump_buf("/tmp/dmp1", &buf);
+      let img = image::load_from_memory_with_format(&buf, image::ImageFormat::Jpeg)
+        .map_err(|err| RawlerError::DecoderFailed(format!("Failed to get full image from RAW file: {:?}", err)))?;
+      log::debug!("Got full image from RAW");
+      Ok(Some(img))
+    } else {
+      Ok(None)
+    }
+  }
+   */
 }
 
 fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
   log::debug!("MRW raw wb: {:?}", raw_wb);
-  let div = raw_wb[1];
+  let div = raw_wb[1]; // G1 should be 1024 and we use this as divisor
   let mut norm = raw_wb;
   norm.iter_mut().for_each(|v| {
     if v.is_normal() {

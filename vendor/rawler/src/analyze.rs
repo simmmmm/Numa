@@ -156,7 +156,7 @@ fn file_metadata<P: AsRef<Path>>(path: P, rawfile: &RawSource) -> Result<FileMet
 }
 
 pub fn analyze_metadata<P: AsRef<Path>>(path: P) -> Result<AnalyzerResult> {
-
+  //let input = BufReader::new(File::open(&path).map_err(|e| RawlerError::with_io_error("load into buffer", &path, e))?);
   let rawfile = RawSource::new(path.as_ref())?;
   let decoder = crate::get_decoder(&rawfile)?;
   let rawimage = decoder.raw_image(&rawfile, &RawDecodeParams::default(), true)?;
@@ -248,9 +248,9 @@ pub fn thumbnail_digest<P: AsRef<Path>>(path: P, params: &RawDecodeParams) -> Re
 
 pub fn raw_to_srgb<P: AsRef<Path>>(path: P, params: &RawDecodeParams) -> Result<DynamicImage> {
   let rawfile = RawSource::new(path.as_ref())?;
-
+  // Get decoder or return
   let decoder = crate::get_decoder(&rawfile)?;
-
+  //decoder.decode_metadata(&mut rawfile)?;
   let rawimage = decoder.raw_image(&rawfile, params, false)?;
   let dev = RawDevelop::default();
   Ok(
@@ -261,6 +261,7 @@ pub fn raw_to_srgb<P: AsRef<Path>>(path: P, params: &RawDecodeParams) -> Result<
   )
 }
 
+/// Dump raw pixel data as PGM
 pub fn raw_as_pgm(width: usize, height: usize, buf: &[u16], writer: &mut dyn Write) -> std::io::Result<()> {
   let header = format!("P5 {} {} {}\n", width, height, 65535);
   writer.write_all(header.as_bytes())?;
@@ -270,6 +271,7 @@ pub fn raw_as_pgm(width: usize, height: usize, buf: &[u16], writer: &mut dyn Wri
   Ok(())
 }
 
+/// Dump pixel data as PPM
 pub fn rgb8_as_ppm8(width: usize, height: usize, buf: &[u8], writer: &mut dyn Write) -> std::io::Result<()> {
   let header = format!("P6 {} {} {}\n", width, height, u8::MAX);
   writer.write_all(header.as_bytes())?;
@@ -277,6 +279,7 @@ pub fn rgb8_as_ppm8(width: usize, height: usize, buf: &[u8], writer: &mut dyn Wr
   Ok(())
 }
 
+/// Dump raw pixel data as PPM
 pub fn raw_as_ppm16(width: usize, height: usize, buf: &[u16], writer: &mut dyn Write) -> std::io::Result<()> {
   let header = format!("P6 {} {} {}\n", width, height, 65535);
   writer.write_all(header.as_bytes())?;

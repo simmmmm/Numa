@@ -708,7 +708,8 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
             dyn DynAccelerationStructure,
         >],
     ) {
-
+        // Need to collect entries here so we can reference them in the descriptor.
+        // TODO: API should be redesigned to avoid this and other descriptor copies that happen due to the dyn api.
         let descriptor_entries = descriptors
             .iter()
             .map(|d| d.entries.expect_downcast())

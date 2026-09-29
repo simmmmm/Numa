@@ -43,7 +43,7 @@ impl<'a> Decoder for DcsDecoder<'a> {
     let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
     let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
     let offset = fetch_tiff_tag!(raw, TiffCommonTag::StripOffsets).force_usize(0);
-    let src = file.subview_until_eof_padded(offset as u64)?;
+    let src = file.subview_until_eof_padded(offset as u64)?; // TODO add size and check all samples
 
     let linearization = fetch_tiff_tag!(self.tiff, TiffCommonTag::GrayResponse);
     let table = {

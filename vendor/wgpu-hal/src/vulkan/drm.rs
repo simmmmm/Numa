@@ -30,7 +30,11 @@ macro_rules! to_u64 {
 }
 
 impl super::Instance {
-
+    /// Creates a new surface from the given drm fd and plane, deriving the connector and mode.
+    ///
+    /// # Safety
+    ///
+    /// - All parameters must point to valid DRM values.
     pub fn create_surface_from_drm_plane(
         &self,
         fd: i32,
@@ -80,7 +84,7 @@ impl super::Instance {
             "Failed to derive drm connector and mode for plane".to_string(),
         ))?;
         let (width, height) = mode.size();
-
+        // Rate in millihertz
         let refresh_rate = (((mode.clock() as f64 * 1000.0)
             / (mode.hsync().2 as f64 * mode.vsync().2 as f64))
             * 1000.0)
@@ -97,6 +101,11 @@ impl super::Instance {
         }
     }
 
+    /// Creates a new surface from the given drm configuration.
+    ///
+    /// # Safety
+    ///
+    /// - All parameters must point to valid DRM values.
     pub unsafe fn create_surface_from_drm(
         &self,
         fd: i32,
@@ -150,11 +159,27 @@ impl super::Instance {
                     .get_physical_device_properties2(device, &mut properties2)
             };
 
+            /*
+                The makedev call is just bit manipulation to combine major and minor device numbers into a Unix device ID.
+                It doesn't perform any filesystem operations, only bitshifting.
+                See: https://github.com/rust-lang/libc/blob/268e1b3810ac07ed637d9005bc1a54e49218c958/src/unix/linux_like/linux/mod.rs#L6049
+                We use the resulting device IDs to check if the Vulkan raw device from enumerate_physical_devices
+                matches the DRM device referred to by our file descriptor.
+            */
+
             let primary_devid =
                 libc::makedev(drm_props.primary_major as _, drm_props.primary_minor as _);
             let render_devid =
                 libc::makedev(drm_props.render_major as _, drm_props.render_minor as _);
 
+            // On most platforms, both `*_devid`s and `st_rdev` are `dev_t`s (which is generally
+            // observed to be an unsigned integral type no greater than 64 bits). However, on some
+            // platforms, there divergences from this pattern:
+            //
+            // - `armv7-linux-androideabi`: `dev_t` is `c_ulong`, and `*_devid`s are `dev_t`, but
+            //   `st_rdev` is `c_ulonglong`. So, we can't just do a `==` comparison.
+            // - OpenBSD has `dev_t` on both sides, but is `i32` (N.B., unsigned). Therefore, we
+            //   can't just use `u64::from`.
             #[allow(clippy::useless_conversion)]
             if [primary_devid, render_devid]
                 .map(|devid| to_u64!(devid))

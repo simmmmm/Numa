@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::super::{BoxHeader, FourCC, ReadBox, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};
@@ -13,6 +16,7 @@ impl CtboBox {
 
 impl<R: Read + Seek> ReadBox<&mut R> for CtboBox {
   fn read_box(reader: &mut R, header: BoxHeader) -> Result<Self> {
+    // TODO: add CTBO records
 
     reader.seek(SeekFrom::Start(header.end_offset()))?;
 

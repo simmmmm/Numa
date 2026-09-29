@@ -26,6 +26,7 @@ use crate::{
 
 use super::{CropMode, DngCompression, DngPhotometricConversion};
 
+/// Parameters for DNG conversion
 #[derive(Clone, Debug)]
 pub struct ConvertParams {
   pub embedded: bool,
@@ -42,9 +43,14 @@ pub struct ConvertParams {
   pub keep_mtime: bool,
 }
 
+/// Information surfaced from a completed conversion.
+///
+/// Lets callers reuse work the converter already performed (such as the
+/// metadata pass) instead of re-running the decoder.
 #[derive(Clone, Debug, Default)]
 pub struct ConvertInfo {
-
+  /// Embedded "last modified" timestamp recovered from the input's metadata,
+  /// if the decoder was able to find one.
   pub last_modified: Option<SystemTime>,
 }
 
@@ -68,70 +74,88 @@ impl Default for ConvertParams {
 }
 
 impl ConvertParams {
-
+  /// Set whether the original raw file is embedded into the DNG.
   pub fn with_embedded(mut self, embedded: bool) -> Self {
     self.embedded = embedded;
     self
   }
 
+  /// Set the DNG compression method.
   pub fn with_compression(mut self, compression: DngCompression) -> Self {
     self.compression = compression;
     self
   }
 
+  /// Set the photometric conversion mode.
   pub fn with_photometric_conversion(mut self, photometric_conversion: DngPhotometricConversion) -> Self {
     self.photometric_conversion = photometric_conversion;
     self
   }
 
+  /// Set whether black/white level scaling is applied.
   pub fn with_apply_scaling(mut self, apply_scaling: bool) -> Self {
     self.apply_scaling = apply_scaling;
     self
   }
 
+  /// Set the crop mode.
   pub fn with_crop(mut self, crop: CropMode) -> Self {
     self.crop = crop;
     self
   }
 
+  /// Set the compression predictor.
   pub fn with_predictor(mut self, predictor: u8) -> Self {
     self.predictor = predictor;
     self
   }
 
+  /// Set whether a preview image is generated.
   pub fn with_preview(mut self, preview: bool) -> Self {
     self.preview = preview;
     self
   }
 
+  /// Set whether a thumbnail image is generated.
   pub fn with_thumbnail(mut self, thumbnail: bool) -> Self {
     self.thumbnail = thumbnail;
     self
   }
 
+  /// Set the artist metadata field.
   pub fn with_artist(mut self, artist: Option<String>) -> Self {
     self.artist = artist;
     self
   }
 
+  /// Set the software metadata field.
   pub fn with_software(mut self, software: String) -> Self {
     self.software = software;
     self
   }
 
+  /// Set the image index to convert.
   pub fn with_index(mut self, index: usize) -> Self {
     self.index = index;
     self
   }
 
+  /// Set whether the source modification time is preserved.
   pub fn with_keep_mtime(mut self, keep_mtime: bool) -> Self {
     self.keep_mtime = keep_mtime;
     self
   }
 }
 
+/// Convert a raw input file into DNG
+///
+/// We don't accept a DNG file path here, because we don't know
+/// how to handle existing target files, buffering, etc.
+/// This is up to the caller.
 pub fn convert_raw_file<W: Write + Seek + Send>(raw: &Path, dng: &mut W, params: &ConvertParams) -> crate::Result<ConvertInfo> {
   let original_filename = raw.file_name().and_then(OsStr::to_str).unwrap_or_default();
+  //let raw_stream = BufReader::new(File::open(raw)?); // TODO: add path hint to error?
+  //let rawfile = RawFile::new(PathBuf::from(raw), raw_stream);
 
   let rawfile = Arc::new(RawSource::new(raw)?);
 
@@ -145,6 +169,7 @@ pub fn convert_raw_file<W: Write + Seek + Send>(raw: &Path, dng: &mut W, params:
   internal_convert(&rawfile, dng, original_filename, original_compress_thread, params)
 }
 
+/// Convert a raw input file into DNG
 pub fn convert_raw_source<W>(raw_source: &RawSource, dng: &mut W, original_filename: impl AsRef<str>, params: &ConvertParams) -> crate::Result<ConvertInfo>
 where
   W: Write + Seek + Send,
@@ -184,7 +209,9 @@ where
   log::debug!("Raw image WB coeff: {:?}", rawimage.wb_coeffs);
 
   if rawimage.camera.find_hint("fuji_rotation") || rawimage.camera.find_hint("fuji_rotation_alt") {
-
+    // if the raw image needs to be rotated, we do this before
+    // writing the image to DNG. This requires scaling and debayer
+    // to be applied.
     rawimage.apply_scaling()?;
     log::debug!("Raw image requires fuji_rotation before writing to DNG");
     let pixels = PixF32::new_with(rawimage.data.as_f32().into_owned(), rawimage.width, rawimage.height);
@@ -198,7 +225,7 @@ where
     rawimage.height = rgb.height;
     rawimage.active_area = None;
     rawimage.cpp = 3;
-    rawimage.whitelevel = WhiteLevel::new([1, 1, 1]);
+    rawimage.whitelevel = WhiteLevel::new([1, 1, 1]); // Already scaled up to 0.0 .. 1.0
     rawimage.photometric = RawPhotometricInterpretation::LinearRaw;
     rawimage.data = RawImageData::Float(rgb.into_flatten());
   } else if params.apply_scaling {
@@ -207,14 +234,18 @@ where
 
   let mut dng = DngWriter::new(dng, DNG_VERSION_V1_4)?;
 
+  // Write RAW image for subframe type 0
+  // If no thumbnail should be written to root IFD, we need to put the raw image into
+  // root IFD instead.
   let mut raw = if params.thumbnail { dng.subframe(0) } else { dng.subframe_on_root(0) };
   raw.raw_image(&rawimage, params.crop, params.compression, params.photometric_conversion, params.predictor)?;
-
+  // Check for DNG raw IFD related tags
   if let Some(dng_raw_ifd) = decoder.ifd(WellKnownIFD::VirtualDngRawTags)? {
     raw.ifd_mut().copy(dng_raw_ifd.value_iter());
   }
   raw.finalize()?;
 
+  // Write preview and thumbnail if requested
   if params.preview || params.thumbnail {
     match generate_preview(rawfile, decoder.as_ref(), &rawimage, &raw_params) {
       Ok(image) => {
@@ -230,21 +261,23 @@ where
       Err(err) => log::warn!("Failed to get review image, continue anyway: {:?}", err),
     }
   }
-
+  // Write metadata
   dng.load_base_tags(&rawimage)?;
   dng.load_metadata(&metadata)?;
   if !dng.root_ifd().contains(ExifTag::Orientation) {
     dng.root_ifd_mut().add_tag(ExifTag::Orientation, rawimage.orientation.to_u16());
   }
 
+  // Check for DNG root IFD related tags
   if let Some(dng_root_ifd) = decoder.ifd(WellKnownIFD::VirtualDngRootTags)? {
     dng.root_ifd_mut().copy(dng_root_ifd.value_iter());
   }
 
+  // Check for TIFF root IFD related tags
   if let Some(tiff_root) = decoder.ifd(WellKnownIFD::Root)? {
     dng.root_ifd_mut().copy(tiff_root.value_iter().filter(|(tag, _)| {
       [
-
+        // Tags from CinemaDNG files
         TiffCommonTag::TimeCodes as u16,
         TiffCommonTag::FrameFrate as u16,
         TiffCommonTag::TStop as u16,
@@ -253,6 +286,7 @@ where
     }));
   }
 
+  // Remove makernotes from EXIF if MakerNoteSafety is not 1 (safe)
   if let Some(Entry {
     value: crate::formats::tiff::Value::Short(v),
     ..
@@ -305,7 +339,16 @@ fn generate_preview(rawfile: &RawSource, decoder: &dyn Decoder, rawimage: &RawIm
       log::warn!("Preview image not found, try to generate sRGB from RAW");
       let dev = RawDevelop::default();
       let image = dev.develop_intermediate(rawimage)?;
-
+      /*
+      let params = rawimage.develop_params()?;
+      let (srgbf, dim) = develop_raw_srgb(&rawimage.data, &params)?;
+      let output = convert_from_f32_scaled_u16(&srgbf, 0, u16::MAX);
+      let image = if srgbf.len() == dim.w * dim.h {
+        DynamicImage::ImageLuma16(ImageBuffer::from_raw(dim.w as u32, dim.h as u32, output).expect("Invalid ImageBuffer size"))
+      } else {
+        DynamicImage::ImageRgb16(ImageBuffer::from_raw(dim.w as u32, dim.h as u32, output).expect("Invalid ImageBuffer size"))
+      };
+       */
       Ok(image.to_dynamic_image().ok_or("failed to convert to dynamic image")?)
     }
   }

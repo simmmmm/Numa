@@ -168,3 +168,21 @@ processor-ms → 8.8 ms and 12.3; one run was 10.4 / 10.3, four 8.4 / 18.
 Over the 123 uncompressed and 16-bit raws of raw.pixls.us: processor time
 −24 %, wall time within the noise; an uncompressed X-H2S RAF 52 → 6
 processor-ms. The mosaic hashes the same on all 528 raws.
+
+### IO-008: the Sony ILME-FX2 (29 September 2026)
+
+- `data/cameras/sony/fx2.toml` (new): the body, which 0.8.0 and dnglab's
+  `main` (still `ae01bcb2` that day) do not know, so its ARWs failed as an
+  unknown camera. Nobody has published a matrix of the FX2's own; it has
+  the 33 MP sensor of the ILCE-7M4 and ILCE-7CM2, and the entry takes both
+  matrices of rawler's own `a7cm2.toml` (Adobe DNG Converter's). Its D65 is
+  the one LibRaw's `adobe_coeff` (`src/tables/colordata.cpp`) and rawspeed's
+  `cameras.xml` give the ILME-FX2: 7460 −2365 −588 / −5687 13442 2474 /
+  −624 1156 6584. Levels and crop come from the file, as for the 7M4.
+  (rawler's `a7m4.toml` carries the ILCE-7M3's D65 instead of that one;
+  left as it is, like every body already known.)
+
+Checked: the four FX2 frames of raw.pixls.us (8807–8810: uncompressed,
+compressed, lossless and lossless medium) decode, make their proxies and
+render; the renders of fifteen frames of bodies it knew (the ten test raws,
+two 7M4s, a 7CM2, an FX3 and an FX30) hash as before.

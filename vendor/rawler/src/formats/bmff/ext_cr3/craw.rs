@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
+
 use super::{
   super::{BmffError, BoxHeader, FourCC, ReadBox, Result},
   cdi1::Cdi1Box,
@@ -13,7 +16,8 @@ use std::io::{Read, Seek, SeekFrom};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CrawBox {
   pub header: BoxHeader,
-
+  //pub version: u8,
+  //pub flags: u32,
   pub reserved: [u8; 6],
   pub data_ref_index: u16,
   pub unknown1: [u8; 16],
@@ -41,6 +45,7 @@ impl CrawBox {
 
 impl<R: Read + Seek> ReadBox<&mut R> for CrawBox {
   fn read_box(mut reader: &mut R, header: BoxHeader) -> Result<Self> {
+    //let (version, flags) = read_box_header_ext(reader)?;
 
     let mut reserved = [0_u8; 6];
     reader.read_exact(&mut reserved)?;
@@ -48,6 +53,8 @@ impl<R: Read + Seek> ReadBox<&mut R> for CrawBox {
 
     let mut unknown1 = [0; 16];
     reader.read_exact(&mut unknown1)?;
+
+    //let _sample_entry = reader.read_u64::<BigEndian>()?;
 
     let width = reader.read_u16::<BigEndian>()?;
     let height = reader.read_u16::<BigEndian>()?;
@@ -70,6 +77,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for CrawBox {
     let mut current = reader.stream_position()?;
 
     while current < header.end_offset() {
+      // get box?
 
       let header = BoxHeader::parse(&mut reader)?;
 
@@ -90,7 +98,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for CrawBox {
           let _ = Some(FreeBox::read_box(&mut reader, header)?);
         }
         _ => {
-
+          //debug!("Unknown box???");
           return Err(BmffError::Parse(format!("Invalid box found in CRAW: {:?}", header.typ)));
         }
       }
@@ -102,7 +110,8 @@ impl<R: Read + Seek> ReadBox<&mut R> for CrawBox {
 
     Ok(Self {
       header,
-
+      //version,
+      //flags,
       reserved,
       data_ref_index,
       unknown1,

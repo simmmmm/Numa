@@ -504,17 +504,40 @@ pub const PRESETS: &[(&str, &[u16])] = &[
 ];
 
 pub fn name_for(classes: &[u16]) -> String {
-    if let Some((name, _)) = PRESETS.iter().find(|(_, preset)| *preset == classes) {
-        return name.to_string();
-    }
+    named(classes).to_string()
+}
 
-    let mut names: Vec<&str> = classes.iter().filter_map(|class| label(*class)).collect();
-    match names.len() {
-        0 => "Empty".to_string(),
-        1..=2 => names.join(" + "),
+#[derive(Clone, Debug, PartialEq)]
+pub enum Named {
+
+    Preset(&'static str),
+
+    Classes { labels: Vec<&'static str>, more: usize },
+    Empty,
+}
+
+pub fn named(classes: &[u16]) -> Named {
+    if let Some((name, _)) = PRESETS.iter().find(|(_, preset)| *preset == classes) {
+        return Named::Preset(name);
+    }
+    let mut labels: Vec<&'static str> = classes.iter().filter_map(|class| label(*class)).collect();
+    match labels.len() {
+        0 => Named::Empty,
+        1..=2 => Named::Classes { labels, more: 0 },
         _ => {
-            names.truncate(2);
-            format!("{} + {} more", names.join(" + "), classes.len() - 2)
+            labels.truncate(2);
+            Named::Classes { labels, more: classes.len() - 2 }
+        }
+    }
+}
+
+impl std::fmt::Display for Named {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Named::Preset(name) => f.write_str(name),
+            Named::Classes { labels, more: 0 } => f.write_str(&labels.join(" + ")),
+            Named::Classes { labels, more } => write!(f, "{} + {more} more", labels.join(" + ")),
+            Named::Empty => f.write_str("Empty"),
         }
     }
 }
@@ -861,5 +884,8 @@ mod tests {
         assert_eq!(name_for(&[2, 4]), "sky + tree");
         assert_eq!(name_for(&[2, 4, 9, 16]), "sky + tree + 2 more");
         assert_eq!(name_for(&[]), "Empty");
+
+        assert_eq!(named(&[2]), Named::Preset("Sky"));
+        assert_eq!(named(&[2, 4, 9, 16]), Named::Classes { labels: vec!["sky", "tree"], more: 2 });
     }
 }

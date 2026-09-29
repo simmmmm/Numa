@@ -14,7 +14,12 @@
 </p>
 
 <p align="center">
+  Numa is also coming to iPhone, iPad and Mac, as a separate app: <a href="https://numa.photo">numa.photo</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/simmmmm/Numa/releases"><b>Download</b></a> ·
+  <a href="https://numa.photo">numa.photo</a> ·
   <a href="#features">Features</a> ·
   <a href="#installing">Installing</a> ·
   <a href="#building-from-source">Building</a> ·
@@ -34,7 +39,7 @@
 
 Numa is a native GTK 4 and libadwaita application written in Rust. It was built
 around a Fujifilm workflow, but it opens and develops every RAW format its
-decoder reads: twenty-nine formats, 811 camera and mode combinations, plus
+decoder reads: twenty-nine formats from 850 cameras, plus
 JPEG, PNG, HEIF, TIFF and WebP. Everything runs on your own computer,
 including the machine-learning models behind masks, faces and the AI tools.
 
@@ -479,7 +484,7 @@ to delete to remove Numa again.
 ## Cameras
 
 Numa reads anything [`rawler`](https://github.com/dnglab/dnglab) reads:
-twenty-nine RAW formats across 811 camera and mode combinations, plus JPEG,
+twenty-nine RAW formats from 850 cameras, plus JPEG,
 PNG, HEIF (`.heic`, `.heif`, `.hif`), TIFF and WebP. The list of supported RAW
 formats is taken from the decoder, so it grows when the decoder does. A JPEG,
 HEIF or PNG opens exactly as it is, in its own colour space, without the
@@ -787,16 +792,19 @@ file per make.
 
 ## Licence
 
-[GNU General Public License, version 3 or later](LICENSE). You may use, study,
-change and share Numa, also commercially. Whoever passes it on, changed or not,
-passes on the source under the same licence.
+Copyright © 2026 Tijmen. [GNU General Public License, version 3 or
+later](LICENSE). You may use, study, change and share Numa, also commercially.
+Whoever passes it on, changed or not, passes on the source under the same
+licence. This is Numa for Linux; Numa for iPhone, iPad and Mac is a separate
+app and is not open source.
 
 The additional files each keep their own licence: the models are Apache-2.0 or
 MIT, and RawTherapee's camera profiles are GPL-3.0. Three optional models were
 trained on data licensed for non-commercial or research use only: ViTMatte-S
 (hair and fur in Refine edge), SFace (recognising people) and IS-Net (a
 fallback for Subject). They are not in Numa's packages but downloaded when
-asked for, and their terms are in
+asked for, Add-ons marks the first two for non-commercial use only, and their
+terms are in
 [`data/MODELS-LICENSES.txt`](data/MODELS-LICENSES.txt). The licence texts are
 published with the downloads.
 
