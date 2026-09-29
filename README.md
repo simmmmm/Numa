@@ -26,7 +26,7 @@
   <img alt="Linux" src="https://img.shields.io/badge/platform-Linux-2b2b2b">
   <img alt="GTK 4 and libadwaita" src="https://img.shields.io/badge/GTK_4-libadwaita-3584e4">
   <img alt="Rust" src="https://img.shields.io/badge/written_in-Rust-b7410e">
-  <img alt="Flatpak and AppImage" src="https://img.shields.io/badge/Flatpak-AppImage-4a86cf">
+  <img alt="Packages, Flatpak and AppImage" src="https://img.shields.io/badge/install-packages_%C2%B7_Flatpak_%C2%B7_AppImage-4a86cf">
   <img alt="GPL-3.0 or later" src="https://img.shields.io/badge/licence-GPL--3.0-555">
 </p>
 
@@ -39,36 +39,6 @@ JPEG, PNG, HEIF, TIFF and WebP. Everything runs on your own computer,
 including the machine-learning models behind masks, faces and the AI tools.
 
 The code was written with Claude (Anthropic); see [How it was made](#how-it-was-made).
-
----
-
-## New since 0.20
-
-- **A calmer editor** (0.28). One bar at the top: where you are, Undo, Redo,
-  Before, Export and the menu. The photograph's sections sit at the top of
-  that menu, each with its key, and the row of controls under the bar is gone.
-- **Looks** (0.26, 0.28). The camera profile on top, then twelve built-in
-  looks with a Strength slider, your own presets, and LUTs (`.cube` and
-  `.3dl`) with an Amount.
-- **A new base render** (0.27). The tone curve is read off the camera JPEGs of
-  349 bodies: lighter shadows, a gentler rise above middle grey, and whites
-  that reach white. Numa's own camera profiles for six cameras are fitted on
-  it, and **Automatic** now picks them where there is one.
-- **Masks that do everything** (0.21–0.23). A mask carries the colour mixer,
-  black and white, point colours, grading, curves and all of Detail.
-  **Subject** is what the photograph is about, found by BiRefNet; a click
-  follows the photograph's own edges; and a person, an animal or the sky can
-  be cut back out of any mask.
-- **Libraries that travel** (0.25). A library on a drive that is not
-  connected opens from what Numa remembers, and stars and flags given
-  meanwhile are written when the drive is back.
-- **Graphs and files** (0.24–0.28). Histogram, waveform or RGB parade, from a
-  right click on the graph. TIFF and WebP open, and a JPEG, HEIF or PNG opens
-  exactly as it is, with its own colour space and its EXIF on the info page.
-- **Lens corrections on Numa's own code** (0.26), reading the LensFun
-  database, which finds more lenses and cameras by the names in their files.
-
-The full history is in the [release notes](data/com.tijmen.Numa.metainfo.xml).
 
 ---
 
@@ -526,10 +496,73 @@ Tested end to end on Fujifilm RAF and Sony ARW files.
 
 ## Installing
 
-Each release on the [Releases page](https://github.com/simmmmm/Numa/releases)
-comes in two forms for 64-bit Intel and AMD machines: a Flatpak bundle and an
-AppImage. Both keep their libraries, presets and models in the same folders
-(see *Where things live*), so moving from one to the other loses nothing.
+Numa comes in three forms for 64-bit Intel and AMD machines: a package for
+your distribution, a Flatpak and an AppImage. All three keep their libraries,
+presets and models in the same folders (see *Where things live*), so moving
+from one to another loses nothing.
+
+### A package for your distribution
+
+The packages are built on the openSUSE Build Service. You add Numa's repository
+once, and from then on Numa updates with the rest of the system, in the
+terminal or in your software centre. Copy the lines for your distribution into
+a terminal.
+
+**Fedora 44**
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:/Numa/Fedora_44/home:Numa.repo
+sudo dnf install numa
+```
+
+dnf asks once whether to trust the repository's key; answer `y`.
+
+**openSUSE Tumbleweed**
+
+```sh
+sudo zypper addrepo https://download.opensuse.org/repositories/home:/Numa/openSUSE_Tumbleweed/home:Numa.repo
+sudo zypper refresh
+sudo zypper install numa
+```
+
+zypper asks once whether to trust the repository's key; answer `a` (always).
+
+**Ubuntu 26.04**
+
+```sh
+wget -qO- https://download.opensuse.org/repositories/home:/Numa/xUbuntu_26.04/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/numa.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/numa.gpg] https://download.opensuse.org/repositories/home:/Numa/xUbuntu_26.04/ /' | sudo tee /etc/apt/sources.list.d/numa.list
+sudo apt update
+sudo apt install numa
+```
+
+**Debian Testing**
+
+```sh
+wget -qO- https://download.opensuse.org/repositories/home:/Numa/Debian_Testing/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/numa.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/numa.gpg] https://download.opensuse.org/repositories/home:/Numa/Debian_Testing/ /' | sudo tee /etc/apt/sources.list.d/numa.list
+sudo apt update
+sudo apt install numa
+```
+
+**Arch, CachyOS, EndeavourOS**
+
+```sh
+printf '\n[home_Numa_Arch]\nServer = https://download.opensuse.org/repositories/home:/Numa/Arch/$arch\n' | sudo tee -a /etc/pacman.conf
+curl -fsSL https://download.opensuse.org/repositories/home:/Numa/Arch/x86_64/home_Numa_Arch.key | sudo pacman-key --add -
+sudo pacman-key --lsign-key 5ADD29F2614AC31A0BD16A75AACA2C3967ED9794
+sudo pacman -Syu numa
+```
+
+The third line trusts the repository's signing key; the number is its
+fingerprint. After this, Numa is also in Octopi.
+
+**Debian 13, Ubuntu 24.04 and older releases** have no package yet, because
+their Rust is too old to build Numa. Use the Flatpak or the AppImage.
+
+### Flatpak and AppImage
+
+Both are on the [Releases page](https://github.com/simmmmm/Numa/releases).
 
 **Flatpak.** Needs Flatpak with Flathub added; the GNOME 50 runtime is fetched
 the first time, about a gigabyte, and shared with other applications after
@@ -632,6 +665,7 @@ cache only means those files are made again.
 
 ### Packages
 
+The distribution packages are built from `packaging/obs/` (see its README).
 There is a Flatpak manifest in `packaging/flatpak/` and an AppImage build in
 `packaging/appimage/`, which builds inside a container so the result runs on
 older distributions:
@@ -640,9 +674,10 @@ older distributions:
 ./packaging/appimage/build.sh
 ```
 
-**Wanted: packagers.** Numa is not in any distribution's repositories yet, nor
-on Flathub, the AUR or the Snap Store. If you would like to package it for one
-of them and keep it up to date, open an issue. Questions about the build get
+**Wanted: packagers.** Apart from its own repository on the openSUSE Build
+Service, Numa is not in any distribution's repositories yet, nor on Flathub,
+the AUR or the Snap Store. If you would like to package it for one of them and
+keep it up to date, open an issue. Questions about the build get
 answered, and anything in the code that gets in a packager's way gets fixed.
 
 One thing to know for Flathub: it does not accept a manifest that was written
