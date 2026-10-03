@@ -103,7 +103,6 @@ pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
         let switch = gtk::Switch::new();
         let button = gtk::Button::with_label(pass.verb());
         button.set_valign(gtk::Align::Center);
-        button.add_css_class("suggested-action");
         button.update_property(&[gtk::accessible::Property::Label(pass.name())]);
         button.connect_clicked(glib::clone!(
             #[weak] switch,
@@ -112,16 +111,8 @@ pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
         switch.connect_active_notify(glib::clone!(
             #[weak] button,
             move |switch| {
-                match switch.is_active() {
-                    true => {
-                        button.set_label("Remove");
-                        button.remove_css_class("suggested-action");
-                    }
-                    false => {
-                        button.set_label(pass.verb());
-                        button.add_css_class("suggested-action");
-                    }
-                }
+
+                button.set_label(if switch.is_active() { "Remove" } else { pass.verb() });
             }
         ));
         header.set_tooltip_text(Some(pass.about()));

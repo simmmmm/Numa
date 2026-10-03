@@ -87,13 +87,28 @@ fn files_of(names: &[&str]) -> Vec<ModelFile> {
         .collect()
 }
 
-pub(super) fn offer_additional_files(state: &App, window: &adw::ApplicationWindow) {
+pub(super) fn offer_additional_files(state: &App) {
     let any = MODELS.iter().any(|(_, _, files)| files.iter().all(|file| model_on_disk(file).is_some()));
     if any || state.catalog.recall::<bool>(OFFERED_MODELS).unwrap_or(false) {
         return;
     }
     state.catalog.remember(OFFERED_MODELS, &true);
+    let banner = &state.grid.extras_banner;
+    banner.set_title("Some tools need extra files: Select, Faces, AI Denoise");
+    banner.set_button_label(Some("Download…"));
+    banner.connect_button_clicked(glib::clone!(
+        #[strong] state,
+        move |banner| {
+            banner.set_revealed(false);
+            if let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() {
+                additional_files_dialog(&state, &window);
+            }
+        }
+    ));
+    banner.set_revealed(true);
+}
 
+fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
     let missing = missing_model_files();
 
     let dialog = adw::Dialog::new();
@@ -152,7 +167,7 @@ pub(super) fn offer_additional_files(state: &App, window: &adw::ApplicationWindo
     }
 
     let models = adw::ExpanderRow::new();
-    models.set_title("What is downloaded");
+    models.set_title("What Is Downloaded");
     models.set_subtitle("Machine-learning models that run on this computer, and camera profiles");
     models.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
     for (name, what, _) in MODELS {
@@ -174,7 +189,7 @@ pub(super) fn offer_additional_files(state: &App, window: &adw::ApplicationWindo
     later.add_css_class("pill");
     let download = gtk::Button::with_label(&format!("Download {} MB", megabytes(&missing)));
     download.add_css_class("pill");
-    download.add_css_class("suggested-action");
+    primary(&download);
     buttons.append(&later);
     buttons.append(&download);
     column.append(&buttons);
@@ -482,7 +497,7 @@ pub(super) fn models_group(
          them in the models folder. Everything else works without them.",
         glib::format_size(total)
     )));
-    let everything = gtk::Button::with_label("Download all");
+    let everything = gtk::Button::with_label("Download All");
     everything.set_valign(gtk::Align::Center);
     models.set_header_suffix(Some(&everything));
     models.add(&folder_row("Models folder", models_dir));
@@ -543,11 +558,11 @@ thread_local! {
     static SAFE_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn at_startup(state: &App, window: &adw::ApplicationWindow) {
+pub(super) fn at_startup(state: &App) {
     if SAFE_MODE.get() {
         state.toast("GPU acceleration is off after a crash — Preferences turns it back on");
     }
-    offer_additional_files(state, window);
+    offer_additional_files(state);
 }
 
 pub(super) fn start_gpu(catalog: &Catalog) {
@@ -575,7 +590,7 @@ pub(super) fn profiles_group(
     folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow,
 ) -> adw::PreferencesGroup {
     let profiles = adw::PreferencesGroup::new();
-    profiles.set_title("Camera profiles");
+    profiles.set_title("Camera Profiles");
     profiles.set_description(Some(
         "A camera profile (.dcp) refines the colour of one camera model. Without one, \
          colour comes from the matrix inside the raw file, which is what every raw \

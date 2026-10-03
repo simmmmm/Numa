@@ -5,7 +5,6 @@ use numa::cull;
 use numa::core::color::{self, WhiteBalance};
 use numa::core::document::{Balance, Basic, Calibration, Detail, Document, EditParts, Effects, Optics, Perspective, Presence, Tone};
 use numa::core::image::LinearImage;
-use numa::core::beautify::Portrait;
 #[cfg(test)]
 use numa::core::beautify::Beautify;
 use numa::core::grading::{Grading, Range};
@@ -46,6 +45,7 @@ mod crop;
 mod light;
 mod detail;
 mod slider;
+mod kit;
 mod icons;
 mod measure;
 mod audit;
@@ -114,6 +114,7 @@ use crop::*;
 use light::*;
 use detail::*;
 use slider::*;
+use kit::*;
 use icons::*;
 use measure::*;
 use audit::*;
@@ -217,9 +218,22 @@ struct WindowState {
 
 const CSS: &str = include_str!("style.css");
 
+const TOKENS: &str = include_str!("tokens.css");
+
+fn stylesheet(dark: bool) -> String {
+    let (dark_half, light_half) = TOKENS.split_once("/* light */").unwrap_or((TOKENS, ""));
+    let light_half = if dark { "" } else { light_half };
+    format!("{dark_half}{light_half}{CSS}")
+}
+
 fn load_css() {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(CSS);
+    let style = adw::StyleManager::default();
+    provider.load_from_string(&stylesheet(style.is_dark()));
+    style.connect_dark_notify(glib::clone!(
+        #[strong] provider,
+        move |style| provider.load_from_string(&stylesheet(style.is_dark()))
+    ));
 
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
@@ -400,10 +414,25 @@ fn recall_window_state(state: &App, window: &adw::ApplicationWindow) {
 fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
 
     watch_the_button(state, window);
+
+    state.stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    state.stack.set_transition_duration(300);
     state.stack.add_named(&build_library_page(state, window), Some("library"));
 
     state.stack.add_named(&build_folders_page(state), Some("folders"));
     state.stack.set_visible_child_name("library");
+
+    state.stack.connect_visible_child_name_notify(glib::clone!(
+        #[strong(rename_to = wall)] state.grid.wall,
+        move |stack| {
+            if stack.visible_child_name().as_deref() == Some("library") {
+                let wall = wall.clone();
+                glib::idle_add_local_once(move || {
+                    wall.grab_focus();
+                });
+            }
+        }
+    ));
 
     glib::idle_add_local_once(glib::clone!(
         #[strong] state,
@@ -412,6 +441,7 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
 
     let view = gtk::Box::new(gtk::Orientation::Vertical, 0);
     view.append(&build_header(state, window));
+    view.append(&banners(state));
     view.append(&state.stack);
 
     state.toasts.set_child(Some(&view));
@@ -581,3 +611,4 @@ mod brush_scale;
 
 mod mask_toolbar;
 mod watermark;
+mod hud;

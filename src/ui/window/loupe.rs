@@ -23,6 +23,7 @@ const AF_ZONE: f64 = 0.2;
 pub(super) fn build_loupe(state: &App) -> gtk::Revealer {
     let loupe = state.loupe.root.clone();
     loupe.add_css_class("loupe");
+    loupe.add_css_class("numa-content");
 
     state.loupe.picture.set_vexpand(true);
     state.loupe.picture.set_hexpand(true);
@@ -99,7 +100,7 @@ fn build_stage(state: &App) -> gtk::Overlay {
     }
 
     let marker = &state.loupe.marker;
-    marker.add_css_class("accent");
+    marker.add_css_class("photo-mark");
     marker.set_can_target(false);
     marker.set_draw_func(|area, cr, width, height| {
         let (width, height) = (width as f64, height as f64);
@@ -122,7 +123,7 @@ fn build_stage(state: &App) -> gtk::Overlay {
     stage.add_overlay(leaving);
 
     let framed = &state.loupe.picked_frame;
-    framed.add_css_class("accent");
+    framed.add_css_class("photo-mark");
     framed.set_can_target(false);
     framed.set_draw_func(glib::clone!(
         #[strong] state,
@@ -347,41 +348,6 @@ pub(super) fn build_loupe_bar(state: &App) -> gtk::Box {
     };
     bar.append(&step(state, "go-previous-symbolic", "Previous photograph (Left)", false));
 
-    let stars = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    stars.add_css_class("linked");
-    stars.set_margin_start(6);
-    stars.set_margin_end(6);
-    for (index, star) in state.loupe.stars.iter().enumerate() {
-        let value = index as u8 + 1;
-        star.set_label("\u{2606}");
-        star.add_css_class("flat");
-        star.add_css_class("loupe-star");
-        star.set_tooltip_text(Some(&format!("{value} \u{2605} ({value}) \u{2014} again to clear")));
-        star.connect_clicked(glib::clone!(
-            #[strong] state,
-            move |_| rate_in_loupe(&state, value)
-        ));
-        stars.append(star);
-    }
-    bar.append(&stars);
-
-    state.loupe.pick.set_label("\u{2691}");
-    state.loupe.pick.add_css_class("flat");
-    state.loupe.pick.set_tooltip_text(Some("Pick (P) \u{2014} again to clear \u{00b7} Up picks and moves on"));
-    state.loupe.pick.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| flag_in_loupe(&state, Flag::Picked)
-    ));
-    bar.append(&state.loupe.pick);
-
-    state.loupe.reject.set_label("\u{2715}");
-    state.loupe.reject.add_css_class("flat");
-    state.loupe.reject.set_tooltip_text(Some("Reject (X) \u{2014} again to clear \u{00b7} Down rejects and moves on"));
-    state.loupe.reject.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| flag_in_loupe(&state, Flag::Rejected)
-    ));
-    bar.append(&state.loupe.reject);
     bar.append(&build_target(state));
 
     let edit = gtk::Button::with_label("Edit");
@@ -411,6 +377,44 @@ pub(super) fn build_loupe_bar(state: &App) -> gtk::Box {
 
     bar.append(&step(state, "go-next-symbolic", "Next photograph (Right)", true));
     bar
+}
+
+pub(super) fn build_loupe_rating(state: &App) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("bar-rating");
+    row.set_margin_start(6);
+    let stars = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    stars.update_property(&[gtk::accessible::Property::Label("Rating")]);
+    for (index, star) in state.loupe.stars.iter().enumerate() {
+        let value = index as u8 + 1;
+        star.set_icon_name("non-starred-symbolic");
+        star.add_css_class("flat");
+        star.set_tooltip_text(Some(&match value {
+            1 => "1 Star (1), again to clear".to_string(),
+            n => format!("{n} Stars ({n}), again to clear"),
+        }));
+        star.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| rate_in_loupe(&state, value)
+        ));
+        stars.append(star);
+    }
+    row.append(&stars);
+    for (button, icon, tip, flag) in [
+        (&state.loupe.pick, "emoji-flags-symbolic", "Pick (P), again to clear \u{00b7} Up picks and moves on", Flag::Picked),
+        (&state.loupe.reject, "window-close-symbolic", "Reject (X), again to clear \u{00b7} Down rejects and moves on", Flag::Rejected),
+    ] {
+        button.set_icon_name(icon);
+        button.add_css_class("flat");
+        button.set_tooltip_text(Some(tip));
+        button.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| flag_in_loupe(&state, flag)
+        ));
+        row.append(button);
+    }
+    state.loupe.pick.set_margin_start(6);
+    row
 }
 
 fn build_target(state: &App) -> gtk::MenuButton {
@@ -876,7 +880,7 @@ pub(super) fn refresh_loupe_bar(state: &App) {
 
     for (index, star) in state.loupe.stars.iter().enumerate() {
         let filled = index as u8 + 1 <= rating;
-        star.set_label(if filled { "\u{2605}" } else { "\u{2606}" });
+        star.set_icon_name(if filled { "starred-symbolic" } else { "non-starred-symbolic" });
         match filled {
             true => star.add_css_class("rated"),
             false => star.remove_css_class("rated"),
@@ -894,6 +898,13 @@ pub(super) fn refresh_loupe_bar(state: &App) {
         match target.is_some_and(|target| picks > target as i64) {
             true => state.loupe.target.add_css_class("warning"),
             false => state.loupe.target.remove_css_class("warning"),
+        }
+    }
+
+    if let Some(row) = state.loupe.pick.parent() {
+        match flag == Flag::Rejected {
+            true => row.add_css_class("rejected"),
+            false => row.remove_css_class("rejected"),
         }
     }
     for (button, on, class) in [

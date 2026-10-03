@@ -191,14 +191,7 @@ pub(super) fn name_selected_mask(state: &App) {
         if let Some(photo) = open.as_ref() {
             let masks = photo.document.masks();
             let name = mask_label(&masks, index);
-            let parts = masks.get(index).map(parts_of).unwrap_or(0);
             state.editor_page.mask_name_label.set_text(&name);
-            state.editor_page.mask_where_label.set_text(&format!(
-                "{} of {} \u{b7} {parts} part{}",
-                index + 1,
-                masks.len().max(1),
-                if parts == 1 { "" } else { "s" }
-            ));
             state.editor_page.mask_crumb_label.set_text(&name);
             state.editor_page.banner_label.set_markup(&format!(
                 "These tabs edit <b>{}</b>",
@@ -230,6 +223,7 @@ pub(super) fn set_panel_scope(state: &App) {
     }
     state.filmstrip.scroller.set_visible(!masked);
     state.editor_page.strip_line.set_visible(!masked);
+
     match masked {
         true => state.editor_page.viewport.add_css_class("editing-mask"),
         false => state.editor_page.viewport.remove_css_class("editing-mask"),

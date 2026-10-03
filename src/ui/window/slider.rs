@@ -1,13 +1,34 @@
 use super::*;
 
-pub(super) fn section_header(title: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(&title.to_uppercase()));
-    label.set_xalign(0.0);
+pub(super) fn section_row(title: &str, ends: &[&gtk::Widget]) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    let label = section_header(title);
+    label.set_hexpand(true);
+    row.append(&label);
+    for end in ends {
+        end.set_valign(gtk::Align::End);
+        end.add_css_class("label-action");
+        row.append(*end);
+    }
+    name_icon_buttons(row.upcast_ref());
+    row
+}
 
-    label.set_margin_top(18);
-    label.set_margin_bottom(2);
-    label.add_css_class("section-header");
-    label
+pub(super) fn more_menu(sections: &[&[(&str, &str)]]) -> gtk::MenuButton {
+    let menu = gio::Menu::new();
+    for items in sections {
+        let section = gio::Menu::new();
+        for (label, action) in *items {
+            section.append(Some(label), Some(action));
+        }
+        menu.append_section(None, &section);
+    }
+    let button = gtk::MenuButton::new();
+    button.set_icon_name("view-more-horizontal-symbolic");
+    button.set_tooltip_text(Some("More"));
+    button.add_css_class("flat");
+    button.set_menu_model(Some(&menu));
+    button
 }
 
 pub(super) fn shift_moves_ten(widget: &impl IsA<gtk::Widget>, adjustment: &gtk::Adjustment) {
@@ -90,7 +111,7 @@ fn rule_for(scale: &gtk::Scale, neutral: f64) -> (String, String) {
 
     let fill = match (to - from).abs() < 0.2 {
         true => "transparent",
-        false => "@accent_bg_color",
+        false => "@numa_accent",
     };
 
     let mut rules = (String::new(), String::new());
@@ -104,8 +125,8 @@ fn rule_for(scale: &gtk::Scale, neutral: f64) -> (String, String) {
     if low < 0.0 && high > 0.0 {
         let zero = at(0.0);
         rules.1 = format!(
-            "scale {{ background-image: linear-gradient(rgba(255,255,255,0.32), \
-             rgba(255,255,255,0.32)); background-size: 1px 8px; \
+            "scale {{ background-image: linear-gradient(@numa_rest_tick, @numa_rest_tick); \
+             background-size: 1px 8px; \
              background-position: {zero:.3}% center; background-repeat: no-repeat; }}\n"
         );
     }
@@ -178,6 +199,8 @@ pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: R
 
     connect_wheel(scale);
 
+    hud::follow(scale, name, readout);
+
     row.append(&header);
     row.append(scale);
     row
@@ -203,10 +226,14 @@ fn connect_reset(state: &App, scale: &gtk::Scale, value: &gtk::Label, readout: R
                 Readout::BrushSize => brush_travel(DEFAULT_BRUSH),
                 Readout::Middle => 50.0,
             };
-            scale.set_value(original);
+
+            glide(&scale, &scale.adjustment(), original);
         }
     );
+    on_reset(scale, Some(value), reset);
+}
 
+fn on_reset(scale: &gtk::Scale, value: Option<&gtk::Label>, reset: impl Fn() + Clone + 'static) {
     let right_click = gtk::GestureClick::new();
     right_click.set_button(gtk::gdk::BUTTON_SECONDARY);
     right_click.connect_pressed(glib::clone!(
@@ -229,21 +256,47 @@ fn connect_reset(state: &App, scale: &gtk::Scale, value: &gtk::Label, readout: R
         }
     ));
     scale.add_controller(double_click);
+    scale.set_tooltip_text(Some("Right-click to reset"));
 
+    let Some(value) = value else { return };
     let on_value = gtk::GestureClick::new();
     on_value.set_button(0);
-    on_value.connect_pressed(glib::clone!(
-        #[strong] reset,
-        move |gesture, presses, _, _| {
-            let button = gesture.current_button();
-            if button == gtk::gdk::BUTTON_SECONDARY || (button == gtk::gdk::BUTTON_PRIMARY && presses == 2) {
-                reset();
-            }
+    on_value.connect_pressed(move |gesture, presses, _, _| {
+        let button = gesture.current_button();
+        if button == gtk::gdk::BUTTON_SECONDARY || (button == gtk::gdk::BUTTON_PRIMARY && presses == 2) {
+            reset();
         }
-    ));
+    });
     value.add_controller(on_value);
     value.set_tooltip_text(Some("Right-click to reset"));
-    scale.set_tooltip_text(Some("Right-click to reset"));
+}
+
+pub(super) fn numa_slider(adjustment: &gtk::Adjustment, neutral: f64) -> gtk::Scale {
+    let scale = gtk::Scale::new(gtk::Orientation::Horizontal, Some(adjustment));
+    scale.add_css_class("numa-slider");
+    scale.set_draw_value(false);
+    scale.set_has_origin(false);
+    PAINTERS.with(|painters| painters.borrow_mut().insert(scale.as_ptr() as usize, Painter::on(&scale)));
+    set_neutral(&scale, neutral);
+    let mark = move |scale: &gtk::Scale| {
+        let moved = (scale.value() - neutral).abs() > scale.adjustment().step_increment() / 2.0;
+        for widget in std::iter::once(scale.clone().upcast::<gtk::Widget>()).chain(scale.parent()) {
+            match moved {
+                true => widget.add_css_class("touched"),
+                false => widget.remove_css_class("touched"),
+            }
+        }
+    };
+    scale.connect_value_changed(move |scale| {
+        repaint(scale);
+        mark(scale);
+    });
+    scale.connect_realize(move |scale| mark(scale));
+    on_reset(&scale, None, glib::clone!(
+        #[weak] scale,
+        move || glide(&scale, &scale.adjustment(), neutral)
+    ));
+    scale
 }
 
 fn connect_wheel(scale: &gtk::Scale) {

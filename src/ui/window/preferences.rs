@@ -121,6 +121,7 @@ fn storage_page(state: &App, folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRo
         ("Settings and list of libraries", numa::core::paths::data_dir()),
         ("Models", numa::core::paths::models_dir()),
         ("Presets", numa::io::presets::dir()),
+        ("LUTs", numa::core::paths::luts_dir()),
         ("Thumbnails", numa::io::thumbs::cache_dir()),
         ("Masks the models made", numa::io::mask_store::dir()),
     ];
@@ -395,8 +396,9 @@ pub(super) fn folder_size(dir: &std::path::Path, skip: &[PathBuf]) -> u64 {
 
 pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     let dialog = adw::Dialog::new();
-    dialog.set_title("Keyboard shortcuts");
-    dialog.set_content_width(420);
+    dialog.set_title("Keyboard Shortcuts");
+
+    dialog.set_content_width(600);
     dialog.set_content_height(560);
 
     let page = adw::PreferencesPage::new();
@@ -413,8 +415,9 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     let app_group = adw::PreferencesGroup::new();
     app_group.set_title("Application");
     app_group.add(&row("Quit", "Ctrl+Q"));
-    app_group.add(&row("Keyboard shortcuts", "Ctrl+/"));
+    app_group.add(&row("Keyboard shortcuts", "Ctrl+? / Ctrl+/"));
     app_group.add(&row("Preferences", "Ctrl+,"));
+    app_group.add(&row("Open a photograph", "Ctrl+O"));
     page.add(&app_group);
 
     let library_group = adw::PreferencesGroup::new();
@@ -425,9 +428,13 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     library_group.add(&row("Pick in the loupe and go on to the next", "Up"));
     library_group.add(&row("Reject in the loupe and go on to the next", "Down"));
     library_group.add(&row("Take back the last mark given in the loupe", "Backspace"));
-    library_group.add(&row("Previous / next burst in the loupe, on its best frame", "Ctrl+Left / Ctrl+Right"));
+    library_group.add(&row("Previous / next burst, on its best frame", "Ctrl+Left / Ctrl+Right"));
     library_group.add(&row("Reject the rest of the burst and go on to the next", "Shift+Down"));
     library_group.add(&row("The neighbours beside the photograph in the loupe, on or off", "F"));
+    library_group.add(&row("Compare the selection side by side", "C"));
+    library_group.add(&row("Select all", "Ctrl+A"));
+    library_group.add(&row("Clear the selection", "Ctrl+Shift+A"));
+    library_group.add(&row("Rescan the library", "F5"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
     library_group.add(&row("Flag the selection picked, again to clear", "P"));
     library_group.add(&row("Flag the selection rejected, again to clear", "X"));
@@ -451,6 +458,7 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     editor_group.add(&row("Copy this photograph's edits", "Ctrl+C"));
     editor_group.add(&row("Copy the edited picture", "Ctrl+Shift+C"));
     editor_group.add(&row("Paste edits onto this photograph", "Ctrl+V"));
+    editor_group.add(&row("Leave the mask", "Esc"));
     editor_group.add(&row("Undo", "Ctrl+Z"));
     editor_group.add(&row("Redo", "Ctrl+Shift+Z"));
     page.add(&editor_group);

@@ -26,9 +26,6 @@ fn filter_of_this_place(state: &App, library: &Library) {
 
     state.catalog.remember(GRID_FILTER, &*state.libraries.filter.borrow());
     state.catalog.remember(&key, &*state.libraries.filter.borrow());
-    if let Some(show) = state.libraries.show_filter.borrow().as_ref() {
-        show();
-    }
 }
 
 pub(super) fn reload_grid(state: &App) {
@@ -113,20 +110,32 @@ pub(super) fn reload_grid(state: &App) {
     }
     let aspects_at = timed.elapsed();
 
-    let scale = state.libraries.scale.get();
-    let noted: Vec<bool> = photos.iter().map(|photo| !cull_note(photo, &scale).is_empty()).collect();
+    let with_bursts: std::collections::HashSet<i64> =
+        photos.iter().filter(|photo| photo.best_of_burst).map(|photo| numa::io::catalog::library_of(photo.id)).collect();
+    *state.grid.bursts.borrow_mut() = with_bursts
+        .into_iter()
+        .flat_map(|library| {
+            let sizes = state.catalog.burst_sizes(library).unwrap_or_default();
+            sizes.into_iter().map(move |(burst, size)| ((library, burst), size))
+        })
+        .collect();
+
     *state.grid.lazy.borrow_mut() = photos
         .iter()
         .map(|photo| LazyThumb::new(photo.id, photo.path.clone(), photo.mtime, photo.edited, edge))
         .collect();
     *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
-    state.grid.wall.fill(found.into_iter().map(|(aspect, _)| aspect).collect(), noted);
+    state.grid.wall.fill(found.into_iter().map(|(aspect, _)| aspect).collect());
     if timing() {
         eprintln!(
             "x-data: reload_grid {} cards: query+aspects {aspects_at:?}, cards {:?}",
             state.grid.wall.len(),
             timed.elapsed() - aspects_at
         );
+    }
+
+    if let Some(show) = state.libraries.show_filter.borrow().as_ref() {
+        show();
     }
 
     sweep_thumbnails(state);
@@ -172,6 +181,14 @@ pub(super) struct State {
     pub(super) thumbnail_watch: Rc<Cell<bool>>,
 
     pub(super) offline: adw::Banner,
+
+    pub(super) bursts: Rc<RefCell<HashMap<(i64, i64), u32>>>,
+
+    pub(super) header_end: gtk::Box,
+
+    pub(super) card_banner: adw::Banner,
+    pub(super) extras_banner: adw::Banner,
+    pub(super) update_banner: adw::Banner,
 }
 
 impl State {
@@ -189,6 +206,11 @@ impl State {
             thumbnail_generation: Rc::new(Cell::new(0)),
             thumbnail_watch: Rc::new(Cell::new(false)),
             offline: adw::Banner::new(""),
+            bursts: Rc::default(),
+            header_end: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+            card_banner: adw::Banner::new(""),
+            extras_banner: adw::Banner::new(""),
+            update_banner: adw::Banner::new(""),
         }
     }
 }

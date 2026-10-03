@@ -8,6 +8,8 @@ use std::sync::Arc;
 thread_local! {
 
     static MONITOR: RefCell<Option<gio::VolumeMonitor>> = const { RefCell::new(None) };
+
+    static OFFERED: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 pub(super) fn watch_cards(state: &App) {
@@ -25,24 +27,40 @@ pub(super) fn watch_cards(state: &App) {
 
     monitor.connect_mount_removed(glib::clone!(
         #[strong] state,
-        move |_, _| follow_drive(&state)
+        move |_, _| {
+            follow_drive(&state);
+            if OFFERED.with(|offered| offered.borrow().as_ref().is_some_and(|root| !root.exists())) {
+                state.grid.card_banner.set_revealed(false);
+            }
+        }
+    ));
+    state.grid.card_banner.set_button_label(Some("Import…"));
+    state.grid.card_banner.connect_button_clicked(glib::clone!(
+        #[strong] state,
+        move |banner| {
+            banner.set_revealed(false);
+            let root = OFFERED.with(|offered| offered.borrow_mut().take());
+            if let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() {
+                import_dialog(&state, &window, root);
+            }
+        }
     ));
     MONITOR.with(|kept| *kept.borrow_mut() = Some(monitor));
 }
 
 fn offer(state: &App, name: &str, root: PathBuf) {
-    let toast = adw::Toast::new(&format!("{name} connected"));
-    toast.set_button_label(Some("Import…"));
-    toast.set_timeout(0);
-    toast.connect_button_clicked(glib::clone!(
-        #[strong] state,
-        move |_| {
-            if let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() {
-                import_dialog(&state, &window, Some(root.clone()));
-            }
+    let (state, name) = (state.clone(), name.to_string());
+    glib::spawn_future_local(async move {
+        let card = read_card(&state, root.clone()).await;
+        let new = card.already.iter().filter(|there| there.is_none()).count();
+        if new == 0 {
+            return;
         }
-    ));
-    state.toasts.add_toast(toast);
+        let photographs = if new == 1 { "photograph" } else { "photographs" };
+        state.grid.card_banner.set_title(&format!("{name} · {} new {photographs}", places::grouped(new as i64)));
+        OFFERED.with(|offered| *offered.borrow_mut() = Some(root));
+        state.grid.card_banner.set_revealed(true);
+    });
 }
 
 fn card_root(mount: &gio::Mount) -> Option<PathBuf> {
@@ -75,8 +93,7 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
     let page = adw::PreferencesPage::new();
     view.set_content(Some(&page));
 
-    let go = gtk::Button::with_label("Import");
-    go.add_css_class("suggested-action");
+    let go = primary_button("Import");
     go.add_css_class("pill");
     go.set_halign(gtk::Align::Center);
     go.set_margin_top(12);

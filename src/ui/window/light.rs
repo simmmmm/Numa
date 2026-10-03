@@ -32,8 +32,6 @@ pub(super) fn build_light(
 
     light.add_css_class("quiet");
 
-    light.append(&section_header("Tone"));
-
     let auto_tone_button = state.light.auto.clone();
     let (word, spinner) = (gtk::Label::new(Some("Auto")), state.light.auto_waiting.spinner.clone());
     let content = gtk::Stack::new();
@@ -51,17 +49,15 @@ pub(super) fn build_light(
     auto_tone_button.set_tooltip_text(Some(
         "Set exposure and the black and white points from this photograph",
     ));
-    auto_tone_button.set_margin_bottom(6);
     auto_tone_button.connect_clicked(glib::clone!(
         #[strong] state,
 
         move |_| auto_tone(&state)
     ));
 
-    auto_tone_button.set_halign(gtk::Align::End);
-    auto_tone_button.add_css_class("panel-action");
     global_only(auto_tone_button.as_ref());
-    light.append(&auto_tone_button);
+
+    light.append(&section_row("Tone", &[auto_tone_button.upcast_ref()]));
 
     for (name, scale, readout) in &all[2..8] {
         let row = slider_row(state, name, scale, *readout);
@@ -173,8 +169,7 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
     ));
     area.add_controller(remove);
 
-    let channels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    channels.add_css_class("linked");
+    let channels = chip_row();
     let mut first: Option<gtk::ToggleButton> = None;
     for (index, (label, tooltip)) in
         [("RGB", "All channels"), ("R", "Red"), ("G", "Green"), ("B", "Blue")].into_iter().enumerate()

@@ -11,33 +11,26 @@ pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow
         Some("yes") => check_for_update(state, window),
         Some(_) => {}
         None => {
-            let alert = adw::AlertDialog::new(
-                Some("Look for new versions?"),
-                Some(
-                    "The AppImage does not update itself. Numa can look at its releases page \
-                     on GitHub once a day and say when there is a new version. Nothing about you \
-                     or your photographs is sent. This can be changed in Preferences.",
-                ),
-            );
-            alert.add_response("no", "No");
-            alert.add_response("yes", "Check Daily");
-            alert.set_response_appearance("yes", adw::ResponseAppearance::Suggested);
-
-            alert.set_close_response("no");
-            let (state, parent) = (state.clone(), window.clone());
-            alert.connect_response(None, move |_, response| {
-                let _ = state.catalog.set_setting(UPDATE_CHECK, response);
-                if response == "yes" {
-                    check_for_update(&state, &parent);
+            let _ = state.catalog.set_setting(UPDATE_CHECK, "no");
+            let banner = &state.grid.update_banner;
+            banner.set_title("Look for new versions once a day?");
+            banner.set_button_label(Some("Check Daily"));
+            banner.connect_button_clicked(glib::clone!(
+                #[strong] state,
+                #[weak] window,
+                move |banner| {
+                    banner.set_revealed(false);
+                    let _ = state.catalog.set_setting(UPDATE_CHECK, "yes");
+                    check_for_update(&state, &window);
                 }
-            });
-            alert.present(Some(window));
+            ));
+            banner.set_revealed(true);
         }
     }
 }
 
 pub(super) fn checks_itself() -> bool {
-    numa::io::update::checks_itself(std::env::var_os("FLATPAK_ID").as_deref())
+    std::env::var_os("APPIMAGE").is_some() && numa::io::update::checks_itself(std::env::var_os("FLATPAK_ID").as_deref())
 }
 
 pub(super) fn check_for_update(state: &App, window: &adw::ApplicationWindow) {
@@ -80,7 +73,7 @@ pub(super) fn mark_seen(state: &App, key: &str) {
 
 pub(super) fn key_hint(state: &App, key: &'static str, text: &str) -> adw::Banner {
     let banner = adw::Banner::new(text);
-    banner.set_button_label(Some("Got it"));
+    banner.set_button_label(Some("Got It"));
     banner.set_revealed(first_time(state, key));
     banner.connect_button_clicked(glib::clone!(
         #[strong] state,
@@ -90,4 +83,16 @@ pub(super) fn key_hint(state: &App, key: &'static str, text: &str) -> adw::Banne
         }
     ));
     banner
+}
+
+pub(super) fn banners(state: &App) -> gtk::Box {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for banner in [&state.grid.card_banner, &state.grid.extras_banner, &state.grid.update_banner] {
+        column.append(banner);
+    }
+    state.stack.connect_visible_child_name_notify(glib::clone!(
+        #[weak] column,
+        move |stack| column.set_visible(stack.visible_child_name().as_deref() != Some("editor"))
+    ));
+    column
 }

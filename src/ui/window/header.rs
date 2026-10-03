@@ -26,14 +26,20 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
 
     let (menu_button, main_menu) = build_header_menu();
 
+    let library_menu = library_menu(&main_menu);
+    menu_button.set_menu_model(Some(&library_menu));
+    cullbar::back_to_grid(state, &menu_button);
+
     let editor_menu = state.editor_page.photo_menu.clone();
     editor_menu.append_section(None, &main_menu);
     header.insert_action_group("editor", Some(&state.editor_page.actions));
     header.pack_end(&menu_button);
     let end = gtk::Stack::new();
+    end.set_transition_type(gtk::StackTransitionType::Crossfade);
+    end.set_transition_duration(300);
 
     end.set_hhomogeneous(false);
-    end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("library"));
+    end.add_named(&state.grid.header_end, Some("library"));
     end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("folders"));
     end.add_named(&state.editor_page.header_end, Some("editor"));
     header.pack_end(&end);
@@ -43,7 +49,11 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
             title.set_visible_child_name(&name);
             start.set_visible_child_name(&name);
             end.set_visible_child_name(&name);
-            menu_button.set_menu_model(Some(if name == "editor" { &editor_menu } else { &main_menu }));
+            menu_button.set_menu_model(Some(match name.as_str() {
+                "editor" => &editor_menu,
+                "library" => &library_menu,
+                _ => &main_menu,
+            }));
         }
     });
 
@@ -59,32 +69,6 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
         move |_| add_library_dialog(&state, &window)
     ));
 
-    let rescan = gtk::Button::from_icon_name("view-refresh-symbolic");
-    rescan.set_tooltip_text(Some("Rescan this folder"));
-    rescan.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| {
-            let Some(library) = state.libraries.current.borrow().clone() else {
-                state.toast("No library selected — pick one to rescan");
-                return;
-            };
-            if state.libraries.filter.borrow().spans_libraries() {
-                rescan_everywhere(&state);
-                return;
-            }
-
-            follow_drive(&state);
-            if state.catalog.is_offline(library.id) {
-                state.toast(&format!("{} is not connected — a rescan waits until it is back", library.label()));
-                return;
-            }
-            sync_in_background(&state, vec![library], |state, added| {
-                reload_grid(state);
-                state.toast(&format!("Rescanned: {added} new photo(s)"));
-            });
-        }
-    ));
-
     let library_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     library_actions.append(&add);
 
@@ -97,8 +81,12 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     ));
     library_actions.append(&import);
 
-    state.libraries.picker.bind_property("visible", &rescan, "visible").sync_create().build();
-    library_actions.append(&rescan);
+    let rating = build_loupe_rating(state);
+    library_actions.append(&rating);
+    state.loupe.reveal.bind_property("reveal-child", &rating, "visible").sync_create().build();
+    for button in [&add, &import] {
+        state.loupe.reveal.bind_property("reveal-child", button, "visible").invert_boolean().sync_create().build();
+    }
 
     let back = gtk::Button::from_icon_name("go-previous-symbolic");
     back.set_tooltip_text(Some("Back to the library"));
@@ -124,6 +112,8 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     }
 
     let start = gtk::Stack::new();
+    start.set_transition_type(gtk::StackTransitionType::Crossfade);
+    start.set_transition_duration(300);
     start.add_named(&library_actions, Some("library"));
     start.add_named(&folder_actions, Some("folders"));
 
@@ -139,13 +129,20 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
 fn build_header_title(state: &App) -> gtk::Stack {
 
     let title = gtk::Stack::new();
+    title.set_transition_type(gtk::StackTransitionType::Crossfade);
+    title.set_transition_duration(300);
 
     let picker_holder = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+    let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    picker_holder.append(&balance);
     let libraries = libraries_crumb(state);
     libraries.add_css_class("dim-label");
     picker_holder.append(&libraries);
     let arrow = crumb_arrow();
     arrow.add_css_class("dim-label");
+
+    state.libraries.picker.bind_property("visible", &arrow, "visible").sync_create().build();
     picker_holder.append(&arrow);
     picker_holder.append(&state.libraries.picker);
     let mut child = state.libraries.picker.first_child();
@@ -153,6 +150,7 @@ fn build_header_title(state: &App) -> gtk::Stack {
         if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
             button.add_css_class("flat");
             arrow_on_hover(button);
+            balance_picker(button, &balance);
         }
         child = widget.next_sibling();
     }
@@ -184,6 +182,25 @@ fn arrow_on_hover(button: &gtk::ToggleButton) {
     button.add_controller(motion);
 }
 
+fn balance_picker(button: &gtk::ToggleButton, balance: &gtk::Box) {
+    button.connect_map(glib::clone!(
+        #[weak] balance,
+        move |button| {
+            let (button, balance) = (button.clone(), balance.clone());
+            glib::idle_add_local_once(move || {
+                let Some(inner) = button.child() else { return };
+                let Some(shown) = inner.last_child().and_then(|arrow| arrow.prev_sibling()) else { return };
+                let Some(bounds) = shown.compute_bounds(&inner) else { return };
+
+                let room = inner.width() - (bounds.x() + bounds.width()).round() as i32 - 4;
+                if room > 0 {
+                    balance.set_width_request(room);
+                }
+            });
+        }
+    ));
+}
+
 fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
 
     let manage = gio::SimpleAction::new("libraries", None);
@@ -202,7 +219,8 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
     ));
     window.add_action(&shortcuts);
     if let Some(app) = window.application() {
-        app.set_accels_for_action("win.shortcuts", &["<primary>slash"]);
+
+        app.set_accels_for_action("win.shortcuts", &["<primary>question", "<primary>slash"]);
     }
 
     let preferences = gio::SimpleAction::new("preferences", None);
@@ -230,7 +248,7 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
         #[weak] window,
         move |_, _| {
             let dialog = gtk::FileDialog::new();
-            dialog.set_title("Open a photograph");
+            dialog.set_title("Open a Photograph");
             let (state, parent) = (state.clone(), window.clone());
             dialog.open(Some(&window), gio::Cancellable::NONE, move |chosen| {
                 if let Some(path) = chosen.ok().and_then(|file| file.path()) {
@@ -254,6 +272,58 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
         }
     ));
     window.add_action(&open_path_action);
+    install_rescan_action(state, window);
+}
+
+fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
+    let rescan = gio::SimpleAction::new("rescan", None);
+    rescan.connect_activate(glib::clone!(
+        #[strong] state,
+        move |_, _| {
+            let Some(library) = state.libraries.current.borrow().clone() else {
+                state.toast("No library selected — pick one to rescan");
+                return;
+            };
+            if state.libraries.filter.borrow().spans_libraries() {
+                rescan_everywhere(&state);
+                return;
+            }
+
+            follow_drive(&state);
+            if state.catalog.is_offline(library.id) {
+                state.toast(&format!("{} is not connected — a rescan waits until it is back", library.label()));
+                return;
+            }
+            sync_in_background(&state, vec![library], |state, added| {
+                reload_grid(state);
+                state.toast(&format!("Rescanned: {added} new photo(s)"));
+            });
+        }
+    ));
+    window.add_action(&rescan);
+    if let Some(app) = window.application() {
+        app.set_accels_for_action("win.rescan", &["F5"]);
+    }
+
+    let people = gio::SimpleAction::new("people", None);
+    people.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] window,
+        move |_, _| people_dialog(&state, &window)
+    ));
+    window.add_action(&people);
+}
+
+fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
+    let menu = sort_menu();
+    let library = gio::Menu::new();
+    library.append(Some("Rescan Library"), Some("win.rescan"));
+    if cull::people::is_installed() {
+        library.append(Some("People…"), Some("win.people"));
+    }
+    menu.append_section(None, &library);
+    menu.append_section(None, main_menu);
+    menu
 }
 
 fn build_header_menu() -> (gtk::MenuButton, gio::Menu) {
@@ -262,7 +332,7 @@ fn build_header_menu() -> (gtk::MenuButton, gio::Menu) {
     menu.append(Some("Libraries…"), Some("win.libraries"));
     menu.append(Some("Albums…"), Some("win.albums"));
     menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("Keyboard shortcuts"), Some("win.shortcuts"));
+    menu.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
     menu.append(Some("About"), Some("win.about"));
     menu.append(Some("Quit"), Some("app.quit"));
     let menu_button = gtk::MenuButton::new();

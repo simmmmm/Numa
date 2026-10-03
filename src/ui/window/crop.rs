@@ -69,6 +69,8 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
     let row = slider_row(state, "Straighten", &straighten, Readout::Signed(1));
     row.add_css_class("lead");
 
+    follow_straighten(state);
+
     straighten.connect_value_changed(glib::clone!(
         #[strong] state,
         move |_| {
@@ -133,11 +135,14 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
 }
 
 fn aspect_buttons(state: &App) -> (gtk::Box, Option<gtk::ToggleButton>) {
-    let aspects = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    aspects.add_css_class("linked");
+    let aspects = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let rows = [chip_row(), chip_row()];
+    for row in &rows {
+        aspects.append(row);
+    }
     let free = gtk::ToggleButton::with_label("Free");
     free.set_active(true);
-    let choose = |button: &gtk::ToggleButton, ratio: Rc<dyn Fn(&App) -> Option<f32>>| {
+    let choose = |row: &gtk::Box, button: &gtk::ToggleButton, ratio: Rc<dyn Fn(&App) -> Option<f32>>| {
         button.set_hexpand(true);
         button.connect_toggled(glib::clone!(
             #[strong] state,
@@ -153,24 +158,28 @@ fn aspect_buttons(state: &App) -> (gtk::Box, Option<gtk::ToggleButton>) {
                 commit_crop(&state);
             }
         ));
-        aspects.append(button);
+        row.append(button);
     };
-    choose(&free, Rc::new(|_| None));
+
+    let original = gtk::ToggleButton::with_label("Original");
+    original.set_group(Some(&free));
+    original.set_tooltip_text(Some("The photograph's own shape"));
+    choose(&rows[0], &original, Rc::new(|state| Some(frame_aspect(state))));
+    choose(&rows[0], &free, Rc::new(|_| None));
     press_again_to_turn(state, &free);
-    for sides in [(1.0, 1.0), (5.0, 4.0), (3.0, 2.0), (16.0, 9.0)] {
+    for (index, sides) in [(1.0, 1.0), (5.0, 4.0), (3.0, 2.0), (16.0, 9.0)].into_iter().enumerate() {
         let button = gtk::ToggleButton::new();
         button.set_group(Some(&free));
-        choose(&button, Rc::new(move |state| Some(ratio_of(sides, state.crop.landscape.get()))));
+        choose(&rows[usize::from(index >= 2)], &button, Rc::new(move |state| Some(ratio_of(sides, state.crop.landscape.get()))));
         press_again_to_turn(state, &button);
         state.crop.ratios.borrow_mut().push((button, sides));
     }
     let custom = gtk::ToggleButton::with_label("Custom");
     custom.set_group(Some(&free));
     custom.set_tooltip_text(Some("A ratio of your own"));
-    choose(&custom, Rc::new(|state| Some(ratio_of(state.crop.custom.get(), state.crop.landscape.get()))));
+    choose(&rows[1], &custom, Rc::new(|state| Some(ratio_of(state.crop.custom.get(), state.crop.landscape.get()))));
     let popover = custom_popover(state, &custom);
     custom.connect_clicked(move |_| popover.popup());
-    aspects.add_css_class("aspect-ratios");
     label_ratios(state);
     (aspects, Some(free))
 }
@@ -394,9 +403,8 @@ fn finish_buttons(state: &App, free: &Option<gtk::ToggleButton>) -> gtk::Box {
     ));
     finish.append(&reset);
 
-    let done = gtk::Button::with_label("Done");
+    let done = primary_button("Done");
     done.set_hexpand(true);
-    done.add_css_class("suggested-action");
     done.set_tooltip_text(Some("Keep this crop and leave the tool"));
     done.connect_clicked(glib::clone!(
         #[strong] state,
@@ -407,4 +415,15 @@ fn finish_buttons(state: &App, free: &Option<gtk::ToggleButton>) -> gtk::Box {
     ));
     finish.append(&done);
     finish
+}
+
+fn follow_straighten(state: &App) {
+    state.crop.straighten.connect_value_changed(glib::clone!(
+        #[strong] state,
+        move |scale| {
+            if !state.applying.get() && is_cropping(&state) {
+                hud::show("Straighten", &format!("{}\u{b0}", Readout::Signed(1).format(scale.value())));
+            }
+        }
+    ));
 }

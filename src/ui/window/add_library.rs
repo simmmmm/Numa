@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn add_library_dialog(state: &App, window: &adw::ApplicationWindow) {
     let dialog = gtk::FileDialog::new();
-    dialog.set_title("Add folder to library");
+    dialog.set_title("Add Folder to Library");
 
     let beside = state
         .libraries.current

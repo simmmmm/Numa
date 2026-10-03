@@ -6,6 +6,7 @@ pub(super) fn build_compare(state: &App) -> gtk::Revealer {
     let compare = &state.compare;
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("loupe");
+    root.add_css_class("numa-content");
     compare.row.set_homogeneous(true);
     compare.row.set_vexpand(true);
     root.append(&compare.row);

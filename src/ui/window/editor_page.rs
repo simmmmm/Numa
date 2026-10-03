@@ -11,6 +11,8 @@ pub(super) fn build_editor_page(state: &App) -> gtk::Box {
     ));
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+    body.add_css_class("numa-content");
     body.set_hexpand(true);
     body.set_vexpand(true);
 
@@ -32,7 +34,12 @@ pub(super) fn build_editor_page(state: &App) -> gtk::Box {
 
     let strip = build_editor_filmstrip(state);
 
-    page.append(&state.editor_page.strip_line);
+    let handle = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    handle.add_css_class("filmstrip-handle");
+    handle.append(&state.editor_page.strip_line);
+    install_strip_resize(state, handle.upcast_ref());
+    strip.bind_property("visible", &handle, "visible").sync_create().build();
+    page.append(&handle);
     page.append(&strip);
     page
 }
@@ -124,17 +131,35 @@ fn append_panel_split(state: &App, body: &gtk::Box, scroller: &gtk::ScrolledWind
 
     beside.set_homogeneous(true);
     beside.append(&build_reference_pane(state));
-    beside.append(scroller);
+
+    let photograph = gtk::Overlay::new();
+    photograph.set_child(Some(scroller));
+    photograph.add_overlay(&build_histogram_hud(state));
+    beside.append(&photograph);
 
     let canvas_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let above = state.editor_page.viewport.clone();
     above.add_css_class("canvas-viewport");
     above.set_child(Some(&beside));
-    above.add_overlay(&build_drawing(state));
     above.add_overlay(&zoom_badge(state));
+    above.add_overlay(&hud::build());
     above.set_vexpand(true);
+
+    let arriving = gtk::Revealer::new();
+    arriving.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+
+    arriving.set_transition_duration(200);
+    let bar = build_mask_toolbar(state);
+    bar.bind_property("visible", &arriving, "reveal-child").sync_create().build();
+
+    bar.connect_visible_notify(|bar| {
+        if let Some(root) = bar.root() {
+            if bar.is_visible() { root.add_css_class("masking") } else { root.remove_css_class("masking") }
+        }
+    });
+    arriving.set_child(Some(&bar));
+    canvas_column.append(&arriving);
     canvas_column.append(&above);
-    canvas_column.append(&build_mask_toolbar(state));
 
     let panel = build_adjustment_panel(state);
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -327,12 +352,6 @@ pub(super) fn fill_header(state: &App) {
     let start = state.editor_page.header_start.clone();
     start.set_spacing(6);
 
-    let history = gtk::MenuButton::new();
-    history.set_icon_name("document-open-recent-symbolic");
-    history.set_tooltip_text(Some("History"));
-    history.set_popover(Some(&build_history(state)));
-    start.append(&history);
-
     start.append(&build_bar_rating(state));
 
     let end = state.editor_page.header_end.clone();
@@ -358,6 +377,8 @@ fn build_before_group(state: &App) -> gtk::Box {
 
     let before = &state.editor_page.before;
     before.set_label("Before");
+
+    before.add_css_class("before-toggle");
     before.set_tooltip_text(Some("Show the frame as shot (hold Space)"));
     before.connect_toggled(glib::clone!(
         #[strong] state,
@@ -435,6 +456,8 @@ fn fill_photo_menu(state: &App) {
         guides.append_item(&item);
     }
     edit.append_submenu(Some("Guides"), &guides);
+
+    edit.append(Some("Histogram"), Some("editor.histogram"));
     state.editor_page.photo_menu.insert_section(0, None, &edit);
 }
 
@@ -458,7 +481,7 @@ fn fill_info_popover(state: &App) {
 fn build_zoom_menu() -> gio::Menu {
     let levels = gio::Menu::new();
     let fit = gio::Menu::new();
-    fit.append(Some("Fit to window"), Some("win.zoom::fit"));
+    fit.append(Some("Fit to Window"), Some("win.zoom::fit"));
     levels.append_section(None, &fit);
     let steps = gio::Menu::new();
     for percent in [50u32, 100, 200, 400] {
@@ -469,9 +492,9 @@ fn build_zoom_menu() -> gio::Menu {
 }
 
 pub(super) fn zoom_badge(state: &App) -> gtk::Box {
+
     let badge = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    badge.add_css_class("osd");
-    badge.add_css_class("zoom-badge");
+    badge.add_css_class("photo-pill");
     badge.set_halign(gtk::Align::Center);
     badge.set_valign(gtk::Align::Start);
     badge.set_margin_top(12);
@@ -509,6 +532,12 @@ fn build_history_group(state: &App) -> gtk::Box {
         ));
         history_group.append(&button);
     }
+
+    let history = gtk::MenuButton::new();
+    history.set_icon_name("document-open-recent-symbolic");
+    history.set_tooltip_text(Some("History"));
+    history.set_popover(Some(&build_history(state)));
+    history_group.append(&history);
     history_group
 }
 
@@ -520,7 +549,6 @@ pub(super) struct State {
     pub(super) banner_label: gtk::Label,
 
     pub(super) mask_name_label: gtk::Label,
-    pub(super) mask_where_label: gtk::Label,
 
     pub(super) mask_crumb: gtk::Box,
     pub(super) mask_crumb_label: gtk::Label,
@@ -555,7 +583,6 @@ impl State {
             banner: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             banner_label: gtk::Label::new(None),
             mask_name_label: gtk::Label::new(None),
-            mask_where_label: gtk::Label::new(None),
             mask_crumb: gtk::Box::new(gtk::Orientation::Horizontal, 2),
             mask_crumb_label: gtk::Label::new(None),
             page: gtk::Box::new(gtk::Orientation::Vertical, 0),

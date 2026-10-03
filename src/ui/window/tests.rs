@@ -319,3 +319,13 @@ fn picking_a_profile_rewrites_its_note() {
     assert!(picker.contains("write_profile_note(&state"));
     assert!(!picker.contains("refresh_profile_picker("));
 }
+
+#[test]
+fn the_light_tokens_override_the_dark_ones() {
+    let (dark, light) = (stylesheet(true), stylesheet(false));
+    let white = "@define-color numa_accent #ffffff;";
+    let ink = "@define-color numa_accent #141414;";
+    assert!(dark.contains(white) && !dark.contains(ink));
+    assert!(light.find(ink) > light.find(white));
+    assert!(light.ends_with(CSS));
+}

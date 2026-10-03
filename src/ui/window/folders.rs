@@ -8,7 +8,21 @@ pub(super) fn build_folders_page(state: &App) -> gtk::ScrolledWindow {
     scroller.set_vexpand(true);
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(1600);
-    clamp.set_child(Some(&state.libraries.shelves));
+
+    let mark = gtk::Image::from_paintable(mark_texture().as_ref());
+    mark.set_pixel_size(50);
+    mark.set_halign(gtk::Align::Start);
+    mark.set_margin_top(24);
+    mark.set_margin_start(24);
+    mark.set_tooltip_text(Some("Numa"));
+    adw::StyleManager::default().connect_dark_notify(glib::clone!(
+        #[weak] mark,
+        move |_| mark.set_paintable(mark_texture().as_ref())
+    ));
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.append(&mark);
+    page.append(&state.libraries.shelves);
+    clamp.set_child(Some(&page));
     state.libraries.shelves.set_margin_top(18);
     state.libraries.shelves.set_margin_bottom(36);
     state.libraries.shelves.set_margin_start(24);
@@ -39,11 +53,20 @@ pub(super) fn show_folders(state: &App) {
         let places: Vec<Place> = libraries.into_iter().map(|library| Place::Library(library.clone())).collect();
         column.append(&shelf(state, &parent, &places));
     }
+
+    if !libraries.is_empty() {
+        let albums: Vec<Place> = state.catalog.albums().unwrap_or_default().into_iter().map(|(key, _)| Place::Album(key)).collect();
+        if !albums.is_empty() {
+            column.append(&shelf(state, "Albums", &albums));
+        }
+        let people: Vec<Place> = state.catalog.names().unwrap_or_default().into_iter().map(Place::Person).collect();
+        if !people.is_empty() {
+            column.append(&shelf(state, "People", &people));
+        }
+    }
     if libraries.is_empty() {
         let empty = adw::StatusPage::new();
-        empty.set_icon_name(Some("folder-pictures-symbolic"));
-        empty.set_title("No Libraries Yet");
-        empty.set_description(Some("Add a folder of photographs, or import from a card or a camera"));
+        no_libraries_yet(state, &empty);
         column.append(&empty);
     }
     state.stack.set_visible_child_name("folders");
@@ -70,9 +93,9 @@ pub(super) fn libraries_crumb(state: &App) -> gtk::Button {
 fn shelf(state: &App, heading: &str, places: &[Place]) -> gtk::Box {
     let shelf = gtk::Box::new(gtk::Orientation::Vertical, 12);
     shelf.set_margin_bottom(24);
-    let title = gtk::Label::new(Some(heading));
-    title.set_xalign(0.0);
-    title.add_css_class("title-3");
+
+    let title = section_header(heading);
+    title.set_margin_top(0);
     shelf.append(&title);
 
     let flow = gtk::FlowBox::new();
@@ -96,9 +119,15 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     places::show_covers(&fan, &read.covers, TILE);
 
     let name = gtk::Label::new(Some(&match place {
-        Place::Everywhere => "All libraries".to_string(),
+        Place::Everywhere => "All Libraries".to_string(),
         Place::Library(library) => library.label(),
-        Place::Album(album) => album.clone(),
+
+        Place::Album(key) => state
+            .catalog
+            .albums()
+            .ok()
+            .and_then(|albums| albums.into_iter().find(|(album, _)| album == key).map(|(_, name)| name))
+            .unwrap_or_else(|| key.clone()),
         Place::Person(person) => person.clone(),
     }));
     name.add_css_class("heading");

@@ -28,6 +28,10 @@ fn key(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> String {
         text.push_str(edits);
 
         text.push_str(&format!("\0{:?}", crate::dcp::automatic()));
+
+        if edits.contains(r#""type":"Beautify""#) {
+            text.push_str("\0faces");
+        }
     }
     let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3));
     format!("{hash:016x}.jpg")
@@ -277,6 +281,10 @@ mod tests {
         let edited = key(Path::new("a/b.RAF"), 1, 320, Some(r#"{"exposure":0.5}"#));
         assert_ne!(edited, key(Path::new("a/b.RAF"), 1, 320, None));
         assert_ne!(edited, key(Path::new("a/b.RAF"), 1, 320, Some(r#"{"exposure":0.6}"#)));
+
+        let mut document = numa_core::document::Document::new("a/b.RAF".into());
+        document.set_beautify(numa_core::beautify::Beautify { skin: 50.0, ..Default::default() });
+        assert!(serde_json::to_string(&document).unwrap().contains(r#""type":"Beautify""#));
     }
 
     #[test]

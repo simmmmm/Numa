@@ -448,9 +448,22 @@ pub fn models_needed(masks: &[Mask]) -> (bool, bool) {
     (semantic, prompt)
 }
 
+pub fn portraits(faces: &[numa_cull::faces::Face], frame: &RgbImage) -> Vec<numa_core::beautify::Portrait> {
+    let (width, height) = (frame.width() as f32, frame.height() as f32);
+    faces
+        .iter()
+        .map(|face| numa_core::beautify::Portrait {
+            at: [face.x / width, face.y / height, face.width / width, face.height / height],
+            points: face.landmarks.map(|(x, y)| [x / width, y / height]),
+        })
+        .collect()
+}
+
 pub fn with_masks_resolved(document: &Document, source: &LinearImage) -> Document {
     let mut masks = document.masks();
-    if !masks.iter().any(Mask::wants_pixels) {
+
+    let wants_faces = document.faces.is_empty() && !document.beautify().is_identity() && numa_cull::faces::is_installed();
+    if !wants_faces && !masks.iter().any(Mask::wants_pixels) {
         return document.clone();
     }
 
@@ -484,6 +497,10 @@ pub fn with_masks_resolved(document: &Document, source: &LinearImage) -> Documen
 
     let mut resolved = document.clone();
     resolved.set_masks(masks);
+
+    if wants_faces {
+        resolved.faces = numa_cull::faces::detect(&frame).map(|faces| portraits(&faces, &frame)).unwrap_or_default();
+    }
     resolved
 }
 
@@ -2548,6 +2565,43 @@ mod tests {
 
         let plain = Document::new("x".into());
         assert!(with_masks_resolved(&plain, &grey).masks().is_empty());
+    }
+
+    #[test]
+    fn a_stored_face_retouch_is_in_the_export() {
+        use numa_io::export::{develop, Developed, ExportSettings, Size};
+
+        let Some(path) = std::env::var_os("FACES") else {
+            println!("skipped: FACES=<a photograph with a face in it>");
+            return;
+        };
+        assert!(numa_cull::faces::is_installed(), "no face detector in {:?}", numa_cull::faces::model_dir());
+        let linear = numa_io::raw::decode_linear_any(std::path::Path::new(&path)).unwrap();
+        let plain = Document::new(path.to_string_lossy().into());
+        let mut document = plain.clone();
+        document.set_beautify(numa_core::beautify::Beautify { spots: 100.0, skin: 100.0, evenness: 100.0, red_eye: 100.0, teeth: 100.0 });
+
+        let proxy = linear.downscaled(2400).unwrap_or_else(|| linear.clone());
+        let frame = apply_stack(&mask_geometry(&document), to_working_space(&document, &proxy, &RenderInputs::default()), 1.0);
+        let mut open = document.clone();
+        open.faces = portraits(&numa_cull::faces::detect(&frame).unwrap(), &frame);
+        assert!(!open.faces.is_empty(), "no face in {path:?}");
+
+        let stored: Document = serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+        assert!(stored.faces.is_empty(), "the faces were stored");
+
+        let settings = ExportSettings { size: Size::LongEdge(1200), ..Default::default() };
+        let export = |document: &Document| {
+            let Developed::Eight(frame) = develop(document, &linear, &Default::default(), &settings) else { unreachable!() };
+            frame
+        };
+        let differ = |a: &RgbImage, b: &RgbImage| a.as_raw().iter().zip(b.as_raw()).filter(|(a, b)| a != b).count();
+        let on_screen = export(&open);
+        let retouched = differ(&on_screen, &export(&plain));
+        assert!(retouched > 0, "the retouching does nothing to this face");
+        let exported = export(&with_masks_resolved(&stored, &linear));
+        let off = differ(&exported, &on_screen);
+        assert!(off * 10 < retouched, "the export is not what the editor shows: {off} values off, the retouching moves {retouched}");
     }
 
     #[test]

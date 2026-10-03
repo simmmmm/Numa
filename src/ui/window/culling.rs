@@ -4,9 +4,9 @@ pub(super) use numa::io::analysis::{measure_photo, regroup_bursts, FACE_EDGE};
 #[cfg(test)]
 pub(super) use numa::io::analysis::twins;
 
-pub(super) use numa::io::notes::{cull_detail, cull_note};
+pub(super) use numa::io::notes::cull_note;
 
-pub(super) fn analyse_library(state: &App, button: &adw::SplitButton) {
+pub(super) fn analyse_library(state: &App, button: &gtk::Button) {
     let Some(library) = state.libraries.current.borrow().clone() else {
         state.toast("No library selected");
         return;
@@ -34,7 +34,7 @@ pub(super) fn analyse_library(state: &App, button: &adw::SplitButton) {
 
 async fn analyse_pending(
     state: App,
-    button: adw::SplitButton,
+    button: gtk::Button,
     library: Library,
     pending: Vec<Photo>,
     label: String,

@@ -17,7 +17,7 @@ pub fn enabled() -> bool {
 pub fn warm_up(frugal: bool, marker: Option<std::path::PathBuf>) {
     let frugal = lane(frugal);
 
-    if !enabled() || !slot(frugal).try_lock().is_ok_and(|slot| matches!(*slot, Slot::Untried)) {
+    if !enabled() || making(frugal).try_lock().is_err() || !matches!(*lock(frugal), Slot::Untried) {
         return;
     }
     if let Some(marker) = &marker {
@@ -42,6 +42,7 @@ pub fn open_now(frugal: bool) -> bool {
 
 pub fn release() {
     for frugal in [false, true] {
+        let _making = making(frugal).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut slot = lock(frugal);
         if matches!(*slot, Slot::Ready(_)) {
             *slot = Slot::Untried;
@@ -71,18 +72,19 @@ fn ready(frugal: bool) -> Option<Arc<Gpu>> {
     if !enabled() {
         return None;
     }
-    match &*slot(lane(frugal)).try_lock().ok()? {
+    match &*lock(lane(frugal)) {
         Slot::Ready(gpu) if !gpu.lost.load(Ordering::Relaxed) => Some(gpu.clone()),
         _ => None,
     }
 }
 
 fn made(frugal: bool) -> Option<Arc<Gpu>> {
-    let mut slot = lock(frugal);
-    if matches!(*slot, Slot::Untried) {
-        *slot = open(frugal).map_or(Slot::None, |gpu| Slot::Ready(Arc::new(gpu)));
+    let _making = making(frugal).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if matches!(*lock(frugal), Slot::Untried) {
+        let made = open(frugal).map_or(Slot::None, |gpu| Slot::Ready(Arc::new(gpu)));
+        *lock(frugal) = made;
     }
-    match &*slot {
+    match &*lock(frugal) {
         Slot::Ready(gpu) => Some(gpu.clone()),
         _ => None,
     }
@@ -102,6 +104,16 @@ enum Slot {
 fn slot(frugal: bool) -> &'static Mutex<Slot> {
     static FAST: Mutex<Slot> = Mutex::new(Slot::Untried);
     static FRUGAL: Mutex<Slot> = Mutex::new(Slot::Untried);
+    if frugal {
+        &FRUGAL
+    } else {
+        &FAST
+    }
+}
+
+fn making(frugal: bool) -> &'static Mutex<()> {
+    static FAST: Mutex<()> = Mutex::new(());
+    static FRUGAL: Mutex<()> = Mutex::new(());
     if frugal {
         &FRUGAL
     } else {
@@ -365,5 +377,22 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
             return value;
         }
         std::thread::yield_now();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn the_card_is_ready_to_everyone_asking_at_once() {
+        if !super::open_now(false) {
+            println!("skipped: no card");
+            return;
+        }
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| assert!((0..20_000).all(|_| super::describe(false).is_some())));
+            }
+        });
     }
 }
