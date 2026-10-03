@@ -22,23 +22,7 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     let welcome = state.grid.welcome.clone();
     welcome.set_vexpand(true);
     welcome.set_visible(false);
-    welcome.set_icon_name(Some("folder-pictures-symbolic"));
-    welcome.set_title("Add a Folder of Photographs");
-    welcome.set_description(Some(
-        "Numa shows your photographs where they are. They are never moved, copied or changed.\n\n\
-         Ratings, edits and names are kept in a hidden .numa folder inside the folder you add, \
-         so it needs to be a folder you can write to — and they go wherever the folder goes.",
-    ));
-    let add = gtk::Button::with_label("Add Folder…");
-    add.set_halign(gtk::Align::Center);
-    add.add_css_class("pill");
-    add.add_css_class("suggested-action");
-    add.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] window,
-        move |_| add_library_dialog(&state, &window)
-    ));
-    welcome.set_child(Some(&add));
+    no_libraries_yet(state, &welcome);
     page.append(&welcome);
 
     let scroller = build_grid_scroller(state);
@@ -69,10 +53,10 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     over.set_child(Some(&scroller));
     over.add_overlay(&build_loupe(state));
 
-    over.add_overlay(&cullbar::build(state));
-
     over.add_overlay(&build_compare(state));
     page.append(&over);
+
+    page.append(&cullbar::build(state));
 
     let loupe_keys = gtk::EventControllerKey::new();
     loupe_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -103,6 +87,41 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     page
 }
 
+pub(super) fn mark_texture() -> Option<gtk::gdk::Texture> {
+    let image: &'static [u8] = match adw::StyleManager::default().is_dark() {
+        true => include_bytes!("../../../data/branding/mark.png"),
+        false => include_bytes!("../../../data/branding/icon-light@2x.png"),
+    };
+    gtk::gdk::Texture::from_bytes(&glib::Bytes::from_static(image)).ok()
+}
+
+pub(super) fn no_libraries_yet(state: &App, page: &adw::StatusPage) {
+    page.set_paintable(mark_texture().as_ref());
+    page.set_title("No Libraries Yet");
+    page.set_description(Some("Add a folder of photographs to start. Numa never moves or changes them."));
+    let add = primary_button("Add Folder…");
+    add.add_css_class("pill");
+    let import = gtk::Button::with_label("Import from Card…");
+    import.add_css_class("flat");
+    for (button, card) in [(&add, false), (&import, true)] {
+        button.set_halign(gtk::Align::Center);
+        button.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| {
+                let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() else { return };
+                match card {
+                    true => import_dialog(&state, &window, None),
+                    false => add_library_dialog(&state, &window),
+                }
+            }
+        ));
+    }
+    let buttons = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    buttons.append(&add);
+    buttons.append(&import);
+    page.set_child(Some(&buttons));
+}
+
 fn build_grid_scroller(state: &App) -> gtk::ScrolledWindow {
 
     state.grid.wall.add_css_class("photo-rows");
@@ -116,6 +135,7 @@ fn build_grid_scroller(state: &App) -> gtk::ScrolledWindow {
     );
 
     let scroller = state.grid.scroller.clone();
+    scroller.add_css_class("numa-content");
     scroller.set_hexpand(true);
     scroller.set_vexpand(true);
 
@@ -215,7 +235,7 @@ fn photo_menu_model(state: &App) -> gio::Menu {
     let rating = gio::Menu::new();
     for stars in 0..=5i32 {
         let label = match stars {
-            0 => "No rating".to_string(),
+            0 => "No Rating".to_string(),
             n => "★".repeat(n as usize),
         };
         let item = gio::MenuItem::new(Some(&label), None);
@@ -225,7 +245,7 @@ fn photo_menu_model(state: &App) -> gio::Menu {
     menu.append_submenu(Some("Rating"), &rating);
 
     let flags = gio::Menu::new();
-    for (label, which) in [("Pick", "pick"), ("Reject", "reject"), ("Clear flag", "none")] {
+    for (label, which) in [("Pick", "pick"), ("Reject", "reject"), ("Clear Flag", "none")] {
         let item = gio::MenuItem::new(Some(label), None);
         item.set_action_and_target_value(Some("win.photo-flag"), Some(&which.to_variant()));
         flags.append_item(&item);
@@ -235,9 +255,9 @@ fn photo_menu_model(state: &App) -> gio::Menu {
     let settings = gio::Menu::new();
     settings.append(Some("Export…"), Some("win.photo-export"));
 
-    settings.append(Some("Copy settings"), Some("win.photo-copy"));
-    settings.append(Some("Paste settings"), Some("win.photo-paste"));
-    settings.append(Some("Choose what to paste…"), Some("win.photo-paste-choose"));
+    settings.append(Some("Copy Settings"), Some("win.photo-copy"));
+    settings.append(Some("Paste Settings"), Some("win.photo-paste"));
+    settings.append(Some("Choose What to Paste…"), Some("win.photo-paste-choose"));
     settings.append_submenu(Some("Presets"), &state.copy_paste.presets_menu);
     menu.append_section(None, &settings);
     menu.append_section(None, &state.libraries.albums_menu);

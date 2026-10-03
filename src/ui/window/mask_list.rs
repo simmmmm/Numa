@@ -92,7 +92,7 @@ fn append_mask_list_row(
     row.add_suffix(&shown);
 
     let invert = gtk::ToggleButton::new();
-    invert.set_icon_name("object-flip-horizontal-symbolic");
+    invert.set_icon_name("numa-invert-symbolic");
     invert.set_active(mask.inverted);
     invert.set_valign(gtk::Align::Center);
     invert.add_css_class("flat");

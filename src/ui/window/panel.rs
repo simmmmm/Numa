@@ -66,11 +66,6 @@ pub(super) fn build_adjustment_panel(state: &App) -> gtk::Box {
     let tabs = build_rail(state);
 
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let histogram = build_histogram(state);
-    histogram.set_margin_top(14);
-    histogram.set_margin_start(14);
-    histogram.set_margin_end(14);
-    panel.append(&histogram);
     panel.append(&build_mask_banner(state));
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -147,9 +142,7 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     top.append(&section_header("Camera profile"));
     top.append(&build_profile_picker(state));
 
-    let choice = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    choice.add_css_class("linked");
-    choice.add_css_class("aspect-ratios");
+    let choice = chip_row();
     choice.set_homogeneous(true);
     choice.set_margin_top(8);
     let kinds = gtk::Stack::new();

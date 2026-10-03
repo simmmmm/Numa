@@ -80,7 +80,7 @@ pub(super) fn refresh_folders(state: &App, library: &Library, photos: &[Photo]) 
     if *state.libraries.folders.borrow() == folders && !folders.is_empty() {
         return;
     }
-    let labels: Vec<String> = std::iter::once("All folders".to_string())
+    let labels: Vec<String> = std::iter::once("All Folders".to_string())
         .chain(folders.iter().map(|folder| {
             let depth = folder.components().count().saturating_sub(1);
             let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -429,7 +429,7 @@ pub(super) struct State {
 
     pub(super) scale: Rc<Cell<cull::Scale>>,
 
-    pub(super) analyse_button: Rc<RefCell<Option<adw::SplitButton>>>,
+    pub(super) analyse_button: Rc<RefCell<Option<gtk::Button>>>,
 
     pub(super) shelves: gtk::Box,
 }
@@ -446,7 +446,7 @@ impl State {
             shelves: gtk::Box::new(gtk::Orientation::Vertical, 0),
             picker: gtk::DropDown::from_strings(&[]),
             folder: Rc::default(),
-            folder_picker: gtk::DropDown::from_strings(&["All folders"]),
+            folder_picker: gtk::DropDown::from_strings(&["All Folders"]),
             folders: Rc::default(),
             switching: Rc::new(Cell::new(false)),
             scanning: Rc::new(Cell::new(false)),

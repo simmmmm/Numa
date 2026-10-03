@@ -43,9 +43,7 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let (wheel, caption) = build_grading_wheel(state);
 
-    let ranges = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    ranges.add_css_class("linked");
-    ranges.add_css_class("aspect-ratios");
+    let ranges = chip_row();
     ranges.set_margin_bottom(6);
     let mut first: Option<gtk::ToggleButton> = None;
     for (index, name) in ["Shadow", "Mid", "High", "All"].iter().enumerate() {

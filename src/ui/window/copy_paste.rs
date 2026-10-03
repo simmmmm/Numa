@@ -4,12 +4,12 @@ pub(super) fn fill_presets_menu(state: &App) {
 
     let menu = &state.copy_paste.presets_menu;
     menu.remove_all();
-    menu.append(Some("Apply a preset…"), Some("win.preset-choose"));
-    menu.append(Some("Save settings as preset…"), Some("win.preset-save"));
+    menu.append(Some("Apply a Preset…"), Some("win.preset-choose"));
+    menu.append(Some("Save Settings as Preset…"), Some("win.preset-save"));
     let manage = gio::Menu::new();
-    manage.append(Some("Import presets…"), Some("win.preset-import"));
-    manage.append(Some("Import a folder of presets…"), Some("win.preset-import-folder"));
-    manage.append(Some("Open presets folder"), Some("win.preset-folder"));
+    manage.append(Some("Import Presets…"), Some("win.preset-import"));
+    manage.append(Some("Import a Folder of Presets…"), Some("win.preset-import-folder"));
+    manage.append(Some("Open Presets Folder"), Some("win.preset-folder"));
     menu.append_section(None, &manage);
 }
 
@@ -41,7 +41,7 @@ pub(super) fn preset_picker(state: &App, window: &adw::ApplicationWindow) {
 
 pub(super) fn save_preset_dialog(state: &App, window: &adw::ApplicationWindow, source: Document) {
     let dialog = adw::Dialog::new();
-    dialog.set_title("Save as preset");
+    dialog.set_title("Save Settings as Preset");
     dialog.set_content_width(420);
 
     let page = adw::PreferencesPage::new();
@@ -52,12 +52,11 @@ pub(super) fn save_preset_dialog(state: &App, window: &adw::ApplicationWindow, s
     page.add(&naming);
 
     let group = adw::PreferencesGroup::new();
-    group.set_title("What it carries");
+    group.set_title("What It Carries");
     let chosen = parts_checklist(&group, state.copy_paste.parts.get());
     page.add(&group);
 
-    let save = gtk::Button::with_label("Save");
-    save.add_css_class("suggested-action");
+    let save = primary_button("Save");
     save.set_halign(gtk::Align::End);
     save.set_margin_top(12);
     save.connect_clicked(glib::clone!(
@@ -142,12 +141,12 @@ pub(super) fn paste_settings(state: &App, window: &adw::ApplicationWindow, ask: 
     }
 
     let dialog = adw::Dialog::new();
-    dialog.set_title("Paste settings");
+    dialog.set_title("Paste Settings");
     dialog.set_content_width(420);
 
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::new();
-    group.set_title("What travels");
+    group.set_title("What Travels");
     group.set_description(Some(
         "The crop is off by default: it is drawn against one photograph's \
          content and rarely means the same thing on another.",
@@ -155,8 +154,7 @@ pub(super) fn paste_settings(state: &App, window: &adw::ApplicationWindow, ask: 
 
     let chosen = parts_checklist(&group, state.copy_paste.parts.get());
 
-    let apply = gtk::Button::with_label("Paste");
-    apply.add_css_class("suggested-action");
+    let apply = primary_button("Paste");
     apply.set_halign(gtk::Align::End);
     apply.set_margin_top(12);
     apply.connect_clicked(glib::clone!(

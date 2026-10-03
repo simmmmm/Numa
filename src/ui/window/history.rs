@@ -150,6 +150,7 @@ pub(super) fn build_history(state: &App) -> gtk::Popover {
     column.append(&snapshots);
 
     let popover = gtk::Popover::new();
+    popover.add_css_class("numa-content");
     popover.set_child(Some(&column));
 
     popover.connect_show(glib::clone!(
@@ -173,7 +174,7 @@ pub(super) fn refresh_snapshots(state: &App, list: &gtk::ListBox) {
     let saved = state.catalog.snapshots(id).unwrap_or_default();
 
     let save = adw::EntryRow::new();
-    save.set_title("Save snapshot…");
+    save.set_title("Save Snapshot…");
     let button = gtk::Button::from_icon_name("list-add-symbolic");
     button.set_tooltip_text(Some("Save snapshot"));
     button.set_valign(gtk::Align::Center);

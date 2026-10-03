@@ -313,13 +313,20 @@ fn show_picked_point(state: &App) {
                 let (top, bottom) = (bounds.y() as f64, (bounds.y() + bounds.height()) as f64);
                 let (shown, page) = (adjustment.value(), adjustment.page_size());
                 if top < shown || bottom > shown + page {
-                    adjustment.set_value((top - 24.0).max(0.0));
+                    glide(&scroller, &adjustment, (top - 24.0).max(0.0));
                 }
             }
         }
+
         section.add_css_class("point-flash");
-        glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
+        let frames = Cell::new(0);
+        section.add_tick_callback(move |section, _| {
+            frames.set(frames.get() + 1);
+            if frames.get() < 3 {
+                return glib::ControlFlow::Continue;
+            }
             section.remove_css_class("point-flash");
+            glib::ControlFlow::Break
         });
     });
 }

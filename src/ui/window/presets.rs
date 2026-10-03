@@ -110,7 +110,7 @@ pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static
 
     if names.is_empty() {
         let empty = adw::StatusPage::new();
-        empty.set_title("No presets yet");
+        empty.set_title("No Presets Yet");
         empty.set_description(Some("Save the settings of a photograph, or import presets from Lightroom or Capture One."));
         empty.set_vexpand(true);
         column.append(&empty);
@@ -293,7 +293,7 @@ pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindo
         #[weak] window,
         move |_, _| {
             let dialog = gtk::FileDialog::new();
-            dialog.set_title("Import presets");
+            dialog.set_title("Import Presets");
             start_in_downloads(&dialog);
             let filter = gtk::FileFilter::new();
             filter.set_name(Some("Presets — Numa, Lightroom, Capture One"));
@@ -316,7 +316,7 @@ pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindo
         #[weak] window,
         move |_, _| {
             let dialog = gtk::FileDialog::new();
-            dialog.set_title("Import a folder of presets");
+            dialog.set_title("Import a Folder of Presets");
             start_in_downloads(&dialog);
             let (state, parent) = (state.clone(), window.clone());
             dialog.select_multiple_folders(Some(&window), gio::Cancellable::NONE, move |chosen| {
@@ -610,26 +610,21 @@ pub(super) fn fill_presets_page(state: &App) {
     }
     page.append(&card);
     refresh_strength(state);
+
+    let save = gtk::Button::from_icon_name("list-add-symbolic");
+    save.set_tooltip_text(Some("Save Settings as Preset…"));
+    save.set_action_name(Some("win.preset-save"));
+    save.add_css_class("flat");
+    let more = more_menu(&[
+        &[("Import Presets…", "win.preset-import"), ("Import a Folder of Presets…", "win.preset-import-folder")],
+        &[("Open Presets Folder", "win.preset-folder")],
+    ]);
+    let label = section_row("Presets", &[save.upcast_ref(), more.upcast_ref()]);
+    label.set_margin_bottom(6);
+    page.append(&label);
     let browser = preset_browser(state, || {});
     browser.set_vexpand(true);
     page.append(&browser);
-
-    let actions = gtk::FlowBox::new();
-    actions.set_selection_mode(gtk::SelectionMode::None);
-    actions.set_column_spacing(6);
-    actions.set_row_spacing(6);
-    actions.set_margin_top(6);
-    for (label, action) in [
-        ("Save current…", "win.preset-save"),
-        ("Import…", "win.preset-import"),
-        ("Import folder…", "win.preset-import-folder"),
-        ("Open folder", "win.preset-folder"),
-    ] {
-        let button = gtk::Button::with_label(label);
-        button.set_action_name(Some(action));
-        actions.append(&button);
-    }
-    page.append(&actions);
 }
 
 thread_local! {

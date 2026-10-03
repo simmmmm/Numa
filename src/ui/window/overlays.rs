@@ -10,14 +10,12 @@ pub(super) fn build_face_names_overlay(state: &App) -> gtk::DrawingArea {
     ));
     area.set_draw_func(glib::clone!(
         #[strong] state,
-        move |_, context, width, height| {
+        move |area, context, width, height| {
             let (x, y, w, h) = content_rect(&state, width as f64, height as f64);
-            context.select_font_face(
-                "Sans",
-                gtk::cairo::FontSlant::Normal,
-                gtk::cairo::FontWeight::Normal,
-            );
-            context.set_font_size(13.0);
+
+            let mut font = area.pango_context().font_description().unwrap_or_default();
+            font.set_absolute_size(12.0 * gtk::pango::SCALE as f64);
+            font.set_weight(gtk::pango::Weight::Semibold);
             for (at, name) in state.overlays.face_names.borrow().iter() {
                 let (face_x, face_y) = (x + w * at[0] as f64, y + h * at[1] as f64);
                 let (face_w, face_h) = (w * at[2] as f64, h * at[3] as f64);
@@ -27,18 +25,24 @@ pub(super) fn build_face_names_overlay(state: &App) -> gtk::DrawingArea {
                 context.rectangle(face_x.round() + 0.5, face_y.round() + 0.5, face_w.round(), face_h.round());
                 let _ = context.stroke();
 
-                let Ok(extents) = context.text_extents(name) else { continue };
-                let pad = 5.0;
-                let (label_w, label_h) = (extents.width() + pad * 2.0, 20.0);
+                let layout = area.create_pango_layout(Some(name));
+                layout.set_font_description(Some(&font));
+                let (_, text) = layout.pixel_extents();
+                let pad = 12.0;
+                let (label_w, label_h) = (text.width() as f64 + pad * 2.0, 24.0);
 
                 let label_x = (face_x + face_w / 2.0 - label_w / 2.0).clamp(x, x + w - label_w);
                 let label_y = (face_y + face_h + 4.0).min(y + h - label_h);
-                context.set_source_rgba(0.0, 0.0, 0.0, 0.55);
-                context.rectangle(label_x, label_y, label_w, label_h);
+                let r = label_h / 2.0;
+                context.new_sub_path();
+                context.arc(label_x + label_w - r, label_y + r, r, -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+                context.arc(label_x + r, label_y + r, r, std::f64::consts::FRAC_PI_2, 3.0 * std::f64::consts::FRAC_PI_2);
+                context.close_path();
+                context.set_source_rgba(0.078, 0.078, 0.078, 0.7);
                 let _ = context.fill();
-                context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                context.move_to(label_x + pad, label_y + label_h - 6.0);
-                let _ = context.show_text(name);
+                context.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+                context.move_to(label_x + pad, label_y + (label_h - text.height() as f64) / 2.0 - text.y() as f64);
+                pangocairo::functions::show_layout(context, &layout);
             }
         }
     ));

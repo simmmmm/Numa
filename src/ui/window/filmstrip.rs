@@ -1,6 +1,9 @@
 use super::*;
 
 const HEIGHT: f32 = 64.0;
+const SHORTEST: f32 = 36.0;
+const TALLEST: f32 = 200.0;
+const HEIGHT_SETTING: &str = "filmstrip-height";
 
 pub(super) fn build_filmstrip(state: &App) {
     let timed = std::time::Instant::now();
@@ -75,16 +78,14 @@ fn make_frame(state: &App) -> gtk::Button {
 
     let stacked = gtk::Overlay::new();
     stacked.set_child(Some(&picture));
-    let mark = gtk::Image::from_icon_name("document-edit-symbolic");
-    mark.set_pixel_size(11);
-    mark.add_css_class("edited-mark");
-    mark.set_halign(gtk::Align::Start);
-    mark.set_valign(gtk::Align::Start);
+    let mark = edited_mark();
+    mark.set_halign(gtk::Align::End);
+    mark.set_valign(gtk::Align::End);
     stacked.add_overlay(&mark);
     let badge = gtk::Label::new(None);
     badge.add_css_class("strip-badge");
-    badge.set_halign(gtk::Align::End);
-    badge.set_valign(gtk::Align::Start);
+    badge.set_halign(gtk::Align::Start);
+    badge.set_valign(gtk::Align::End);
     stacked.add_overlay(&badge);
 
     let frame = gtk::Button::new();
@@ -109,13 +110,16 @@ fn bind_frame(state: &App, frame: &gtk::Button, index: usize) {
     let lazy = state.filmstrip.lazy.borrow();
     let Some(thumb) = lazy.get(index) else { return };
     let aspect = state.filmstrip.aspects.borrow().get(index).copied().unwrap_or(justified::UNKNOWN_ASPECT);
-    picture.set_size_request((HEIGHT * aspect).round() as i32, HEIGHT as i32);
+    let height = state.filmstrip.height.get();
+    picture.set_size_request((height * aspect).round() as i32, height as i32);
     picture.set_paintable(thumb.texture.as_ref());
 
     let cards = state.grid.cards.borrow();
     let marks = cards.get(&thumb.id).map_or((0, Flag::None, thumb.edited), |photo| (photo.rating, photo.flag, photo.edited));
     let (rating, flag, edited) = marks;
     mark.set_visible(edited);
+
+    picture.set_opacity(if flag == Flag::Rejected { 0.35 } else { 1.0 });
     badge.set_text(&strip_badge_text(rating, flag));
     badge.set_visible(!badge.text().is_empty());
     match flag == Flag::Rejected {
@@ -173,7 +177,7 @@ pub(super) fn mark_filmstrip(state: &App, current: i64) {
         let centre = adjustment.value() + bounds.x() as f64 + bounds.width() as f64 / 2.0;
         let reach = adjustment.upper() - adjustment.page_size();
 
-        adjustment.set_value((centre - adjustment.page_size() / 2.0).clamp(0.0, reach.max(0.0)));
+        glide(strip, &adjustment, (centre - adjustment.page_size() / 2.0).clamp(0.0, reach.max(0.0)));
         glib::ControlFlow::Break
     });
 }
@@ -192,6 +196,8 @@ pub(super) struct State {
     pub(super) live: Rc<RefCell<std::collections::BTreeMap<usize, gtk::Button>>>,
 
     pub(super) current: Rc<Cell<Option<i64>>>,
+
+    pub(super) height: Rc<Cell<f32>>,
 }
 
 impl State {
@@ -204,6 +210,57 @@ impl State {
             aspects: Rc::default(),
             live: Rc::default(),
             current: Rc::default(),
+            height: Rc::new(Cell::new(HEIGHT)),
         }
     }
+}
+
+pub(super) fn install_strip_resize(state: &App, handle: &gtk::Widget) {
+    if let Some(saved) = state.catalog.setting(HEIGHT_SETTING).and_then(|value| value.parse::<f32>().ok()) {
+        state.filmstrip.height.set(saved.clamp(SHORTEST, TALLEST));
+    }
+    handle.set_cursor_from_name(Some("ns-resize"));
+    let drag = gtk::GestureDrag::new();
+
+    let start = Rc::new(Cell::new((HEIGHT, 0.0_f32)));
+    let window_y = |gesture: &gtk::GestureDrag, y: f64| -> Option<f32> {
+        let widget = gesture.widget()?;
+        let root = widget.root()?;
+        widget.compute_point(&root, &gtk::graphene::Point::new(0.0, y as f32)).map(|point| point.y())
+    };
+    drag.connect_drag_begin(glib::clone!(
+        #[strong] state,
+        #[strong] start,
+        move |gesture, _, y| {
+            if let Some(at) = window_y(gesture, y) {
+                start.set((state.filmstrip.height.get(), at));
+            }
+        }
+    ));
+    drag.connect_drag_update(glib::clone!(
+        #[strong] state,
+        #[strong] start,
+        move |gesture, _, _| {
+            let Some((_, y)) = gesture.point(None) else { return };
+            let Some(at) = window_y(gesture, y) else { return };
+            let (from, began) = start.get();
+            let height = (from + began - at).clamp(SHORTEST, TALLEST).round();
+            if height == state.filmstrip.height.get() {
+                return;
+            }
+            state.filmstrip.height.set(height);
+
+            let live: Vec<(usize, gtk::Button)> = state.filmstrip.live.borrow().iter().map(|(index, frame)| (*index, frame.clone())).collect();
+            for (index, frame) in live {
+                bind_frame(&state, &frame, index);
+            }
+        }
+    ));
+    drag.connect_drag_end(glib::clone!(
+        #[strong] state,
+        move |_, _, _| {
+            let _ = state.catalog.set_setting(HEIGHT_SETTING, &state.filmstrip.height.get().to_string());
+        }
+    ));
+    handle.add_controller(drag);
 }

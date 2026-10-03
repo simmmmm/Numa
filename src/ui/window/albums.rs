@@ -11,10 +11,10 @@ pub(super) fn fill_albums_menu(state: &App, albums: &[(String, String)]) {
         existing.append_item(&item);
     }
     add.append_section(None, &existing);
-    add.append(Some("New album…"), Some("win.photo-album-new"));
-    menu.append_submenu(Some("Add to album"), &add);
+    add.append(Some("New Album…"), Some("win.photo-album-new"));
+    menu.append_submenu(Some("Add to Album"), &add);
     if state.libraries.filter.borrow().album.is_some() {
-        menu.append(Some("Remove from album"), Some("win.photo-album-remove"));
+        menu.append(Some("Remove from Album"), Some("win.photo-album-remove"));
     }
 }
 
@@ -121,14 +121,18 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
     });
     if albums.is_empty() {
         let empty = adw::ActionRow::new();
-        empty.set_title("No albums yet");
-        empty.set_subtitle("Select photographs, right-click, and choose Add to album.");
+        empty.set_title("No Albums Yet");
+        empty.set_subtitle("Select photographs, right-click, and choose Add to Album.");
         group.add(&empty);
     }
 
     for (key, name) in albums {
         let row = adw::EntryRow::new();
         row.set_text(&name);
+
+        let fan = places::fan(places::TILE);
+        places::show_covers(&fan, &places::row(state, &Place::Album(key.clone())).covers, places::TILE);
+        row.add_prefix(&fan);
         row.set_show_apply_button(true);
         row.connect_apply(glib::clone!(
             #[strong] state,

@@ -52,26 +52,29 @@ pub(super) fn fill(state: &App) {
         page.remove(&child);
     }
     page.append(&card);
+
+    let more = more_menu(&[&[("Import LUTs…", "lut.import")], &[("Open LUTs Folder", "lut.folder")]]);
+    let actions = gio::SimpleActionGroup::new();
+    let import = gio::SimpleAction::new("import", None);
+    import.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] more,
+        move |_, _| choose_files(&state, more.upcast_ref())
+    ));
+    let folder = gio::SimpleAction::new("folder", None);
+    folder.connect_activate(glib::clone!(
+        #[weak] more,
+        move |_, _| open_folder(more.upcast_ref(), Kind::Luts.folder())
+    ));
+    actions.add_action(&import);
+    actions.add_action(&folder);
+    more.insert_action_group("lut", Some(&actions));
+    let label = section_row("LUTs", &[more.upcast_ref()]);
+    label.set_margin_bottom(6);
+    page.append(&label);
     let browser = browser(state, Kind::Luts, || {});
     browser.set_vexpand(true);
     page.append(&browser);
-
-    let actions = gtk::FlowBox::new();
-    actions.set_selection_mode(gtk::SelectionMode::None);
-    actions.set_column_spacing(6);
-    actions.set_row_spacing(6);
-    actions.set_margin_top(6);
-    let import = gtk::Button::with_label("Import…");
-    import.set_tooltip_text(Some("Add .cube or .3dl files to Numa's LUTs"));
-    import.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |button| choose_files(&state, button)
-    ));
-    actions.append(&import);
-    let folder = gtk::Button::with_label("Open folder");
-    folder.connect_clicked(|button| open_folder(button, Kind::Luts.folder()));
-    actions.append(&folder);
-    page.append(&actions);
     write(state);
 }
 
@@ -102,7 +105,7 @@ pub(super) fn choose(state: &App, chosen: Option<&str>) {
     schedule_history_push(state);
 }
 
-fn choose_files(state: &App, button: &gtk::Button) {
+fn choose_files(state: &App, button: &gtk::Widget) {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("LUTs (.cube, .3dl)"));
     for pattern in ["*.cube", "*.CUBE", "*.3dl", "*.3DL"] {
@@ -133,7 +136,7 @@ fn choose_files(state: &App, button: &gtk::Button) {
     });
 }
 
-fn open_folder(button: &gtk::Button, dir: std::path::PathBuf) {
+fn open_folder(button: &gtk::Widget, dir: std::path::PathBuf) {
     if let Err(err) = std::fs::create_dir_all(&dir) {
         log::warn!("could not create {}: {err}", dir.display());
     }

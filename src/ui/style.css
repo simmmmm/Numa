@@ -1,5 +1,66 @@
-/* UX-003: the look. Colours come from libadwaita's named palette, so light and
-   dark themes and the user's accent colour all follow automatically. */
+/* UX-003: the look. Chrome follows libadwaita's named palette, so the light
+   and dark schemes and the user's accent all reach it; Numa's own content
+   uses the design system's tokens (`@numa_*`, UX-031). */
+
+/* ---------- The design system's parts ---------- */
+
+/* Colours are the design system's tokens (`tokens.css`, from
+   data/design/tokens.json by dev/tokens.py), loaded ahead of this sheet. */
+
+/* Inside Numa's own content — the panel, the grid, the loupe, what is drawn
+   over the photograph, the mask bar, Numa's popovers — the accent is Numa's:
+   white with dark on it, near-black with white on the light scheme. The
+   chrome keeps the system accent. Custom properties need GTK 4.16 and
+   libadwaita 1.6; the rule after this one covers the older ones. */
+.numa-content {
+    --accent-bg-color: @numa_accent;
+    --accent-fg-color: @numa_on_accent;
+    --accent-color: @numa_accent;
+}
+
+/* The same on GTK before 4.16 (Ubuntu 24.04: GTK 4.14, libadwaita 1.5), which
+   ignores the properties above: what libadwaita 1.5's sheet fills with its
+   accent (`$fill_color`), by its node names. A checked toggle button is grey
+   there, not the accent, and Numa's chips set their own; the focus ring
+   stays the system's on those versions, and a menu's check has no ground. */
+.numa-content switch:checked,
+.numa-content checkbutton > check:checked,
+.numa-content checkbutton > check:indeterminate,
+.numa-content checkbutton > radio:checked,
+.numa-content checkbutton > radio:indeterminate {
+    background-color: @numa_accent;
+    color: @numa_on_accent;
+}
+
+/* The one primary command of a screen (`primary_button`), header bar
+   included. `.opaque` with it, so a header bar does not flatten it. */
+button.numa-primary {
+    background-color: @numa_accent;
+    color: @numa_on_accent;
+}
+
+/* The photo-side ground, as a card (the histogram) and as a pill (the zoom,
+   a name). #141414 at 70 % rather than the HUD's 55 %: GTK draws no backdrop
+   blur, so the ground does the material's reading work alone. Dark in both
+   schemes — it sits on the photograph. */
+.photo-card,
+.photo-pill {
+    background: alpha(@numa_photo_ground_page, 0.7);
+    color: white;
+}
+
+.photo-card {
+    border-radius: 14px;
+    padding: 10px 14px;
+}
+
+.photo-pill {
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-feature-settings: "tnum";
+}
 
 /* ---------- Adjustment panel ---------- */
 
@@ -18,7 +79,7 @@
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 1.1px;
-    color: alpha(@window_fg_color, 0.5);
+    color: @numa_label;
     opacity: 1;
 }
 
@@ -59,16 +120,18 @@
    margins, and at -6 that arithmetic lands on 2 px with our own handle and
    below zero with a theme whose handle is smaller — which GTK reports as
    "trough reported min height -2" and then draws anyway. */
-.adjustment scale {
+.adjustment scale,
+scale.numa-slider {
     min-height: 0;
     padding: 5px 0;
 }
 
-.adjustment scale trough {
+.adjustment scale trough,
+scale.numa-slider trough {
     /* PANEL_PLAN P1: a 2 px hairline, and a 10 px area for the thumb to sit in. */
     min-height: 2px;
-    border-radius: 1px;
-    background-color: alpha(@window_fg_color, 0.11);
+    border-radius: 999px;
+    background-color: @numa_track;
 }
 
 /* PANEL_PLAN P1: what GTK draws between a slider's lower bound and its value.
@@ -90,7 +153,8 @@ scale highlight {
    a detail nobody sees as a shadow; what it does is thicken the dot, and
    eighteen thickened dots down a column is most of why the panel read as
    heavy. */
-.adjustment scale slider {
+.adjustment scale slider,
+scale.numa-slider slider {
     min-width: 10px;
     min-height: 10px;
     margin: -4px;
@@ -100,16 +164,8 @@ scale highlight {
     box-shadow: none;
 }
 
-.adjustment scale.touched slider {
-    background: @accent_bg_color;
-}
-
 .adjustment scale:hover slider {
     background: alpha(currentColor, 0.7);
-}
-
-.adjustment scale.touched:hover slider {
-    background: mix(@accent_bg_color, white, 0.15);
 }
 
 .adjustment scale:disabled slider {
@@ -124,30 +180,25 @@ scale highlight {
    been touched — what changes is the fill `paint_track` draws on it and the
    thumb. A track that brightened as well said the same thing twice. */
 .quiet scale trough {
-    background-color: alpha(@window_fg_color, 0.11);
+    background-color: @numa_track;
 }
 
 /* Neutral: the thumb is there, dim, on its neutral position — not absent.
    Transparent until hover was a control that appeared out of nothing. */
-.quiet scale slider {
-    background: alpha(@window_fg_color, 0.28);
+.quiet scale slider,
+scale.numa-slider slider {
+    background: @numa_thumb_rest;
     transition: background 120ms ease-out;
 }
 
-.quiet scale:hover trough {
-    background-color: alpha(@window_fg_color, 0.18);
+.quiet scale:hover trough,
+scale.numa-slider:hover trough {
+    background-color: @numa_track_hover;
 }
 
-.quiet scale:hover slider {
+.quiet scale:hover slider,
+scale.numa-slider:hover slider {
     background: alpha(currentColor, 0.7);
-}
-
-.quiet scale.touched slider {
-    background: @accent_bg_color;
-}
-
-.quiet scale.touched:hover slider {
-    background: mix(@accent_bg_color, white, 0.15);
 }
 
 .quiet .slider-name {
@@ -161,10 +212,6 @@ scale highlight {
 .quiet .touched .slider-value,
 .quiet .lead .slider-name {
     opacity: 1;
-}
-
-.quiet .lead .slider-name {
-    font-weight: 600;
 }
 
 /* ---------- Histogram ---------- */
@@ -207,22 +254,101 @@ scale highlight {
 
 /* ---------- Library grid ---------- */
 
-/* LIB-015: the cards in the rows. The padding is also
-   `CHROME` in justified.rs, which needs it to give the picture its shape. */
-.photo-rows > box {
-    padding: 6px;
-    border-radius: 10px;
-    transition: background 120ms ease;
+/* UX-026: a card is only the photograph. Selected is Numa's accent — white
+   on the dark ground, near-black on the light one — as a ring round it. */
+.photo-rows > overlay.grid-card {
+    border-radius: 3px;
+    background: alpha(black, 0.25);
 }
 
-.photo-rows > box:hover {
-    background: alpha(currentColor, 0.07);
+.photo-rows > overlay.grid-card:selected {
+    outline: 3px solid @numa_accent;
+    outline-offset: 1px;
 }
 
-.photo-rows > box:selected {
-    background: alpha(@accent_bg_color, 0.28);
-    outline: 2px solid @accent_bg_color;
-    outline-offset: -2px;
+.grid-card.rejected > picture {
+    opacity: 0.35;
+}
+
+/* What is set, on the photograph: always dark, whichever the theme. UX-036:
+   the filmstrip's frames carry the same marks (`.strip-badge` is the rating
+   there). */
+.card-badge,
+.strip-badge {
+    margin: 6px;
+    padding: 2px 6px;
+    border-radius: 7px;
+    background: rgba(0, 0, 0, 0.62);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    font-feature-settings: "tnum";
+}
+
+.card-marks {
+    margin: 6px;
+}
+
+.card-marks > .card-badge {
+    margin: 0;
+}
+
+.card-badge.suggested {
+    background: rgba(0, 0, 0, 0.45);
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 600;
+}
+
+.card-badge.rejected,
+.strip-badge.rejected {
+    color: @numa_photo_reject;
+}
+
+.card-edited {
+    padding: 3px;
+}
+
+.card-dot {
+    min-width: 6px;
+    min-height: 6px;
+    border-radius: 3px;
+    background: white;
+}
+
+/* LIB-023: what narrows the grid, under the header while anything does. */
+.filter-chips {
+    padding: 10px 14px;
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.filter-chips .filter-chip {
+    border-radius: 999px;
+    padding: 4px 8px 4px 14px;
+    min-height: 30px;
+}
+
+/* The name and the stars, with the pointer. */
+/* 12 px in and 8 up: the stars land where the rating's pill has its text. */
+.card-caption {
+    padding: 22px 12px 8px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+.card-stars {
+    font-size: 13px;
+}
+
+.grid-card:hover .card-caption {
+    opacity: 1;
+}
+
+.grid-card:hover .card-foot {
+    opacity: 0;
 }
 
 /* CANVAS-006: the reference frame beside the canvas. A line between the two,
@@ -235,7 +361,7 @@ scale highlight {
 }
 
 .reference-caption {
-    font-size: 0.85em;
+    font-size: 12px;
     opacity: 0.6;
 }
 
@@ -247,7 +373,7 @@ scale highlight {
 }
 
 .loupe-caption {
-    font-size: 0.9em;
+    font-size: 13px;
     opacity: 0.6;
 }
 
@@ -262,116 +388,35 @@ scale highlight {
     opacity: 1;
 }
 
-.loupe-bar .loupe-star {
-    padding-left: 4px;
-    padding-right: 4px;
-    font-size: 1.1em;
-}
-
-.loupe-bar button.rated {
-    opacity: 1;
-    color: @accent_color;
-}
-
-.loupe-bar button.rejected {
-    opacity: 1;
-    color: #ff7a66;
-}
-
-.thumbnail {
-    border-radius: 6px;
-    background: alpha(black, 0.25);
-}
-
-.photo-name {
-    font-size: 0.85em;
-    opacity: 0.8;
-}
-
-/* Stars stay quiet until a photo is actually rated. */
-.photo-badge {
-    font-size: 0.8em;
-    opacity: 0.35;
-    letter-spacing: 0.06em;
-}
-
-.photo-badge.rated {
-    opacity: 0.9;
-    color: @accent_color;
-}
-
-.photo-badge.rejected {
-    opacity: 0.8;
-    color: @error_color;
-}
 
 /* ---------- Bars ---------- */
 
-.toolbar-row {
-    padding: 5px 10px;
-    background: @window_bg_color;
-    border-bottom: 1px solid alpha(currentColor, 0.1);
-}
-
-/* Chrome should not compete with the photo: smaller, flatter, quieter. */
-.toolbar-row button {
-    min-width: 26px;
-    min-height: 26px;
-    padding: 2px 6px;
-}
-
-.toolbar-row button.suggested-action {
-    padding: 2px 14px;
-}
-
 /* IO-012: the arrow beside Export is an icon, not a word, and the padding that
    makes a labelled button comfortable makes this one look like a mistake. */
-.toolbar-row .linked button.suggested-action:not(:first-child),
-headerbar .linked button.suggested-action:not(:first-child),
+headerbar .linked button.numa-primary:not(:first-child),
 headerbar .linked menubutton.before-more > button {
     padding-left: 4px;
     padding-right: 4px;
     min-width: 20px;
 }
 
-/* UX-023: the zoom, over the photograph while it says something — Adwaita's
-   own .osd for the ground, a pill for the shape. */
-.zoom-badge {
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 0.88em;
-    font-feature-settings: "tnum";
-}
-
 .profile-note {
-    font-size: 0.78em;
+    font-size: 12px;
     opacity: 0.45;
 }
 
-.info-block {
-    font-size: 0.78em;
-    opacity: 0.6;
-    font-feature-settings: "tnum";
-}
-
-.empty-state {
-    font-size: 1.05em;
-    opacity: 0.55;
-}
-
-/* CULL: a suggestion, said quietly. Small, dim and never coloured like the
-   rating badge — the two must not be mistaken for each other. */
-.cull-note {
-    font-size: 0.72rem;
-    opacity: 0.62;
-    margin-top: -2px;
-}
 
 /* UX-009: the strip under the canvas. The current frame is marked by its
    border rather than by a tint, so the thumbnail keeps its own colour — which
    is the thing being judged. */
 .filmstrip {
     background: alpha(black, 0.25);
+}
+
+/* UX-029: the strip's handle — its line, with room above and below to take
+   hold of it. */
+.filmstrip-handle {
+    padding: 3px 0;
 }
 
 /* PERF-052: the strip is a list view, which draws nothing of its own here:
@@ -392,34 +437,17 @@ listview.filmstrip-frames > row {
 }
 
 .filmstrip-frame {
-    padding: 2px;
+    padding: 0;
     min-height: 0;
     min-width: 0;
     border: 2px solid transparent;
 }
 
-.filmstrip-frame.current {
-    border-color: @accent_bg_color;
-}
-
-/* DOC-002: quiet, and never coloured like the rating badge. */
-.edited-mark {
-    opacity: 0.7;
-}
-
-/* LIB-003: the rating on a filmstrip frame. Small, high contrast against a
-   photograph of any brightness, and out of the way in the corner. */
-.strip-badge {
-    font-size: 0.7rem;
-    color: white;
-    background: alpha(black, 0.6);
-    border-radius: 4px;
-    padding: 0 4px;
-    margin: 2px;
-}
-
-.strip-badge.rejected {
-    color: #ff9a8a;
+/* LIB-003: the marks on a filmstrip frame sit closer to its corners than on
+   a card: the frame is 64 px tall. */
+.filmstrip-frame .card-badge,
+.filmstrip-frame .strip-badge {
+    margin: 4px;
 }
 
 /* LIB-003, UX-024: the bar's stars and flags, RatingAndFlags. Quiet until
@@ -437,25 +465,16 @@ listview.filmstrip-frames > row {
 
 .bar-rating button.rated {
     opacity: 1;
-    color: @window_fg_color;
+    color: @numa_accent;
 }
 
 .bar-rating.rejected button.rated,
 .bar-rating button.rejected {
     opacity: 1;
-    color: #ff7a66;
+    color: @numa_reject;
 }
 
-/* MASK-004: what the panel is currently about. Tinted rather than quiet: the
-   panel has changed underneath the reader — half its sections are gone and
-   every slider now writes somewhere else — and a note in small type is not how
-   you tell someone that. */
-.mask-scope {
-    background: alpha(@accent_bg_color, 0.2);
-    border-radius: 7px;
-    padding: 2px;
-}
-
+/* MASK-004: what the panel is currently about. */
 .mask-scope button {
     min-height: 26px;
     padding: 2px 6px;
@@ -465,22 +484,51 @@ listview.filmstrip-frames > row {
     font-weight: 600;
 }
 
-/* TOOL-002: four aspect buttons across a 240-pixel panel. The default button
-   padding puts their combined minimum past that, and the panel is then as wide
-   as this row rather than as wide as it was meant to be.
+/* UX-033: a choice among a few is a row of chips (`chip_row`) — the panel's
+   RGB | R | G | B, Presets | LUTs, the grade's ranges, the crop's aspects,
+   retouch's tools, the filter's rows, the mask bar's tools and Add | Subtract.
+   At rest a quiet fill rather than a raised button: the only thing drawn as a
+   *button* should be something that does something when pressed. Chosen, the
+   accent with its ink on it — white on the dark scheme.
 
-   UX-014: and flat. These rows are a choice between four things, not four
-   commands, so what marks the choice is a quiet fill rather than a raised
-   button — the only thing on the panel drawn as a *button* should be something
-   that does something when pressed. */
-.aspect-ratios button {
-    padding-left: 6px;
-    padding-right: 6px;
+   TOOL-002: tight padding, so four aspects fit a 240-pixel panel rather than
+   making the panel as wide as the row. */
+.chip-row > button {
+    border-radius: 999px;
+    padding-left: 8px;
+    padding-right: 8px;
     min-height: 28px;
-    font-size: 0.92em;
-    background: alpha(currentColor, 0.06);
+    font-size: 13px;
+    font-weight: 600;
+    background: @numa_ground_chip;
     box-shadow: none;
-    border-color: alpha(currentColor, 0.08);
+    border-color: transparent;
+}
+
+.chip-row > button:hover:not(:checked) {
+    background: alpha(currentColor, 0.12);
+}
+
+.chip-row > button:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.chip-row > button:checked:hover {
+    background: alpha(@numa_accent, 0.9);
+}
+
+/* The mask bar's tools, set tighter where the bar is short of room. */
+.chip-row.tight > button {
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+/* UX-032: while a mask is edited, its Done is the screen's one white button;
+   the header's Export steps back to an ordinary one. */
+.masking button.numa-primary.export-primary {
+    background-color: alpha(currentColor, 0.1);
+    color: inherit;
 }
 
 /* The same arithmetic as the row above, on the mask panel: four ways to make a
@@ -490,30 +538,6 @@ listview.filmstrip-frames > row {
 .mask-add button {
     padding-left: 6px;
     padding-right: 6px;
-}
-
-.aspect-ratios button:hover {
-    background: alpha(currentColor, 0.12);
-}
-
-.aspect-ratios button:checked {
-    /* PANEL_PLAN D3: which one is on, without clicking to find out.
-       `alpha(currentColor, 0.2)` was a fifth of the *label's* colour, and the
-       label on a quiet flat button is #9a9a9a — a fifth of dim grey on a dark
-       ground is nothing, which is why the three read as identical. The foreground
-       colour, and the text at full strength with it — the same pair that marks the
-       rail's tab, and one that follows the colour scheme. */
-    background: alpha(@window_fg_color, 0.16);
-    color: @window_fg_color;
-    font-weight: 600;
-}
-
-/* MASK-004: the row for the mask being edited, so the list agrees with the
-   banner above the tabs. DOC-004: and the step in the history that is on
-   screen, which is the same idea about a different list. */
-.current-mask,
-.current-step {
-    background: alpha(@accent_bg_color, 0.22);
 }
 
 /* UX-012: the path across the top of the editor. Flat buttons that read as
@@ -532,7 +556,7 @@ listview.filmstrip-frames > row {
 /* MASK-005: what a mask is made of, under the mask it belongs to. Quieter than
    the list above it: these are the parts of one row, not siblings of it. */
 .mask-part {
-    font-size: 0.92em;
+    font-size: 13px;
     min-height: 34px;
 }
 
@@ -549,7 +573,7 @@ listview.filmstrip-frames > row {
 /* PANEL_PLAN P1: at hairline height with the rest of them. */
 .adjustment scale.hue-slider trough {
     min-height: 2px;
-    border-radius: 1px;
+    border-radius: 999px;
     background: linear-gradient(to right,
         #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%,
         #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%);
@@ -618,7 +642,7 @@ listview.filmstrip-frames > row {
    stays, at hairline height: it is what makes a hue aimable. */
 .adjustment scale.mixer-track trough {
     min-height: 2px;
-    border-radius: 1px;
+    border-radius: 999px;
 }
 
 /* The filled part would paint over the gradient, and these have no neutral to
@@ -635,7 +659,7 @@ listview.filmstrip-frames > row {
 }
 
 .point-section.point-flash {
-    background: alpha(@accent_bg_color, 0.22);
+    background: alpha(@window_fg_color, 0.1);
     transition: none;
 }
 
@@ -771,14 +795,6 @@ listview.filmstrip-frames > row {
 .adjustment .quiet scale.track-luminance trough,
 .adjustment .quiet scale.hue-slider.idle trough {
     background: alpha(currentColor, 0.07);
-}
-
-.adjustment .quiet scale.track-saturation trough,
-.adjustment .quiet scale.track-luminance trough,
-.adjustment .quiet scale.hue-slider.idle trough,
-.adjustment .quiet scale.track-saturation slider,
-.adjustment .quiet scale.track-luminance slider,
-.adjustment .quiet scale.hue-slider.idle slider {
     transition: background 120ms ease-out, border-color 120ms ease-out;
 }
 
@@ -787,6 +803,7 @@ listview.filmstrip-frames > row {
 .adjustment .quiet scale.hue-slider.idle slider {
     background: transparent;
     border-color: transparent;
+    transition: background 120ms ease-out, border-color 120ms ease-out;
 }
 
 .adjustment .quiet scale.track-saturation:hover slider,
@@ -815,9 +832,35 @@ listview.filmstrip-frames > row {
 
 .band-pipette:hover { opacity: 0.9; }
 
+/* A pipette that is down is chosen. */
 .band-pipette:checked {
     opacity: 1;
-    background: alpha(@accent_bg_color, 0.35);
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+/* UX-038: a print in a stack of three (`places::fan`): radius-print, the back
+   two darkened to 0.8 and 0.9, a shadow under each. */
+.print {
+    border-radius: 6px;
+    background: @numa_ground_raised;
+    box-shadow: 0 2px 6px alpha(black, 0.55);
+}
+
+.print.print-mid {
+    filter: brightness(0.9);
+}
+
+.print.print-back {
+    filter: brightness(0.8);
+}
+
+.large-stack .print {
+    box-shadow: 0 6px 16px alpha(black, 0.55);
+}
+
+.large-stack .print.print-front {
+    box-shadow: 0 8px 20px alpha(black, 0.6);
 }
 
 /* LIB-014: a face beside its name. */
@@ -862,11 +905,6 @@ button.rail-tab {
     background: alpha(@window_fg_color, 0.06);
 }
 
-.rail-tab:checked {
-    background: alpha(@window_fg_color, 0.11);
-    color: @window_fg_color;
-}
-
 /* 10 px, not the artboard's 9.5: GTK renders 9.5 as 9 px of ink, and 9 px on
    a 27" at 1080p is the wrong side of legible. The artboard has the note. */
 .rail-label {
@@ -881,27 +919,15 @@ button.rail-tab {
     margin-right: 2px;
 }
 
+/* A tab with work in it: the dot in the accent, its ink on the chosen tab. */
 .rail-dot {
     min-width: 5px;
     min-height: 5px;
     border-radius: 3px;
-    background: @accent_bg_color;
+    background: @numa_accent;
 }
 
 /* ---------- PANEL_PLAN P2b: editing a mask ---------- */
-
-/* The viewport says it: a one-pixel accent border round where the photograph
-   is shown — the photographer's, 21 September, in place of P2's tinted panel
-   and the badge on the photograph; round the whole window at first, and round
-   the viewport only once it had been seen. Transparent outside a mask, so
-   entering one moves nothing by a pixel. */
-.canvas-viewport {
-    border: 1px solid transparent;
-}
-
-.canvas-viewport.editing-mask {
-    border-color: #62a0ea;
-}
 
 /* The line above the rail: whose sliders these are. Quiet — no tint and no
    border, which the plan took away from the panel. */
@@ -913,10 +939,6 @@ button.rail-tab {
     font-size: 13px;
 }
 
-.mask-scope > image {
-    color: @accent_color;
-}
-
 /* The eye, small: a full button filled the 34 px line top to bottom, where
    the artboard has it at 26 with the line's air round it. */
 .mask-scope > button {
@@ -926,29 +948,14 @@ button.rail-tab {
     margin: 4px 0;
 }
 
-/* The path's last step while a mask is edited, in the mask's accent. */
+/* The path's last step while a mask is edited: the name, in ink. */
 .mask-crumb {
-    color: @accent_color;
+    color: @window_fg_color;
     font-weight: 600;
     padding: 0 6px;
 }
 
-/* The toolbar, in the filmstrip's place: one row of 56 px. */
-.mask-toolbar {
-    min-height: 56px;
-    background: mix(@window_bg_color, @accent_bg_color, 0.06);
-    border-top: 1px solid rgba(98, 160, 234, 0.35);
-}
-
-.mask-editing {
-    color: @accent_color;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.2px;
-}
-
-.mask-chip > button,
-.mask-select > button {
+.mask-chip > button {
     min-height: 36px;
     padding: 2px 10px;
 }
@@ -957,75 +964,11 @@ button.rail-tab {
     font-weight: 700;
 }
 
-.mask-chip .mask-where {
-    font-size: 11px;
-    color: alpha(@window_fg_color, 0.6);
-}
-
 .mask-thumb {
     border-radius: 5px;
 }
 
-/* Add or Subtract: a switch of two, the pressed one a pill of accent in its
-   track, so which is on is plain. */
-.mask-adding {
-    background: alpha(@window_fg_color, 0.08);
-    border-radius: 9px;
-    padding: 2px;
-}
-
-.mask-adding > button {
-    background: none;
-    box-shadow: none;
-    border-radius: 7px;
-    min-height: 28px;
-    padding: 0 10px;
-}
-
-.mask-adding > button:hover:not(:checked) {
-    background: alpha(@window_fg_color, 0.08);
-}
-
-.mask-adding > button:checked {
-    background: #3584e4;
-    color: #ffffff;
-}
-
-/* The tool in hand: the button in a light accent, the one in its popover in
-   the full one — Add and Subtract keep the solid blue for which way. */
-.mask-select.tool-in-hand > button {
-    background: alpha(#3584e4, 0.2);
-    color: @accent_color;
-    box-shadow: inset 0 0 0 1px alpha(#3584e4, 0.55);
-}
-
-.tool-item {
-    padding: 6px 12px;
-    font-weight: normal;
-}
-
-.tool-item.current-tool {
-    background: #3584e4;
-    color: #ffffff;
-}
-
-/* The tool's row just above the bar: the OSD's dark glass, with the same
-   room above and below its controls as at either end. */
-.mask-drawing {
-    padding: 6px;
-    border-radius: 12px;
-}
-
-/* The headings and items of the toolbar's popovers — SHOW, SHAPE,
-   THIS MASK. */
-.popover-heading {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.1px;
-    color: alpha(currentColor, 0.55);
-    margin: 4px 10px;
-}
-
+/* The items of the mask chip's popover. */
 .popover-item {
     padding: 6px 12px;
     font-weight: normal;
@@ -1033,10 +976,6 @@ button.rail-tab {
 
 .popover-item.current-mask {
     font-weight: 700;
-}
-
-.destructive-item {
-    color: #ed333b;
 }
 
 /* PANEL_PLAN: a button inside the panel — "Pick a neutral", "Auto", the mask's
@@ -1082,4 +1021,167 @@ button.rail-tab {
    hairline with it. */
 .presets-page {
     padding: 6px 14px 12px 14px;
+}
+
+/* UX-study: editor */
+
+/* UX-030, UX-033: white is Numa's accent inside its own content — the
+   design system's second signature. What is touched or chosen is `numa_accent`
+   with `numa_on_accent` on it: white and #141414 on the dark scheme, the
+   other way round on the light one. Adwaita's chrome keeps the system accent;
+   a screen's one primary command is `.numa-primary` (UX-032). */
+
+/* A moved slider: its dot in the accent (its fill is `paint_track`'s). */
+.adjustment scale.touched slider,
+.quiet scale.touched slider,
+scale.numa-slider.touched slider {
+    background: @numa_accent;
+}
+
+.adjustment scale.touched:hover slider,
+.quiet scale.touched:hover slider,
+scale.numa-slider.touched:hover slider {
+    background: alpha(@numa_accent, 0.85);
+}
+
+/* The selected rail tab: the accent, its icon and name in the accent's ink.
+   The icon is drawn in the tab's foreground colour, so the colour carries it. */
+button.rail-tab:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+button.rail-tab:checked:hover {
+    background: alpha(@numa_accent, 0.9);
+}
+
+.rail-tab:checked .rail-dot {
+    background: @numa_on_accent;
+}
+
+/* "This one" in Numa's lists — the mask being edited (MASK-004), the step on
+   screen (DOC-004), a point colour just picked — a neutral tint, not blue. */
+.current-mask,
+.current-step {
+    background: alpha(@window_fg_color, 0.1);
+}
+
+/* Held Before: the photograph as shot is what is chosen. */
+button.before-toggle:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+/* The filmstrip's current frame: a ring in the accent, nothing blue beside
+   the photograph. */
+.filmstrip-frame.current {
+    border-color: @numa_accent;
+}
+
+/* UX-033: the loupe's AF point and its picked frame, drawn in this colour —
+   white on the photograph in both schemes. */
+.photo-mark {
+    color: white;
+}
+
+/* UX-028, UX-035: the histogram on the photograph, on the photo-side card. */
+.photo-card .histogram {
+    background: none;
+}
+
+/* UX-029: a command at the end of a section's label — Auto on Tone — small
+   enough to sit on the label's line, as the pipette does on White balance. */
+.label-action {
+    min-height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* The same line's icons — Presets' + and ⋯ — at the label's size. */
+button.label-action.image-button,
+menubutton.label-action > button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+}
+
+/* UX-030: focus inside Numa's panel in the same ink as the rest of it. */
+.adjustment button:focus-visible {
+    outline-color: alpha(@window_fg_color, 0.5);
+}
+
+/* MASK-022: the mask's bar, on the window's own ground — nothing blue under
+   or round the photograph. */
+.mask-toolbar {
+    min-height: 56px;
+    background: @window_bg_color;
+    border-bottom: 1px solid alpha(currentColor, 0.1);
+}
+
+/* The chip holds two lines now — EDITING MASK over the name — in the bar's
+   row of 56. */
+.mask-chip {
+    min-height: 44px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+/* MASK-022: while a mask is edited, a white edge round where the photograph
+   is shown — the photographer's border of 21 September, in Numa's accent
+   since the design system made that white. Transparent outside a mask, so
+   entering one moves nothing. */
+.canvas-viewport {
+    border: 2px solid transparent;
+}
+
+.canvas-viewport.editing-mask {
+    border-color: alpha(white, 0.85);
+}
+
+/* Size and Softness (UX-034): Numa's slider (`scale.numa-slider`), its name
+   and value coming up to ink once moved, as a panel row's do. */
+.mask-inline {
+    font-size: 12px;
+    color: alpha(@window_fg_color, 0.72);
+}
+
+.mask-inline.touched {
+    color: @window_fg_color;
+}
+
+.mask-inline .numeric {
+    font-feature-settings: "tnum";
+}
+
+/* Strength, Feather and Edge in the chip's popover: the panel's sliders
+   without the panel's ground and edge. */
+.adjustment.mask-shape {
+    background: none;
+    border: none;
+    margin: 8px 6px 0 6px;
+}
+
+/* TOOL-002: the value HUD over the photograph while the angle moves — the
+   design system's ValueHUD: #141414 at 55 %, 22 px round, the name as a
+   section label, the number white and tabular. Dark in both schemes: it sits
+   on the photograph. */
+.value-hud {
+    background: rgba(20, 20, 20, 0.55);
+    border-radius: 22px;
+    padding: 10px 20px;
+}
+
+.value-hud .hud-name {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1.1px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.value-hud .hud-value {
+    font-size: 26px;
+    font-weight: 300;
+    font-feature-settings: "tnum";
+    color: white;
 }

@@ -228,6 +228,22 @@ entry does not exist, and the messages that say what is missing name
   less than the card already moves it. A mirror without the pack, or a Numa
   from before, fetches the original as before.
 
+- ✅ **START-018**: A card or camera plugged in is a banner under the header,
+  "EOS_DIGITAL · 312 new photographs", with one button, Import…, which opens
+  the Import dialog on that card. The card is read beside the window first,
+  and nothing is said when none of it is new; the banner goes when the card
+  is pulled out. It was a toast that stayed until closed.
+
+- ✅ **START-019**: A quiet first start. Nothing opens by itself: the
+  Additional files dialog is a banner over the libraries, once, "Some tools
+  need extra files: Select, Faces, AI Denoise", whose Download… opens it; the
+  update question, which came as an alert half a minute in, is a banner too
+  and only for the AppImage — a Flatpak or a distribution's package is
+  updated by what installed it. The empty page says "No Libraries Yet", "Add
+  a folder of photographs to start. Numa never moves or changes them.", with
+  Add Folder… and Import from Card…, under the mark (the app icon in the
+  light theme). No banner shows in the editor.
+
 ### APP — Application shell
 
 - ✅ **APP-001**: App actions (`app.quit`, `app.about`) and accelerators.
@@ -791,6 +807,11 @@ entry does not exist, and the messages that say what is missing name
   it was a 64-pixel square left over from the square grid. It shows the grid's
   own 320-pixel thumbnail, so the strip decodes nothing of its own and stays
   sharp on a HiDPI screen.
+
+  30 September: the loupe's five stars, Pick and Reject are in the header's
+  start while it is up, where the editor has them since UX-024 and drawn the
+  same way; adding and importing step aside meanwhile. The bar under the
+  photograph keeps the arrows, the pick target, Edit and the grid.
 - ✅ **LIB-013**: A mark in the grid and the filmstrip on photographs that have
   adjustments. Opening one is not editing it: an untouched document is stored as
   nothing at all, so the mark means what it says — which is the question a shoot
@@ -856,6 +877,8 @@ entry does not exist, and the messages that say what is missing name
   every photograph they are in from every library that can be reached, in the
   filter's order. The rating, flag and sort filters still apply. The People
   dialog stays the place to name them, and works on the library last picked.
+  Since 0.34.0 the Libraries page has shelves for Albums and People too,
+  after the libraries', each a stack like theirs.
   Libraries sharing a parent folder are listed under its name, in the same kind
   of section: a library is a folder, so one trip photographed across several
   years is several of them, and a flat list of "2015, 2019, 2023" says nothing
@@ -885,8 +908,11 @@ entry does not exist, and the messages that say what is missing name
   import files or whole folders. A preset is one JSON file in the data folder,
   in a subfolder per group, holding only the parts it carries — no path, spots
   or faces — so exporting, renaming and deleting one are the file manager's,
-  reached from "Open presets folder". A name already taken is refused, not
-  replaced. The presets are not rows in the menu itself: a GTK menu builds
+  reached from "Open Presets Folder". A name already taken is refused, not
+  replaced. On the Looks tab (UX study, 30 September) the four full-width
+  buttons under the cards are a + (Save Current as Preset…) and a ⋯ (Import
+  Presets…, Import a Folder of Presets…, Open Presets Folder) at the end of
+  the PRESETS label, so more cards fit. The presets are not rows in the menu itself: a GTK menu builds
   every row at once, and 3500 imported ones held the window back for over
   forty seconds.
 
@@ -958,6 +984,27 @@ entry does not exist, and the messages that say what is missing name
   at. And the stack a card is laid over is the one a *click* would land on —
   the stack as it was before the preset now on the photograph — so a card is a
   promise the click keeps.
+- ✅ **LIB-023**: One Filter button and a bar of chips, in place of the second
+  row of drop-downs under the header. The header's end in the grid is the
+  sizes, Analyse, Filter and Export. Filter's popover holds every facet as a
+  section: Rating (Any, 1+ to 5), Flag (All, Picked, Unflagged, Rejected),
+  Analyse (Only Questionable, Only Best of Each Burst — out of Analyse's
+  menu, so Analyse is a plain button now), Type, and Folder when the library
+  has folders. While anything narrows, a slim bar under the header has a
+  chip per facet with its own cross, "5 of 72" and Clear, and the button
+  says how many ("Filter · 2"); with nothing narrowing the bar is gone. The
+  order moved to the main menu's first section, Sort By, five radio items
+  and Reverse Order. Rescan left the header for the main menu, "Rescan
+  Library" (F5), since the folders are watched; People left the filter row
+  for the main menu too. Each library keeps its filter as before.
+- ✅ **LIB-024**: A bar for the selection. With one or more photographs
+  selected, a bar slides up at the foot of the library: a cross that clears
+  the selection, "4 Selected", Rate (No Rating, 1 Star … 5 Stars), Pick,
+  Reject, Paste Settings, Add to Album (the albums and New Album…), Merge…
+  (the HDR merge, only with two or more; it left the header) and, at the
+  end, Export 4… for the export dialog. The keys are in the tooltips. It
+  replaces the floating line of keys ("0–5 rate · P pick · X reject") and
+  stays away while the loupe is up.
 - ✅ **LIB-022**: A photograph that has been worked on shows the edit in the
   grid and the filmstrip, rather than the camera's own picture — seeing the
   render is what says it has been edited, and by then the original is the
@@ -1938,6 +1985,13 @@ dependency at all.
   runs out of room. The larger of the two edges decides the size, so it follows
   the hand rather than one axis of it.
 
+  **Original** comes first (UX study, 30 September): the photograph's own
+  shape, as it is turned, then Free, 1:1, 5:4 / 3:2, 16:9, Custom — seven in
+  two linked rows so none is cut short. While the angle moves, a value HUD
+  floats at the top centre of the photograph — STRAIGHTEN and "−1.4°" on the
+  HUD's dark ground, 22 px round — and leaves 0.9 s after the last change.
+  Done is white, as the mask bar's is.
+
   And there are Reset and Done. The crop was committed on every release of a
   handle, which is right for the undo history and wrong as the only feedback
   there is: nothing on screen ever said the rectangle had been accepted, so the
@@ -2598,7 +2652,8 @@ dependency at all.
   not something the photographer wants.*
 - ✅ **FILTER-009**: LUTs — `.cube` (1D and 3D, up to 65, `DOMAIN_MIN/MAX`)
   and `.3dl`, imported into the data folder's `luts/` and chosen from a list
-  on the Looks tab (Effects' foot until UX-023), with an Amount 0–100. Kept apart from the
+  on the Looks tab (Effects' foot until UX-023), with an Amount 0–100; Import
+  LUTs… and Open LUTs Folder are the ⋯ at the end of the LUTS label. Kept apart from the
   camera profile, as the design principles require: a profile is how the raw
   is rendered, a LUT is a look over the rendered photograph. Applied where a
   LUT made for an sRGB / Rec.709 screen expects to be — on the display values
@@ -3685,10 +3740,9 @@ dependency at all.
     Detail, with one quiet line above it — "These four tabs edit **Person**"
     and the eye. The path ends in the mask's name, in its accent.
   - **Nothing on the photograph**: no badge, no frame; the wash is white at a
-    tenth. What says "you are in a mask" is a one-pixel accent border round
-    the viewport, where the photograph is shown — the photographer's
-    addition, first round the whole window and then, once seen, round the
-    viewport only; transparent outside a mask so entering one moves nothing.
+    tenth. What said "you are in a mask" was a one-pixel accent border round
+    the viewport; MASK-022 took it away (nothing blue round the photograph)
+    — the bar under it and the banner say it.
   - **The tool's own row floats** just above the bar, over the canvas column,
     in the OSD's glass — the photographer's, 21 September: Add | Subtract for
     Brush, Lasso and Click, and Size and Softness only for the first two;
@@ -3780,6 +3834,27 @@ dependency at all.
   average and up to 0.997 in places. The card's session is now built for the
   tile's size, and built again for a frame under 1024 on a side: 6e-8 on
   average, 6e-5 at most. The processor's mattes do not move.
+- ✅ **MASK-022**: The mask bar, fewer parts and in sight (UX study, 30
+  September; reworked after the photographer's test of 0.34.0: "de inhoud
+  was net beter alleen moet het wel duidelijker zijn wat er gebeurt op je
+  scherm"). Entering a mask, the bar slides down at the top of the
+  photograph's column, under the header where the eye already is, and the
+  filmstrip goes; leaving, it goes back. Left, the chip — the mask's
+  picture, "EDITING MASK" over its name (in the chip so it never has to go
+  for room), no "1 of 1 · …". Its popover holds the mask: MASKS with New
+  Mask, THIS MASK's parts, Strength, Feather and Edge, and Invert,
+  Duplicate, Delete Mask. Then the tools as one group — Look, Brush, Lasso,
+  Click, Linear, Radial — with the tool's own controls after them while
+  Brush or Lasso (Add | Subtract for Click too) is in hand. Right, Refine
+  as a split button (Edge, Hair, fur and feathers, Search Again), what is
+  shown in one place — the wash's eye with Outline, Points and Matte in its
+  arrow — and Done in white, at the top right. Round the viewport a white
+  edge while a mask is edited: the photographer's border of 21 September, in
+  Numa's accent since the design system made that white. Nothing is cut off
+  and a 1 280 window keeps one line: under 1 160 px of bar the tools and Add
+  | Subtract are set tighter, under 1 000 the row of tools is one menu with
+  the one in hand as its label, and under 700 the tools and their controls
+  take a second line. Menus open downwards.
 ### RETOUCH — Repair
 
 - ✅ **RETOUCH-001**: Heal — the source's texture under the destination's tone.
@@ -4799,6 +4874,10 @@ dependency at all.
   Application, Library and Editor, each key combination dimmed the way UX-010's
   fact pages already write one. Nothing here is aspirational; the list is the
   code that reads the keys, not a plan for what should.
+  30 September: bound to Ctrl+? as well, as GNOME's own applications have it,
+  and the rows that were missing added — C to compare, Ctrl+O to open a
+  photograph, Ctrl+A and Ctrl+Shift+A for the selection, F5 to rescan (LIB-023),
+  Esc to leave a mask. Wide enough that every row is one line.
 - ✅ **UX-014**: The panel, quieter. Seven section headings at full weight, a
   drop shadow under every one of eighteen slider handles, and a bar of eight
   touching saturated rectangles for the colour mixer — each defensible alone,
@@ -4953,6 +5032,163 @@ dependency at all.
   queue rather than asking it ten times a second. The inventory, the
   numbers and what is still on the main thread are in `ENGINEERING.md`
   ("Saying Numa is busy").
+- ✅ **UX-026**: Quiet rows. A card in the grid is only the photograph: the
+  lines under it (the cull note, the file name, five stars) are gone, so a
+  row is as tall as its pictures and more of them fit. What has been set is
+  said on the picture in small dark pills — "★ 3" and the pick flag at the
+  foot on the left in white, a reject as a dimmed frame with a cross in the
+  reject colour, a white dot on the right for an edited frame, the drive icon
+  for one that is offline, and "×N" at the top on the best frame of a burst.
+  Analyse's suggestion shows only on a frame nobody has rated or flagged, as
+  a dimmer hollow star ("☆ 3", and "soft"). With the pointer on a card a
+  gradient at its foot gives the stars where the pill was and the file name
+  on the right. The tooltip is the name in bold, what stands out in a word
+  or two (Sharp or Soft, Blown highlights, Deep shadows, Almost empty,
+  faces, Eyes closed?, Slow for the lens) and how it was taken with
+  Analyse's suggestion — not every measure with its threshold, which read
+  as a report. Selected is a ring in Numa's accent. Back from the editor or
+  the Libraries page, the keyboard is the grid's, so Space opens the loupe
+  rather than pressing Add Folder.
+- ✅ **UX-027**: The editor's bar, grouped by meaning (UX study, 30
+  September, drawing "Editor · de balk", A). The verdict on the left — Back,
+  the five stars, Pick and Reject; which photograph in the middle — the path
+  and its ⓘ; what is done to it on the right — Undo, Redo and History as one
+  linked group (History is the list Undo and Redo step through, so it moved
+  from the left to beside them), Before with its arrow, Export, the menu.
+- ✅ **UX-030**: White is Numa's accent inside its own content on Linux, as
+  the design system's second signature says. A moved slider's fill and dot,
+  the selected rail tab (white, its icon and name dark), the rail's dots, the
+  chosen chip in the panel (RGB | R | G | B, Presets | LUTs, the grade's
+  ranges, the crop's aspects, a mask's ranges), a pipette that is down, held
+  Before and the filmstrip's current frame are the foreground ink — white on
+  dark, near-black on the light scheme. The mask being edited, the step on
+  screen and a picked point colour lose their blue tint for a neutral one.
+  Adwaita's chrome and its accent are untouched; Export went white with
+  UX-032.
+- ✅ **UX-031**: One design system in the Linux code (UI cohesion, 2
+  October). The design system's tokens.json is in the repository
+  (`data/design/tokens.json`) and `dev/tokens.py` turns its colours into GTK
+  named colours (`src/ui/tokens.css`, `@numa_*`), loaded ahead of the
+  stylesheet with the light scheme's values on top while the scheme is light.
+  The parts more than one place builds live in one module (`kit.rs`).
+  `dev/style.py`, run by `dev/check.sh`, is a ratchet like the shape one:
+  colour literals outside the tokens, stray `suggested-action`, stock
+  sliders outside `slider.rs`, CSS sizes off the scale, cairo "Sans", and
+  spinners or progress bars made outside `busy.rs` (whose three forms —
+  loader toast, progress toast, `Waiting` in place — are the only waits)
+  may only become fewer. The slim tracks' corners are written as a capsule rather
+  than 1 px (the same on a 2 px track), and the notes, the mask's parts and
+  the loupe's and reference's captions are set in px on the type scale
+  rather than in em (12 or 13 px, within half a pixel of what they were at
+  the default font).
+- ✅ **UX-032**: One primary command per screen, and it is white — Numa's
+  accent, near-black on the light scheme — in the header bar as well: the
+  Export pair in the grid and the editor, Export in the export dialog, Add
+  Folder… on the first page, Import, Download, Save and Paste in the settings
+  dialogs, and Done on the mask bar and the crop. The system's blue stays
+  only on what the platform draws itself (an alert's response, the file
+  chooser). AI Denoise and AI Sharpen on the Detail tab are plain buttons:
+  a command in the panel is not the screen's primary.
+- ✅ **UX-033**: Chosen is the accent, everywhere in Numa's own content. A
+  choice among a few is a row of chips, the chosen one white with dark on it
+  (near-black with white on the light scheme): the curve's channels, Presets
+  | LUTs, the grade's ranges, the crop's aspects, retouch's tools, the
+  Filter popover's rows, and on the mask bar the tools and Add | Subtract,
+  which lose their grey track. Inside the editor, the grid, the loupe,
+  compare and Numa's popovers the accent Adwaita draws with (a check, a
+  switch, a focus ring) is Numa's too; the chrome keeps the system's. On
+  GTK before 4.16 (Ubuntu 24.04's AppImage and OBS builds), which ignores
+  the accent properties, switches, checks and radio buttons there are set
+  white by name all the same; only the focus ring stays the system's. The loupe's AF point and the picked frame are white,
+  not the system blue; the grid's selection ring, set stars in the bar, the
+  rail and Before take the same accent.
+- ✅ **UX-034**: The mask bar's Size and Softness are Numa's slider, as on
+  the panel: a hairline filled from where each rests (the default brush, a
+  half-soft edge) rather than from the left end, the dot dim until moved and
+  then in the accent, the name and number coming up to full strength, and a
+  double or right click to put it back. The panel's rest tick follows the
+  light scheme now (it was white on white there).
+- ✅ **UX-035**: One ground on the photograph, in three forms: #141414 at 70 %
+  (GTK draws no blur, so the ground does the reading alone), dark in both
+  schemes. The histogram sits on a card (14 px corners), the zoom and a
+  face's name on a pill (12 px, semibold, the system face — the names were
+  square black boxes in cairo's "Sans"), and the Straighten value HUD keeps
+  its own, as the design system draws it.
+- ✅ **UX-036**: One tile grammar. A filmstrip frame carries the marks its
+  grid card does, drawn the same way: the rating and pick as a dark pill at
+  the foot on the left ("★ 4  ⚑", where it said "4★" in small type at the
+  top right), the edited mark as the card's white dot at the foot on the
+  right (it was a pencil with no ground), and a reject dimmed with the cross
+  in the reject red. One reject red: #ff7a66 on the photograph in both
+  schemes, the design system's light value in the bar on the light scheme.
+- ✅ **UX-037**: One small heading. The mask chip's popover headings (MASKS,
+  THIS MASK, SHOW) and the bar's EDITING MASK are the section label every
+  other popover and the panel use — 10 px, semibold, spaced, in the design
+  system's grey — where they were 11 px bold and 9 px bold white; the
+  Libraries page's shelves are headed by it too, instead of a large title.
+  The section label's grey is the design system's `label` token, which
+  follows the light scheme.
+- ✅ **UX-038**: Stacks of prints as the design system draws them, on the
+  Libraries page and in the picker: three prints turned −8°, 6° and 0°,
+  small corners, the back two darkened to 0.8 and 0.9, each lifted by a
+  shadow — no longer Adwaita cards with a rim and 12 px corners. Each album
+  in the Albums dialog leads with its 36 px stack, as in the picker. The eclipse
+  mark heads the Libraries page (the app icon on the light scheme, where the
+  mark's light disc would vanish); never in the editor.
+- ✅ **UX-039**: The filter's quick chips. The bar under the library's
+  header is always there, led by three chips — All, Picks, ★ 3+ — the
+  narrowings a shoot is gone through with, one press each and the chosen
+  ones white. What else narrows (from the Filter popover) follows them as
+  removable chips, with how many are left and Clear while anything narrows
+  (LIB-023).
+- ✅ **UX-040**: Copy and icons, one way each. Commands, menu items and
+  titles are in Title Case — the presets menu said "Import presets…" in one
+  place and "Import Presets…" in another; "Ask Again", "Find Dust", "Remove
+  People", "Show Affected Area", "Download All", "Got It", "Fit to Window",
+  "Pet Eye"; empty pages "No Albums Yet", "No Presets Yet", "No Folders
+  Yet", "No Faces Yet" — and explanations stay in sentence case. The two
+  dialogs both called "Save as preset" are "Save Settings as Preset" and
+  "Save Export Preset". An icon means one thing: Clear Selection no longer
+  shares Reject's cross (a clear-all icon), a mask's Invert is its own icon
+  (a square with a hole) rather than Flip's, and the arrow beside Export,
+  which opens its settings, is a gear rather than the crumbs' arrow.
+- ✅ **UX-041**: Motion, one way. Opening and closing a photograph, and
+  going to the Libraries page, cross-fade over 300 ms (with the header)
+  instead of cutting. The mask bar slides in over 200 ms. A slider's
+  double-click or right-click reset glides back over about 200 ms, easing
+  out, on the panel and the mask bar alike; the filmstrip follows the
+  photograph the same way, and the panel scrolls to a picked point colour
+  so too. That point colour's flash comes on at once and fades over 700 ms
+  without the 900 ms hold. Nothing bounces, and with animations turned off
+  in the desktop's settings each lands at once.
+- ✅ **UX-042**: The floating value, for every slider. A value changed away
+  from the drag on its row — an arrow, Page or Home/End key on a focused
+  slider (Shift for ten steps), a touchpad's sideways swipe over it (the
+  wheel scrolls the panel instead), on the panel and on the mask bar's Size
+  and Softness, where the wheel moves them too — shows its name
+  and number at the top centre of the photograph on the HUD's dark pill,
+  at once, and leaves 0.9 s after the last change. It was Straighten's
+  alone (which keeps it while the angle moves at all, the level line drawn
+  on the photograph included). A drag on the row does not call it — the
+  row already says it — nor do undo, redo, a preset or opening a
+  photograph.
+- ✅ **UX-028**: The histogram on the photograph. It left the top of the
+  panel for a small graph (about 200×70) at the photograph's top right, 14 px
+  in, on the photo-side card (UX-035) — beside the
+  panel and its sliders (at the top left it hid, the photographer said on
+  testing 0.34.0), where the eyes are while a slider moves, and the panel's first line is the tabs, or
+  the mask's banner while a mask is edited. Shown only while Light or Colour
+  is open; Crop, Retouch and the rest keep the photograph clear. The clipping
+  lights are its two top corners; a right click still chooses Histogram,
+  Waveform or Parade (UX-022); Histogram, a check in the photograph's section
+  of the menu, hides it (not remembered between launches).
+- ✅ **UX-029**: Less furniture round the photograph. Tone's Auto sits at
+  the end of the section's label, small, as White balance's pipette does,
+  rather than on a row of its own. The editor's filmstrip is as tall as the
+  photographer drags it: the line above it is its handle, 36 to 200 px
+  (64 until dragged), kept between launches — the slim 48 of the first test
+  was "nog veel kleiner". Measured in the window's coordinates: in the
+  handle's own the strip shook and the window stopped answering.
 
 ---
 

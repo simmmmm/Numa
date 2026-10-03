@@ -235,7 +235,7 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let show = state.colour.point_show.clone();
-    show.set_label("Show affected area");
+    show.set_label("Show Affected Area");
     show.set_tooltip_text(Some("Grey out everything this colour does not reach"));
     show.connect_toggled(glib::clone!(
         #[strong] state,

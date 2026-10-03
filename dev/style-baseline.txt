@@ -1,0 +1,28 @@
+# style baseline — what the design system replaces, per file. May only shrink.
+# check	count	file
+colour	96	src/ui/style.css
+colour	15	src/ui/window/mask_overlay.rs
+colour	6	src/ui/window/overlays.rs
+colour	6	src/ui/window/retouch_overlay.rs
+colour	5	src/ui/window/masks.rs
+colour	3	src/ui/window/grade.rs
+colour	3	src/ui/window/light.rs
+colour	2	src/ui/window/loupe.rs
+colour	2	src/ui/window/mask_toolbar.rs
+colour	2	src/ui/window/pipettes.rs
+colour	2	src/ui/window/watermark.rs
+colour	1	src/ui/window/panel_values.rs
+scale	6	src/ui/window/colour.rs
+scale	6	src/ui/window/panel_sliders.rs
+scale	5	src/ui/window/grade.rs
+scale	4	src/ui/window/retouch.rs
+scale	3	src/ui/window/masks.rs
+scale	2	src/ui/window/crop.rs
+scale	1	src/ui/window/ai_denoise.rs
+scale	1	src/ui/window/filter.rs
+scale	1	src/ui/window/lut.rs
+scale	1	src/ui/window/preferences.rs
+scale	1	src/ui/window/presets.rs
+size	54	src/ui/style.css
+sans	1	src/ui/window/watermark.rs
+busy	1	src/ui/window/downloads.rs

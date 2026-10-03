@@ -72,9 +72,8 @@ fn tool_buttons(state: &App) -> gtk::Box {
 
     let tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
     tools.set_margin_bottom(8);
-    let pairs = [gtk::Box::new(gtk::Orientation::Horizontal, 0), gtk::Box::new(gtk::Orientation::Horizontal, 0)];
+    let pairs = [chip_row(), chip_row()];
     for pair in &pairs {
-        pair.add_css_class("linked");
         pair.set_homogeneous(true);
         tools.append(pair);
     }
@@ -84,7 +83,7 @@ fn tool_buttons(state: &App) -> gtk::Box {
         (&state.retouch.heal, "Heal", "The source's texture, this place's brightness", RetouchTool::Heal),
         (&state.retouch.clone_tool, "Clone", "The source exactly as it is", RetouchTool::Clone),
         (&state.retouch.remove, "Remove", "Take out what is under the circle and fill it from around it", RetouchTool::Remove),
-        (&state.retouch.pet_eye, "Pet eye", "Put the glow in an animal's eye out: a circle over the pupil", RetouchTool::PetEye),
+        (&state.retouch.pet_eye, "Pet Eye", "Put the glow in an animal's eye out: a circle over the pupil", RetouchTool::PetEye),
     ]
     .into_iter()
     .enumerate()
@@ -173,13 +172,13 @@ pub(super) fn build_retouch(state: &App) -> gtk::Box {
     let finders = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     finders.set_halign(gtk::Align::End);
     finders.set_margin_top(6);
-    let people = gtk::Button::with_label("Remove people");
+    let people = gtk::Button::with_label("Remove People");
     people.set_tooltip_text(Some("Take out everyone but the subject — the passers-by behind"));
     people.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| remove_people(&state)
     ));
-    let dust = gtk::Button::with_label("Find dust");
+    let dust = gtk::Button::with_label("Find Dust");
     dust.set_tooltip_text(Some("Heal the specks a dirty sensor leaves in skies and walls"));
     dust.connect_clicked(glib::clone!(
         #[strong] state,

@@ -8,8 +8,6 @@ pub const ROW_HEIGHT: f32 = 160.0;
 
 pub const SPACING: f32 = 8.0;
 
-const CHROME: f32 = 12.0;
-
 pub const UNKNOWN_ASPECT: f32 = 1.5;
 
 const PAD: f32 = 12.0;
@@ -44,14 +42,11 @@ mod imp {
     pub struct Justified {
 
         pub(super) aspects: RefCell<Vec<f32>>,
-        pub(super) noted: RefCell<Vec<bool>>,
         pub(super) selected: RefCell<Vec<bool>>,
         pub(super) layout: RefCell<Layout>,
 
         pub(super) live: RefCell<Vec<(usize, gtk::Widget)>>,
         pub(super) spare: RefCell<Vec<gtk::Widget>>,
-
-        pub(super) samples: RefCell<[Option<gtk::Widget>; 2]>,
         pub(super) make: RefCell<Option<Make>>,
         pub(super) bind: RefCell<Option<Bind>>,
         pub(super) hadjustment: RefCell<Option<gtk::Adjustment>>,
@@ -149,7 +144,6 @@ mod imp {
         fn dispose(&self) {
             self.live.take();
             self.spare.take();
-            self.samples.take();
 
             while let Some(child) = self.obj().first_child() {
                 child.unparent();
@@ -233,12 +227,11 @@ impl Justified {
         *self.imp().bind.borrow_mut() = Some(Box::new(bind));
     }
 
-    pub fn fill(&self, aspects: Vec<f32>, noted: Vec<bool>) {
+    pub fn fill(&self, aspects: Vec<f32>) {
         let imp = self.imp();
         let had_selection = imp.selected.borrow().contains(&true);
         let count = aspects.len();
         *imp.aspects.borrow_mut() = aspects;
-        *imp.noted.borrow_mut() = noted;
         *imp.selected.borrow_mut() = vec![false; count];
         imp.anchor.set(None);
         imp.cursor.set(None);
@@ -249,7 +242,6 @@ impl Justified {
             card.set_child_visible(false);
         }
         imp.spare.borrow_mut().extend(live.into_iter().map(|(_, card)| card));
-        self.bind_samples();
 
         self.forget_layout();
         if had_selection {
@@ -258,7 +250,7 @@ impl Justified {
     }
 
     pub fn remove_all(&self) {
-        self.fill(Vec::new(), Vec::new());
+        self.fill(Vec::new());
     }
 
     pub fn len(&self) -> usize {
@@ -426,35 +418,8 @@ impl Justified {
 
     fn justify(&self, width: i32) -> Layout {
         let imp = self.imp();
-
-        let caption = self.caption_heights();
-        let captions: Vec<f32> = imp.noted.borrow().iter().map(|noted| caption[*noted as usize]).collect();
         let aspects: Vec<f32> = imp.aspects.borrow().iter().map(|aspect| aspect.max(0.1)).collect();
-        justify(&aspects, &captions, width as f32, imp.row_height.get(), imp.spacing.get())
-    }
-
-    fn bind_samples(&self) {
-        let imp = self.imp();
-        for noted in [false, true] {
-            let Some(index) = imp.noted.borrow().iter().position(|kind| *kind == noted) else { continue };
-            let sample = imp.samples.borrow()[noted as usize].clone();
-            let sample = match sample {
-                Some(sample) => sample,
-                None => {
-                    let Some(card) = self.make_card() else { return };
-                    imp.samples.borrow_mut()[noted as usize] = Some(card.clone());
-                    card
-                }
-            };
-            self.bind_card(&sample, index);
-        }
-    }
-
-    fn caption_heights(&self) -> [f32; 2] {
-        let samples = self.imp().samples.borrow();
-        [0, 1].map(|kind| {
-            samples[kind].as_ref().map_or(0.0, |card| card.measure(gtk::Orientation::Vertical, -1).0 as f32)
-        })
+        justify(&aspects, width as f32, imp.row_height.get(), imp.spacing.get())
     }
 
     fn make_card(&self) -> Option<gtk::Widget> {
@@ -833,10 +798,8 @@ impl Justified {
     }
 }
 
-fn justify(aspects: &[f32], captions: &[f32], width: f32, row_height: f32, spacing: f32) -> Layout {
-    let height_for = |sum: f32, count: usize| {
-        (width - spacing * (count as f32 - 1.0) - CHROME * count as f32).max(1.0) / sum
-    };
+fn justify(aspects: &[f32], width: f32, row_height: f32, spacing: f32) -> Layout {
+    let height_for = |sum: f32, count: usize| (width - spacing * (count as f32 - 1.0)).max(1.0) / sum;
 
     let mut layout = Layout { rects: vec![Rect::default(); aspects.len()], ..Layout::default() };
     let mut y = 0.0;
@@ -864,16 +827,13 @@ fn justify(aspects: &[f32], captions: &[f32], width: f32, row_height: f32, spaci
         };
 
         let mut x = 0.0;
-        let mut tallest: f32 = 0.0;
         for index in start..end {
-            let card_width = aspects[index] * height + CHROME;
-            let card_height = height + captions[index];
-            layout.rects[index] = Rect { x, y, width: card_width, height: card_height };
+            let card_width = aspects[index] * height;
+            layout.rects[index] = Rect { x, y, width: card_width, height };
             x += card_width + spacing;
-            tallest = tallest.max(card_height);
         }
         layout.rows.push(start);
-        y += tallest + spacing;
+        y += height + spacing;
         start = end;
     }
     layout.height = (y - spacing).max(0.0);
@@ -887,9 +847,8 @@ mod tests {
     #[test]
     fn rows_fill_the_width_keep_the_order_and_the_shapes() {
         let aspects = [1.5, 0.667, 1.5, 1.5, 3.0, 1.5, 0.667, 1.0, 1.5];
-        let captions = [40.0; 9];
         let width = 1000.0;
-        let layout = justify(&aspects, &captions, width, ROW_HEIGHT, SPACING);
+        let layout = justify(&aspects, width, ROW_HEIGHT, SPACING);
 
         assert_eq!(layout.rows[0], 0);
         for (row, first) in layout.rows.iter().enumerate() {
@@ -901,7 +860,7 @@ mod tests {
             }
             for index in *first..end {
                 let rect = layout.rects[index];
-                let picture = (rect.width - CHROME) / (rect.height - captions[index]);
+                let picture = rect.width / rect.height;
                 assert!((picture - aspects[index]).abs() < 1e-3);
                 assert_eq!(rect.y, layout.rects[*first].y);
             }
@@ -912,7 +871,7 @@ mod tests {
 
     #[test]
     fn a_panorama_never_runs_past_the_window() {
-        let layout = justify(&[1.5, 12.0, 1.5], &[0.0; 3], 800.0, ROW_HEIGHT, SPACING);
+        let layout = justify(&[1.5, 12.0, 1.5], 800.0, ROW_HEIGHT, SPACING);
         assert!(layout.rects.iter().all(|rect| rect.x + rect.width <= 800.5));
 
         assert!(layout.rects.iter().all(|rect| rect.height < 2.0 * ROW_HEIGHT));
@@ -921,8 +880,8 @@ mod tests {
     #[test]
     fn a_bigger_size_puts_fewer_photographs_in_a_taller_row_and_the_space_is_kept() {
         let aspects = [1.5; 30];
-        let small = justify(&aspects, &[0.0; 30], 1200.0, 120.0, 4.0);
-        let large = justify(&aspects, &[0.0; 30], 1200.0, 360.0, 24.0);
+        let small = justify(&aspects, 1200.0, 120.0, 4.0);
+        let large = justify(&aspects, 1200.0, 360.0, 24.0);
         assert!(large.rows.len() > small.rows.len());
         assert!(large.rects[0].height > small.rects[0].height);
         let (first, second) = (large.rects[0], large.rects[1]);

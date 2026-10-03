@@ -1,12 +1,32 @@
 use super::*;
 
+pub(super) fn build_histogram_hud(state: &App) -> gtk::Box {
+
+    let hud = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    hud.set_halign(gtk::Align::End);
+    hud.set_valign(gtk::Align::Start);
+    hud.set_margin_top(14);
+    hud.set_margin_end(14);
+    let graph = build_histogram(state);
+
+    graph.add_css_class("photo-card");
+    hud.append(&graph);
+    state.editor_page.actions.add_action(&gio::PropertyAction::new("histogram", &graph, "visible"));
+    let follow = glib::clone!(
+        #[weak] hud,
+        move |stack: &gtk::Stack| hud.set_visible(matches!(stack.visible_child_name().as_deref(), Some("light" | "colour")))
+    );
+    follow(&state.panel.stack);
+    state.panel.stack.connect_visible_child_name_notify(follow);
+    hud
+}
+
 pub(super) fn build_histogram(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    column.set_margin_bottom(4);
 
     let area = state.info.histogram_area.clone();
-    area.set_content_height(84);
-    area.set_hexpand(true);
+    area.set_content_width(192);
+    area.set_content_height(60);
     area.add_css_class("histogram");
 
     let histogram = state.info.histogram.clone();
@@ -31,10 +51,10 @@ pub(super) fn build_histogram(state: &App) -> gtk::Box {
         button.add_css_class(class);
         button.set_has_frame(false);
         button.set_halign(side);
-        button.set_valign(gtk::Align::End);
+        button.set_valign(gtk::Align::Start);
         button.set_margin_start(4);
         button.set_margin_end(4);
-        button.set_margin_bottom(4);
+        button.set_margin_top(4);
         button.connect_toggled(glib::clone!(
             #[strong] state,
             move |_| request_render(&state)

@@ -3,9 +3,9 @@ use gtk::graphene;
 use gtk::gsk;
 use numa::io::catalog::Glance;
 
-const TILE: f32 = 36.0;
+pub(super) const TILE: f32 = 36.0;
 
-const FAN: [(f32, f32); 3] = [(-9.0, -7.0), (5.5, 4.5), (0.0, 0.0)];
+const FAN: [(f32, f32); 3] = [(-8.0, -7.0), (6.0, 4.5), (0.0, 0.0)];
 
 const MARGIN: f32 = 10.0;
 
@@ -183,7 +183,7 @@ fn subtitle(photos: i64, first: Option<i64>, last: Option<i64>) -> String {
     }
 }
 
-fn grouped(number: i64) -> String {
+pub(super) fn grouped(number: i64) -> String {
     let digits = number.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (at, digit) in digits.chars().enumerate() {
@@ -345,13 +345,19 @@ pub(super) fn fan(tile: f32) -> gtk::Fixed {
     fan.set_size_request((tile + margin * 2.0) as i32, (tile + margin) as i32);
     fan.set_valign(gtk::Align::Center);
 
+    if tile >= 100.0 {
+        fan.add_css_class("large-stack");
+    }
+
     for index in 0..FAN.len() {
 
         let picture = gtk::Image::new();
         picture.set_pixel_size(tile as i32);
 
         let frame = gtk::Frame::new(None);
-        frame.add_css_class("card");
+        frame.add_css_class("print");
+        frame.add_css_class(["print-back", "print-mid", "print-front"][index]);
+        frame.set_overflow(gtk::Overflow::Hidden);
         frame.set_child(Some(&picture));
         fan.put(&frame, 0.0, 0.0);
         fan.set_child_transform(&frame, Some(&lean(index, tile)));

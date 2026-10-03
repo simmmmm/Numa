@@ -8,7 +8,7 @@ pub(super) fn libraries_dialog(state: &App, window: &adw::ApplicationWindow) {
 
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::new();
-    group.set_title("Folders in the catalog");
+    group.set_title("Folders in the Catalog");
     group.set_description(Some(
         "The photographs stay where they are, and so does everything done to \
          them: each folder keeps its own catalog. Removing a folder here only \
@@ -32,7 +32,7 @@ pub(super) fn libraries_dialog(state: &App, window: &adw::ApplicationWindow) {
     let libraries = state.libraries.all.borrow().clone();
     if libraries.is_empty() {
         let empty = adw::ActionRow::new();
-        empty.set_title("No folders yet");
+        empty.set_title("No Folders Yet");
         empty.set_subtitle("Add one to start.");
         group.add(&empty);
     }

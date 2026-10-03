@@ -41,16 +41,17 @@ pub(super) fn export_buttons(state: &App, act: fn(&App)) -> (gtk::Box, gtk::Butt
     let group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     group.add_css_class("linked");
 
-    let export = gtk::Button::with_label("Export");
-    export.add_css_class("suggested-action");
+    let export = primary_button("Export");
     export.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| act(&state)
     ));
+    export.add_css_class("export-primary");
     group.append(&export);
 
-    let more = gtk::Button::from_icon_name("pan-end-symbolic");
-    more.add_css_class("suggested-action");
+    let more = gtk::Button::from_icon_name("emblem-system-symbolic");
+    primary(&more);
+    more.add_css_class("export-primary");
     more.set_tooltip_text(Some("Export settings…"));
     more.connect_clicked(glib::clone!(
         #[strong] state,
@@ -145,8 +146,7 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     header.set_show_start_title_buttons(false);
     header.set_show_end_title_buttons(false);
     let cancel = gtk::Button::with_label("Cancel");
-    let export = gtk::Button::with_label("Export");
-    export.add_css_class("suggested-action");
+    let export = primary_button("Export");
     header.pack_start(&cancel);
     header.pack_end(&export);
     let clamp = adw::Clamp::new();
@@ -474,7 +474,7 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
         #[weak] row,
         move |button| {
             let name_row = entry("Name");
-            let ask = adw::AlertDialog::new(Some("Save as preset"), None);
+            let ask = adw::AlertDialog::new(Some("Save Export Preset"), None);
             let group = adw::PreferencesGroup::new();
             group.add(&name_row);
             ask.set_extra_child(Some(&group));
@@ -545,7 +545,7 @@ fn folder_row(destination: &Rc<RefCell<PathBuf>>) -> adw::ActionRow {
         #[strong] destination,
         move |button| {
             let dialog = gtk::FileDialog::new();
-            dialog.set_title("Export into");
+            dialog.set_title("Export Into");
             dialog.set_initial_folder(Some(&gtk::gio::File::for_path(
                 destination.borrow().as_path(),
             )));

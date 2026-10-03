@@ -44,7 +44,7 @@ pub(super) fn fill_people(state: &App, dialog: &adw::Dialog, holder: &adw::Bin, 
     if faces.is_empty() {
         let empty = adw::StatusPage::new();
         empty.set_icon_name(Some("avatar-default-symbolic"));
-        empty.set_title("No faces yet");
+        empty.set_title("No Faces Yet");
         empty.set_description(Some("Analyse the library to find the people in it."));
         holder.set_child(Some(&empty));
         return;
@@ -76,7 +76,7 @@ pub(super) fn fill_people(state: &App, dialog: &adw::Dialog, holder: &adw::Bin, 
         let aside = adw::PreferencesGroup::new();
         let row = adw::ActionRow::new();
         row.set_title(&format!("{ignored} face(s) set aside as nobody to name"));
-        let back = gtk::Button::with_label("Ask again");
+        let back = gtk::Button::with_label("Ask Again");
         back.set_valign(gtk::Align::Center);
         back.connect_clicked(glib::clone!(
             #[strong] state,
@@ -224,7 +224,7 @@ fn unnamed_group(
     let embeddings: Vec<[f32; cull::people::LENGTH]> = unnamed.iter().map(|face| face.embedding).collect();
     let mut once = 0usize;
     let group = adw::PreferencesGroup::new();
-    group.set_title("Not named yet");
+    group.set_title("Not Named Yet");
     for members in cull::people::groups(&embeddings) {
         let members: Vec<&numa::io::catalog::StoredFace> = members.iter().map(|index| unnamed[*index]).collect();
         let mut photos: Vec<i64> = members.iter().map(|face| face.photo_id).collect();

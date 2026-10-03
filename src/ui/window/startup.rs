@@ -18,17 +18,10 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
     reload_libraries(state);
 
     watch_cards(state);
-    downloads::at_startup(state, window);
+    downloads::at_startup(state);
     integrate_appimage(state);
 
-    glib::timeout_add_seconds_local_once(
-        30,
-        glib::clone!(
-            #[strong] state,
-            #[weak] window,
-            move || consider_update_check(&state, &window)
-        ),
-    );
+    consider_update_check(state, window);
 
     report_panel(state);
     open_requested(state);

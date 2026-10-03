@@ -348,18 +348,7 @@ pub(super) fn ensure_faces(state: &App) {
             let frame = render::apply_stack(&geometry, &*working, 1.0);
             let (width, height) = (frame.width() as f32, frame.height() as f32);
             cull::faces::detect(&frame).map(|faces| {
-                let portraits = faces
-                    .iter()
-                    .map(|face| Portrait {
-                        at: [
-                            face.x / width,
-                            face.y / height,
-                            face.width / width,
-                            face.height / height,
-                        ],
-                        points: face.landmarks.map(|(x, y)| [x / width, y / height]),
-                    })
-                    .collect::<Vec<_>>();
+                let portraits = render::portraits(&faces, &frame);
 
                 let people = faces
                     .iter()

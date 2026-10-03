@@ -69,7 +69,7 @@ pub(super) fn refresh_picker(state: &App) {
     let mut top = Vec::new();
     if everywhere {
         places.push(Place::Everywhere);
-        top.push("All libraries".to_string());
+        top.push("All Libraries".to_string());
     }
     for library in &loose {
         places.push(Place::Library((*library).clone()));

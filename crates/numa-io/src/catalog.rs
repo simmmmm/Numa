@@ -1341,6 +1341,20 @@ impl Catalog {
         Ok(paths)
     }
 
+    pub fn burst_sizes(&self, library_id: i64) -> Result<HashMap<i64, u32>, String> {
+        let open = self.library(library_id)?;
+        let mut statement = open
+            .conn
+            .prepare("SELECT burst, COUNT(*) FROM analysis WHERE burst IS NOT NULL GROUP BY burst")
+            .map_err(text)?;
+        let sizes = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(text)?
+            .collect::<Result<_, _>>()
+            .map_err(text)?;
+        Ok(sizes)
+    }
+
     pub fn glance(&self, library_id: i64, album: Option<&str>, only: Option<&[i64]>) -> Result<Glance, String> {
         let open = self.library(library_id)?;
 

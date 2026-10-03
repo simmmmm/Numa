@@ -51,6 +51,35 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.35.0" date="2026-10-03">
+      <description>
+        <p>
+          Numa on Linux follows one design: a single white button to finish,
+          white for whatever you chose, chips for every small choice, and
+          calmer overlays on the photograph. A slider changed with the keys
+          or the wheel shows its value over the photograph, albums are stacks
+          of their prints, and face retouching is in every export, including
+          photographs exported from the grid without opening them.
+        </p>
+      </description>
+    </release>
+    <release version="0.34.0" date="2026-09-30">
+      <description>
+        <p>
+          A calmer library: a photograph in the grid is only the photograph,
+          with its stars, flag and edited mark on it, and one Filter button
+          whose choices show as a row of chips while they narrow. A selection
+          brings a bar with Rate, Pick, Reject, Paste Settings, Add to Album,
+          Merge and Export. In the editor the histogram sits on the
+          photograph while Light or Colour is open, History is beside Undo
+          and Redo, the filmstrip is as tall as you drag it, and Crop has
+          Original and shows the angle while you straighten. Editing a mask,
+          its bar slides in at the top with Done at the right and everything
+          about the mask in its chip. The Libraries page has shelves for
+          albums and people.
+        </p>
+      </description>
+    </release>
     <release version="0.33.0" date="2026-09-29">
       <description>
         <p>

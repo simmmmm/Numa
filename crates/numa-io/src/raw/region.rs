@@ -41,13 +41,17 @@ type Rect = [usize; 4];
 impl Regions {
 
     pub fn open(path: &Path) -> Result<Regions, String> {
+        Self::open_on(path, true)
+    }
+
+    fn open_on(path: &Path, card: bool) -> Result<Regions, String> {
         std::thread::scope(|scope| {
             let midtone = scope.spawn(|| camera_midtone(path));
-            Self::open_beside(path, || midtone.join().ok().flatten())
+            Self::open_beside(path, card, || midtone.join().ok().flatten())
         })
     }
 
-    fn open_beside(path: &Path, camera_midtone: impl FnOnce() -> Option<f32>) -> Result<Regions, String> {
+    fn open_beside(path: &Path, card: bool, camera_midtone: impl FnOnce() -> Option<f32>) -> Result<Regions, String> {
         let fail = |err: String| format!("{}: {}", path.display(), err);
         let mut laps = Laps::start();
 
@@ -78,10 +82,14 @@ impl Regions {
             laps.lap("metadata");
 
             #[cfg(feature = "gpu")]
-            if let Some((image, _)) = super::gpu::develop(&raw, path, Demosaic::Best, flips, profile.as_ref(), &mut wanted, &mut laps, true) {
-                laps.report("regions", path);
-                return Ok(Self::cut_from(image, profile, rendering, film_mode));
+            if card {
+                if let Some((image, _)) = super::gpu::develop(&raw, path, Demosaic::Best, flips, profile.as_ref(), &mut wanted, &mut laps, true) {
+                    laps.report("regions", path);
+                    return Ok(Self::cut_from(image, profile, rendering, film_mode));
+                }
             }
+            #[cfg(not(feature = "gpu"))]
+            let _ = card;
             let (developed, markesteijn) = demosaic_on_processor(raw, path, Demosaic::Best)?;
             laps.lap("demosaic");
             let dim = developed.dim();
@@ -342,8 +350,9 @@ mod tests {
                 println!("skipped {file}: run dev/fetch-corpus.sh");
                 continue;
             }
-            let full = super::super::decode_linear_best(&path).unwrap();
-            let regions = Regions::open(&path).unwrap();
+
+            let (full, _, _) = super::super::decode_sized(&path, Demosaic::Best, false).unwrap();
+            let regions = Regions::open_on(&path, false).unwrap();
             let (width, height) = regions.size();
             assert_eq!((width, height), (full.width, full.height), "{file}");
             for [x, y, w, h] in [[width / 3, height / 3, 401, 299], [0, 0, 64, 48], [width - 65, height - 49, 65, 49], [0, 0, width, height]] {
