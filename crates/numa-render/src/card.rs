@@ -38,6 +38,8 @@ pub struct Plan {
 
     pub base_curve: [f32; BASE_STEPS],
     pub toe: f32,
+
+    pub agx: bool,
 }
 
 #[derive(Debug)]
@@ -356,6 +358,7 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
         display_referred: source.display_referred,
         base_curve,
         toe,
+        agx: document.tone_mapping == tone::ToneMapping::Agx && !source.display_referred,
     })
 }
 

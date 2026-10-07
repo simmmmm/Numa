@@ -176,6 +176,7 @@ fn early_key(document: &Document, basic: &Basic, detail_scale: f32, region: [f32
 fn late_key(document: &Document, early: &str) -> (String, Vec<Weak<numa_core::mask::Stored>>) {
     let mut before = document.clone();
     before.lut = None;
+    before.tone_mapping = Default::default();
     before.operations.retain(|operation| !matches!(operation, Operation::Grading(_) | Operation::Curve(_) | Operation::ChannelCurve { .. }));
     for operation in &mut before.operations {
         if let Operation::Basic(basic) = operation {

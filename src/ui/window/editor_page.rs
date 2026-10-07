@@ -180,6 +180,7 @@ fn append_panel_split(state: &App, body: &gtk::Box, scroller: &gtk::ScrolledWind
     split.set_shrink_end_child(true);
     split.set_position(-1);
 
+    body.append(&build_info_panel(state));
     body.append(&split);
     split.set_hexpand(true);
 
@@ -373,7 +374,6 @@ pub(super) fn fill_header(state: &App) {
     refresh_export_button(state);
     end.append(&group);
 
-    fill_info_popover(state);
     install_photo_actions(state);
     fill_photo_menu(state);
     name_icon_buttons(start.upcast_ref());
@@ -415,11 +415,7 @@ fn build_before_group(state: &App) -> gtk::Box {
 
 pub(super) fn toggle_info(state: &App) {
     let info = &state.editor_page.info_button;
-    if info.is_active() {
-        info.popdown();
-    } else {
-        info.popup();
-    }
+    info.set_active(!info.is_active());
 }
 
 fn install_photo_actions(state: &App) {
@@ -481,22 +477,39 @@ fn fill_photo_menu(state: &App) {
     state.editor_page.photo_menu.insert_section(0, None, &edit);
 }
 
-fn fill_info_popover(state: &App) {
-
+fn build_info_panel(state: &App) -> gtk::Revealer {
     let facts = page_column();
     facts.append(&section_header("This photograph"));
     facts.append(&build_info(state));
+
+    facts.set_size_request(PANEL_WIDTH - 28, -1);
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_propagate_natural_height(true);
-    scroller.set_max_content_height(600);
-
-    facts.set_size_request(380, -1);
     scroller.set_child(Some(&facts));
-    let popover = gtk::Popover::new();
-    popover.set_child(Some(&scroller));
-    state.editor_page.info_button.set_popover(Some(&popover));
+    let side = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    side.append(&scroller);
+    side.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    let panel = gtk::Revealer::new();
+    panel.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+
+    panel.set_transition_duration(300);
+    panel.set_child(Some(&side));
+
+    panel.set_hexpand(false);
+
+    let info = &state.editor_page.info_button;
+    info.set_active(state.catalog.setting(INFO_SETTING).as_deref() == Some("open"));
+    info.connect_toggled(glib::clone!(
+        #[strong] state,
+        move |info| {
+            let _ = state.catalog.set_setting(INFO_SETTING, if info.is_active() { "open" } else { "shut" });
+        }
+    ));
+    info.bind_property("active", &panel, "reveal-child").sync_create().build();
+    panel
 }
+
+const INFO_SETTING: &str = "info-panel";
 
 fn build_zoom_menu() -> gio::Menu {
     let levels = gio::Menu::new();
@@ -600,7 +613,7 @@ pub(super) struct State {
     pub(super) reject: gtk::Button,
     pub(super) shown: Rc<Cell<u8>>,
 
-    pub(super) info_button: gtk::MenuButton,
+    pub(super) info_button: gtk::ToggleButton,
     pub(super) before: gtk::ToggleButton,
 
     pub(super) proof: proof::State,
@@ -629,7 +642,7 @@ impl State {
             pick: gtk::Button::new(),
             reject: gtk::Button::new(),
             shown: Rc::new(Cell::new(0)),
-            info_button: gtk::MenuButton::new(),
+            info_button: gtk::ToggleButton::new(),
             before: gtk::ToggleButton::new(),
             proof: proof::State::new(),
         }

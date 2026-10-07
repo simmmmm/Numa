@@ -2176,6 +2176,19 @@ dependency at all.
   (`docs/ENGINEERING.md`, "As Shot — 4 October"). The Apple apps have the
   document field and the render, not the tile; their export does not fill a
   pasted As Shot yet.
+- 🟡 **RENDER-026**: AgX tone mapping, beside the cameras' curve (RENDER-004).
+  The curve works per channel, so a bright saturated light clips its
+  strongest channel first and changes hue (an orange lamp goes yellow, a blue
+  sky cyan); AgX pulls each primary toward the others, runs a sigmoid over
+  16.5 stops of log2 and pushes back out, so bright colour goes to white as
+  on film. Three.js's numbers (MIT, after Filament and Blender), through
+  Rec.2020 from any working space. Per photograph, copied with Colour, in
+  history and presets; a JPEG keeps its own curve (IO-015). On the processor
+  a pixel at a time (the per-channel table of PERF-041 cannot hold it) and on
+  the card. Linux: Looks › Tone mapping, Camera | AgX, under the profile.
+  The photographer, 7 October: "Kun je ook AGX tone mapping toevoegen", for
+  0.37.0. Apple: the same choice under the camera profile on iPhone, iPad
+  and Mac ("Ik wil dat overal natuurlijk").
 
 ### OPTICS — Lens corrections
 
@@ -5482,6 +5495,11 @@ and it fills 2 % of the frame (a cyclist of a few pixels took a blue-hour
   they answer "why does this look soft", which is not the question the page is
   opened for. The colour profile left this page for the Colour tab, where it is
   now a choice rather than a note (RENDER-005).
+  Since 0.37.0 (7 October) the page is a panel at the editor's left rather
+  than a popover: `I` and the info icon fold it open and shut, and it stays
+  open across photographs and restarts until it is shut (the catalogue's
+  `info-panel` setting). The Mac and the iPad's Classic editor the same
+  (`showsInfo`); the iPhone keeps its sheet.
 - ✅ **UX-008**: Panel sections. Tabs rather than collapsible sections, which
   answers the same question — one thing on screen at a time — without a
   disclosure to remember the state of. The one disclosure left is on the Info

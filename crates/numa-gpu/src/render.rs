@@ -112,6 +112,7 @@ const MASKS: u32 = 512;
 const DEHAZE: u32 = 4096;
 const GRAIN: u32 = 8192;
 const KEPT: u32 = 16384;
+const AGX: u32 = 32768;
 
 const BASIC: u32 = 1;
 const SLOPE: u32 = 2;
@@ -404,6 +405,9 @@ fn pack(plan: &Plan, groups_x: u32, source_groups_x: u32, stride_px: u32, overla
     }
     if plan.display_referred {
         flags |= DISPLAY_REFERRED;
+    }
+    if plan.agx {
+        flags |= AGX;
     }
     for (k, value) in plan.base_curve.iter().enumerate() {
         p.base[k / 4][k % 4] = *value;

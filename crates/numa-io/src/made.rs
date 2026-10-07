@@ -125,7 +125,7 @@ impl Take {
 
 fn parts_of(before: &EditState, after: &EditState) -> Vec<Part> {
 
-    let fields: [(&str, &str, fn(&mut EditState, &EditState)); 19] = [
+    let fields: [(&str, &str, fn(&mut EditState, &EditState)); 20] = [
         ("White balance", "Colour", |c, n| c.white_balance = n.white_balance),
         ("Crop", "Crop", |c, n| c.crop = n.crop),
         ("Rotation", "Crop", |c, n| c.rotation = n.rotation),
@@ -139,6 +139,7 @@ fn parts_of(before: &EditState, after: &EditState) -> Vec<Part> {
         ("Moved a retouch", "Retouch", |c, n| c.retouch = n.retouch.clone()),
         ("Film simulation", "Looks", |c, n| c.film_simulation = n.film_simulation.clone()),
         ("Camera profile", "Looks", |c, n| c.colour_profile = n.colour_profile.clone()),
+        ("Tone mapping", "Looks", |c, n| c.tone_mapping = n.tone_mapping),
         ("Colour space", "Colour", |c, n| c.working_space = n.working_space),
         ("Perspective", "Crop", |c, n| c.perspective = n.perspective),
         ("Face", "Retouch", |c, n| c.beautify = n.beautify),
@@ -182,6 +183,10 @@ fn detail(word: &str, before: &EditState, after: &EditState) -> Option<String> {
         },
         "Film simulation" => Some(after.film_simulation.as_deref().map_or("off".into(), name)),
         "Camera profile" => Some(after.colour_profile.as_deref().map_or("as shot".into(), name)),
+        "Tone mapping" => Some(match after.tone_mapping {
+            numa_core::tone::ToneMapping::Camera => "camera".into(),
+            numa_core::tone::ToneMapping::Agx => "AgX".into(),
+        }),
         "LUT" => Some(after.lut.as_ref().map_or("off".into(), |lut| name(&lut.name))),
         "AI denoise" => Some(number(Fmt::Positive, after.ai_denoise)),
         "AI sharpen" => Some(number(Fmt::Positive, after.ai_sharpen)),

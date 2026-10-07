@@ -48,6 +48,8 @@ pub struct EditState {
 
     pub camera_look: Option<numa_core::camera_look::CameraLook>,
 
+    pub tone_mapping: numa_core::tone::ToneMapping,
+
     pub auto: Option<AutoRecord>,
 }
 
@@ -75,6 +77,7 @@ impl EditState {
         document.ai_sharpen = self.ai_sharpen;
         document.lut = self.lut.clone();
         document.camera_look = self.camera_look.clone();
+        document.tone_mapping = self.tone_mapping;
         document.auto = self.auto;
     }
 
@@ -104,6 +107,7 @@ impl EditState {
             ai_sharpen: document.ai_sharpen,
             lut: document.lut.clone(),
             camera_look: document.camera_look.clone(),
+            tone_mapping: document.tone_mapping,
             auto: document.auto,
         }
     }
@@ -394,6 +398,9 @@ impl EditState {
         }
         if self.colour_profile != previous.colour_profile {
             changed.push(Change::Word("Camera profile"));
+        }
+        if self.tone_mapping != previous.tone_mapping {
+            changed.push(Change::Word("Tone mapping"));
         }
         if self.working_space != previous.working_space {
             changed.push(Change::Word("Colour space"));

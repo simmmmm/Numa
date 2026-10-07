@@ -88,6 +88,7 @@ const LOCAL: u32 = 2048u;   // HDR, Clarity or Texture: `finish` into `work`, `e
 const DEHAZE: u32 = 4096u;  // dehaze: the frame is in `work` after it
 const GRAIN: u32 = 8192u;
 const KEPT: u32 = 16384u;   // the stages before the operations kept: `settle` into `kept`, `finish` from there
+const AGX: u32 = 32768u;    // AgX in the base curve's place
 
 // `Adjust.flags.x`.
 const BASIC: u32 = 1u;
@@ -930,14 +931,48 @@ fn mask_curves(pixel: vec3<f32>, a: Adjust) -> vec3<f32> {
     return out;
 }
 
-// `encode`'s eight bits for one channel: `tone::shown`, the curves, quantised.
-fn code(channel: u32, value: f32) -> u32 {
-    var display: f32;
+// `tone::Agx` for linear sRGB, the only working space the card has: into
+// Rec.2020 and the inset as one matrix, the log2 sigmoid, the outset, and
+// back to sRGB.
+fn agx(pixel: vec3<f32>) -> vec3<f32> {
+    let into = mat3x3<f32>(
+        vec3<f32>(0.544814746, 0.140416948, 0.08881042),
+        vec3<f32>(0.373787398, 0.754137555, 0.178871756),
+        vec3<f32>(0.081397855, 0.105445497, 0.732317824),
+    );
+    let outset = mat3x3<f32>(
+        vec3<f32>(1.1271006, -0.1413298, -0.1413298),
+        vec3<f32>(-0.1106066, 1.1578237, -0.1106066),
+        vec3<f32>(-0.0164939, -0.0164939, 1.2519364),
+    );
+    let back = mat3x3<f32>(
+        vec3<f32>(1.660491, -0.124550475, -0.018150763),
+        vec3<f32>(-0.587641139, 1.132899897, -0.100578898),
+        vec3<f32>(-0.072849863, -0.008349423, 1.118729661),
+    );
+    let x = clamp((log2(max(into * pixel, vec3<f32>(1e-10))) + 12.47393) / 16.499999, vec3<f32>(0.0), vec3<f32>(1.0));
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    let sigmoid = 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+    let linear = back * pow(max(outset * sigmoid, vec3<f32>(0.0)), vec3<f32>(2.2));
+    return vec3<f32>(srgb_encode(linear.x), srgb_encode(linear.y), srgb_encode(linear.z));
+}
+
+// `encode`'s `shown`: `tone::shown` per channel, or AgX's for the pixel.
+fn shown(pixel: vec3<f32>) -> vec3<f32> {
     if (has(DISPLAY_REFERRED)) {
-        display = srgb_encode(value);
-    } else {
-        display = clamp(base_curve(value), 0.0, 1.0);
+        return vec3<f32>(srgb_encode(pixel.x), srgb_encode(pixel.y), srgb_encode(pixel.z));
     }
+    if (has(AGX)) {
+        return agx(pixel);
+    }
+    return vec3<f32>(base_curve(pixel.x), base_curve(pixel.y), base_curve(pixel.z));
+}
+
+// `encode`'s eight bits for one channel: the curves on what `shown` gave,
+// quantised.
+fn code(channel: u32, value: f32) -> u32 {
+    var display = clamp(value, 0.0, 1.0);
     if (p.curves.x != 0u) {
         display = through(0u, display);
     }
@@ -961,9 +996,10 @@ fn show(i: u32, pixel_in: vec3<f32>) {
     if (has(GRAIN)) {
         pixel = grain(pixel, x, y, p.grain[0]);
     }
-    let r8 = code(0u, pixel.x);
-    let g8 = code(1u, pixel.y);
-    let b8 = code(2u, pixel.z);
+    let display = shown(pixel);
+    let r8 = code(0u, display.x);
+    let g8 = code(1u, display.y);
+    let b8 = code(2u, display.z);
     if (i % 4u == 0u) {
         atomicAdd(&local_hist[r8], 1u);
         atomicAdd(&local_hist[256u + g8], 1u);

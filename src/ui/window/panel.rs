@@ -141,6 +141,7 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     top.set_margin_bottom(0);
     top.append(&section_header("Camera profile"));
     top.append(&build_profile_picker(state));
+    top.append(&build_tone_mapping(state));
 
     top.append(&camera_look::build(state));
 
