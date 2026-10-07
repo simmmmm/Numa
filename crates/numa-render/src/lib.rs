@@ -15,6 +15,7 @@ mod kept;
 pub mod local;
 pub mod auto;
 pub mod matte;
+pub mod proof;
 pub mod range;
 pub mod remove;
 pub mod retouch;
@@ -514,8 +515,8 @@ pub fn apply_stack<'a>(
 
 pub fn apply_stack_kept(document: &Document, working: &std::sync::Arc<LinearImage>, detail_scale: f32) -> RgbImage {
     let (data, width, height) = kept::finished(document, working, detail_scale, WHOLE_FRAME, true, local::Tone::Own);
-    let lut = lut_of(document);
-    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, lut.as_ref());
+    let looks = looks_of(document);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, &looks);
     kept::recycle(data);
     frame
 }
@@ -536,8 +537,8 @@ pub fn apply_pixels_kept(
         None => local::Tone::Own,
     };
     let (data, width, height) = kept::finished(document, working, detail_scale, region, false, tone);
-    let lut = lut_of(document);
-    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, lut.as_ref());
+    let looks = looks_of(document);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, &looks);
     kept::recycle(data);
     frame
 }
@@ -622,13 +623,31 @@ where
     let working = working.into();
     let display_referred = working.display_referred;
     let (data, width, height) = finished(document, working, detail_scale, region, tone);
-    let lut = lut_of(document);
-    encode(width, height, &data, &document.curves(), document.working_space, document.output_space, display_referred, lut.as_ref())
+    let looks = looks_of(document);
+    encode(width, height, &data, &document.curves(), document.working_space, document.output_space, display_referred, &looks)
 }
 
-fn lut_of(document: &Document) -> Option<(std::sync::Arc<numa_core::lut::Lut>, f32)> {
-    let choice = document.lut.as_ref().filter(|choice| choice.amount > 0.0)?;
-    Some((load_lut(&choice.name)?, (choice.amount / 100.0).min(1.0)))
+pub(crate) fn looks_of(document: &Document) -> Vec<(std::sync::Arc<numa_core::lut::Lut>, f32)> {
+    let camera = document.camera_look.as_ref().filter(|look| look.strength > 0.0).and_then(|look| {
+        Some((camera_look_table(look.fit.as_ref()?), (look.strength / 100.0).min(1.0)))
+    });
+    let lut = document.lut.as_ref().filter(|choice| choice.amount > 0.0).and_then(|choice| {
+        Some((load_lut(&choice.name)?, (choice.amount / 100.0).min(1.0)))
+    });
+    camera.into_iter().chain(lut).collect()
+}
+
+fn camera_look_table(fit: &numa_core::camera_look::LookFit) -> std::sync::Arc<numa_core::lut::Lut> {
+    use std::sync::{Arc, Mutex};
+    type Kept = Option<(numa_core::camera_look::LookFit, Arc<numa_core::lut::Lut>)>;
+    static KEPT: Mutex<Kept> = Mutex::new(None);
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, table)) = kept.as_ref().filter(|(was, _)| was == fit) {
+        return table.clone();
+    }
+    let table = Arc::new(fit.bake());
+    *kept = Some((fit.clone(), table.clone()));
+    table
 }
 
 pub fn load_lut(name: &str) -> Option<std::sync::Arc<numa_core::lut::Lut>> {
@@ -938,8 +957,8 @@ pub fn develop_hdr<'a>(
         None => finished(document, working, detail_scale, WHOLE_FRAME, local::Tone::Own),
     };
     let curves = document.curves();
-    let lut = lut_of(document);
-    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space, display_referred, lut.as_ref());
+    let looks = looks_of(document);
+    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space, display_referred, &looks);
     let shape = shaper(&curves);
     let weights = document.working_space.luminance_weights();
     let ceiling = HDR_STOPS.exp2();
@@ -999,6 +1018,10 @@ fn run_operations(document: &Document, data: &mut [f32], (width, height): (usize
                 basic.presence.texture / 100.0,
                 tone,
             );
+
+            if !matches!(tone, local::Tone::Measure(_)) {
+                effects::mist(data, width, height, basic.effects.mist);
+            }
         }
     }
 
@@ -1296,10 +1319,13 @@ fn measures_frame(basic: &Basic) -> bool {
         || basic.presence.clarity != 0.0
         || basic.presence.texture != 0.0
         || basic.effects.dehaze != 0.0
+        || basic.effects.mist != 0.0
 }
 
 pub fn tiles_with_guide(document: &Document) -> bool {
+
     document.basic().effects.dehaze == 0.0
+        && document.basic().effects.mist == 0.0
         && document.masks().iter().all(|mask| mask.is_idle() || mask.covers_nothing() || !measures_frame(&mask.basic))
         && document.beautify().is_identity()
 }
@@ -1726,7 +1752,7 @@ fn encode_srgb(
     working: ColourSpace,
     output: ColourSpace,
 ) -> RgbImage {
-    encode(width, height, data, curves, working, output, false, None)
+    encode(width, height, data, curves, working, output, false, &[])
 }
 
 fn shaper(curves: &[Curve]) -> impl Fn(usize, f32) -> f32 + Sync {
@@ -1755,7 +1781,7 @@ fn encode<T: Sample>(
 
     display_referred: bool,
 
-    lut: Option<&(std::sync::Arc<numa_core::lut::Lut>, f32)>,
+    looks: &[(std::sync::Arc<numa_core::lut::Lut>, f32)],
 ) -> Frame<T>
 where
     image::Rgb<T>: image::Pixel<Subpixel = T>,
@@ -1764,9 +1790,8 @@ where
 
     let shape = shaper(curves);
 
-    let looked = |display: [f32; 3]| match lut {
-        Some((lut, amount)) => lut.mix(display, *amount).map(|value| value.clamp(0.0, 1.0)),
-        None => display,
+    let looked = |display: [f32; 3]| {
+        looks.iter().fold(display, |display, (lut, amount)| lut.mix(display, *amount).map(|value| value.clamp(0.0, 1.0)))
     };
 
     let recode = (working != output || output != ColourSpace::Srgb)
@@ -1795,7 +1820,7 @@ where
         return Frame::from_raw(width, height, out).expect("buffer matches dimensions");
     }
 
-    if lut.is_none() {
+    if looks.is_empty() {
         if let Some(bytes) = (&mut out as &mut dyn std::any::Any).downcast_mut::<Vec<u8>>() {
             let exact = |channel: usize, value: f32| u8::quantise(shape(channel, tone::shown(value, display_referred).clamp(0.0, 1.0)));
             let encoder = Encoder::for_curves(curves, display_referred, &exact);
@@ -1903,7 +1928,7 @@ mod tests {
         for curves in &curves {
             let shape = shaper(curves);
             for referred in [false, true] {
-                let fast = encode::<u8>(width, 1, &data, curves, ColourSpace::Srgb, ColourSpace::Srgb, referred, None);
+                let fast = encode::<u8>(width, 1, &data, curves, ColourSpace::Srgb, ColourSpace::Srgb, referred, &[]);
                 for (index, (byte, value)) in fast.as_raw().iter().zip(&data).enumerate() {
                     let exact = u8::quantise(shape(index % 3, tone::shown(*value, referred).clamp(0.0, 1.0)));
                     assert_eq!(*byte, exact, "{value:e} moved a code value");
@@ -3424,11 +3449,32 @@ mod tests {
         let lut = std::sync::Arc::new(numa_core::lut::parse_cube(&text).unwrap());
         let data = [0.18f32, 0.18, 0.18];
         let srgb = ColourSpace::Srgb;
-        let plain: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, None);
-        let inverted: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Some(&(lut.clone(), 1.0)));
-        let half: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Some(&(lut, 0.5)));
+        let plain: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[]);
+        let inverted: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[(lut.clone(), 1.0)]);
+        let half: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[(lut, 0.5)]);
         let code = plain.get_pixel(0, 0)[0] as i32;
         assert!((inverted.get_pixel(0, 0)[0] as i32 - (255 - code)).abs() <= 1);
         assert!((half.get_pixel(0, 0)[0] as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn as_shot_is_a_look_before_the_lut() {
+        use numa_core::camera_look::{CameraLook, LookFit};
+        let mut document = Document::new(String::new());
+        document.camera_look = Some(CameraLook { strength: 50.0, fit: None });
+        assert!(looks_of(&document).is_empty(), "nothing to follow until it is fitted");
+        let mut darker = LookFit::identity();
+        darker.terms[1] = 0.5;
+        darker.terms[numa_core::camera_look::TERMS + 2] = 0.5;
+        darker.terms[2 * numa_core::camera_look::TERMS + 3] = 0.5;
+        document.camera_look = Some(CameraLook { strength: 50.0, fit: Some(darker) });
+        let looks = looks_of(&document);
+        assert_eq!(looks.len(), 1);
+        assert_eq!(looks[0].1, 0.5);
+
+        let looked = looks[0].0.mix([0.8; 3], looks[0].1);
+        assert!((looked[0] - 0.6).abs() < 0.01, "{looked:?}");
+        document.camera_look.as_mut().unwrap().strength = 0.0;
+        assert!(looks_of(&document).is_empty());
     }
 }

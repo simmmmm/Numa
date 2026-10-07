@@ -353,13 +353,18 @@ fn blacks_at_full_travel_visibly_moves_the_darkest_tones() {
 
 #[test]
 fn auto_brightens_a_dim_frame_without_clipping_it() {
+
     let mut dim = ramp();
-    dim.data.iter_mut().for_each(|value| *value *= 0.125);
-    let auto = numa_render::auto::tone(&dim, None);
+    dim.data.iter_mut().for_each(|value| *value = *value * 0.125 + 0.05);
+    let auto = numa_render::auto::tone(&dim, None, &plain());
     assert!(auto.basic.tone.exposure > 0.0, "{:?}", auto.basic.tone);
+    let mut night = ramp();
+    night.data.iter_mut().for_each(|value| *value *= 0.125);
+    assert!(numa_render::auto::tone(&night, None, &plain()).basic.tone.exposure <= 0.0, "a night is not brought up");
 
     let mut document = plain();
-    assert_eq!(auto.apply(&mut document), None, "no subject, so no mask");
+    auto.apply(&mut document);
+    assert!(document.masks().is_empty(), "no subject, so no mask");
     let (before, after) = (render(&plain(), &dim), render(&document, &dim));
     assert!(level(&after, RAMP_WIDTH - 1) > level(&before, RAMP_WIDTH - 1) + 8.0, "the top did not come up");
     in_order(&after).unwrap();

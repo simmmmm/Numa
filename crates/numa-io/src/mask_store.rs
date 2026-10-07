@@ -54,6 +54,8 @@ fn answered_by(mask: &Mask, subject_model: &str) -> String {
     bare.feather = 0.0;
     bare.shift = 0.0;
     bare.minus_masks = Vec::new();
+
+    bare.auto = None;
     bare.id = 0;
     let recipe = serde_json::to_string(&bare).unwrap_or_default();
 

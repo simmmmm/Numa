@@ -70,6 +70,7 @@ pub(super) fn at_rest_of(now: Basic, balance: WhiteBalance, as_shot: WhiteBalanc
         same(now.calibration.blue_saturation, rest.calibration.blue_saturation),
         same(now.optics.lens_distortion, rest.optics.lens_distortion),
         same(now.optics.lens_vignetting, rest.optics.lens_vignetting),
+        same(now.effects.mist, rest.effects.mist),
     ]
 }
 

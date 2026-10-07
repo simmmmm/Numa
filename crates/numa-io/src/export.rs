@@ -91,6 +91,9 @@ pub struct ExportSettings {
     pub strip_location: bool,
     #[serde(default)]
     pub watermark: Watermark,
+
+    #[serde(default)]
+    pub proof: Option<crate::print::Target>,
 }
 
 fn yes() -> bool {
@@ -196,6 +199,8 @@ pub struct Description {
     pub rating: u8,
     pub people: Vec<String>,
     pub albums: Vec<String>,
+
+    pub position: Option<(f64, f64)>,
 }
 
 impl Default for ExportSettings {
@@ -215,6 +220,7 @@ impl Default for ExportSettings {
             keywords: true,
             strip_location: false,
             watermark: Watermark::default(),
+            proof: None,
         }
     }
 }
@@ -226,6 +232,10 @@ impl ExportSettings {
             Size::Full => "full size".to_string(),
             Size::LongEdge(edge) => format!("{edge} px"),
             Size::Double => "twice the size".to_string(),
+        };
+        let size = match self.proof_applies() {
+            Some(target) => format!("{size}, for {}", Path::new(&target.file).file_stem().unwrap_or_default().to_string_lossy()),
+            None => size,
         };
         match self.format {
             Format::Jpeg if self.hdr => format!("JPEG {} with HDR, {size}", self.quality),
@@ -239,11 +249,26 @@ impl ExportSettings {
     }
 
     pub fn written_space(&self) -> numa_core::space::ColourSpace {
+
+        if self.proof_applies().is_some() {
+            return numa_core::space::ColourSpace::Srgb;
+        }
         match self.format {
             Format::Avif => crate::avif::space_for(self.space),
 
             Format::Dng => numa_core::space::ColourSpace::Srgb,
             _ => self.space,
+        }
+    }
+
+    pub fn proof_applies(&self) -> Option<&crate::print::Target> {
+        self.proof.as_ref().filter(|_| matches!(self.format, Format::Jpeg | Format::Png | Format::Tiff))
+    }
+
+    fn embedded(&self) -> Result<Vec<u8>, String> {
+        match self.proof_applies() {
+            Some(target) => crate::print::bytes(&target.file),
+            None => Ok(crate::icc::profile(self.space)),
         }
     }
 }
@@ -263,7 +288,13 @@ pub fn next_path(dir: &Path, source: &Path, settings: &ExportSettings) -> Result
     std::fs::create_dir_all(dir).map_err(|err| format!("{}: {}", dir.display(), err))?;
 
     for index in 1..10_000 {
-        let candidate = dir.join(render_name(&settings.template, source, index, settings.format));
+        let mut name = render_name(&settings.template, source, index, settings.format);
+
+        if index > 1 && !settings.template.contains("{index}") {
+            let extension = settings.format.extension();
+            name = format!("{} {index}.{extension}", name.strip_suffix(&format!(".{extension}")).unwrap_or(&name));
+        }
+        let candidate = dir.join(name);
         if !candidate.exists() {
             return Ok(candidate);
         }
@@ -376,7 +407,7 @@ pub fn develop<'a>(
         return Developed::Dng(frame, crate::foreign::to_lightroom(document));
     }
     let (source, scale) = for_size(document, source.into(), settings);
-    if settings.hdr && settings.format == Format::Jpeg {
+    if settings.hdr && settings.format == Format::Jpeg && settings.proof_applies().is_none() {
         let (frame, gains) = numa_render::develop_hdr(document, source, inputs, scale);
         let gains = crate::gainmap::Gains::from_raw(frame.width(), frame.height(), gains).expect("a gain per pixel");
         let frame = fit(frame, settings);
@@ -449,6 +480,14 @@ pub fn enlarge(frame: Developed, settings: &ExportSettings, mut progress: impl F
 }
 
 pub fn write(frame: &Developed, path: &Path, settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Result<(), String> {
+    let converted;
+    let frame = match settings.proof_applies() {
+        Some(target) => {
+            converted = crate::print::convert(frame, target).map_err(|err| format!("{}: {err}", path.display()))?;
+            &converted
+        }
+        None => frame,
+    };
     match frame {
         Developed::Eight(image) => save_jpeg_or_png(image, None, path, settings, source, about),
         Developed::Hdr(image, gains) => save_jpeg_or_png(image, Some(gains), path, settings, source, about),
@@ -464,15 +503,15 @@ pub fn write(frame: &Developed, path: &Path, settings: &ExportSettings, source: 
     }
 }
 
-fn carried_exif(settings: &ExportSettings, source: Option<&Path>) -> Option<Vec<u8>> {
+fn carried_exif(settings: &ExportSettings, source: Option<&Path>, position: Option<(f64, f64)>) -> Option<Vec<u8>> {
     let block = source.filter(|_| settings.metadata).and_then(exif_block)?;
-    if !settings.strip_location {
+    if !settings.strip_location && position.is_none() {
         return Some(block);
     }
     use std::io::Cursor;
     let mut reader = Cursor::new(block.get(10..)?.to_vec());
     let root = IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()?;
-    app1_from(&root, false)
+    app1_with(Some(&root), !settings.strip_location, Vec::new(), position)
 }
 
 fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Option<Vec<u8>> {
@@ -494,21 +533,21 @@ fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Desc
         }
     }
     if own.is_empty() {
-        return carried_exif(settings, source);
+        return carried_exif(settings, source, about.position);
     }
     let block = source.filter(|_| settings.metadata).and_then(exif_block);
     let root = block.and_then(|block| {
         let mut reader = std::io::Cursor::new(block.get(10..)?.to_vec());
         IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()
     });
-    app1_with(root.as_ref(), !settings.strip_location, own)
+    app1_with(root.as_ref(), !settings.strip_location, own, about.position)
 }
 
 fn save_coded(image: &Frame<u16>, path: &Path, settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Result<(), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
     let block = match settings.format {
         Format::Avif => described_exif(settings, source, about),
-        _ => carried_exif(settings, source),
+        _ => carried_exif(settings, source, about.position),
     };
     let exif = block.as_deref().and_then(|block| block.get(10..));
     let (width, height) = image.dimensions();
@@ -541,7 +580,7 @@ fn save_jpeg_or_png(
 ) -> Result<(), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
 
-    let icc = crate::icc::profile(settings.space);
+    let icc = settings.embedded().map_err(fail)?;
     let mut bytes: Vec<u8> = Vec::new();
     match settings.format {
         Format::Jpeg => {
@@ -567,7 +606,7 @@ fn save_jpeg_or_png(
     }
 
     if settings.format == Format::Jpeg {
-        if let Some(exif) = carried_exif(settings, source) {
+        if let Some(exif) = carried_exif(settings, source, about.position) {
             bytes = with_exif(bytes, &exif);
         }
 
@@ -600,7 +639,7 @@ fn save_tiff_with(image: &Frame<u16>, path: &Path, settings: &ExportSettings, so
         true => source.and_then(exif_block).and_then(|block| {
             let mut reader = Cursor::new(block.get(10..)?.to_vec());
             let root = IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()?;
-            carry_tags(&root, &mut tiff, !settings.strip_location)
+            carry_tags(&root, &mut tiff, !settings.strip_location, about.position)
         }),
         false => None,
     };
@@ -647,7 +686,7 @@ fn save_tiff_with(image: &Frame<u16>, path: &Path, settings: &ExportSettings, so
     ifd0.add_untyped_tag(0x011C, Value::Short(vec![1]));
     ifd0.add_untyped_tag(0x013D, Value::Short(vec![2]));
 
-    ifd0.add_untyped_tag(0x8773, Value::Undefined(crate::icc::profile(settings.space).to_vec()));
+    ifd0.add_untyped_tag(0x8773, Value::Undefined(settings.embedded().map_err(fail)?));
     if let Some(description) = crate::xmp::description(settings, about, None) {
         ifd0.add_untyped_tag(0x02BC, Value::Byte(crate::xmp::packet(&description).into_bytes()));
     }
@@ -660,7 +699,12 @@ const EXIF_IFD: u16 = 0x8769;
 const GPS_IFD: u16 = 0x8825;
 const ORIENTATION: u16 = 0x0112;
 
-fn carry_tags<W: std::io::Write + std::io::Seek>(root: &IFD, tiff: &mut TiffWriter<W>, location: bool) -> Option<Vec<(u16, Value)>> {
+fn carry_tags<W: std::io::Write + std::io::Seek>(
+    root: &IFD,
+    tiff: &mut TiffWriter<W>,
+    location: bool,
+    position: Option<(f64, f64)>,
+) -> Option<Vec<(u16, Value)>> {
 
     const MAKER_NOTE: u16 = 0x927C;
 
@@ -699,12 +743,36 @@ fn carry_tags<W: std::io::Write + std::io::Seek>(root: &IFD, tiff: &mut TiffWrit
         let offset = sub.build(tiff).ok()?;
         carried.push((tag, Value::Long(vec![offset])));
     }
+    if let Some(position) = position.filter(|_| location && !carried.iter().any(|(tag, _)| *tag == GPS_IFD)) {
+        carried.push((GPS_IFD, Value::Long(vec![gps_directory(tiff, position)?])));
+    }
     for (entry, value) in root.value_iter() {
         if KEEP.contains(entry) {
             carried.push((*entry, value.clone()));
         }
     }
     Some(carried)
+}
+
+fn gps_directory<W: std::io::Write + std::io::Seek>(tiff: &mut TiffWriter<W>, (latitude, longitude): (f64, f64)) -> Option<u32> {
+    use rawler::formats::tiff::Rational;
+    let dms = |degrees: f64| {
+        let degrees = degrees.abs();
+        let minutes = degrees.fract() * 60.0;
+        let seconds = minutes.fract() * 60.0;
+        Value::Rational(vec![
+            Rational::new(degrees.trunc() as u32, 1),
+            Rational::new(minutes.trunc() as u32, 1),
+            Rational::new((seconds * 10_000.0).round() as u32, 10_000),
+        ])
+    };
+    let mut gps = tiff.new_directory();
+    gps.add_untyped_tag(0x0000, Value::Byte(vec![2, 3, 0, 0]));
+    gps.add_untyped_tag(0x0001, Value::from(if latitude < 0.0 { "S" } else { "N" }));
+    gps.add_untyped_tag(0x0002, dms(latitude));
+    gps.add_untyped_tag(0x0003, Value::from(if longitude < 0.0 { "W" } else { "E" }));
+    gps.add_untyped_tag(0x0004, dms(longitude));
+    gps.build(tiff).ok()
 }
 
 pub fn exif_block(source: &Path) -> Option<Vec<u8>> {
@@ -754,14 +822,14 @@ fn exif_from_tiff(source: &Path) -> Option<Vec<u8>> {
 }
 
 fn app1_from(root: &IFD, location: bool) -> Option<Vec<u8>> {
-    app1_with(Some(root), location, Vec::new())
+    app1_with(Some(root), location, Vec::new(), None)
 }
 
-fn app1_with(root: Option<&IFD>, location: bool, own: Vec<(u16, Value)>) -> Option<Vec<u8>> {
+fn app1_with(root: Option<&IFD>, location: bool, own: Vec<(u16, Value)>, position: Option<(f64, f64)>) -> Option<Vec<u8>> {
     use std::io::Cursor;
     let mut buffer = Cursor::new(Vec::new());
     let mut tiff = TiffWriter::new(&mut buffer).ok()?;
-    let carried = root.and_then(|root| carry_tags(root, &mut tiff, location));
+    let carried = root.and_then(|root| carry_tags(root, &mut tiff, location, position));
     if carried.is_none() && own.is_empty() {
         return None;
     }
@@ -842,6 +910,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_print_profile_applies_to_what_a_lab_takes() {
+        let target = crate::print::Target { file: "Lab Lustre.icc".into(), perceptual: true };
+        for (format, applies) in [(Format::Jpeg, true), (Format::Png, true), (Format::Tiff, true), (Format::Avif, false), (Format::Jxl, false), (Format::Dng, false)] {
+            let settings = ExportSettings { format, space: numa_core::space::ColourSpace::AdobeRgb, proof: Some(target.clone()), ..ExportSettings::default() };
+            assert_eq!(settings.proof_applies().is_some(), applies, "{format:?}");
+            if applies {
+                assert_eq!(settings.written_space(), numa_core::space::ColourSpace::Srgb);
+                assert!(settings.summary().ends_with("for Lab Lustre"), "{}", settings.summary());
+            }
+        }
+        assert!(crate::print::bytes("../catalog.db").is_err(), "a setting names a profile, never a path");
+    }
+
+    #[test]
     fn an_avif_says_who_made_it_in_its_exif() {
         let settings = ExportSettings {
             format: Format::Avif,
@@ -849,7 +931,7 @@ mod tests {
             copyright: "© 2026 Tijmen".into(),
             ..ExportSettings::default()
         };
-        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Noordwijk best".into()] };
+        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Noordwijk best".into()], position: None };
         let block = described_exif(&settings, None, &about).expect("an EXIF block");
         let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).expect("a TIFF a reader can read");
 
@@ -890,7 +972,7 @@ mod tests {
 
     #[test]
     fn names_are_templated_and_never_collide() {
-        let dir = std::env::temp_dir().join("numa-export-test");
+        let dir = std::env::temp_dir().join(format!("numa-export-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let source = Path::new("/photos/DSCF5591.RAF");
         let settings = ExportSettings::default();
@@ -918,6 +1000,12 @@ mod tests {
         let decoded = image::open(&first).unwrap();
         assert_eq!(decoded.width(), 4);
         assert_eq!(decoded.height(), 3);
+
+        let plain = ExportSettings { template: "{stem}".into(), ..ExportSettings::default() };
+        let named = next_path(&dir, source, &plain).unwrap();
+        assert_eq!(named.file_name().unwrap(), "DSCF5591.jpg");
+        save(&image, &named, &plain, None).unwrap();
+        assert_eq!(next_path(&dir, source, &plain).unwrap().file_name().unwrap(), "DSCF5591 2.jpg");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1004,7 +1092,7 @@ mod tests {
 
     #[test]
     fn a_png_is_written_as_a_png() {
-        let dir = std::env::temp_dir().join("numa-export-png");
+        let dir = std::env::temp_dir().join(format!("numa-export-png-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let settings = ExportSettings { format: Format::Png, ..Default::default() };
         let path = next_path(&dir, Path::new("/photos/DSCF1.RAF"), &settings).unwrap();
@@ -1034,7 +1122,7 @@ mod tests {
 
     #[test]
     fn the_exif_block_is_found_wherever_it_sits() {
-        let dir = std::env::temp_dir().join("numa-exif-scan");
+        let dir = std::env::temp_dir().join(format!("numa-exif-scan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1098,7 +1186,7 @@ mod tests {
         use rawler::formats::tiff::IFD;
         use std::io::Cursor;
 
-        let dir = std::env::temp_dir().join("numa-exif-build");
+        let dir = std::env::temp_dir().join(format!("numa-exif-build-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = pentax_raw(&dir);
@@ -1122,6 +1210,29 @@ mod tests {
         assert!(text(0x927C).is_none(), "the MakerNote travelled and its offsets did not");
         assert!(text(0x0111).is_none(), "a pointer to image data travelled");
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_tracks_place_travels_as_gps() {
+        let dir = std::env::temp_dir().join("numa-exif-gps");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = pentax_raw(&dir);
+        let settings = ExportSettings::default();
+        let block = carried_exif(&settings, Some(&path), Some((35.0116, -135.5))).expect("a block");
+        let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).unwrap();
+        let field = |tag| exif.get_field(tag, ::exif::In::PRIMARY).map(|field| field.display_value().to_string());
+        assert_eq!(field(::exif::Tag::GPSLatitudeRef).as_deref(), Some("N"));
+        assert_eq!(field(::exif::Tag::GPSLongitudeRef).as_deref(), Some("W"));
+        let ::exif::Value::Rational(latitude) = &exif.get_field(::exif::Tag::GPSLatitude, ::exif::In::PRIMARY).unwrap().value else { panic!() };
+        let degrees = latitude[0].to_f64() + latitude[1].to_f64() / 60.0 + latitude[2].to_f64() / 3600.0;
+        assert!((degrees - 35.0116).abs() < 1e-6, "{degrees}");
+        assert!(field(::exif::Tag::Make).unwrap().contains("PENTAX"), "the camera's tags stay");
+        let behind = ExportSettings { strip_location: true, ..ExportSettings::default() };
+        let block = carried_exif(&behind, Some(&path), Some((35.0, 135.0))).expect("a block");
+        let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).unwrap();
+        assert!(exif.get_field(::exif::Tag::GPSLatitude, ::exif::In::PRIMARY).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

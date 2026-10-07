@@ -3,6 +3,8 @@ use super::*;
 pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
+    page.append(&words::build_search_bar(state));
+    words::install_search_action(state, window);
     let bar = build_filter_bar(state, window);
 
     state.grid.welcome.bind_property("visible", &bar, "visible").invert_boolean().sync_create().build();
@@ -14,7 +16,24 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     );
     state.grid.welcome.bind_property("visible", &hint, "visible").invert_boolean().sync_create().build();
     page.append(&hint);
+
+    state.loupe.reveal.connect_reveal_child_notify(glib::clone!(
+        #[strong] state,
+        #[weak] bar,
+        #[weak] hint,
+        move |reveal| {
+            let choosing = reveal.reveals_child();
+            bar.set_reveal_child(!choosing);
+            hint.set_visible(!choosing && !state.grid.welcome.is_visible());
+
+            state.grid.header_end.set_visible(!choosing && !state.grid.welcome.is_visible());
+        }
+    ));
     page.append(&state.grid.offline);
+
+    state.grid.clock_offer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    state.grid.clock_offer.set_transition_duration(200);
+    page.append(&state.grid.clock_offer);
 
     state.grid.empty.set_vexpand(true);
     page.append(&state.grid.empty);
@@ -50,7 +69,8 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     page.add_controller(drop);
 
     let over = gtk::Overlay::new();
-    over.set_child(Some(&scroller));
+
+    over.set_child(Some(&rapid::build(state, &scroller)));
     over.add_overlay(&build_loupe(state));
 
     over.add_overlay(&build_compare(state));
@@ -127,7 +147,10 @@ fn build_grid_scroller(state: &App) -> gtk::ScrolledWindow {
     state.grid.wall.add_css_class("photo-rows");
 
     state.grid.wall.set_factory(
-        make_card,
+        glib::clone!(
+            #[strong] state,
+            move || make_card(&state)
+        ),
         glib::clone!(
             #[strong] state,
             move |card, index| bind_card(&state, card, index)
@@ -222,6 +245,7 @@ pub(super) fn install_photo_menu(state: &App, window: &adw::ApplicationWindow) {
         window.add_action(action);
     }
     install_preset_actions(state, window);
+    install_client_actions(state, window);
 
     debug_assert_missing_actions(&menu, window);
 
@@ -254,6 +278,8 @@ fn photo_menu_model(state: &App) -> gio::Menu {
 
     let settings = gio::Menu::new();
     settings.append(Some("Export…"), Some("win.photo-export"));
+
+    settings.append(Some("Copy File Names"), Some("win.copy-names"));
 
     settings.append(Some("Copy Settings"), Some("win.photo-copy"));
     settings.append(Some("Paste Settings"), Some("win.photo-paste"));

@@ -258,11 +258,15 @@ pub(super) fn present(
 
     let kept = show(state, rendered, placement, backdrop);
 
+    how_made::presented();
+
     refresh_render_info(state);
     kept
 }
 
 pub(super) fn schedule_history_push(state: &App) {
+
+    how_made::close(state);
 
     schedule_save(state);
 
@@ -274,23 +278,22 @@ pub(super) fn schedule_history_push(state: &App) {
         if state.render.history_generation.get() != generation {
             return;
         }
-        if let Some(photo) = state.open.borrow_mut().as_mut() {
-            let snapshot = EditState::of(&photo.document);
-            photo.history.push(snapshot);
-        }
+        let look = state.open.borrow_mut().as_mut().and_then(|photo| photo.push_snapshot());
+        note_look(&state, look);
     });
 }
 
 pub(super) fn step_history(state: &App, redo: bool) {
+    let mut noted = None;
     let stepped = state.open.borrow_mut().as_mut().and_then(|photo| {
 
-        let snapshot = EditState::of(&photo.document);
-        photo.history.push(snapshot);
+        noted = photo.push_snapshot();
         let stepped = if redo { photo.history.redo() } else { photo.history.undo() };
 
         stepped.map(|state| (state, photo.as_shot))
     });
 
+    note_look(state, noted);
     let Some((edit, as_shot)) = stepped else {
         state.toast(if redo { "Nothing to redo" } else { "Nothing to undo" });
         return;
@@ -300,18 +303,20 @@ pub(super) fn step_history(state: &App, redo: bool) {
 }
 
 pub(super) fn jump_history(state: &App, position: usize) {
+    let mut noted = None;
     let stepped = state.open.borrow_mut().as_mut().and_then(|photo| {
 
-        let snapshot = EditState::of(&photo.document);
-        photo.history.push(snapshot);
+        noted = photo.push_snapshot();
         photo.history.go_to(position).map(|state| (state, photo.as_shot))
     });
 
+    note_look(state, noted);
     let Some((edit, as_shot)) = stepped else { return };
     apply_history(state, edit, as_shot);
 }
 
 pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance) {
+    how_made::close(state);
     state.applying.set(true);
     state.sliders.write(edit.basic);
     state.mask_overlay.sliders_hold.set(None);
@@ -345,6 +350,7 @@ pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance)
     write_perspective(state);
     ai_denoise::write(state);
     lut::write(state);
+    camera_look::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);
@@ -407,7 +413,10 @@ pub(super) fn show(
         Some(placement) => crate::ui::pixel_paintable::PixelPaintable::with_placement(
             texture,
             placement,
-            backdrop.as_ref().map(texture_from),
+            backdrop.as_ref().map(|backdrop| match proof::proofing(state) {
+                Some((proof, hatch)) => texture_from(&proof.shown(backdrop, hatch)),
+                None => texture_from(backdrop),
+            }),
         ),
         None => crate::ui::pixel_paintable::PixelPaintable::new(texture),
     };

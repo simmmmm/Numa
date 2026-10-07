@@ -23,5 +23,15 @@
         "saturation": 5
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "More punch in the midtones",
+    "Highlights": "Holds detail in the bright parts",
+    "Shadows": "Keeps the dark parts readable",
+    "Whites": "A cleaner white point",
+    "Blacks": "Deeper blacks",
+    "Vibrance": "Strong colour where it was weakest",
+    "Saturation": "A touch more colour overall"
   }
 }

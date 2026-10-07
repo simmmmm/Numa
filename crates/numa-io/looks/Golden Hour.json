@@ -100,5 +100,13 @@
         "balance": 20
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Highlights": "Pulls the sky back so the glow stays",
+    "Shadows": "Opens the shadows a little",
+    "Vibrance": "Lifts muted colour and leaves skin alone",
+    "Colour mixer": "Orange and yellow pushed toward gold",
+    "Colour grading": "Amber in the highlights, warmth through the rest"
   }
 }

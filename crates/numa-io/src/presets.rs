@@ -13,6 +13,14 @@ pub struct Preset {
     pub document: Document,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Notes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
+}
+
 pub fn dir() -> PathBuf {
     numa_core::paths::data_dir().join("presets")
 }
@@ -63,11 +71,24 @@ fn read(path: &Path) -> Result<Preset, String> {
     serde_json::from_str(&text).map_err(|err| format!("{} is not a preset: {err}", path.display()))
 }
 
-pub fn save(folder: &Path, name: &str, preset: &Preset) -> Result<(), String> {
-    save_in(folder, None, name, preset)
+pub fn notes(folder: &Path, name: &str) -> Notes {
+    let own = std::fs::read_to_string(folder.join(format!("{name}.json"))).ok().and_then(|text| serde_json::from_str::<Notes>(&text).ok());
+    let shipped = || {
+        let (group, look) = name.split_once('/')?;
+        let (_, json) = LOOKS.iter().find(|(shipped, _)| group == LOOKS_GROUP && *shipped == look)?;
+        serde_json::from_str::<Notes>(json).ok()
+    };
+    match own {
+        Some(own) if own != Notes::default() => own,
+        _ => shipped().unwrap_or_default(),
+    }
 }
 
-fn save_in(folder: &Path, group: Option<&str>, name: &str, preset: &Preset) -> Result<(), String> {
+pub fn save(folder: &Path, name: &str, preset: &Preset) -> Result<(), String> {
+    save_in(folder, None, name, preset, &Notes::default())
+}
+
+fn save_in(folder: &Path, group: Option<&str>, name: &str, preset: &Preset, notes: &Notes) -> Result<(), String> {
     let name = name.trim();
     let valid = |part: &str| !part.is_empty() && !part.starts_with('.') && !part.contains(['/', '\\']);
     if !valid(name) || group.is_some_and(|group| !valid(group)) {
@@ -82,7 +103,11 @@ fn save_in(folder: &Path, group: Option<&str>, name: &str, preset: &Preset) -> R
         return Err(format!("There is already a preset called “{name}”"));
     }
     std::fs::create_dir_all(&folder).map_err(|err| err.to_string())?;
-    let json = serde_json::to_string_pretty(preset).map_err(|err| err.to_string())?;
+    let mut value = serde_json::to_value(preset).map_err(|err| err.to_string())?;
+    if let (Some(object), Ok(serde_json::Value::Object(extra))) = (value.as_object_mut(), serde_json::to_value(notes)) {
+        object.extend(extra);
+    }
+    let json = serde_json::to_string_pretty(&value).map_err(|err| err.to_string())?;
     std::fs::write(&path, json).map_err(|err| format!("{}: {err}", path.display()))
 }
 
@@ -186,6 +211,12 @@ pub fn at_strength(base: &Document, preset: &Preset, amount: f32) -> Document {
         lut.amount = from + (lut.amount - from) * t;
         out.lut = Some(lut);
     }
+
+    if let Some(mut look) = target.camera_look.clone() {
+        let from = base.camera_look.as_ref().map_or(0.0, |was| was.strength);
+        look.strength = from + (look.strength - from) * t;
+        out.camera_look = Some(look);
+    }
     if let (Some(a), Some(b)) = (base.white_balance, target.white_balance) {
         out.white_balance = Some(mix(&a, &b, t));
     }
@@ -248,7 +279,9 @@ pub fn import(folder: &Path, dropped: &[PathBuf]) -> Imported {
             "json" => match read(&path) {
                 Ok(preset) => {
                     let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
-                    record(&mut imported, save(folder, &clean(&stem), &preset));
+
+                    let notes = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+                    record(&mut imported, save_in(folder, None, &clean(&stem), &preset, &notes));
                 }
                 Err(err) => imported.refused.push(err),
             },
@@ -296,7 +329,7 @@ fn import_pack(folder: &Path, path: &Path, imported: &mut Imported) {
 }
 
 fn keep(folder: &Path, group: Option<&str>, translated: foreign::Translated, imported: &mut Imported) {
-    let saved = save_in(folder, group, &clean(&translated.name), &translated.preset);
+    let saved = save_in(folder, group, &clean(&translated.name), &translated.preset, &Notes::default());
     if saved.is_ok() {
         for what in translated.ignored {
             *imported.ignored.entry(what).or_default() += 1;
@@ -325,7 +358,7 @@ mod tests {
 
     #[test]
     fn a_preset_is_saved_listed_imported_and_never_overwritten() {
-        let root = std::env::temp_dir().join("numa-test-presets");
+        let root = std::env::temp_dir().join(format!("numa-test-presets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (folder, elsewhere) = (root.join("presets"), root.join("elsewhere"));
         std::fs::create_dir_all(elsewhere.join("Film Pack")).unwrap();
@@ -358,6 +391,30 @@ mod tests {
         let again = import(&folder, &[elsewhere.clone()]);
         assert_eq!((again.presets, again.existing), (0, 2), "already there");
 
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_looks_notes_travel_with_its_file() {
+        let root = std::env::temp_dir().join(format!("numa-test-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (folder, elsewhere) = (root.join("presets"), root.join("elsewhere"));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        let preset = Preset { parts: EditParts { tone: true, ..EditParts::nothing() }, document: Document::new(String::new()) };
+        save(&folder, "Plain", &preset).unwrap();
+        assert_eq!(notes(&folder, "Plain"), Notes::default(), "an old file has none");
+
+        let mut value = serde_json::to_value(&preset).unwrap();
+        value["by"] = "Anna".into();
+        value["notes"] = serde_json::json!({ "Highlights": "Keeps the sky" });
+        std::fs::write(elsewhere.join("Evening.json"), value.to_string()).unwrap();
+        assert!(read(&elsewhere.join("Evening.json")).is_ok(), "the edit reads as before");
+
+        import(&folder, &[elsewhere.join("Evening.json")]);
+        let kept = notes(&folder, "Evening");
+        assert_eq!(kept.by.as_deref(), Some("Anna"));
+        assert_eq!(kept.notes.get("Highlights").map(String::as_str), Some("Keeps the sky"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

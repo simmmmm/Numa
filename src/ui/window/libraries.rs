@@ -108,6 +108,10 @@ pub(super) fn rescan_in_background(state: &App, changed: bool) {
     follow_drive(state);
     let Some(library) = state.libraries.current.borrow().clone() else { return };
 
+    if tethering_into(library.id) {
+        return;
+    }
+
     if folder_is_missing(&library.path) {
         return;
     }
@@ -116,9 +120,12 @@ pub(super) fn rescan_in_background(state: &App, changed: bool) {
     if !changed && walked.is_some() && state.libraries.scanned.get().is_some_and(|last| now.duration_since(last) < SCAN_AT_MOST) {
         return;
     }
-    if state.libraries.scanning.replace(true) {
+
+    if state.libraries.scanning.get() {
+        rescan_soon(state);
         return;
     }
+    state.libraries.scanning.set(true);
     state.libraries.scanned.set(Some(now));
     let state = state.clone();
     glib::spawn_future_local(async move {
@@ -351,6 +358,7 @@ pub(super) fn select_library_index(state: &App, index: u32) {
     *state.libraries.current.borrow_mut() = selected;
 
     reload_grid(state);
+    offer_clocks(state);
 
     rescan_in_background(state, false);
 }
@@ -401,6 +409,8 @@ pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<Path
 
 #[derive(Clone)]
 pub(super) struct State {
+
+    pub(super) rapid: rapid::State,
     pub(super) current: Rc<RefCell<Option<Library>>>,
     pub(super) all: Rc<RefCell<Vec<Library>>>,
     pub(super) filter: Rc<RefCell<Filter>>,
@@ -432,11 +442,14 @@ pub(super) struct State {
     pub(super) analyse_button: Rc<RefCell<Option<gtk::Button>>>,
 
     pub(super) shelves: gtk::Box,
+
+    pub(super) words: words::State,
 }
 
 impl State {
     pub(super) fn new() -> Self {
         Self {
+            rapid: rapid::State::new(),
             current: Rc::new(RefCell::new(None)),
             all: Rc::new(RefCell::new(Vec::new())),
             filter: Rc::new(RefCell::new(Filter::default())),
@@ -444,6 +457,7 @@ impl State {
             show_filter: Rc::default(),
             places: Rc::new(RefCell::new(Vec::new())),
             shelves: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            words: words::State::new(),
             picker: gtk::DropDown::from_strings(&[]),
             folder: Rc::default(),
             folder_picker: gtk::DropDown::from_strings(&["All Folders"]),

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::catalog::{copy_whole, Copied, Library};
+use crate::catalog::Library;
 use crate::raw;
 
 const GAP: i64 = 2 * 24 * 3600;
@@ -55,11 +55,17 @@ pub fn scan(source: &Path) -> Vec<Found> {
     found
 }
 
+pub fn raws_only(mut found: Vec<Found>) -> Vec<Found> {
+    let raws: std::collections::HashSet<PathBuf> = found.iter().filter(|photo| raw::is_raw(&photo.path)).map(|photo| photo.path.with_extension("")).collect();
+    found.retain(|photo| raw::is_raw(&photo.path) || !raws.contains(&photo.path.with_extension("")));
+    found
+}
+
 pub fn by_name(paths: impl IntoIterator<Item = PathBuf>) -> HashMap<OsString, Vec<PathBuf>> {
     let mut index: HashMap<OsString, Vec<PathBuf>> = HashMap::new();
     for path in paths {
-        if let Some(name) = path.file_name() {
-            index.entry(name.to_os_string()).or_default().push(path);
+        if let Some(name) = name_key(&path) {
+            index.entry(name).or_default().push(path);
         }
     }
     index
@@ -69,13 +75,38 @@ pub fn already(found: &[Found], known: &HashMap<OsString, Vec<PathBuf>>) -> Vec<
     found
         .iter()
         .map(|photo| {
-            let name = photo.path.file_name()?;
-            known.get(name)?.iter().find(|there| same_file(&photo.path, photo.size, there)).cloned()
+            let name = name_key(&photo.path)?;
+            let cable = over_a_cable(&photo.path);
+            known.get(&name)?.iter().find(|there| if cable { same_size_and_time(photo, there) } else { same_file(&photo.path, photo.size, there) }).cloned()
         })
         .collect()
 }
 
-fn same_file(one: &Path, size: u64, other: &Path) -> bool {
+fn name_key(path: &Path) -> Option<OsString> {
+    let mut key = path.file_stem()?.to_os_string();
+    let extension = path.extension().map(|extension| extension.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    key.push(".");
+    key.push(match extension.as_str() {
+        "hif" | "heic" | "heif" => "heif",
+        "jpeg" => "jpg",
+        other => other,
+    });
+    Some(key)
+}
+
+fn over_a_cable(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    path.contains("/gvfs/gphoto2:") || path.contains("/gvfs/mtp:")
+}
+
+fn same_size_and_time(photo: &Found, other: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(other) else { return false };
+    let when = meta.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |since| since.as_secs() as i64);
+    let apart = (photo.when - when).abs();
+    meta.len() == photo.size && apart <= 14 * 3600 && apart % 900 == 0
+}
+
+pub(crate) fn same_file(one: &Path, size: u64, other: &Path) -> bool {
     if std::fs::metadata(other).map(|meta| meta.len()).ok() != Some(size) {
         return false;
     }
@@ -171,7 +202,7 @@ pub fn day(when: i64, offset: i64) -> String {
     format!("{year}-{month:02}-{day:02}")
 }
 
-fn civil(seconds: i64) -> (i64, u32, u32) {
+pub(crate) fn civil(seconds: i64) -> (i64, u32, u32) {
     let days = seconds.div_euclid(86_400) + 719_468;
     let era = days.div_euclid(146_097);
     let of_era = days - era * 146_097;
@@ -203,44 +234,20 @@ pub fn named(pattern: &str, photo: &Found, n: usize, offset: i64) -> OsString {
     }
 }
 
-pub fn copy(
-    photos: &[(&Found, OsString)],
-    folder: &Path,
-    stop: impl Fn() -> bool,
-    mut done: impl FnMut(usize),
-) -> Copied {
-    let mut copied = Copied::default();
-    for (at, (photo, name)) in photos.iter().enumerate() {
-        if stop() {
-            break;
+pub(crate) fn free_name(folder: &Path, name: &OsStr, same: impl Fn(&Path) -> bool) -> (PathBuf, bool) {
+    let mut to = folder.join(name);
+    let mut suffix = 2;
+    while to.exists() {
+        if same(&to) {
+            return (to, true);
         }
-        let mut to = folder.join(name);
-        let mut suffix = 2;
-        while to.exists() {
-            if same_file(&photo.path, photo.size, &to) {
-                break;
-            }
-            let path = Path::new(name);
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-            let extension = path.extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
-            to = folder.join(format!("{stem}-{suffix}{extension}"));
-            suffix += 1;
-        }
-        let shown = || to.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        if to.exists() {
-            copied.existing.push(shown());
-        } else {
-            match copy_whole(&photo.path, &to) {
-                Ok(()) => copied.photos += 1,
-                Err(err) => {
-                    log::warn!("{}: {err}", photo.path.display());
-                    copied.failed.push(shown());
-                }
-            }
-        }
-        done(at + 1);
+        let path = Path::new(name);
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let extension = path.extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
+        to = folder.join(format!("{stem}-{suffix}{extension}"));
+        suffix += 1;
     }
-    copied
+    (to, false)
 }
 
 #[cfg(test)]
@@ -313,6 +320,49 @@ mod tests {
     }
 
     #[test]
+    fn only_the_raws_leaves_a_raws_jpeg_and_keeps_a_jpeg_of_its_own() {
+        let found = |paths: &[&str]| -> Vec<Found> { paths.iter().map(|path| Found { path: PathBuf::from(path), size: 1, when: 0 }).collect() };
+        let card = found(&["100_FUJI/A.RAF", "100_FUJI/A.JPG", "100_FUJI/B.HEIC", "100_FUJI/C.RAF", "100_FUJI/C.HEIC", "101_FUJI/A.JPG"]);
+        let kept: Vec<PathBuf> = raws_only(card).into_iter().map(|photo| photo.path).collect();
+        let want: Vec<PathBuf> = ["100_FUJI/A.RAF", "100_FUJI/B.HEIC", "100_FUJI/C.RAF", "101_FUJI/A.JPG"].iter().map(PathBuf::from).collect();
+        assert_eq!(kept, want);
+    }
+
+    #[test]
+    fn off_a_camera_on_its_cable_the_size_and_time_say_it_is_there() {
+        let dir = std::env::temp_dir().join(format!("numa-import-cable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let library = dir.join("Japan");
+        std::fs::create_dir_all(&library).unwrap();
+        let taken = 1_785_635_172;
+        let copy = |name: &str, size: usize, when: i64| {
+            let path = library.join(name);
+            std::fs::write(&path, vec![0u8; size]).unwrap();
+            let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(when as u64);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
+            path
+        };
+
+        let names = ["DSCF1961.RAF", "DSCF1962.RAF", "DSCF1963.RAF", "DSCF1964.RAF", "DSCF2732.HEIC"];
+        let known = by_name(vec![
+            copy(names[0], 100, taken + 7200),
+            copy(names[1], 100, taken + 61),
+            copy(names[2], 99, taken),
+            copy(names[3], 100, taken + 365 * DAY),
+
+            copy("DSCF2732.HIF", 100, taken + 7200),
+        ]);
+
+        let camera = dir.join("gvfs/gphoto2:host=04cb_USB_PTP_Camera/SLOT 1/DCIM/104_FUJI");
+        let found: Vec<Found> = names.iter().map(|name| Found { path: camera.join(name), size: 100, when: taken }).collect();
+        let there = already(&found, &known);
+        assert_eq!(there[0], Some(library.join(names[0])));
+        assert_eq!(&there[1..4], [None, None, None]);
+        assert_eq!(there[4], Some(library.join("DSCF2732.HIF")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn what_a_library_has_is_known_and_a_clash_of_names_keeps_both() {
         let dir = std::env::temp_dir().join(format!("numa-import-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -337,8 +387,18 @@ mod tests {
         assert_eq!(there[1 - first], None, "the same name is not the same photograph");
 
         let new = &found[1 - first];
-        let copied = copy(&[(new, new.path.file_name().unwrap().to_owned())], &library, || false, |_| {});
-        assert_eq!(copied.photos, 1);
+        let copy = || {
+            let item = crate::offload::Item {
+                card: new.path.clone(),
+                size: new.size,
+                to: crate::offload::Target::Free(library.clone(), new.path.file_name().unwrap().to_owned()),
+                second: None,
+            };
+            let (report, later) = crate::offload::run(vec![item], true, Default::default(), std::sync::Arc::new(|_| {}));
+            later.join(report)
+        };
+        let copied = copy();
+        assert_eq!(copied.landed.len(), 1);
         assert_eq!(std::fs::read(library.join("DSCF0002-2.RAF")).unwrap(), frame(5), "copied beside, not over");
         assert_eq!(std::fs::read(library.join("DSCF0002.RAF")).unwrap(), frame(7), "the other camera's is untouched");
 
@@ -346,8 +406,8 @@ mod tests {
         assert_eq!(time(&library.join("DSCF0002-2.RAF")), time(&new.path));
         assert!(!library.join("DSCF0002-2.RAF.part").exists());
 
-        let again = copy(&[(new, new.path.file_name().unwrap().to_owned())], &library, || false, |_| {});
-        assert_eq!((again.photos, again.existing.len()), (0, 1), "found as the -2 already there, and no -3 made");
+        let again = copy();
+        assert_eq!((again.landed.len(), again.existing.len()), (0, 1), "found as the -2 already there, and no -3 made");
         assert!(!library.join("DSCF0002-3.RAF").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }

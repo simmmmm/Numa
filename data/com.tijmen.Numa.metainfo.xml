@@ -51,6 +51,31 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.36.0" date="2026-10-07">
+      <description>
+        <p>
+          An import you can trust: Numa copies a card into your library, and
+          to a second drive if you like, checks every file, keeps a receipt
+          and says when the card is safe to format. With a camera on its
+          cable, its name appears in the library's header bar: shoot
+          tethered, each photograph straight into a library and onto the
+          screen, or import from the camera, only the raws if you want.
+          What comes in is analysed and read for search as it lands.
+        </p>
+        <p>
+          Search your photographs by what is in them, in English or Dutch,
+          on this computer, and find the things Numa saw in the Filter menu.
+          Moments shows a shoot by its moments, with the shoot as a tape
+          under the loupe, Review at full size and an edit per moment. Also
+          new: camera clocks that agree, As Shot (a look that follows the
+          camera's own JPEG), a camera profile made from your own
+          photographs, HEIF and HEIC files, Proof for Print, For a Book,
+          Tonight, the client's picks back from a proofing gallery, How It
+          Was Made, stars to click on a hovered photograph, Mist, a better
+          Auto, crash reports, and Send Feedback in the main menu.
+        </p>
+      </description>
+    </release>
     <release version="0.35.0" date="2026-10-03">
       <description>
         <p>

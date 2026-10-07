@@ -39,7 +39,10 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     end.set_transition_duration(300);
 
     end.set_hhomogeneous(false);
-    end.add_named(&state.grid.header_end, Some("library"));
+
+    let library_end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    library_end.append(&state.grid.header_end);
+    end.add_named(&library_end, Some("library"));
     end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("folders"));
     end.add_named(&state.editor_page.header_end, Some("editor"));
     header.pack_end(&end);
@@ -81,12 +84,37 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     ));
     library_actions.append(&import);
 
+    let search = words::search_button(state);
+    library_actions.append(&search);
+
+    let view = rapid::view_button(state);
+    view.set_margin_start(6);
+    library_actions.append(&view);
+
     let rating = build_loupe_rating(state);
     library_actions.append(&rating);
     state.loupe.reveal.bind_property("reveal-child", &rating, "visible").sync_create().build();
-    for button in [&add, &import] {
+    for button in [add.upcast_ref::<gtk::Widget>(), search.upcast_ref(), view.upcast_ref()] {
         state.loupe.reveal.bind_property("reveal-child", button, "visible").invert_boolean().sync_create().build();
     }
+
+    let pill = camera_pill();
+    library_actions.insert_child_after(&pill, Some(&import));
+    let reveal = state.loupe.reveal.clone();
+    let one_camera = glib::clone!(
+        #[weak] import,
+        #[weak] pill,
+        move || import.set_visible(!reveal.reveals_child() && !pill.is_visible())
+    );
+    pill.connect_visible_notify(glib::clone!(
+        #[strong] one_camera,
+        move |_| one_camera()
+    ));
+    state.loupe.reveal.connect_reveal_child_notify(glib::clone!(
+        #[strong] one_camera,
+        move |_| one_camera()
+    ));
+    one_camera();
 
     let back = gtk::Button::from_icon_name("go-previous-symbolic");
     back.set_tooltip_text(Some("Back to the library"));
@@ -212,6 +240,9 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
     window.add_action(&manage);
     install_album_actions(state, window);
 
+    tonight::install_tonight_action(state, window);
+    tracks::install_track_action(state, window);
+
     let shortcuts = gio::SimpleAction::new("shortcuts", None);
     shortcuts.connect_activate(glib::clone!(
         #[weak] window,
@@ -241,6 +272,13 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
         move |_, _| show_about(Some(window.upcast_ref()), Some(&state))
     ));
     window.add_action(&about);
+    let feedback = gio::SimpleAction::new("feedback", None);
+    feedback.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] window,
+        move |_, _| feedback_dialog(&state, &window)
+    ));
+    window.add_action(&feedback);
 
     let open_file = gio::SimpleAction::new("open-file", None);
     open_file.connect_activate(glib::clone!(
@@ -273,6 +311,7 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
     ));
     window.add_action(&open_path_action);
     install_rescan_action(state, window);
+    book::install(state, window);
 }
 
 fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
@@ -304,6 +343,7 @@ fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
     if let Some(app) = window.application() {
         app.set_accels_for_action("win.rescan", &["F5"]);
     }
+    install_tethering(state, window);
 
     let people = gio::SimpleAction::new("people", None);
     people.connect_activate(glib::clone!(
@@ -312,16 +352,23 @@ fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
         move |_, _| people_dialog(&state, &window)
     ));
     window.add_action(&people);
+    install_clock_action(state, window);
 }
 
 fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
-    let menu = sort_menu();
+    let menu = gio::Menu::new();
     let library = gio::Menu::new();
     library.append(Some("Rescan Library"), Some("win.rescan"));
-    if cull::people::is_installed() {
-        library.append(Some("People…"), Some("win.people"));
-    }
+    library.append(Some("Camera Clocks…"), Some("win.clocks"));
+    library.append(Some("Add Places from a Track…"), Some("win.places-from-track"));
+
+    library.append(Some("Paste the Client's Picks…"), Some("win.client-picks"));
+
+    let out = gio::Menu::new();
+    out.append(Some("Tonight…"), Some("win.tonight"));
+    out.append(Some("For a Book…"), Some("win.book"));
     menu.append_section(None, &library);
+    menu.append_section(None, &out);
     menu.append_section(None, main_menu);
     menu
 }
@@ -329,12 +376,17 @@ fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
 fn build_header_menu() -> (gtk::MenuButton, gio::Menu) {
     let menu = gio::Menu::new();
     menu.append(Some("Open…"), Some("win.open-file"));
+
+    let stop = gio::MenuItem::new(Some("Stop Tethering"), Some("win.tether-stop"));
+    stop.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    menu.append_item(&stop);
     menu.append(Some("Libraries…"), Some("win.libraries"));
     menu.append(Some("Albums…"), Some("win.albums"));
     menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
+    menu.append(Some("Send Feedback…"), Some("win.feedback"));
     menu.append(Some("About"), Some("win.about"));
-    menu.append(Some("Quit"), Some("app.quit"));
+
     let menu_button = gtk::MenuButton::new();
     menu_button.set_menu_model(Some(&menu));
     menu_button.set_icon_name("open-menu-symbolic");
@@ -378,16 +430,187 @@ pub(super) fn show_about(parent: Option<&gtk::Window>, state: Option<&App>) {
 
     about.set_debug_info(&debug_info(state));
     about.set_debug_info_filename("numa-debug-info.txt");
-    about.set_issue_url("https://github.com/simmmmm/Numa/issues/new");
+    about.set_issue_url("https://github.com/simmmmm/Numa/issues/new?template=problem.yml");
     about.set_support_url("https://numa.photo/support");
 
     about.present(parent);
+}
+
+fn feedback_dialog(state: &App, window: &adw::ApplicationWindow) {
+    let text = gtk::TextView::new();
+    text.set_wrap_mode(gtk::WrapMode::WordChar);
+    text.set_top_margin(8);
+    text.set_bottom_margin(8);
+    text.set_left_margin(8);
+    text.set_right_margin(8);
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&text)
+        .min_content_height(140)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+    scroll.add_css_class("card");
+    let debug = gtk::CheckButton::with_label("Include Debug Information");
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.append(&scroll);
+    content.append(&debug);
+
+    let ask = adw::AlertDialog::new(
+        Some("Send Feedback"),
+        Some("An idea or a tip. On GitHub others can read and add to it; a mail goes to one person."),
+    );
+    ask.set_extra_child(Some(&content));
+    ask.add_response("cancel", "Cancel");
+    ask.add_response("mail", "Send by Mail");
+    ask.add_response("github", "Post on GitHub");
+    ask.set_response_appearance("github", adw::ResponseAppearance::Suggested);
+    ask.set_close_response("cancel");
+    for response in ["mail", "github"] {
+        ask.set_response_enabled(response, false);
+    }
+    text.buffer().connect_changed(glib::clone!(
+        #[weak] ask,
+        move |buffer| {
+            let written = !buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().is_empty();
+            for response in ["mail", "github"] {
+                ask.set_response_enabled(response, written);
+            }
+        }
+    ));
+    let (state, parent, typed) = (state.clone(), window.clone(), text.clone());
+    ask.connect_response(None, move |_, response| {
+        if response == "cancel" {
+            return;
+        }
+        let buffer = typed.buffer();
+        let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+        let debug = debug.is_active().then(|| debug_info(Some(&state)));
+        let url = feedback_url(response == "github", written.trim(), debug.as_deref());
+        gtk::UriLauncher::new(&url).launch(Some(&parent), gio::Cancellable::NONE, |_| {});
+    });
+    ask.present(Some(window));
+    text.grab_focus();
+}
+
+pub(super) fn feedback_url(github: bool, written: &str, debug: Option<&str>) -> String {
+    let escape = |text: &str| glib::Uri::escape_string(text, None, false).to_string();
+    let version = env!("CARGO_PKG_VERSION");
+    if github {
+        let title: String = written.lines().next().unwrap_or_default().chars().take(80).collect();
+        let mut body = written.to_string();
+        if let Some(debug) = debug {
+            body.push_str(&format!("\n\n<details><summary>Debug information</summary>\n\n```\n{debug}\n```\n</details>"));
+        }
+        format!(
+            "https://github.com/simmmmm/Numa/discussions/new?category=ideas&title={}&body={}",
+            escape(&title),
+            escape(&body)
+        )
+    } else {
+        let mut body = written.to_string();
+        if let Some(debug) = debug {
+            body.push_str(&format!("\n\n—\n{debug}"));
+        }
+        format!("mailto:support@numa.photo?subject={}&body={}", escape(&format!("Numa {version}")), escape(&body))
+    }
+}
+
+pub(super) fn offer_crash_report(state: &App, window: &adw::ApplicationWindow) {
+    let Some(report) = crate::crash::last_time() else { return };
+    let toast = adw::Toast::new("Numa closed unexpectedly");
+    toast.set_button_label(Some("Send Report…"));
+    toast.set_timeout(0);
+    let (state, window) = (state.clone(), window.clone());
+    toast.connect_button_clicked(glib::clone!(
+        #[strong] state,
+        move |_| crash_dialog(&state, &window, &report)
+    ));
+    state.toasts.add_toast(toast);
+}
+
+fn crash_dialog(state: &App, window: &adw::ApplicationWindow, report: &str) {
+
+    #[cfg(feature = "gpu")]
+    let card = numa::gpu::describe(numa::io::raw::card_frugal());
+    #[cfg(not(feature = "gpu"))]
+    let card: Option<String> = None;
+    let card = format!("\nGraphics card: {}\n", card.unwrap_or_else(|| "none in use".to_string()));
+    let report = report.replacen('\n', &card, 1);
+
+    let note = gtk::Label::new(Some(
+        "This is everything it left behind; nothing leaves unless you send it. \
+         Without a GitHub account, copy it into a mail to support@numa.photo.",
+    ));
+    note.set_wrap(true);
+    note.set_xalign(0.0);
+    note.set_margin_start(12);
+    note.set_margin_end(12);
+    note.set_margin_bottom(6);
+    let copy = gtk::Button::with_label("Copy");
+    let github = primary_button("Open on GitHub");
+    let header = adw::HeaderBar::new();
+    header.pack_start(&copy);
+    header.pack_end(&github);
+    let bar = adw::ToolbarView::new();
+    bar.add_top_bar(&header);
+    bar.add_top_bar(&note);
+    bar.set_content(Some(&text_scroll(&report)));
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Numa Closed Unexpectedly");
+    dialog.set_content_width(720);
+    dialog.set_content_height(560);
+    dialog.set_child(Some(&bar));
+
+    let (state, parent, text) = (state.clone(), window.clone(), report.clone());
+    copy.connect_clicked(move |_| {
+        parent.clipboard().set_text(&text);
+        state.toasts.add_toast(adw::Toast::new("Report copied"));
+    });
+    let parent = window.clone();
+    github.connect_clicked(glib::clone!(
+        #[weak] dialog,
+        move |_| {
+            let (url, cut) = crash_url(&report);
+            if cut {
+                parent.clipboard().set_text(&report);
+            }
+            gtk::UriLauncher::new(&url).launch(Some(&parent), gio::Cancellable::NONE, |_| {});
+            dialog.close();
+        }
+    ));
+    dialog.present(Some(window));
+}
+
+pub(super) fn crash_url(report: &str) -> (String, bool) {
+    let escape = |text: &str| glib::Uri::escape_string(text, None, false).to_string();
+    let cut = report.chars().count() > 2500;
+    let debug = match cut {
+        true => report.chars().take(2500).collect::<String>() + "\n… cut here: paste the whole report from the clipboard",
+        false => report.to_string(),
+    };
+    let url = format!(
+        "https://github.com/simmmmm/Numa/issues/new?template=problem.yml&title={}&debug={}",
+        escape("Numa closed unexpectedly"),
+        escape(&debug)
+    );
+    (url, cut)
 }
 
 const LICENCES_LINK: &str = "numa:third-party-licences";
 const MODELS_LINK: &str = "numa:model-licences";
 
 fn show_text(over: &adw::AboutDialog, title: &str, text: &str) {
+    let bar = adw::ToolbarView::new();
+    bar.add_top_bar(&adw::HeaderBar::new());
+    bar.set_content(Some(&text_scroll(text)));
+    let dialog = adw::Dialog::new();
+    dialog.set_title(title);
+    dialog.set_content_width(720);
+    dialog.set_content_height(640);
+    dialog.set_child(Some(&bar));
+    dialog.present(Some(over));
+}
+
+fn text_scroll(text: &str) -> gtk::ScrolledWindow {
     let view = gtk::TextView::new();
     view.set_editable(false);
     view.set_monospace(true);
@@ -399,15 +622,7 @@ fn show_text(over: &adw::AboutDialog, title: &str, text: &str) {
     view.buffer().set_text(text);
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&view));
-    let bar = adw::ToolbarView::new();
-    bar.add_top_bar(&adw::HeaderBar::new());
-    bar.set_content(Some(&scroll));
-    let dialog = adw::Dialog::new();
-    dialog.set_title(title);
-    dialog.set_content_width(720);
-    dialog.set_content_height(640);
-    dialog.set_child(Some(&bar));
-    dialog.present(Some(over));
+    scroll
 }
 
 fn add_legal_sections(about: &adw::AboutDialog) {

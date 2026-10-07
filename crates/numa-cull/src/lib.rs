@@ -3,6 +3,7 @@ pub mod faces;
 pub mod learn;
 pub mod people;
 pub mod measure;
+pub mod tape;
 
 pub const VERSION: i64 = 4;
 
@@ -30,6 +31,8 @@ pub struct Frame {
     pub contrast: f32,
 
     pub colourfulness: f32,
+
+    pub clock: Option<i64>,
 }
 
 pub const SOFT: f32 = 0.25;
@@ -96,6 +99,28 @@ pub fn bursts(hashes: &[u64], taken: &[i64], tolerance: u32) -> Vec<usize> {
         groups.push(current);
     }
 
+    groups
+}
+
+pub fn bursts_by_body(hashes: &[u64], taken: &[i64], bodies: &[&str], tolerance: u32) -> Vec<usize> {
+    let mut each: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (index, body) in bodies.iter().enumerate() {
+        match each.iter_mut().find(|(known, _)| known == body) {
+            Some((_, indices)) => indices.push(index),
+            None => each.push((body, vec![index])),
+        }
+    }
+    let mut groups = vec![0; hashes.len()];
+    let mut next = 0;
+    for (_, indices) in each {
+        let pick = |values: &[i64]| indices.iter().map(|index| values[*index]).collect::<Vec<_>>();
+        let own: Vec<u64> = indices.iter().map(|index| hashes[*index]).collect();
+        let runs = bursts(&own, &pick(taken), tolerance);
+        for (index, run) in indices.iter().zip(&runs) {
+            groups[*index] = next + run;
+        }
+        next += runs.last().map_or(0, |last| last + 1);
+    }
     groups
 }
 
@@ -272,6 +297,15 @@ mod tests {
         assert!(groups.iter().all(|group| *group == 0), "{groups:?}");
 
         assert_eq!(bursts(&[0, u64::MAX], &[0, 1], 4), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_burst_is_one_body_s() {
+        let hashes = [7u64; 6];
+        let taken = [0, 0, 1, 1, 2, 2];
+        let bodies = ["X-T5", "A7 IV", "X-T5", "A7 IV", "X-T5", "A7 IV"];
+        assert_eq!(bursts(&hashes, &taken, 4), vec![0; 6], "on one timeline they were one");
+        assert_eq!(bursts_by_body(&hashes, &taken, &bodies, 4), vec![0, 1, 0, 1, 0, 1]);
     }
 
     #[test]

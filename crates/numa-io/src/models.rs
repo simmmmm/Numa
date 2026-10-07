@@ -2,7 +2,7 @@ use std::path::Path;
 
 pub type ModelFile = (&'static str, &'static str, u64, &'static str);
 
-pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") { 11 } else { 13 }] = [
+pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") { 11 } else { 14 }] = [
     ("EfficientViT-Seg B2", "Sky, greenery and the other found masks · Apache-2.0 · 61 MB", &[(
         "efficientvit_seg_b2_ade20k_1024.onnx",
         "https://github.com/simmmmm/Numa/releases/download/models/efficientvit_seg_b2_ade20k_1024.onnx",
@@ -72,6 +72,13 @@ pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") 
     ("SCUNet", "AI denoise · Apache-2.0 · 77 MB", &[
         ("scunet_color_real_psnr.onnx", "https://huggingface.co/Heliosoph/scunet-onnx/resolve/main/scunet_color_real_psnr.onnx", 3_798_678, "231be201ab413dbc999d7951caa9844846b93a12a40a41e037d6b5888ed4e88c"),
         ("scunet_color_real_psnr.onnx.data", "https://huggingface.co/Heliosoph/scunet-onnx/resolve/main/scunet_color_real_psnr.onnx.data", 73_138_176, "98825ea1210b641c71e5f052f582c70c49fd44b35387ebe2c034268c17df3feb"),
+    ]),
+
+    #[cfg(not(target_vendor = "apple"))]
+    ("SigLIP 2", "Search by words, and Things Numa Saw · Apache-2.0 · 412 MB", &[
+        (crate::words::VISION, "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/main/onnx/vision_model_uint8.onnx", 94_553_333, "5f2b401c1a4fc095702a5d45348e17ad46c4f87064085365b43c6e8eaa5c0070"),
+        (crate::words::TEXT, "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/main/onnx/text_model_int8.onnx", 283_438_275, "3a0603d3a00c05a80a6ded4743c16aaac7b1e62cdcc7e362e7ce418659b96400"),
+        (crate::words::TOKENIZER, "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/main/tokenizer.json", 34_363_039, "cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322"),
     ]),
 ];
 
@@ -170,7 +177,7 @@ pub fn unpack(from: &Path, to: &Path) -> std::io::Result<()> {
     out.into_inner().map_err(|err| err.into_error())?.sync_all()
 }
 
-pub const AUTHORS: [(&str, &str); 15] = [
+pub const AUTHORS: [(&str, &str); 16] = [
     ("EfficientViT-Seg B2", "MIT Han Lab (Han Cai et al.)"),
     ("SlimSAM", "Zigeng Chen et al., from Meta's Segment Anything"),
     ("BiRefNet", "Peng Zheng et al."),
@@ -186,6 +193,7 @@ pub const AUTHORS: [(&str, &str); 15] = [
     ("Restormer", "Syed Waqas Zamir et al."),
     ("RealPLKSR", "Dongheon Lee; ONNX by darktable"),
     ("SCUNet", "Kai Zhang et al."),
+    ("SigLIP 2", "Michael Tschannen et al., Google; ONNX by onnx-community"),
 ];
 
 pub const NONCOMMERCIAL: &str = "non-commercial use only";

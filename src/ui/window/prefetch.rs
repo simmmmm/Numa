@@ -15,6 +15,8 @@ struct Key {
     mtime: i64,
     edge: u32,
     automatic: dcp::Automatic,
+
+    profiles: u64,
 }
 
 pub(super) type Coloured = (Option<String>, render::RenderInputs, Arc<LinearImage>, Option<First>);
@@ -150,7 +152,7 @@ pub(super) fn on_screen(state: &App, generation: u64) {
     let path = photo.path;
     std::thread::spawn(move || {
         let decoded = numa::core::power::background(|| {
-            raw::stoppable(stop, || {
+            numa::core::power::stoppable(Some(stop), || {
                 let prepared = prepare(&path, edge)?;
                 raw::stopped()?;
                 let Some(document) = document else { return Ok((prepared, None)) };
@@ -230,7 +232,7 @@ fn recall(ahead: &State, key: &Key) -> Option<Prepared> {
 }
 
 fn key(path: &Path, mtime: i64, edge: u32) -> Key {
-    Key { path: path.to_path_buf(), mtime, edge, automatic: dcp::automatic() }
+    Key { path: path.to_path_buf(), mtime, edge, automatic: dcp::automatic(), profiles: dcp::generation() }
 }
 
 fn first_frame(document: &Document, working: &Arc<LinearImage>, (proxy, full_size, ..): &Prepared) -> First {

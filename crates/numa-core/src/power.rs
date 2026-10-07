@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 static FRUGAL: AtomicBool = AtomicBool::new(false);
 
@@ -23,10 +24,57 @@ pub fn background<R: Send>(work: impl FnOnce() -> R + Send) -> R {
             .build()
             .ok()
     });
+    run_on(pool, work)
+}
+
+fn run_on<R: Send>(pool: &Option<rayon::ThreadPool>, work: impl FnOnce() -> R + Send) -> R {
     match pool {
-        Some(pool) => pool.install(work),
+        Some(pool) => pool.install(|| stoppable(None, work)),
         None => work(),
     }
+}
+
+thread_local! {
+
+    static STOP: std::cell::RefCell<Option<Arc<AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn stoppable<R>(stop: Option<Arc<AtomicBool>>, work: impl FnOnce() -> R) -> R {
+    struct Back(Option<Arc<AtomicBool>>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            STOP.set(self.0.take());
+        }
+    }
+    let _back = Back(STOP.replace(stop));
+    work()
+}
+
+pub fn stopped() -> bool {
+    STOP.with_borrow(|stop| stop.as_ref().is_some_and(|stop| stop.load(Ordering::Relaxed)))
+}
+
+pub const QUIET_THREADS: usize = 2;
+
+const REST: u32 = 2;
+
+pub fn quietly<R: Send>(work: impl FnOnce() -> R + Send) -> R {
+    static LANE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    let _turn = LANE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pool = POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(QUIET_THREADS)
+            .thread_name(|k| format!("numa-quiet-{k}"))
+            .start_handler(|_| lowest_priority())
+            .build()
+            .ok()
+    });
+    let started = std::time::Instant::now();
+    let result = run_on(pool, work);
+
+    std::thread::sleep((started.elapsed() * REST).min(std::time::Duration::from_secs(30)));
+    result
 }
 
 pub fn start_threads() {
@@ -62,6 +110,19 @@ fn waited_for() {
 #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
 fn lower_priority() {}
 
+#[cfg(target_os = "linux")]
+fn lowest_priority() {
+
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lowest_priority() {
+    lower_priority();
+}
+
 static PHONE: AtomicBool = AtomicBool::new(false);
 
 pub fn phone() -> bool {
@@ -88,3 +149,52 @@ pub fn available_memory() -> Option<u64> {
 }
 #[cfg(not(target_vendor = "apple"))]
 fn waited_for() {}
+
+#[cfg(test)]
+mod tests {
+    use super::{quietly, run_on, stoppable, stopped};
+    use std::sync::{atomic::AtomicBool, Arc};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_job_run_inside_a_let_go_decode_is_not_let_go() {
+        let pool = Some(rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap());
+        let other = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let (pool, other) = (&pool, &other);
+        let (waiting, waited) = std::sync::mpsc::channel();
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let let_go = scope.spawn(move || {
+                run_on(pool, move || {
+                    stoppable(Some(Arc::new(AtomicBool::new(true))), move || {
+
+                        let inside = other.install(move || {
+                            waiting.send(()).unwrap();
+                            answered.recv_timeout(Duration::from_secs(10)).is_ok()
+                        });
+                        (inside, stopped())
+                    })
+                })
+            });
+            waited.recv().unwrap();
+            let seen = run_on(pool, stopped);
+            let _ = answer.send(());
+            let (inside, own) = let_go.join().unwrap();
+            assert!(inside, "the second job was to run inside the first one's wait");
+            assert!(!seen, "the second job saw the first one's flag");
+            assert!(own, "the first job lost its flag");
+        });
+    }
+
+    #[test]
+    fn a_quiet_job_rests_and_the_next_waits_for_it() {
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| quietly(|| std::thread::sleep(Duration::from_millis(40))));
+            }
+        });
+
+        assert!(started.elapsed() >= Duration::from_millis(240), "{:?}", started.elapsed());
+    }
+}

@@ -50,6 +50,13 @@ impl CameraProfile {
         Some(self.white_balance_for([shot[0] / balanced[0], shot[1] / balanced[1], shot[2] / balanced[2]]))
     }
 
+    pub fn neutral_of_camera(&self, camera: [f32; 3]) -> Option<WhiteBalance> {
+        if camera.iter().any(|value| *value <= 1e-6) {
+            return None;
+        }
+        Some(self.white_balance_for([camera[1] / camera[0], 1.0, camera[1] / camera[2]]))
+    }
+
     fn white_balance_for(&self, multipliers: [f32; 3]) -> WhiteBalance {
         let target = normalise_green(multipliers);
         let error = |balance: WhiteBalance| {

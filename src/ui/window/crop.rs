@@ -25,10 +25,16 @@ pub(super) struct State {
     pub(super) controls: gtk::Box,
 
     pub(super) at_open: Rc<Cell<Option<([f32; 4], f32, f32)>>>,
+
+    pub(super) level: gtk::Button,
+    pub(super) level_waiting: Waiting,
+    pub(super) upright: gtk::Button,
+    pub(super) upright_waiting: Waiting,
 }
 
 impl State {
     pub(super) fn new() -> Self {
+        let (level, upright) = (gtk::Button::new(), gtk::Button::new());
         Self {
             area: gtk::DrawingArea::new(),
             rect: Rc::new(Cell::new([0.0, 0.0, 1.0, 1.0])),
@@ -46,6 +52,10 @@ impl State {
             guide_lines: Rc::new(RefCell::new(Vec::new())),
             controls: gtk::Box::new(gtk::Orientation::Vertical, 0),
             at_open: Rc::new(Cell::new(None)),
+            level_waiting: Waiting::new("Looking for the horizon", &level),
+            level,
+            upright_waiting: Waiting::new("Looking for the verticals", &upright),
+            upright,
         }
     }
 }
@@ -80,7 +90,8 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
         }
     ));
 
-    let level = gtk::Button::with_label("Auto");
+    let level = state.crop.level.clone();
+    word_or_spinner(&level, "Auto", &state.crop.level_waiting);
     level.add_css_class("flat");
     level.add_css_class("caption");
     level.set_tooltip_text(Some("Level the photograph by its horizon and its verticals"));
@@ -119,7 +130,8 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
         column.append(&row);
     }
 
-    let auto = gtk::Button::with_label("Auto");
+    let auto = state.crop.upright.clone();
+    word_or_spinner(&auto, "Auto", &state.crop.upright_waiting);
     auto.set_tooltip_text(Some("Square up converging verticals; Horizontal is Guided's"));
     auto.set_margin_top(4);
     auto.connect_clicked(glib::clone!(

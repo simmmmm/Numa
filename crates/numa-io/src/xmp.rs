@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn the_catalogue_and_the_photographer_are_described() {
         let settings = ExportSettings { creator: "Tijmen".into(), copyright: "© 2026 T & co".into(), ..ExportSettings::default() };
-        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Portfolio".into()] };
+        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Portfolio".into()], position: None };
         let text = description(&settings, &about, None).unwrap();
         assert!(text.contains(r#"xmp:Rating="4""#));
         assert!(text.contains("<dc:creator><rdf:Seq><rdf:li>Tijmen</rdf:li></rdf:Seq></dc:creator>"));

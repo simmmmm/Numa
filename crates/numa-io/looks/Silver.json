@@ -88,5 +88,13 @@
         ]
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "Softer contrast for a gentle silver",
+    "Highlights": "Keeps detail in the highlights",
+    "Shadows": "Opens the shadows",
+    "Tone curve": "Slightly lifted blacks",
+    "Colour mixer": "Black and white, with red and orange lightened"
   }
 }

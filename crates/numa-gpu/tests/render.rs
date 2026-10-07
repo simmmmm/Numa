@@ -60,7 +60,7 @@ fn edits(path: &str) -> Vec<(&'static str, Document)> {
         curves(document);
         mixer(document);
     };
-    vec![
+    let mut edits = vec![
         ("untouched", with(&|_| {})),
         ("exposure +1.5", with(&basic(|b| b.tone.exposure = 1.5))),
         ("exposure -2", with(&basic(|b| b.tone.exposure = -2.0))),
@@ -108,31 +108,26 @@ fn edits(path: &str) -> Vec<(&'static str, Document)> {
             b.effects.vignette = 30.0;
             b.effects.vignette_roundness = -70.0;
         }))),
-
-        ("luminance NR 40", with(&basic(|b| b.detail.denoise_luma = 40.0))),
-        ("luminance NR 70, detail 20, contrast 60", with(&basic(|b| {
-            b.detail.denoise_luma = 70.0;
-            b.detail.denoise_detail = 20.0;
-            b.detail.denoise_contrast = 60.0;
-        }))),
-        ("HDR +60", with(&basic(|b| b.presence.hdr = 60.0))),
-        ("HDR -40", with(&basic(|b| b.presence.hdr = -40.0))),
-        ("Clarity +50", with(&basic(|b| b.presence.clarity = 50.0))),
-        ("Clarity -40", with(&basic(|b| b.presence.clarity = -40.0))),
-        ("Texture +60", with(&basic(|b| b.presence.texture = 60.0))),
-        ("Texture -50", with(&basic(|b| b.presence.texture = -50.0))),
-        ("HDR, Clarity, Texture, luminance NR", with(&basic(|b| {
-            b.presence.hdr = 40.0;
-            b.presence.clarity = 30.0;
-            b.presence.texture = 25.0;
-            b.detail.denoise_luma = 30.0;
-            b.tone.exposure = 0.3;
-        }))),
+    ];
+    edits.extend(neighbourhood_edits(path));
+    edits.extend([
         ("mask: gradient", with(&|d| d.set_masks(vec![gradient()]))),
         ("mask: radial, warmth", with(&|d| d.set_masks(vec![radial()]))),
         ("mask: colour NR, curves", with(&|d| d.set_masks(vec![curved()]))),
         ("mask: black and white, grade, Color", with(&|d| d.set_masks(vec![toned()]))),
         ("mask: mixer, point colour", with(&|d| d.set_masks(vec![coloured()]))),
+        ("mask: HDR, Clarity, Texture", with(&|d| d.set_masks(vec![local_toned()]))),
+        ("mask: sharpen, defringe, moiré, colour NR", with(&|d| d.set_masks(vec![detailed()]))),
+        ("mask: grain", with(&|d| d.set_masks(vec![grained()]))),
+        ("mask: dehaze, Clarity, Texture", with(&|d| d.set_masks(vec![hazy()]))),
+        ("mask: luminance NR, colour NR, warmth, glow", with(&|d| d.set_masks(vec![smoothed()]))),
+        ("masks: the photograph's tone map, then two of their own", with(&|d| {
+            d.set_basic(Basic::with(|b| {
+                b.presence.hdr = 30.0;
+                b.detail.denoise_luma = 20.0;
+            }));
+            d.set_masks(vec![local_toned(), gradient(), smoothed()]);
+        })),
         ("masks, five, turned and cropped", with(&|d| {
             d.set_masks(vec![gradient(), radial(), curved(), toned(), coloured()]);
             d.set_rotation(90.0);
@@ -154,6 +149,78 @@ fn edits(path: &str) -> Vec<(&'static str, Document)> {
             basic.detail.denoise_luma = 25.0;
             d.set_basic(basic);
             d.set_masks(vec![gradient(), curved(), coloured()]);
+        })),
+    ]);
+    edits
+}
+
+fn neighbourhood_edits(path: &str) -> Vec<(&'static str, Document)> {
+    let with = |change: &dyn Fn(&mut Document)| {
+        let mut document = Document::new(path.to_string());
+        change(&mut document);
+        document
+    };
+    let basic = |change: fn(&mut Basic)| move |document: &mut Document| document.set_basic(Basic::with(change));
+    vec![
+        ("luminance NR 40", with(&basic(|b| b.detail.denoise_luma = 40.0))),
+        ("luminance NR 70, detail 20, contrast 60", with(&basic(|b| {
+            b.detail.denoise_luma = 70.0;
+            b.detail.denoise_detail = 20.0;
+            b.detail.denoise_contrast = 60.0;
+        }))),
+        ("HDR +60", with(&basic(|b| b.presence.hdr = 60.0))),
+        ("HDR -40", with(&basic(|b| b.presence.hdr = -40.0))),
+        ("Clarity +50", with(&basic(|b| b.presence.clarity = 50.0))),
+        ("Clarity -40", with(&basic(|b| b.presence.clarity = -40.0))),
+        ("Texture +60", with(&basic(|b| b.presence.texture = 60.0))),
+        ("Texture -50", with(&basic(|b| b.presence.texture = -50.0))),
+        ("HDR, Clarity, Texture, luminance NR", with(&basic(|b| {
+            b.presence.hdr = 40.0;
+            b.presence.clarity = 30.0;
+            b.presence.texture = 25.0;
+            b.detail.denoise_luma = 30.0;
+            b.tone.exposure = 0.3;
+        }))),
+        ("dehaze +40", with(&basic(|b| b.effects.dehaze = 40.0))),
+        ("dehaze -50, cropped", with(&|d| {
+            d.set_basic(Basic::with(|b| b.effects.dehaze = -50.0));
+            d.set_crop([0.1, 0.15, 0.6, 0.55], 0.0);
+        })),
+        ("dehaze +70, luminance NR, Clarity", with(&basic(|b| {
+            b.effects.dehaze = 70.0;
+            b.detail.denoise_luma = 30.0;
+            b.presence.clarity = 30.0;
+        }))),
+        ("grain 40", with(&basic(|b| b.effects.grain = 40.0))),
+        ("grain 80, coarse and rough, vignette, turned", with(&|d| {
+            d.set_basic(Basic::with(|b| {
+                b.effects.grain = 80.0;
+                b.effects.grain_size = 90.0;
+                b.effects.grain_roughness = 100.0;
+                b.effects.vignette = -40.0;
+            }));
+            d.set_rotation(270.0);
+        })),
+        ("sharpen 60, radius 3, masking 20", with(&basic(|b| {
+            b.detail.sharpen = 60.0;
+            b.detail.sharpen_radius = 3.0;
+            b.detail.sharpen_masking = 20.0;
+        }))),
+        ("sharpen 80, radius 2.4, colour NR", with(&basic(|b| {
+            b.detail.sharpen = 80.0;
+            b.detail.sharpen_radius = 2.4;
+            b.detail.denoise_colour = 40.0;
+        }))),
+        ("defringe 100", with(&basic(|b| b.detail.defringe = 100.0))),
+        ("moiré 100", with(&basic(|b| b.detail.moire = 100.0))),
+        ("defringe, moiré, dehaze, colour NR, turned", with(&|d| {
+            d.set_basic(Basic::with(|b| {
+                b.detail.defringe = 60.0;
+                b.detail.moire = 70.0;
+                b.detail.denoise_colour = 30.0;
+                b.effects.dehaze = 20.0;
+            }));
+            d.set_rotation(90.0);
         })),
     ]
 }
@@ -220,6 +287,53 @@ fn toned() -> Mask {
     mask
 }
 
+fn local_toned() -> Mask {
+    let mut mask = Mask::new(Shape::Radial { centre: [0.45, 0.5], radius: [0.3, 0.35], feather: 0.5 });
+    mask.basic.tone.exposure = 0.3;
+    mask.basic.presence.hdr = 40.0;
+    mask.basic.presence.clarity = 20.0;
+    mask.basic.presence.texture = 85.0;
+    mask
+}
+
+fn hazy() -> Mask {
+    let mut mask = Mask::new(Shape::Linear { from: [0.5, 0.0], to: [0.5, 0.45] });
+    mask.basic.effects.dehaze = 25.0;
+    mask.basic.presence.clarity = 17.0;
+    mask.basic.presence.texture = 87.0;
+    mask.basic.detail.denoise_luma = 20.0;
+    mask
+}
+
+fn grained() -> Mask {
+    let mut mask = Mask::new(Shape::Radial { centre: [0.5, 0.5], radius: [0.35, 0.3], feather: 0.5 });
+    mask.basic.effects.grain = 60.0;
+    mask.basic.effects.grain_size = 10.0;
+    mask.basic.tone.exposure = -0.3;
+    mask
+}
+
+fn detailed() -> Mask {
+    let mut mask = Mask::new(Shape::Radial { centre: [0.55, 0.45], radius: [0.35, 0.4], feather: 0.4 });
+    mask.basic.detail.sharpen = 70.0;
+    mask.basic.detail.sharpen_radius = 2.8;
+    mask.basic.detail.defringe = 80.0;
+    mask.basic.detail.moire = 90.0;
+    mask.basic.detail.denoise_colour = 25.0;
+    mask.basic.balance.tint = -15.0;
+    mask
+}
+
+fn smoothed() -> Mask {
+    let mut mask = Mask::new(Shape::Linear { from: [0.5, 0.2], to: [0.5, 0.7] });
+    mask.basic.balance.temperature = 500.0;
+    mask.basic.detail.denoise_luma = 50.0;
+    mask.basic.detail.denoise_contrast = 40.0;
+    mask.basic.detail.denoise_colour = 20.0;
+    mask.basic.presence.clarity = -40.0;
+    mask
+}
+
 fn coloured() -> Mask {
     let mut mask = Mask::new(Shape::Radial { centre: [0.5, 0.5], radius: [0.4, 0.4], feather: 0.8 });
     mask.mixer.bands[3] = [-15.0, -40.0, 25.0];
@@ -272,7 +386,7 @@ fn the_card_renders_what_the_processor_does() {
         let finished = finished_picture(&raw, &path.to_string_lossy());
         for (source, kind) in [(&raw, "raw"), (&finished, "finished")] {
             for (what, document) in edits(&path.to_string_lossy()) {
-                if kind == "finished" && !matches!(what, "untouched" | "exposure +1.5" | "curves" | "mixer" | "vibrance +60" | "straightened 3.7°" | "grading" | "mask: gradient" | "mask: radial, warmth" | "mask: colour NR, curves" | "HDR +60" | "luminance NR 40" | "Clarity -40") {
+                if kind == "finished" && !matches!(what, "untouched" | "exposure +1.5" | "curves" | "mixer" | "vibrance +60" | "straightened 3.7°" | "grading" | "mask: gradient" | "mask: radial, warmth" | "mask: colour NR, curves" | "HDR +60" | "luminance NR 40" | "Clarity -40" | "mask: HDR, Clarity, Texture" | "dehaze +40" | "mask: dehaze, Clarity, Texture" | "grain 40" | "mask: grain" | "moiré 100" | "mask: sharpen, defringe, moiré, colour NR") {
                     continue;
                 }
                 let inputs = numa_io::inputs::render_inputs(&document);
@@ -310,12 +424,56 @@ fn the_card_renders_what_the_processor_does() {
 }
 
 #[test]
+fn a_kept_prefix_is_the_same_picture() {
+    ask_for_the_render();
+    let frugal = std::env::var_os("NUMA_GPU_LOW").is_some();
+    let Some(path) = frames().into_iter().next().filter(|_| numa_gpu::open_now(frugal)) else {
+        println!("skipped: no corpus or no card");
+        return;
+    };
+    let (raw, full) = numa_io::raw::proxy_from_mosaic(&path, 2400).expect("decodes");
+    let scale = raw.width.max(raw.height) as f32 / full.0.max(full.1).max(1) as f32;
+    let name = path.to_string_lossy().to_string();
+    let document = |exposure: f32, kept: bool, temperature: f32| {
+        let mut document = Document::new(name.clone());
+        document.set_basic(Basic::with(|b| {
+            b.tone.exposure = exposure;
+            if kept {
+                b.effects.dehaze = 25.0;
+                b.detail.denoise_luma = 30.0;
+                b.detail.defringe = 60.0;
+                b.detail.moire = 60.0;
+            }
+        }));
+        document.white_balance = Some(WhiteBalance { temperature, tint: 0.0 });
+        document
+    };
+    for (what, document) in [
+        ("kept", document(0.0, true, 5200.0)),
+        ("dragged from it", document(0.6, true, 5200.0)),
+        ("another white, nothing kept", document(0.6, false, 3900.0)),
+        ("back, kept", document(-0.4, true, 5200.0)),
+
+        ("back, nothing kept", document(-0.4, false, 5200.0)),
+    ] {
+        let inputs = numa_io::inputs::render_inputs(&document);
+        let plan = numa_render::card::plan(&document, &raw, &inputs, scale).expect("the card has it");
+        let cpu = numa_render::apply_stack(&document, &numa_render::to_working_space(&document, &raw, &inputs), scale);
+        let card = numa_gpu::render(&raw, &plan, 0, frugal, numa_gpu::Output::ReadBack).expect("renders");
+        let numa_gpu::Pixels::Rgba { bytes, stride } = &card.pixels else { panic!("read back") };
+        let (most, moved) = difference(cpu.as_raw(), bytes, card.width as usize, *stride);
+        println!("{what}: 8-bit max {most}, moved {:.4}%", moved * 100.0);
+        assert!(most <= 1 && moved < 5e-3, "{what}: {most} levels apart on {:.3}%", moved * 100.0);
+    }
+}
+
+#[test]
 fn a_stage_the_card_lacks_is_named() {
     let image = LinearImage::new(4, 4, vec![0.2; 48]);
     let mut document = Document::new(String::new());
-    document.set_basic(Basic::with(|b| b.effects.dehaze = 30.0));
+    document.set_basic(Basic::with(|b| b.calibration.red_hue = 30.0));
     let plan = numa_render::card::plan(&document, &image, &Default::default(), 0.3);
-    assert_eq!(plan.err(), Some("dehaze"));
+    assert_eq!(plan.err(), Some("calibration"));
     let document = {
         let mut document = Document::new(String::new());
         document.set_basic(Basic::with(|b| b.optics.lens_distortion = 10.0));
@@ -346,6 +504,13 @@ fn a_discrete_card_takes_the_heavy_edits() {
         d.set_basic(Basic::with(|b| b.presence.hdr = 18.0));
         d.set_grading(grading());
     }), "his DSCF3204's kind: masks, HDR and a grade");
+
+    assert!(heavy(&|d| d.set_masks(vec![hazy()])), "his DSCF2843's kind: a mask's dehaze, Clarity and Texture");
+    assert!(heavy(&|d| d.set_masks(vec![detailed()])), "a mask's detail passes");
+    assert!(!heavy(&|d| d.set_basic(Basic::with(|b| {
+        b.effects.dehaze = 30.0;
+        b.effects.grain = 25.0;
+    }))), "dehaze and grain");
 }
 
 #[test]
@@ -374,6 +539,11 @@ fn small_frame(frugal: bool) {
     let mut mask = Mask::new(Shape::Radial { centre: [0.5, 0.5], radius: [0.3, 0.3], feather: 0.5 });
     mask.basic.tone.exposure = 0.7;
     mask.basic.detail.denoise_colour = 25.0;
+    mask.basic.detail.denoise_luma = 30.0;
+    mask.basic.presence.clarity = 35.0;
+    mask.basic.effects.dehaze = 30.0;
+    mask.basic.detail.moire = 50.0;
+    mask.basic.detail.sharpen = 40.0;
     document.set_masks(vec![mask]);
     let mut basic = document.basic();
     basic.detail.denoise_luma = 40.0;
@@ -381,6 +551,10 @@ fn small_frame(frugal: bool) {
     basic.presence.clarity = -30.0;
     basic.presence.texture = 40.0;
     basic.presence.hdr = 50.0;
+    basic.effects.dehaze = -20.0;
+    basic.detail.defringe = 50.0;
+    basic.detail.sharpen = 30.0;
+    basic.detail.sharpen_radius = 1.5;
     document.set_basic(basic);
     let plan = numa_render::card::plan(&document, &image, &Default::default(), 1.0).expect("the card has these");
     let cpu = numa_render::apply_stack(&document, &image, 1.0);
@@ -578,6 +752,17 @@ fn what_a_drag_costs() {
             }));
             d.set_grading(grading());
         })),
+
+        ("mask: dehaze, Clarity, Texture", with(&|d| d.set_masks(vec![hazy()]))),
+        ("mask: sharpen, defringe, moiré, colour NR", with(&|d| d.set_masks(vec![detailed()]))),
+        ("dehaze 30, grain 25", with(&|d| d.set_basic(Basic::with(|b| {
+            b.effects.dehaze = 30.0;
+            b.effects.grain = 25.0;
+        })))),
+        ("defringe 40, moiré 40", with(&|d| d.set_basic(Basic::with(|b| {
+            b.detail.defringe = 40.0;
+            b.detail.moire = 40.0;
+        })))),
     ];
     std::thread::sleep(std::time::Duration::from_secs(2));
     let idle = {

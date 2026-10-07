@@ -37,6 +37,7 @@ fn a_restored_snapshot_is_the_snapshot() {
     edited.set_grading(Grading::default());
     edited.set_beautify(Beautify { spots: 40.0, skin: 25.0, ..Default::default() });
     edited.set_masks(vec![Mask::new(Shape::radial())]);
+    edited.auto = Some(numa::core::document::AutoRecord { whites: Some(40.0), ..Default::default() });
 
     let snapshot = EditState::of(&edited);
 
@@ -328,4 +329,29 @@ fn the_light_tokens_override_the_dark_ones() {
     assert!(dark.contains(white) && !dark.contains(ink));
     assert!(light.find(ink) > light.find(white));
     assert!(light.ends_with(CSS));
+}
+
+#[test]
+fn feedback_is_prefilled_and_escaped() {
+    let idea = feedback_url(true, "Rate & cull\nwith one key", None);
+    assert!(idea.starts_with("https://github.com/simmmmm/Numa/discussions/new?category=ideas&title=Rate%20%26%20cull&body="), "{idea}");
+    assert!(idea.ends_with("Rate%20%26%20cull%0Awith%20one%20key"), "{idea}");
+
+    let mail = feedback_url(false, "Hi", Some("Numa 1.0"));
+    assert!(mail.starts_with("mailto:support@numa.photo?subject=Numa%20"), "{mail}");
+    assert!(mail.ends_with("&body=Hi%0A%0A%E2%80%94%0ANuma%201.0"), "{mail}");
+    assert!(!feedback_url(false, "Hi", None).contains("%E2%80%94"));
+}
+
+#[test]
+fn a_crash_report_fills_the_problem_form() {
+    let (url, cut) = crash_url("Numa 0.36.0\nStopped by SIGSEGV & more");
+    assert_eq!(
+        url,
+        "https://github.com/simmmmm/Numa/issues/new?template=problem.yml&title=Numa%20closed%20unexpectedly\
+         &debug=Numa%200.36.0%0AStopped%20by%20SIGSEGV%20%26%20more"
+    );
+    assert!(!cut);
+    let (long, cut) = crash_url(&"x".repeat(9000));
+    assert!(cut && long.len() < 8000, "{}", long.len());
 }

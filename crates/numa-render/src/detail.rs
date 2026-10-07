@@ -73,7 +73,7 @@ pub fn denoise(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct LumaShape {
 
     pub radius: usize,
@@ -122,8 +122,7 @@ pub fn defringe(data: &mut [f32], width: usize, height: usize, amount: f32, scal
     }
 
     let luma = log_luminance(data, width, height);
-    let radius = ((2.0 * scale).round() as usize).max(1);
-    let soft = blur(&luma, radius);
+    let soft = blur(&luma, defringe_radius(scale));
 
     let strength: Vec<f32> = (0..width * height)
         .into_par_iter()
@@ -215,8 +214,7 @@ pub fn moire(data: &mut [f32], width: usize, height: usize, amount: f32, scale: 
         })
         .collect();
 
-    let near = ((2.0 * scale).round() as usize).max(1);
-    let far = ((10.0 * scale).round() as usize).max(near + 1);
+    let (near, far) = moire_radii(scale);
     let close: Vec<Plane> = chroma.iter().map(|plane| blur(plane, near)).collect();
     let wide: Vec<Plane> = chroma.iter().map(|plane| blur(plane, far)).collect();
 
@@ -252,36 +250,28 @@ pub fn sharpen(
     threshold: f32,
     scale: f32,
 ) {
-    let amount = amount.clamp(0.0, 1.0);
-    if amount == 0.0 || width == 0 || height == 0 {
+    if width == 0 || height == 0 {
         return;
     }
-
-    let scaled = radius * scale;
-    if scaled < MIN_RADIUS {
-
+    let Some(SharpenShape { amount, below, t, floor }) = SharpenShape::new(amount, radius, threshold, scale) else {
         return;
-    }
+    };
 
     let log = log_luminance(data, width, height);
-
-    let (below, t) = (scaled.floor(), scaled.fract());
     let base = if t < 1e-3 {
-        blur(&log, below as usize)
+        blur(&log, below)
     } else {
         let blurred;
-        let lower = if below < 1.0 {
+        let lower = if below < 1 {
             &log
         } else {
-            blurred = blur(&log, below as usize);
+            blurred = blur(&log, below);
             &blurred
         };
-        let upper = blur(&log, below as usize + 1);
+        let upper = blur(&log, below + 1);
         let mixed = lower.data.par_iter().zip(&upper.data).map(|(a, b)| a + (b - a) * t).collect();
         Plane::new(log.width, log.height, mixed)
     };
-
-    let floor = threshold.clamp(0.0, 1.0) * 0.5;
 
     data.par_chunks_exact_mut(3).enumerate().for_each(|(index, pixel)| {
         let detail = log.data[index] - base.data[index];
@@ -297,6 +287,35 @@ pub fn sharpen(
             *channel = (*channel * gain).max(0.0);
         }
     });
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SharpenShape {
+
+    pub amount: f32,
+
+    pub below: usize,
+    pub t: f32,
+
+    pub floor: f32,
+}
+
+impl SharpenShape {
+    pub fn new(amount: f32, radius: f32, threshold: f32, scale: f32) -> Option<Self> {
+        let amount = amount.clamp(0.0, 1.0);
+        let scaled = radius * scale;
+
+        (amount != 0.0 && scaled >= MIN_RADIUS).then(|| Self { amount, below: scaled.floor() as usize, t: scaled.fract(), floor: threshold.clamp(0.0, 1.0) * 0.5 })
+    }
+}
+
+pub fn defringe_radius(scale: f32) -> usize {
+    ((2.0 * scale).round() as usize).max(1)
+}
+
+pub fn moire_radii(scale: f32) -> (usize, usize) {
+    let near = ((2.0 * scale).round() as usize).max(1);
+    (near, ((10.0 * scale).round() as usize).max(near + 1))
 }
 
 fn log_luminance(data: &[f32], width: usize, height: usize) -> Plane {

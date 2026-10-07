@@ -155,6 +155,8 @@ pub(super) fn choose_place(state: &App, place: Place) {
         }
     }
     reload_grid(state);
+
+    offer_clocks(state);
 }
 
 pub(super) fn rescan_everywhere(state: &App) {

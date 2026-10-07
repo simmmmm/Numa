@@ -193,11 +193,13 @@ pub(super) fn install_rating_shortcuts(state: &App, window: &adw::ApplicationWin
 fn hold_for_before(state: &App) -> gtk::EventControllerKey {
     let hold = gtk::EventControllerKey::new();
     let matte_was: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
+    let before_auto: Rc<Cell<bool>> = Rc::default();
     hold.set_propagation_phase(gtk::PropagationPhase::Capture);
     hold.connect_key_pressed(glib::clone!(
         #[strong] state,
         #[strong] matte_was,
-        move |controller, key, _, _| {
+        #[strong] before_auto,
+        move |controller, key, _, modifiers| {
             let typing = controller
                 .widget()
                 .and_then(|window| window.root())
@@ -205,6 +207,11 @@ fn hold_for_before(state: &App) -> gtk::EventControllerKey {
                 .is_some_and(|focus| focus.is::<gtk::Editable>() || focus.is::<gtk::TextView>());
             if key != gtk::gdk::Key::space || typing || state.stack.visible_child_name().as_deref() != Some("editor") {
                 return glib::Propagation::Proceed;
+            }
+
+            if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) && show_before_auto(&state) {
+                before_auto.set(true);
+                return glib::Propagation::Stop;
             }
             if state.mask_overlay.selected_mask.get().is_some() {
 
@@ -220,7 +227,12 @@ fn hold_for_before(state: &App) -> gtk::EventControllerKey {
     ));
     hold.connect_key_released(glib::clone!(
         #[strong] state,
+        #[strong] before_auto,
         move |_, key, _, _| {
+            if key == gtk::gdk::Key::space && before_auto.replace(false) {
+                end_before_auto(&state);
+                return;
+            }
             if key == gtk::gdk::Key::space {
                 if let Some(was) = matte_was.take() {
                     state.masks.show_matte.set(was);
@@ -280,6 +292,11 @@ fn editor_key(
 
         if matches!(key.to_unicode(), Some('i' | 'I')) {
             toggle_info(&state);
+            return glib::Propagation::Stop;
+        }
+
+        if matches!(key.to_unicode(), Some('a' | 'A')) && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
+            auto_press(&state);
             return glib::Propagation::Stop;
         }
     }
@@ -371,7 +388,7 @@ fn library_key(
     glib::Propagation::Stop
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) enum Action {
     Rate(u8),
     Flag(Flag),

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn make_card() -> gtk::Widget {
+pub(super) fn make_card(state: &App) -> gtk::Widget {
     let picture = gtk::Picture::new();
 
     picture.set_can_shrink(true);
@@ -47,15 +47,70 @@ pub(super) fn make_card() -> gtk::Widget {
     name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     let stars = gtk::Label::new(None);
     stars.add_css_class("card-stars");
+    rate_from_card(state, &card, &stars);
     caption.append(&stars);
     caption.append(&name);
 
-    for part in [rating.upcast_ref::<gtk::Widget>(), burst.upcast_ref(), marks.upcast_ref(), caption.upcast_ref()] {
-
+    name.set_can_target(false);
+    for part in [rating.upcast_ref::<gtk::Widget>(), burst.upcast_ref(), marks.upcast_ref()] {
         part.set_can_target(false);
         card.add_overlay(part);
     }
+    card.add_overlay(&caption);
     card.upcast()
+}
+
+fn rate_from_card(state: &App, card: &gtk::Overlay, stars: &gtk::Label) {
+    stars.set_cursor_from_name(Some("pointer"));
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_PRIMARY);
+    click.connect_pressed(glib::clone!(
+        #[strong] state,
+        #[weak] card,
+        #[weak] stars,
+        move |gesture, _, x, _| {
+
+            if gesture.device().is_some_and(|device| device.source() == gtk::gdk::InputSource::Touchscreen) {
+                gesture.set_state(gtk::EventSequenceState::Denied);
+                return;
+            }
+
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let Ok(id) = card.widget_name().parse::<i64>() else { return };
+            let value = star_under(x, stars.width());
+            let now = state.grid.cards.borrow().get(&id).map(|photo| photo.rating);
+            apply_to_ids(&state, &[id], Action::Rate(if now == Some(value) { 0 } else { value }));
+        }
+    ));
+    stars.add_controller(click);
+
+    let hover = gtk::EventControllerMotion::new();
+    hover.connect_motion(glib::clone!(
+        #[weak] stars,
+        move |_, x, _| {
+            let markup = hover_stars(star_under(x, stars.width()));
+
+            if stars.label() != markup {
+                stars.set_markup(&markup);
+            }
+        }
+    ));
+    hover.connect_leave(glib::clone!(
+        #[strong] state,
+        #[weak] card,
+        #[weak] stars,
+        move |_| {
+            let Ok(id) = card.widget_name().parse::<i64>() else { return };
+            if let Some(photo) = state.grid.cards.borrow().get(&id) {
+                stars.set_markup(&hover_stars(photo.rating));
+            }
+        }
+    ));
+    stars.add_controller(hover);
+}
+
+fn star_under(x: f64, width: i32) -> u8 {
+    (x / width.max(1) as f64 * 5.0).floor().clamp(0.0, 4.0) as u8 + 1
 }
 
 pub(super) fn edited_mark() -> gtk::Box {
@@ -116,6 +171,25 @@ pub(super) fn bind_card(state: &App, card: &gtk::Widget, index: usize) {
     let Some(photo) = cards.get(&thumb.id) else { return };
 
     parts.picture.set_paintable(thumb.texture.as_ref());
+
+    let burst = photo
+        .burst
+        .filter(|_| photo.best_of_burst)
+        .and_then(|burst| state.grid.bursts.borrow().get(&(numa::io::catalog::library_of(photo.id), burst)).copied());
+    mark_card(state, card, &parts, photo, burst.map(|size| size as usize));
+}
+
+pub(super) fn mark_photo_card(state: &App, card: &gtk::Widget, photo: &Photo, burst: Option<usize>) {
+    if let Some(parts) = CardParts::of(card) {
+        mark_card(state, card, &parts, photo, burst.map(|size| size as usize));
+    }
+}
+
+pub(super) fn card_picture(card: &gtk::Widget) -> Option<gtk::Picture> {
+    part(card, "picture")
+}
+
+fn mark_card(state: &App, card: &gtk::Widget, parts: &CardParts, photo: &Photo, burst: Option<usize>) {
     parts.name.set_text(&photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
     parts.stars.set_markup(&hover_stars(photo.rating));
     parts.edited.set_visible(photo.edited);
@@ -137,10 +211,6 @@ pub(super) fn bind_card(state: &App, card: &gtk::Widget, index: usize) {
         }
     }
 
-    let burst = photo
-        .burst
-        .filter(|_| photo.best_of_burst)
-        .and_then(|burst| state.grid.bursts.borrow().get(&(numa::io::catalog::library_of(photo.id), burst)).copied());
     parts.burst.set_visible(burst.is_some());
     if let Some(size) = burst {
         parts.burst.set_text(&format!("×{size}"));
@@ -195,6 +265,17 @@ mod tests {
         assert_eq!(card_badge(4, Flag::Picked, None, false).0, "★ 4  ⚑");
         assert_eq!(card_badge(5, Flag::Rejected, None, false), ("✕".to_string(), Some("rejected")));
         assert_eq!(card_badge(0, Flag::None, Some(2.6), true), ("☆ 3  soft".to_string(), Some("suggested")));
+    }
+
+    #[test]
+    fn the_star_under_the_pointer_is_the_one_it_gives() {
+        assert_eq!(star_under(0.0, 70), 1);
+        assert_eq!(star_under(13.9, 70), 1);
+        assert_eq!(star_under(14.1, 70), 2);
+        assert_eq!(star_under(69.9, 70), 5);
+
+        assert_eq!(star_under(-3.0, 70), 1);
+        assert_eq!(star_under(75.0, 70), 5);
     }
 }
 

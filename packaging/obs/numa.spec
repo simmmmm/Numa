@@ -21,6 +21,13 @@ Requires:       libvulkan1
 %else
 Requires:       vulkan-loader
 %endif
+# FLOW-013: tethering opens libgphoto2 when it is asked for, and goes without
+# it; not linked, so nothing finds the dependency by itself.
+%if 0%{?suse_version}
+Recommends:     libgphoto2-6
+%else
+Recommends:     libgphoto2
+%endif
 
 # Numa's own copy of ONNX Runtime in /usr/lib/numa: not offered to anything
 # else, and not taken from anywhere else.

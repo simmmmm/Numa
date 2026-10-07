@@ -9,6 +9,8 @@ pub(super) struct State {
 
     pub(super) auto: gtk::Button,
     pub(super) auto_waiting: Waiting,
+
+    pub(super) plan: Plan,
 }
 
 impl State {
@@ -19,6 +21,7 @@ impl State {
             curve_channel: Rc::new(Cell::new(0)),
             auto_waiting: Waiting::new("Looking at the photograph", &auto),
             auto,
+            plan: Plan::new(),
         }
     }
 }
@@ -33,26 +36,14 @@ pub(super) fn build_light(
     light.add_css_class("quiet");
 
     let auto_tone_button = state.light.auto.clone();
-    let (word, spinner) = (gtk::Label::new(Some("Auto")), state.light.auto_waiting.spinner.clone());
-    let content = gtk::Stack::new();
-    content.add_child(&word);
-    content.add_child(&spinner);
-    spinner.connect_visible_notify(glib::clone!(
-        #[weak] content,
-        #[weak] word,
-        move |spinner| match spinner.get_visible() {
-            true => content.set_visible_child(spinner),
-            false => content.set_visible_child(&word),
-        }
-    ));
-    auto_tone_button.set_child(Some(&content));
+    word_or_spinner(&auto_tone_button, "Auto", &state.light.auto_waiting);
     auto_tone_button.set_tooltip_text(Some(
-        "Set exposure and the black and white points from this photograph",
+        "Level the photograph and set its light from what is in it (A)",
     ));
     auto_tone_button.connect_clicked(glib::clone!(
         #[strong] state,
 
-        move |_| auto_tone(&state)
+        move |_| auto_press(&state)
     ));
 
     global_only(auto_tone_button.as_ref());

@@ -19,7 +19,7 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     bar.pack_start(&clear);
     bar.pack_start(&count);
 
-    let rate = rate_button();
+    let rate = rate_button("win.photo-rate");
     back_to_grid(state, &rate);
     bar.pack_start(&rate);
     for (label, icon, tip, flag) in [
@@ -66,6 +66,19 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         move |button| export_selection(&state, button)
     ));
     bar.pack_end(&export);
+
+    let more_menu = gio::Menu::new();
+    more_menu.append(Some("Tonight…"), Some("win.tonight"));
+    more_menu.append(Some("For a Book…"), Some("win.book"));
+
+    more_menu.append(Some("Copy File Names"), Some("win.copy-names"));
+    let more = gtk::MenuButton::new();
+    more.set_icon_name("view-more-symbolic");
+    more.set_has_frame(false);
+    more.set_menu_model(Some(&more_menu));
+    more.set_tooltip_text(Some("More"));
+    back_to_grid(state, &more);
+    bar.pack_end(&more);
 
     let update = Rc::new(glib::clone!(
         #[weak] bar,
@@ -125,7 +138,7 @@ fn labelled(label: &str, icon: &str) -> adw::ButtonContent {
     content
 }
 
-fn rate_button() -> gtk::MenuButton {
+pub(super) fn rate_button(action: &str) -> gtk::MenuButton {
     let menu = gio::Menu::new();
     for stars in 0..=5i32 {
         let label = match stars {
@@ -134,7 +147,7 @@ fn rate_button() -> gtk::MenuButton {
             n => format!("{n} Stars"),
         };
         let item = gio::MenuItem::new(Some(&label), None);
-        item.set_action_and_target_value(Some("win.photo-rate"), Some(&stars.to_variant()));
+        item.set_action_and_target_value(Some(action), Some(&stars.to_variant()));
         menu.append_item(&item);
     }
     let rate = gtk::MenuButton::new();

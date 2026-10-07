@@ -271,6 +271,13 @@ fn on_reset(scale: &gtk::Scale, value: Option<&gtk::Label>, reset: impl Fn() + C
     value.set_tooltip_text(Some("Right-click to reset"));
 }
 
+pub(super) fn strength_scale() -> gtk::Scale {
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+    scale.set_value(100.0);
+    set_neutral(&scale, 100.0);
+    scale
+}
+
 pub(super) fn numa_slider(adjustment: &gtk::Adjustment, neutral: f64) -> gtk::Scale {
     let scale = gtk::Scale::new(gtk::Orientation::Horizontal, Some(adjustment));
     scale.add_css_class("numa-slider");
@@ -299,7 +306,7 @@ pub(super) fn numa_slider(adjustment: &gtk::Adjustment, neutral: f64) -> gtk::Sc
     scale
 }
 
-fn connect_wheel(scale: &gtk::Scale) {
+pub(super) fn connect_wheel(scale: &gtk::Scale) {
     let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
     wheel.connect_scroll(move |controller, _, dy| {

@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn a_kept_answer_reaches_the_colour_stage() {
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         let dir = std::env::temp_dir().join(format!("numa-ai-denoise-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let photo = dir.join("frame.RAF");
@@ -426,7 +426,7 @@ mod tests {
     fn whole_frame() {
         let Ok(path) = std::env::var("WHOLE") else { return };
         let photo = Path::new(&path);
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         let full = numa_io::raw::decode_linear_best(photo).unwrap();
 
         let started = std::time::Instant::now();

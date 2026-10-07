@@ -32,32 +32,14 @@ pub(super) fn build_loupe(state: &App) -> gtk::Revealer {
     state.loupe.picture.set_content_fit(gtk::ContentFit::Contain);
     loupe.append(&build_stage(state));
 
-    state.loupe.caption.add_css_class("loupe-caption");
-    state.loupe.caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-
-    let caption = gtk::CenterBox::new();
-    caption.set_halign(gtk::Align::Center);
-    let slot = || {
-        let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        slot.set_size_request(24, -1);
-        slot
-    };
-    let start = slot();
-    state.loupe.zoom.waiting.spinner.set_halign(gtk::Align::Start);
-    start.append(&state.loupe.zoom.waiting.spinner);
-    caption.set_start_widget(Some(&start));
-    caption.set_center_widget(Some(&state.loupe.caption));
-    caption.set_end_widget(Some(&slot()));
-    loupe.append(&caption);
-    state.loupe.burst.set_halign(gtk::Align::Center);
-    state.loupe.burst.set_visible(false);
-    loupe.append(&state.loupe.burst);
-    loupe.append(&build_loupe_bar(state));
+    let whole = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    whole.append(&loupe);
+    whole.append(&tape::build(state));
 
     let reveal = state.loupe.reveal.clone();
     reveal.set_transition_type(gtk::RevealerTransitionType::Crossfade);
     reveal.set_transition_duration(160);
-    reveal.set_child(Some(&loupe));
+    reveal.set_child(Some(&whole));
 
     reveal.set_visible(false);
     reveal.connect_child_revealed_notify(glib::clone!(
@@ -82,7 +64,7 @@ fn build_stage(state: &App) -> gtk::Overlay {
     stage.set_overflow(gtk::Overflow::Hidden);
     stage.set_child(Some(&loupe_zoom::build(state)));
 
-    let shown = state.catalog.setting(NEIGHBOURS).as_deref() != Some("off");
+    let shown = state.catalog.setting(NEIGHBOURS).as_deref() == Some("on");
     state.loupe.neighbours.set(shown);
     for (side, forward) in [(&state.loupe.previous, false), (&state.loupe.next, true)] {
         side.set_content_fit(gtk::ContentFit::Cover);
@@ -98,6 +80,9 @@ fn build_stage(state: &App) -> gtk::Overlay {
         side.add_controller(click);
         stage.add_overlay(side);
     }
+
+    stage.add_overlay(&loupe_group::build(state));
+    stage.add_overlay(&loupe_group::build_pill(state));
 
     let marker = &state.loupe.marker;
     marker.add_css_class("photo-mark");
@@ -131,6 +116,8 @@ fn build_stage(state: &App) -> gtk::Overlay {
     ));
     stage.add_overlay(framed);
 
+    stage.add_overlay(&review::build_pill(state));
+
     stage.connect_get_child_position(glib::clone!(
         #[strong] state,
         move |stage, child| place(&state, stage, child)
@@ -140,9 +127,15 @@ fn build_stage(state: &App) -> gtk::Overlay {
 
 fn place(state: &App, stage: &gtk::Overlay, child: &gtk::Widget) -> Option<gtk::gdk::Rectangle> {
     let (width, height) = (stage.width(), stage.height());
+    if child == state.loupe.tape.review.pill.upcast_ref::<gtk::Widget>()
+        || child.has_css_class("loupe-group")
+        || child.has_css_class("photo-pill")
+    {
+        return None;
+    }
     if child == state.loupe.marker.upcast_ref::<gtk::Widget>() {
         let nothing = gtk::gdk::Rectangle::new(0, 0, 0, 0);
-        let Some((x, y, side)) = af_box(state).filter(|_| state.loupe.neighbours.get()) else { return Some(nothing) };
+        let Some((x, y, side)) = af_box(state).filter(|_| !loupe_group::active(state)) else { return Some(nothing) };
         let half = side / 2.0;
         return Some(gtk::gdk::Rectangle::new((x - half).round() as i32, (y - half).round() as i32, side.round() as i32, side.round() as i32));
     }
@@ -208,6 +201,10 @@ fn contained(aspect: f64, (x, y, w, h): (f64, f64, f64, f64)) -> (f64, f64, f64,
 
 fn draw_picked(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context) {
     let Some(at) = state.loupe.at.get() else { return };
+
+    if loupe_group::active(state) {
+        return;
+    }
     let (width, height) = (area.width(), area.height());
     let picked = |at: Option<usize>| at.is_some_and(|at| flag_at(state, at) == Flag::Picked);
     let mut boxes = Vec::new();
@@ -218,7 +215,7 @@ fn draw_picked(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context) {
         }
     }
     if state.loupe.neighbours.get() && !loupe_zoom::zoomed(state) {
-        for (previous, near) in [(true, at.checked_sub(1)), (false, Some(at + 1))] {
+        for (previous, near) in [(true, beside(state, at, -1)), (false, beside(state, at, 1))] {
 
             let arriving = previous && state.loupe.leaving_pick.get() && state.loupe.leaving.is_visible();
             if picked(near) && !arriving {
@@ -258,7 +255,7 @@ fn af_box(state: &App) -> Option<(f64, f64, f64)> {
 }
 
 pub(super) fn af_under(state: &App, x: f64, y: f64) -> Option<raw::AfPoint> {
-    let (bx, by, side) = af_box(state).filter(|_| state.loupe.neighbours.get())?;
+    let (bx, by, side) = af_box(state).filter(|_| !loupe_group::active(state))?;
     ((x - bx).abs() <= side / 2.0 && (y - by).abs() <= side / 2.0).then(|| af_here(state)).flatten()
 }
 
@@ -330,10 +327,21 @@ fn slide_away(state: &App, frame: gtk::gdk::Paintable, up: bool) {
     *state.loupe.animation.borrow_mut() = Some(animation);
 }
 
+pub(super) fn build_caption(state: &App) -> gtk::Box {
+    let caption = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    state.loupe.caption.add_css_class("loupe-caption");
+    state.loupe.caption.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    state.loupe.caption.set_xalign(0.0);
+    caption.append(&state.loupe.caption);
+    caption.append(&state.loupe.zoom.waiting.spinner);
+    state.loupe.burst.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    state.loupe.burst.set_visible(false);
+    caption.append(&state.loupe.burst);
+    caption
+}
+
 pub(super) fn build_loupe_bar(state: &App) -> gtk::Box {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    bar.set_halign(gtk::Align::Center);
-    bar.set_margin_bottom(6);
     bar.add_css_class("loupe-bar");
 
     let step = |state: &App, icon: &str, hint: &str, forward: bool| {
@@ -401,8 +409,8 @@ pub(super) fn build_loupe_rating(state: &App) -> gtk::Box {
     }
     row.append(&stars);
     for (button, icon, tip, flag) in [
-        (&state.loupe.pick, "emoji-flags-symbolic", "Pick (P), again to clear \u{00b7} Up picks and moves on", Flag::Picked),
-        (&state.loupe.reject, "window-close-symbolic", "Reject (X), again to clear \u{00b7} Down rejects and moves on", Flag::Rejected),
+        (&state.loupe.pick, "emoji-flags-symbolic", "Pick, again to clear \u{00b7} P or Up picks and moves on", Flag::Picked),
+        (&state.loupe.reject, "window-close-symbolic", "Reject, again to clear \u{00b7} X or Down rejects and moves on", Flag::Rejected),
     ] {
         button.set_icon_name(icon);
         button.add_css_class("flat");
@@ -466,12 +474,14 @@ fn loupe_library(state: &App) -> Option<i64> {
 }
 
 pub(super) fn rate_in_loupe(state: &App, value: u8) {
+    review::stop(state);
     let now = loupe_rating(state).0;
     apply_to_selection(state, Action::Rate(if now == value { 0 } else { value }));
     refresh_loupe_bar(state);
 }
 
 pub(super) fn flag_in_loupe(state: &App, flag: Flag) {
+    review::stop(state);
     let now = loupe_rating(state).1;
     apply_to_selection(state, Action::Flag(if now == flag { Flag::None } else { flag }));
     refresh_loupe_bar(state);
@@ -513,33 +523,48 @@ pub(super) fn show_loupe(state: &App, at: usize) {
     }
 
     let arriving = id_at(state, at);
-    if state.loupe.visit.get().is_some_and(|(id, _, _)| Some(id) != arriving) {
-        leave_visit(state);
-    }
-    if state.loupe.visit.get().is_none() {
-        state.loupe.visit.set(arriving.map(|id| (id, std::time::Instant::now(), false)));
+    if !state.loupe.tape.quiet.get() {
+        if state.loupe.visit.get().is_some_and(|(id, _, _)| Some(id) != arriving) {
+            leave_visit(state);
+        }
+        if state.loupe.visit.get().is_none() {
+            state.loupe.visit.set(arriving.map(|id| (id, std::time::Instant::now(), false)));
+        }
     }
 
     let centre = loupe_zoom::centre(state);
     state.loupe.at.set(Some(at));
+    if !state.loupe.reveal.reveals_child() {
+        tape::rebuild(state);
+    }
     state.loupe.reveal.set_visible(true);
     state.loupe.reveal.set_reveal_child(true);
 
-    let near: Vec<i64> = [at.checked_sub(1), Some(at), Some(at + 1), Some(at + 2)]
-        .into_iter()
-        .flatten()
-        .filter_map(|index| id_at(state, index))
-        .collect();
+    let near: Vec<i64> = wanted(state).into_iter().filter_map(|index| id_at(state, index)).collect();
     state.loupe.textures.borrow_mut().retain(|id, _| near.contains(id));
 
     paint(state);
     refresh_loupe_bar(state);
 
-    for index in [Some(at), Some(at + 1), Some(at + 2), at.checked_sub(1)].into_iter().flatten() {
+    let own = [Some(at), beside(state, at, 1), beside(state, at, 2), beside(state, at, -1)].into_iter().flatten();
+    for index in own.chain(tape::held(state).into_iter().rev()) {
+        hold(state, index);
+    }
+    for index in loupe_group::wanted(state) {
         hold(state, index);
     }
     loupe_zoom::stepped(state, centre);
     read_af(state, at);
+    tape::follow(state);
+}
+
+fn wanted(state: &App) -> Vec<usize> {
+    let Some(at) = state.loupe.at.get() else { return Vec::new() };
+
+    let mut wanted: Vec<usize> = [beside(state, at, -1), Some(at), beside(state, at, 1), beside(state, at, 2)].into_iter().flatten().collect();
+    wanted.extend(tape::held(state));
+    wanted.extend(loupe_group::wanted(state));
+    wanted
 }
 
 fn hold(state: &App, index: usize) {
@@ -547,22 +572,30 @@ fn hold(state: &App, index: usize) {
     else {
         return;
     };
-    if state.loupe.textures.borrow().contains_key(&id) {
+
+    if state.loupe.textures.borrow().contains_key(&id) || !state.loupe.asked.borrow_mut().insert(id) {
         return;
     }
 
-    let near = move |state: &App| state.loupe.at.get().is_some_and(|at| index + 1 >= at && index <= at + 2);
+    let near = move |state: &App| wanted(state).contains(&index);
     thumbnail::load_thumbnail_first(
         &path,
         mtime,
         LOUPE_EDGE,
         glib::clone!(
             #[strong] state,
-            move || near(&state)
+            move || {
+                let near = near(&state);
+                if !near {
+                    state.loupe.asked.borrow_mut().remove(&id);
+                }
+                near
+            }
         ),
         glib::clone!(
             #[strong] state,
             move |texture| {
+                state.loupe.asked.borrow_mut().remove(&id);
                 if near(&state) {
                     state.loupe.textures.borrow_mut().insert(id, texture);
                     paint(&state);
@@ -578,8 +611,8 @@ pub(super) fn paint(state: &App) {
     let texture = |index: Option<usize>| index.and_then(|index| id_at(state, index)).and_then(|id| textures.get(&id).cloned());
     for (picture, index) in [
         (&state.loupe.picture, Some(at)),
-        (&state.loupe.previous, at.checked_sub(1)),
-        (&state.loupe.next, Some(at + 1)),
+        (&state.loupe.previous, beside(state, at, -1)),
+        (&state.loupe.next, beside(state, at, 1)),
     ] {
 
         let full = (index == Some(at)).then(|| loupe_zoom::full_for(state, at)).flatten();
@@ -589,6 +622,7 @@ pub(super) fn paint(state: &App) {
             picture.set_paintable(wanted.as_ref());
         }
     }
+    loupe_group::paint(state);
 
     state.loupe.stage.queue_allocate();
 }
@@ -609,6 +643,26 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
     }
     let ctrl = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
     let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+
+    use gtk::gdk::Key;
+    let held_down = matches!(
+        key,
+        Key::Shift_L | Key::Shift_R | Key::Control_L | Key::Control_R | Key::Alt_L | Key::Alt_R | Key::Super_L | Key::Super_R
+    );
+    let reviewing = review::running(state);
+    if !held_down {
+        review::stop(state);
+        tape::settle(state);
+    }
+    match key {
+        Key::space | Key::Escape if reviewing => return glib::Propagation::Stop,
+        Key::space if shift => {
+            review::toggle(state);
+            return glib::Propagation::Stop;
+        }
+        _ if !reviewing && tape::range_key(state, key, modifiers) => return glib::Propagation::Stop,
+        _ => {}
+    }
     match key {
         gtk::gdk::Key::Left if ctrl => step_burst(state, false),
         gtk::gdk::Key::Right if ctrl => step_burst(state, true),
@@ -623,8 +677,10 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
             }
             close_loupe(state);
         }
-        gtk::gdk::Key::Up => cull(state, Flag::Picked),
-        gtk::gdk::Key::Down => cull(state, Flag::Rejected),
+
+        gtk::gdk::Key::Up | gtk::gdk::Key::p | gtk::gdk::Key::P if !ctrl => cull(state, Flag::Picked),
+        gtk::gdk::Key::Down | gtk::gdk::Key::x | gtk::gdk::Key::X if !ctrl => cull(state, Flag::Rejected),
+        gtk::gdk::Key::z | gtk::gdk::Key::Z if !ctrl => loupe_group::toggle_one(state),
         gtk::gdk::Key::BackSpace => undo_mark(state),
         gtk::gdk::Key::f | gtk::gdk::Key::F => toggle_neighbours(state),
 
@@ -640,9 +696,15 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
 }
 
 pub(super) fn close_loupe(state: &App) {
+    tape::reset(state);
+    loupe_group::reset(state);
     leave_visit(state);
-    let was_open = state.loupe.at.take().is_some();
+    let at = state.loupe.at.take();
+    let was_open = at.is_some();
+
+    let looked_at = at.and_then(|at| id_at(state, at));
     state.loupe.textures.borrow_mut().clear();
+    state.loupe.asked.borrow_mut().clear();
     loupe_zoom::reset(state);
 
     state.loupe.undo.borrow_mut().clear();
@@ -653,6 +715,18 @@ pub(super) fn close_loupe(state: &App) {
     if was_open && back_to_grid && state.grid.stale.replace(false) {
         reload_grid(state);
     }
+    state.loupe.scope.take();
+
+    if was_open && rapid::is_on(state) {
+
+        state.grid.wall.unselect_all();
+        if back_to_grid {
+            rapid::rebuild(state);
+        }
+        if let Some(id) = looked_at {
+            rapid::keys_to(state, id);
+        }
+    }
 }
 
 fn cull(state: &App, flag: Flag) {
@@ -660,19 +734,22 @@ fn cull(state: &App, flag: Flag) {
     apply_to_selection(state, Action::Flag(flag));
     refresh_loupe_bar(state);
 
-    if at + 1 >= state.grid.lazy.borrow().len() {
-        state.toast("Last photograph — Space goes back to the grid");
+    if beside(state, at, 1).is_none() {
+        state.toast(match state.loupe.scope.borrow().is_empty() {
+            true => "Last photograph — Space goes back to the grid",
+            false => "Last of the burst — Space when you have picked",
+        });
         return;
     }
 
-    let frame = state.loupe.picture.paintable().filter(|_| !loupe_zoom::zoomed(state));
+    let frame = state.loupe.picture.paintable().filter(|_| !loupe_zoom::zoomed(state) && !loupe_group::active(state));
     step_loupe(state, true);
     if let Some(frame) = frame {
         slide_away(state, frame, flag == Flag::Picked);
     }
 }
 
-fn undo_mark(state: &App) {
+pub(super) fn undo_mark(state: &App) {
     let Some(before) = state.loupe.undo.borrow_mut().pop() else {
         state.toast("Nothing to undo");
         return;
@@ -695,21 +772,50 @@ fn undo_mark(state: &App) {
 
 pub(super) fn step_loupe(state: &App, forward: bool) {
     let Some(at) = state.loupe.at.get() else { return };
-    let count = state.grid.lazy.borrow().len();
-    let next = match forward {
-        true => (at + 1).min(count.saturating_sub(1)),
-        false => at.saturating_sub(1),
-    };
-    if next == at {
-        return;
+    if let Some(next) = beside(state, at, if forward { 1 } else { -1 }) {
+        go_to(state, arrive(state, at, next));
     }
-    go_to(state, next);
 }
 
-fn go_to(state: &App, index: usize) {
+fn arrive(state: &App, from: usize, to: usize) -> usize {
+    if !state.loupe.scope.borrow().is_empty() {
+        return to;
+    }
+    let run = burst_run(state, to);
+    if run.len() < 2 || run.contains(&from) {
+        return to;
+    }
+    best_in(state, run).unwrap_or(to)
+}
+
+pub(super) fn go_to(state: &App, index: usize) {
     state.grid.wall.select_only(index);
     state.grid.wall.reveal(index);
     show_loupe(state, index);
+}
+
+fn beside(state: &App, at: usize, by: isize) -> Option<usize> {
+    let scope = state.loupe.scope.borrow();
+    if scope.is_empty() {
+        return at.checked_add_signed(by).filter(|index| *index < state.grid.lazy.borrow().len());
+    }
+    let here = scope.iter().position(|index| *index == at)?;
+    scope.get(here.checked_add_signed(by)?).copied()
+}
+
+pub(super) fn cull_only(state: &App, ids: &[i64]) {
+    let indices: Vec<usize> = {
+        let lazy = state.grid.lazy.borrow();
+        ids.iter().filter_map(|id| lazy.iter().position(|card| card.id == *id)).collect()
+    };
+    let Some(first) = indices.first().copied() else { return };
+
+    let best = {
+        let cards = state.grid.cards.borrow();
+        indices.iter().copied().find(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|photo| photo.best_of_burst))
+    };
+    *state.loupe.scope.borrow_mut() = indices;
+    go_to(state, best.unwrap_or(first));
 }
 
 pub(super) fn id_at(state: &App, at: usize) -> Option<i64> {
@@ -722,7 +828,7 @@ fn burst_at(state: &App, at: usize) -> Option<(i64, i64)> {
     Some((numa::io::catalog::library_of(id), burst))
 }
 
-fn burst_run(state: &App, at: usize) -> std::ops::Range<usize> {
+pub(super) fn burst_run(state: &App, at: usize) -> std::ops::Range<usize> {
     let Some(burst) = burst_at(state, at) else { return at..at + 1 };
     let count = state.grid.lazy.borrow().len();
     let same = |index: &usize| burst_at(state, *index) == Some(burst);
@@ -755,7 +861,7 @@ pub(super) fn note_mark(state: &App, ids: &[i64], action: Action) {
     }
 }
 
-fn leave_visit(state: &App) {
+pub(super) fn leave_visit(state: &App) {
     if let Some((id, since, false)) = state.loupe.visit.take() {
         let _ = state.catalog.log_decision(id, "passed", Some(since.elapsed().as_millis() as i64));
     }
@@ -781,6 +887,19 @@ fn step_burst(state: &App, forward: bool) {
 
 fn reject_rest(state: &App) {
     let Some(at) = state.loupe.at.get() else { return };
+
+    let few = state.loupe.scope.borrow().clone();
+    if !few.is_empty() {
+        let unmarked: Vec<i64> = {
+            let cards = state.grid.cards.borrow();
+            few.iter().filter_map(|index| id_at(state, *index)).filter(|id| cards.get(id).is_some_and(|photo| photo.flag == Flag::None)).collect()
+        };
+        if !unmarked.is_empty() {
+            apply_to_ids(state, &unmarked, Action::Flag(Flag::Rejected));
+        }
+        close_loupe(state);
+        return;
+    }
     let run = burst_run(state, at);
     if run.len() < 2 {
         cull(state, Flag::Rejected);
@@ -797,8 +916,10 @@ fn reject_rest(state: &App) {
         apply_to_ids(state, &unmarked, Action::Flag(Flag::Rejected));
     }
     refresh_loupe_bar(state);
-    let (frame, before) =
-        (state.loupe.picture.paintable().filter(|_| !loupe_zoom::zoomed(state)), state.loupe.at.get());
+    let (frame, before) = (
+        state.loupe.picture.paintable().filter(|_| !loupe_zoom::zoomed(state) && !loupe_group::active(state)),
+        state.loupe.at.get(),
+    );
     step_burst(state, true);
     if let (Some(frame), true) = (frame, state.loupe.at.get() != before) {
         slide_away(state, frame, false);
@@ -807,10 +928,17 @@ fn reject_rest(state: &App) {
 
 fn refresh_burst(state: &App, at: usize) {
     let run = burst_run(state, at);
-    let echo = echo_note(state, at);
-    state.loupe.burst.set_visible(run.len() > 1 || echo.is_some());
+    state.loupe.burst.set_visible(run.len() > 1);
     if run.len() < 2 {
-        state.loupe.burst.set_text(echo.as_deref().unwrap_or_default());
+        return;
+    }
+
+    if loupe_group::active(state) {
+        let kept = {
+            let cards = state.grid.cards.borrow();
+            run.clone().filter(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|photo| photo.flag == Flag::Picked)).count()
+        };
+        state.loupe.burst.set_text(&format!("Burst of {} \u{b7} {kept} kept", run.len()));
         return;
     }
     let place = at - run.start + 1;
@@ -839,11 +967,10 @@ fn refresh_burst(state: &App, at: usize) {
         Some((n, _)) => format!(" \u{b7} best is {n}"),
         None => String::new(),
     };
-    let echo = echo.map_or(String::new(), |echo| format!(" \u{b7} {}", glib::markup_escape_text(&echo)));
-    state.loupe.burst.set_markup(&format!("[ {} ]   {place} of {}{why}{echo}", pips.join(" "), run.len()));
+    state.loupe.burst.set_markup(&format!("[ {} ]   {place} of {}{why}", pips.join(" "), run.len()));
 }
 
-fn echo_note(state: &App, at: usize) -> Option<String> {
+pub(super) fn echo_note(state: &App, at: usize) -> Option<String> {
     let cards = state.grid.cards.borrow();
     let photo = cards.get(&id_at(state, at)?)?;
     let other = cards.get(&photo.echo?)?;
@@ -862,10 +989,12 @@ fn echo_note(state: &App, at: usize) -> Option<String> {
 pub(super) fn refresh_loupe_bar(state: &App) {
     state.loupe.picked_frame.queue_draw();
     let Some(at) = state.loupe.at.get() else { return };
+    tape::refresh(state);
     let Some(id) = id_at(state, at) else { return };
     let name = {
         let cards = state.grid.cards.borrow();
         let Some(photo) = cards.get(&id) else { return };
+
         photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
     };
     let (rating, flag) = loupe_rating(state);
@@ -876,6 +1005,7 @@ pub(super) fn refresh_loupe_bar(state: &App) {
         true => state.loupe.caption.set_text(&format!("{name} \u{b7} developing at full size\u{2026}")),
         false => state.loupe.caption.set_text(&name),
     }
+    loupe_group::refresh(state);
     refresh_burst(state, at);
 
     for (index, star) in state.loupe.stars.iter().enumerate() {
@@ -942,7 +1072,13 @@ pub(super) struct State {
 
     pub(super) textures: Rc<RefCell<std::collections::HashMap<i64, gtk::gdk::Texture>>>,
 
+    pub(super) asked: Rc<RefCell<std::collections::HashSet<i64>>>,
+
+    pub(super) tape: tape::State,
+
     pub(super) zoom: loupe_zoom::State,
+
+    pub(super) group: loupe_group::State,
 
     pub(super) marker: gtk::DrawingArea,
     pub(super) af: Rc<RefCell<std::collections::HashMap<i64, Option<raw::AfPoint>>>>,
@@ -961,6 +1097,8 @@ pub(super) struct State {
 
     pub(super) at: Rc<Cell<Option<usize>>>,
 
+    pub(super) scope: Rc<RefCell<Vec<usize>>>,
+
     pub(super) undo: Rc<RefCell<Vec<Vec<(i64, u8, Flag)>>>>,
 }
 
@@ -974,13 +1112,16 @@ impl State {
             previous: gtk::Picture::new(),
             next: gtk::Picture::new(),
             leaving: gtk::Picture::new(),
-            neighbours: Rc::new(Cell::new(true)),
+            neighbours: Rc::new(Cell::new(false)),
             slide: Rc::new(Cell::new(0.0)),
             leaving_pick: Rc::new(Cell::new(false)),
             picked_frame: gtk::DrawingArea::new(),
             animation: Rc::new(RefCell::new(None)),
             textures: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            asked: Rc::default(),
+            tape: tape::State::new(),
             zoom: loupe_zoom::State::new(),
+            group: loupe_group::State::new(),
             marker: gtk::DrawingArea::new(),
             af: Rc::new(RefCell::new(std::collections::HashMap::new())),
             caption: gtk::Label::new(None),
@@ -992,6 +1133,7 @@ impl State {
             visit: Rc::new(Cell::new(None)),
             restoring: Rc::new(Cell::new(false)),
             at: Rc::new(Cell::new(None)),
+            scope: Rc::default(),
             undo: Rc::new(RefCell::new(Vec::new())),
         }
     }

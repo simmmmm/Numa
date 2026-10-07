@@ -10,9 +10,21 @@ use numa_core::document::Document;
 use numa_cull::people;
 use crate::raw;
 pub use crate::copy::{copy_into, Copied};
-pub(crate) use crate::copy::copy_whole;
 
+mod after_camera;
+mod backup;
+mod clocks;
 mod schema;
+pub use clocks::{Camera, Clock, PhotoClock};
+use backup::back_up_weekly;
+#[cfg(test)]
+use backup::{civil_date, BACKUPS_KEPT};
+
+mod flow;
+mod burst;
+pub use burst::{burst_of, sharper_in_burst};
+
+mod found;
 use schema::{migrate, HOME_SCHEMA, LEGACY_SCHEMA, LIBRARY_SCHEMA};
 
 pub type Measured = (i64, numa_cull::Frame, Option<u32>, Option<f32>, Vec<([f32; people::LENGTH], Option<Vec<u8>>)>);
@@ -255,9 +267,6 @@ pub type NamedFace = (i64, String, [f32; people::LENGTH]);
 
 pub const LIBRARY_DIR: &str = ".numa";
 
-const BACKUPS_KEPT: usize = 4;
-const BACKUP_EVERY: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
-
 const LOCAL_BITS: u32 = 32;
 
 fn global_id(library_id: i64, local: i64) -> i64 {
@@ -459,6 +468,7 @@ impl Catalog {
         if !has_aspect {
             conn.execute("ALTER TABLE photos ADD COLUMN aspect REAL", []).map_err(text)?;
         }
+        clocks::migrate(&conn)?;
         back_up_weekly(&conn, &dir);
 
         let open = Rc::new(OpenLibrary { conn, root, offline: false });
@@ -510,6 +520,8 @@ impl Catalog {
                 while let Some(row) = rows.next()? {
                     let (id, path, mtime, taken, edits): (i64, String, i64, Option<i64>, Option<String>) =
                         (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
+
+                    let edits = self.composed_json(global_id(library_id, id), edits);
                     let thumb = crate::thumbs::largest_cached(&open.absolute(&path), mtime, edits.as_deref())
                         .and_then(|file| Some(file.file_name()?.to_string_lossy().into_owned()));
                     write.execute(params![id, path, mtime, taken, thumb])?;
@@ -987,9 +999,33 @@ impl Catalog {
             let people = everyone[&library].iter().filter(|(_, ids)| ids.contains(&id)).map(|(name, _)| name.clone()).collect();
             let mut albums: Vec<String> = in_albums.iter().filter_map(|key| albums.get(key).cloned()).collect();
             albums.sort_by_key(|name| name.to_lowercase());
-            found.insert(id, crate::export::Description { rating, people, albums });
+
+            let position = open
+                .conn
+                .query_row("SELECT latitude, longitude FROM positions WHERE photo_id = ?1", [local], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()
+                .map_err(text)?;
+            found.insert(id, crate::export::Description { rating, people, albums, position });
         }
         Ok(found)
+    }
+
+    pub fn albums_of(&self, photo_ids: &[i64]) -> Result<HashMap<i64, Vec<String>>, String> {
+        let names: HashMap<String, String> = self.albums()?.into_iter().collect();
+        photo_ids
+            .iter()
+            .map(|&id| {
+                let (open, local) = self.photo(id)?;
+                let keys: Vec<String> = open
+                    .conn
+                    .prepare_cached("SELECT album FROM album_photos WHERE photo_id = ?1")
+                    .and_then(|mut statement| statement.query_map([local], |row| row.get::<_, String>(0))?.collect())
+                    .map_err(text)?;
+                let mut albums: Vec<String> = keys.iter().filter_map(|key| names.get(key).cloned()).collect();
+                albums.sort_by_key(|name| name.to_lowercase());
+                Ok((id, albums))
+            })
+            .collect()
     }
 
     pub fn faces(&self, library_id: i64) -> Result<Vec<StoredFace>, String> {
@@ -1122,6 +1158,7 @@ impl Catalog {
                         raw_clipped: row.get::<_, Option<f64>>(11)?.map(|value| value as f32),
                         raw_dark: row.get::<_, Option<f64>>(12)?.map(|value| value as f32),
                         eyes_closed: row.get::<_, Option<i64>>(13)?.map(|closed| closed != 0),
+                        ..Default::default()
                     },
                     row.get::<_, Option<f64>>(4)?.map(|value| value as f32),
                 ))
@@ -1385,8 +1422,8 @@ impl Catalog {
             .conn
 
             .prepare(&format!(
-                "SELECT path, mtime, edits FROM ( \
-                   SELECT path, mtime, edits, rating, flag, suggested, taken, \
+                "SELECT path, mtime, edits, id FROM ( \
+                   SELECT photos.id, path, mtime, edits, rating, flag, suggested, taken, \
                           ROW_NUMBER() OVER (PARTITION BY COALESCE(burst, -photos.id) ORDER BY {best}) AS nth \
                    FROM photos LEFT JOIN analysis ON analysis.photo_id = photos.id \
                    WHERE 1{narrow} AND flag >= 0) \
@@ -1396,11 +1433,15 @@ impl Catalog {
             .map_err(text)?;
         let covers = statement
             .query_map(params![album], |row| {
-                Ok((open.absolute(&row.get::<_, String>(0)?), row.get(1)?, row.get(2)?))
+                Ok((open.absolute(&row.get::<_, String>(0)?), row.get(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?))
             })
             .map_err(text)?
-            .collect::<Result<_, _>>()
-            .map_err(text)?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(text)?
+            .into_iter()
+
+            .map(|(path, mtime, edits, local)| (path, mtime, self.composed_json(global_id(library_id, local), edits)))
+            .collect();
 
         Ok(Glance { photos, first, last, covers })
     }
@@ -1494,13 +1535,15 @@ impl Catalog {
     pub fn known_files(&self, library: &Library) -> Result<Known, String> {
         let open = self.library(library.id)?;
         open.connected()?;
-        let mut stmt = open.conn.prepare("SELECT path, mtime, taken FROM photos").map_err(text)?;
+
+        let mut stmt = open.conn.prepare("SELECT path, mtime, camera_time, camera FROM photos").map_err(text)?;
         let rows = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<i64>>(2)?))
+                let stamp = row.get::<_, Option<String>>(3)?.map(|camera| crate::exif::Stamp { taken: row.get(2).ok().flatten(), camera });
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, stamp))
             })
             .map_err(text)?;
-        Ok(rows.flatten().map(|(path, mtime, taken)| (open.absolute(&path), (mtime, taken))).collect())
+        Ok(rows.flatten().map(|(path, mtime, stamp)| (open.absolute(&path), (mtime, stamp))).collect())
     }
 
     pub fn apply_scan(&self, library: &Library, found: &Scan) -> Result<Changes, String> {
@@ -1516,13 +1559,17 @@ impl Catalog {
         let mut added: Vec<(i64, String, i64)> = Vec::new();
         let complete = found.complete;
 
-        for (path, mtime, taken) in &found.files {
-            let (path, mtime, taken) = (path, *mtime, *taken);
+        for (path, mtime, stamp) in &found.files {
+            let (path, mtime, taken, camera) = (path, *mtime, stamp.taken, &stamp.camera);
             let relative = open.relative(path);
 
             let inserted = tx
-                .prepare_cached("INSERT OR IGNORE INTO photos (path, mtime, taken) VALUES (?1, ?2, ?3)")
-                .and_then(|mut stmt| stmt.execute(params![relative, mtime, taken]))
+                .prepare_cached(&format!(
+                    "INSERT OR IGNORE INTO photos (path, mtime, camera_time, camera, taken) \
+                     VALUES (?1, ?2, ?3, ?4, ?3 + {})",
+                    clocks::OFFSET
+                ))
+                .and_then(|mut stmt| stmt.execute(params![relative, mtime, taken, camera]))
                 .map_err(text)?;
 
             if inserted == 1 {
@@ -1530,11 +1577,12 @@ impl Catalog {
                 added.push((tx.last_insert_rowid(), relative.clone(), mtime));
             } else {
                 changes.updated += tx
-                    .prepare_cached(
-                        "UPDATE photos SET mtime = ?1, taken = ?3 \
-                         WHERE path = ?2 AND (mtime <> ?1 OR taken IS NOT ?3)",
-                    )
-                    .and_then(|mut stmt| stmt.execute(params![mtime, relative, taken]))
+                    .prepare_cached(&format!(
+                        "UPDATE photos SET mtime = ?1, camera_time = ?3, camera = ?4, taken = ?3 + {} \
+                         WHERE path = ?2 AND (mtime <> ?1 OR camera_time IS NOT ?3 OR camera IS NOT ?4)",
+                        clocks::OFFSET
+                    ))
+                    .and_then(|mut stmt| stmt.execute(params![mtime, relative, taken, camera]))
                     .map_err(text)?;
             }
 
@@ -1833,12 +1881,18 @@ impl Catalog {
 
     pub fn edits_json(&self, photo_id: i64) -> Result<Option<String>, String> {
         let (open, local) = self.photo(photo_id)?;
-        open.conn
+        let json: Option<String> = open
+            .conn
             .query_row("SELECT edits FROM photos WHERE id = ?1", params![local], |row| row.get(0))
-            .map_err(text)
+            .map_err(text)?;
+        Ok(self.composed_json(photo_id, json))
     }
 
     pub fn load_edits(&self, photo_id: i64) -> Result<Option<Document>, String> {
+        Ok(self.own_edits(photo_id)?.map(|own| self.composed(photo_id, own)))
+    }
+
+    pub fn own_edits(&self, photo_id: i64) -> Result<Option<Document>, String> {
         let (open, local) = self.photo(photo_id)?;
         let json: Option<String> = open
             .conn
@@ -1881,42 +1935,29 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn found(&self, photo_id: i64, asked: &str) -> Option<crate::masks::Chips> {
-        let (open, local) = self.photo(photo_id).ok()?;
-        let (chips, grid): (String, Vec<u8>) = open
-            .conn
-            .query_row("SELECT chips, grid FROM found WHERE photo_id = ?1 AND asked = ?2", params![local, asked], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .ok()?;
-        let mut chips: crate::masks::Chips = serde_json::from_str(&chips).ok()?;
-        let (size, cells) = grid.split_at_checked(8)?;
-        let (width, height) = (u32::from_le_bytes(size[..4].try_into().ok()?), u32::from_le_bytes(size[4..].try_into().ok()?));
-        let mut raw = Vec::new();
-        std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(cells), &mut raw).ok()?;
-        if raw.len() != width as usize * height as usize {
-            return None;
-        }
-        chips.grid = (width as usize, height as usize, raw);
-        Some(chips)
-    }
-
-    pub fn save_found(&self, photo_id: i64, asked: &str, chips: &crate::masks::Chips) -> Result<(), String> {
+    pub fn note_look(&self, photo_id: i64, digest: &str, look: &crate::made::AppliedLook) -> Result<(), String> {
+        let json = serde_json::to_string(look).map_err(text)?;
         let (open, local) = self.photo(photo_id)?;
         open.connected()?;
-        let (width, height, cells) = &chips.grid;
-        let mut grid = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-        std::io::Write::write_all(&mut grid, cells).map_err(text)?;
-        let mut blob = [(*width as u32).to_le_bytes(), (*height as u32).to_le_bytes()].concat();
-        blob.extend(grid.finish().map_err(text)?);
         open.conn
             .execute(
-                "INSERT INTO found (photo_id, asked, chips, grid) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(photo_id) DO UPDATE SET asked = excluded.asked, chips = excluded.chips, grid = excluded.grid",
-                params![local, asked, serde_json::to_string(chips).map_err(text)?, blob],
+                "INSERT INTO made_looks (photo_id, digest, look) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(photo_id, digest) DO UPDATE SET look = excluded.look",
+                params![local, digest, json],
             )
             .map_err(text)?;
         Ok(())
+    }
+
+    pub fn looks_applied(&self, photo_id: i64) -> std::collections::HashMap<String, crate::made::AppliedLook> {
+        let Ok((open, local)) = self.photo(photo_id) else { return Default::default() };
+        let Ok(mut query) = open.conn.prepare("SELECT digest, look FROM made_looks WHERE photo_id = ?1") else { return Default::default() };
+        let rows = query.query_map(params![local], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)));
+        rows.into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|(digest, look)| Some((digest, serde_json::from_str(&look).ok()?)))
+            .collect()
     }
 
     pub fn snapshots(&self, photo_id: i64) -> Result<Vec<(String, i64)>, String> {
@@ -1977,6 +2018,13 @@ impl Catalog {
     }
 
     pub fn save_edits(&self, photo_id: i64, document: &Document) -> Result<(), String> {
+        match document.moment.and_then(|record| self.layers(library_of(photo_id), record)) {
+            Some(layers) => self.save_own_edits(photo_id, &layers.decompose(photo_id, document)),
+            None => self.save_own_edits(photo_id, document),
+        }
+    }
+
+    pub fn save_own_edits(&self, photo_id: i64, document: &Document) -> Result<(), String> {
         let json = match document.is_untouched() {
             true => None,
             false => Some(serde_json::to_string(document).map_err(text)?),
@@ -2055,6 +2103,12 @@ fn write_analysis(
         ],
     )
     .map_err(text)?;
+
+    match frame.clock {
+        Some(shown) => conn.execute("INSERT OR REPLACE INTO slates (photo_id, shown) VALUES (?1, ?2)", params![local, shown]),
+        None => conn.execute("DELETE FROM slates WHERE photo_id = ?1", params![local]),
+    }
+    .map_err(text)?;
     Ok(())
 }
 
@@ -2067,71 +2121,12 @@ fn table_exists(conn: &Connection, table: &str) -> bool {
     .is_ok()
 }
 
-fn back_up_weekly(conn: &Connection, dir: &Path) {
-
-    if conn.query_row("SELECT 1 FROM photos LIMIT 1", [], |_| Ok(())).is_err() {
-        return;
-    }
-    let backups = dir.join("backups");
-    if let Err(err) = std::fs::create_dir_all(&backups) {
-        log::warn!("{}: {err}", backups.display());
-        return;
-    }
-    let mut existing: Vec<PathBuf> = std::fs::read_dir(&backups)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "db"))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    existing.sort();
-
-    let now = std::time::SystemTime::now();
-    let recent = existing.last().and_then(|newest| std::fs::metadata(newest).ok()?.modified().ok());
-    if recent.is_some_and(|taken| now.duration_since(taken).is_ok_and(|age| age < BACKUP_EVERY)) {
-        return;
-    }
-
-    let days = now.duration_since(UNIX_EPOCH).map(|since| since.as_secs() / 86_400).unwrap_or(0) as i64;
-    let (year, month, day) = civil_date(days);
-    let target = backups.join(format!("catalog-{year:04}-{month:02}-{day:02}.db"));
-    if target.exists() {
-        return;
-    }
-    if let Err(err) = conn.execute("VACUUM INTO ?1", params![target.to_string_lossy()]) {
-        log::warn!("could not back up {}: {err}", dir.display());
-        return;
-    }
-    existing.push(target);
-    while existing.len() > BACKUPS_KEPT {
-        let oldest = existing.remove(0);
-        if let Err(err) = std::fs::remove_file(&oldest) {
-            log::warn!("{}: {err}", oldest.display());
-        }
-    }
-}
-
-fn civil_date(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (yoe + era * 400 + i64::from(month <= 2), month, day)
-}
-
-pub type Known = HashMap<PathBuf, (i64, Option<i64>)>;
+pub type Known = HashMap<PathBuf, (i64, Option<crate::exif::Stamp>)>;
 
 #[derive(Debug, Default)]
 pub struct Scan {
 
-    pub files: Vec<(PathBuf, i64, Option<i64>)>,
+    pub files: Vec<(PathBuf, i64, crate::exif::Stamp)>,
     pub complete: bool,
 
     pub unchanged: bool,
@@ -2154,22 +2149,22 @@ impl Changes {
 
 pub fn scan(root: &Path, known: &Known) -> Scan {
     let (paths, complete, folders) = walk_images(root);
-    let files: Vec<(PathBuf, i64, Option<i64>)> = paths
+    let files: Vec<(PathBuf, i64, crate::exif::Stamp)> = paths
             .into_iter()
             .map(|path| {
                 let mtime = mtime_secs(&path);
 
-                let taken = match known.get(&path) {
-                    Some(&(was, taken)) if was == mtime => taken,
-                    _ => crate::exif::taken(&path),
+                let stamp = match known.get(&path) {
+                    Some((was, Some(stamp))) if *was == mtime => stamp.clone(),
+                    _ => crate::exif::stamp(&path),
                 };
-                (path, mtime, taken)
+                (path, mtime, stamp)
             })
             .collect();
 
     let unchanged = complete
         && files.len() == known.len()
-        && files.iter().all(|(path, mtime, _)| known.get(path).is_some_and(|(was, _)| was == mtime));
+        && files.iter().all(|(path, mtime, _)| known.get(path).is_some_and(|(was, stamp)| was == mtime && stamp.is_some()));
     Scan { files, complete, unchanged, folders }
 }
 
@@ -2265,10 +2260,10 @@ mod tests {
 
     #[test]
     fn a_library_away_is_shown_from_home_and_its_marks_follow_it_back() {
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         let home = temp_dir("offline-home").join("catalog.db");
         let root = temp_dir("offline-library");
-        let away = std::env::temp_dir().join("numa-test-offline-library-away");
+        let away = std::env::temp_dir().join(format!("numa-test-offline-library-away-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&away);
         for name in ["a.RAF", "b.RAF"] {
             std::fs::write(root.join(name), b"x").unwrap();
@@ -2324,7 +2319,7 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("numa-test-{}", name));
+        let dir = std::env::temp_dir().join(format!("numa-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("edited")).unwrap();
         dir
@@ -2360,6 +2355,7 @@ mod tests {
         assert_eq!(covers[..3], ["c.RAF", "e.RAF", "a.RAF"]);
         assert!(!covers.contains(&"d.RAF".to_string()), "a rejected photograph is nobody's cover");
         assert_eq!(covers.len(), 4);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2397,6 +2393,7 @@ mod tests {
 
         assert!(back[0].map.0.is_none());
         assert!(back[0].is_pending(), "and the mask knows it is waiting for them");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2437,6 +2434,7 @@ mod tests {
 
         catalog.name_face(photos[1].id, &face(0, 0.2), "  ").unwrap();
         assert_eq!(catalog.named_faces().unwrap().len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2512,6 +2510,7 @@ mod tests {
             .save_analysis_batch(numa_cull::VERSION, &[(photos[1].id, frame, Some(0), None, vec![])])
             .unwrap();
         assert_eq!(catalog.photos(library.id, &filter).unwrap().len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2587,6 +2586,7 @@ mod tests {
 
         assert_eq!(catalog.unanalysed(library.id, numa_cull::VERSION + 1).unwrap().len(), 3);
         assert_eq!(catalog.analysed(library.id).unwrap().len(), 3);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2632,6 +2632,41 @@ mod tests {
         std::fs::remove_file(inner.join("b.RAF")).unwrap();
         catalog.sync_library(&library).unwrap();
         assert_eq!(catalog.photos(library.id, &Filter::default()).unwrap().len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_sharper_frame_of_a_burst_is_found_from_the_others() {
+        let frame = |id: i64, taken: i64, burst: Option<i64>, best: bool| Photo {
+            id,
+            path: PathBuf::from(format!("{id}.RAF")),
+            mtime: 0,
+            taken: Some(taken),
+            rating: 0,
+            flag: Flag::None,
+            sharpness: None,
+            blown: None,
+            best_of_burst: best,
+            burst,
+            echo: None,
+            exposure: None,
+            focal35: None,
+            raw_clipped: None,
+            raw_dark: None,
+            eyes_closed: None,
+            faces: None,
+            face_sharpness: None,
+            brightness: None,
+            contrast: None,
+            suggested: None,
+            edited: false,
+            aspect: None,
+        };
+        let photos = [frame(1, 10, Some(7), false), frame(2, 11, Some(7), true), frame(3, 12, Some(7), false), frame(4, 13, None, false)];
+        let (best, at, of) = sharper_in_burst(&photos, 3).unwrap();
+        assert_eq!((best.id, at, of), (2, 2, 3));
+        assert!(sharper_in_burst(&photos, 2).is_none(), "it is the sharpest itself");
+        assert!(sharper_in_burst(&photos, 4).is_none(), "in no burst");
     }
 
     #[test]
@@ -2673,6 +2708,7 @@ mod tests {
             .unwrap();
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].path.ends_with("a.RAF"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2720,6 +2756,92 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_of_shoot_is_kept_with_its_library() {
+        let root = temp_dir("kind");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        assert_eq!(catalog.kind(library.id), None);
+        catalog.set_kind(library.id, Some(crate::workflows::Kind::Sports)).unwrap();
+        let again = Catalog::in_memory().unwrap();
+        let reopened = again.add_library(&root).unwrap();
+        assert_eq!(again.kind(reopened.id), Some(crate::workflows::Kind::Sports));
+        catalog.set_kind(library.id, None).unwrap();
+        assert_eq!(catalog.kind(library.id), None);
+    }
+
+    #[test]
+    fn numas_work_is_kept_with_its_library_and_taken_back() {
+        let root = temp_dir("numa-work");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        std::fs::write(root.join("b.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let (a, b) = (photos[0].id, photos[1].id);
+
+        let first = Document::new(photos[0].path.to_string_lossy().to_string());
+        let mut later = first.clone();
+        later.set_crop([0.1, 0.1, 0.5, 0.5], 0.0);
+        catalog.keep_before_numa(a, &first).unwrap();
+        catalog.keep_before_numa(a, &later).unwrap();
+        catalog.keep_numa_flags(&[b], Flag::Rejected).unwrap();
+
+        let again = Catalog::in_memory().unwrap();
+        let reopened = again.add_library(&root).unwrap();
+        let (before, flags) = again.numas_work(reopened.id);
+        assert_eq!(before.len(), 1);
+        assert!(before[0].1.crop().is_none(), "the first before is the one kept");
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].1, Flag::Rejected);
+
+        let did = crate::workflows::Did { angle: Some(1.5), ..Default::default() };
+        catalog.keep_numa_did(a, &did).unwrap();
+        assert_eq!(again.numa_did(a), Some(did));
+        assert!(again.before_numa(a).is_some_and(|document| document.crop().is_none()));
+        catalog.set_library_setting(library.id, "teaser", Some("[1,2]")).unwrap();
+        assert_eq!(again.library_setting(reopened.id, "teaser").as_deref(), Some("[1,2]"));
+
+        catalog.forget_numa(&[a, b]).unwrap();
+        let (before, flags) = catalog.numas_work(library.id);
+        assert!(before.is_empty() && flags.is_empty());
+        assert_eq!(catalog.numa_did(a), None, "what Numa did goes with its before");
+    }
+
+    #[test]
+    fn a_frame_reads_with_its_moments_layers_and_writes_back_its_own() {
+        let root = temp_dir("numa-layers");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let a = catalog.photos(library.id, &Filter::default()).unwrap()[0].id;
+        let untouched = catalog.edits_json(a).unwrap();
+
+        let mut layers = crate::layers::Layers::default();
+        layers.tone[0] = 0.5;
+        catalog.keep_layers(library.id, 9, &layers).unwrap();
+        let mut own = Document::new("a.RAF".to_string());
+        own.moment = Some(9);
+        catalog.save_own_edits(a, &own).unwrap();
+        assert_eq!(catalog.load_edits(a).unwrap().unwrap().basic().tone.exposure, 0.5, "the moment's exposure");
+        assert!(catalog.edits_json(a).unwrap().unwrap().contains("0.5"), "and the thumbnail's key with it");
+
+        let mut whole = catalog.load_edits(a).unwrap().unwrap();
+        let mut basic = whole.basic();
+        basic.tone.exposure = 0.7;
+        whole.set_basic(basic);
+        catalog.save_edits(a, &whole).unwrap();
+        assert!((catalog.own_edits(a).unwrap().unwrap().basic().tone.exposure - 0.2).abs() < 1e-5);
+        layers.tone[0] = 1.0;
+        catalog.keep_layers(library.id, 9, &layers).unwrap();
+        assert!((catalog.load_edits(a).unwrap().unwrap().basic().tone.exposure - 1.2).abs() < 1e-5, "the moment changed, the frame with it");
+        assert_eq!(catalog.all_layers(library.id).len(), 1);
+        assert!(untouched.is_none(), "a frame on its own reads as it is stored");
+    }
+
+    #[test]
     fn a_cull_target_is_kept_with_its_library() {
         let root = temp_dir("target");
         for name in ["a.RAF", "b.RAF", "c.RAF"] {
@@ -2745,6 +2867,7 @@ mod tests {
 
         catalog.set_cull_target(library.id, None).unwrap();
         assert_eq!(catalog.cull_target(library.id), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2763,6 +2886,7 @@ mod tests {
             catalog.decisions(photo).unwrap(),
             vec![("passed".to_string(), Some(1200)), ("pick".to_string(), None), ("undo".to_string(), None)]
         );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2777,13 +2901,14 @@ mod tests {
         assert_eq!(catalog.photo_count(library.id).unwrap(), 2);
 
         let stored = |catalog: &Catalog| catalog.libraries().unwrap().remove(0);
-        assert_eq!(stored(&catalog).label(), "numa-test-manage");
+        let folder = root.file_name().unwrap().to_string_lossy();
+        assert_eq!(stored(&catalog).label(), folder);
 
         catalog.set_library_name(library.id, "  Japan 2026  ").unwrap();
         assert_eq!(stored(&catalog).label(), "Japan 2026", "a name is trimmed");
 
         catalog.set_library_name(library.id, "   ").unwrap();
-        assert_eq!(stored(&catalog).label(), "numa-test-manage");
+        assert_eq!(stored(&catalog).label(), folder);
 
         let photos = catalog.photos(library.id, &Filter::default()).unwrap();
         catalog.set_rating(photos[0].id, 5).unwrap();
@@ -2792,6 +2917,7 @@ mod tests {
         assert!(root.join(LIBRARY_DIR).join("catalog.db").exists(), "the folder keeps its catalog");
         let back = catalog.add_library(&root).unwrap();
         assert_eq!(catalog.photo_count(back.id).unwrap(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2855,7 +2981,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         std::fs::write(here.join("a.RAF"), b"x").unwrap();
         std::fs::create_dir_all(here.join("day2")).unwrap();
         std::fs::write(here.join("day2").join("b.RAF"), b"x").unwrap();
-        let gone = std::env::temp_dir().join("numa-test-split-unplugged");
+        let gone = std::env::temp_dir().join(format!("numa-test-split-unplugged-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&gone);
 
         let path = home.join("catalog.db");
@@ -2932,6 +3058,54 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         let catalog = Catalog::open(&path).unwrap();
         assert_eq!(catalog.photos(1, &Filter::default()).unwrap().len(), 2);
         std::fs::remove_dir_all(&gone).unwrap();
+        std::fs::remove_dir_all(&home).unwrap();
+        std::fs::remove_dir_all(&here).unwrap();
+    }
+
+    #[test]
+    fn a_catalog_from_before_the_clocks_and_the_places_opens() {
+        let here = temp_dir("old-library");
+        let home = temp_dir("old-library-home");
+        std::fs::create_dir_all(here.join(LIBRARY_DIR)).unwrap();
+        {
+            let old = Connection::open(here.join(LIBRARY_DIR).join("catalog.db")).unwrap();
+            old.execute_batch(
+                "CREATE TABLE photos (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL, \
+                    taken INTEGER, rating INTEGER NOT NULL DEFAULT 0, flag INTEGER NOT NULL DEFAULT 0, edits TEXT, aspect REAL); \
+                 INSERT INTO photos (id, path, mtime, taken, rating, flag, aspect) VALUES \
+                    (1, 'a.RAF', 5, 1668952800, 4, 1, 1.5), (2, 'b.RAF', 6, NULL, 0, 0, NULL);",
+            )
+            .unwrap();
+        }
+        std::fs::write(here.join("a.RAF"), b"x").unwrap();
+        std::fs::write(here.join("b.RAF"), b"x").unwrap();
+        let catalog = Catalog::open(&home.join("catalog.db")).unwrap();
+        let library = catalog.add_library(&here).unwrap();
+
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert_eq!(photos.len(), 2, "every photograph is still there");
+        let a = photos.iter().find(|photo| photo.path.ends_with("a.RAF")).unwrap();
+        assert_eq!((a.rating, a.flag), (4, Flag::Picked));
+
+        let open = catalog.library(library.id).unwrap();
+        let (taken, camera_time): (Option<i64>, Option<i64>) = open
+            .conn
+            .query_row("SELECT taken, camera_time FROM photos WHERE id = 1", [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!((taken, camera_time), (Some(1668952800), Some(1668952800)), "the date is the camera's own");
+        for table in ["clocks", "slates", "positions", "auto_read"] {
+            assert!(table_exists(&open.conn, table), "{table} is there");
+        }
+        assert!(catalog.cameras(library.id).unwrap().is_empty(), "no camera is known until a scan reads one");
+        catalog.set_positions(&[(a.id, 35.0, 135.8)]).unwrap();
+        assert_eq!(catalog.positions(&[a.id]).unwrap().len(), 1, "and a place can be written");
+
+        catalog.set_kind(library.id, Some(crate::workflows::Kind::Sports)).unwrap();
+        assert_eq!(catalog.kind(library.id), Some(crate::workflows::Kind::Sports));
+        catalog.keep_layers(library.id, 1, &crate::layers::Layers::default()).unwrap();
+        assert_eq!(catalog.all_layers(library.id).len(), 1);
+        let _ = std::fs::remove_dir_all(&here);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -2945,7 +3119,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.set_rating(photo.id, 3).unwrap();
 
         catalog.remove_library(library.id).unwrap();
-        let moved = std::env::temp_dir().join("numa-test-moved");
+        let moved = std::env::temp_dir().join(format!("numa-test-moved-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&moved);
         std::fs::rename(&root, &moved).unwrap();
 
@@ -2962,7 +3136,8 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
     fn renaming_a_library_renames_its_folder() {
         let root = temp_dir("misnamed");
         std::fs::write(root.join("a.RAF"), b"x").unwrap();
-        let taken = std::env::temp_dir().join("numa-test-taken");
+        let name = |what: &str| format!("numa-test-{what}-{}", std::process::id());
+        let taken = std::env::temp_dir().join(name("taken"));
         std::fs::create_dir_all(&taken).unwrap();
         let catalog = Catalog::in_memory().unwrap();
         let library = catalog.add_library(&root).unwrap();
@@ -2972,12 +3147,12 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.set_rating(photo.id, 4).unwrap();
 
         assert!(catalog.rename_library_folder(library.id, "a/b").is_err(), "a name, not a move");
-        assert!(catalog.rename_library_folder(library.id, "numa-test-taken").is_err(), "not over another folder");
+        assert!(catalog.rename_library_folder(library.id, &name("taken")).is_err(), "not over another folder");
         assert!(root.is_dir(), "a refused rename leaves the folder alone");
 
-        let renamed = std::env::temp_dir().join("numa-test-renamed");
+        let renamed = std::env::temp_dir().join(name("renamed"));
         let _ = std::fs::remove_dir_all(&renamed);
-        assert_eq!(catalog.rename_library_folder(library.id, " numa-test-renamed ").unwrap(), renamed);
+        assert_eq!(catalog.rename_library_folder(library.id, &format!(" {} ", name("renamed"))).unwrap(), renamed);
         assert!(!root.exists() && renamed.join(LIBRARY_DIR).join("catalog.db").exists());
         let library = catalog.libraries().unwrap().into_iter().find(|l| l.id == library.id).unwrap();
         assert_eq!((library.path.as_path(), library.name.as_deref()), (renamed.as_path(), None));
@@ -3096,15 +3271,22 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.sync_library(&library).unwrap();
 
         let mut known = catalog.known_files(&library).unwrap();
-        let (mtime, taken) = known[&root.join("a.jpg")];
-        assert_eq!(taken, None, "a file with no EXIF has no date");
-        known.insert(root.join("a.jpg"), (mtime, Some(42)));
+        let (mtime, stamp) = known[&root.join("a.jpg")].clone();
+        assert_eq!(stamp.map(|stamp| stamp.taken), Some(None), "a file with no EXIF has no date");
+        let stamp = crate::exif::Stamp { taken: Some(42), camera: "A|B|".into() };
+        known.insert(root.join("a.jpg"), (mtime, Some(stamp.clone())));
         let found = scan(&root, &known);
-        assert_eq!(found.files, vec![(root.join("a.jpg"), mtime, Some(42))], "unchanged: not read again");
+        assert_eq!(found.files, vec![(root.join("a.jpg"), mtime, stamp.clone())], "unchanged: not read again");
+        assert!(found.unchanged);
 
-        known.insert(root.join("a.jpg"), (mtime - 1, Some(42)));
+        known.insert(root.join("a.jpg"), (mtime - 1, Some(stamp.clone())));
         let found = scan(&root, &known);
-        assert_eq!(found.files[0].2, None, "changed: read again");
+        assert_eq!(found.files[0].2, crate::exif::Stamp::default(), "changed: read again");
+
+        known.insert(root.join("a.jpg"), (mtime, None));
+        let found = scan(&root, &known);
+        assert_eq!(found.files[0].2, crate::exif::Stamp::default());
+        assert!(!found.unchanged, "so that the camera is written");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3131,6 +3313,29 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
     }
 
     #[test]
+    fn a_look_is_remembered_by_what_it_left() {
+        use crate::made::{digest, AppliedLook};
+        let root = temp_dir("made-looks");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap().remove(0);
+        assert!(catalog.looks_applied(photo.id).is_empty());
+
+        let key = digest(&crate::history::EditState::untouched());
+        let mut look = AppliedLook { name: "Warm".into(), notes: crate::presets::Notes::default() };
+        look.notes.by = Some("Numa".into());
+        catalog.note_look(photo.id, &key, &look).unwrap();
+        look.name = "Warmer".into();
+        catalog.note_look(photo.id, &key, &look).unwrap();
+        let back = catalog.looks_applied(photo.id);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[&key], look);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn found_chips_come_back_for_the_same_question_only() {
         let root = temp_dir("found");
         std::fs::write(root.join("a.RAF"), b"x").unwrap();
@@ -3149,6 +3354,32 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         assert_eq!(catalog.found(photo.id, "framed"), Some(chips.clone()));
         assert_eq!(catalog.found(photo.id, "cropped"), None, "asked about another frame");
         assert_eq!(chips.coarse(&[2]), (3, 2, vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_scene_read_comes_back_for_the_same_question_only() {
+        use numa_render::auto::evidence::{Evidence, Reading, Source};
+        let root = temp_dir("scene");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap().remove(0);
+        let scene = numa_render::auto::scene::Scene {
+            asked: "as shot".into(),
+            size: [6000, 4000],
+            classes: (3, 2, vec![2, 2, 2, 26, 26, 12]),
+            faces: vec![[0.1, 0.2, 0.05, 0.07]],
+            objects: vec![(14, [0.3, 0.2, 0.1, 0.1])],
+            camera: Default::default(),
+            level: vec![Evidence { source: Source::Sea, reading: Reading::Line([0.0, 0.4, 1.0, 0.42]), sigma: 0.05 }],
+            ..Default::default()
+        };
+        catalog.save_scene(photo.id, &scene).unwrap();
+        let back = catalog.scene(photo.id, "as shot").unwrap();
+        assert_eq!((back.classes, back.level, back.faces, back.objects), (scene.classes.clone(), scene.level.clone(), scene.faces.clone(), scene.objects.clone()));
+        assert!(catalog.scene(photo.id, "turned").is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3230,6 +3461,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
                 .any(|entry| !entry.path().to_string_lossy().contains("2020")),
             "the newest is today's"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -3255,6 +3487,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
 
         assert_eq!(catalog.photos(outer.id, &Filter::default()).unwrap().len(), 1);
         assert_eq!(catalog.photos(nested.id, &Filter::default()).unwrap().len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -3450,12 +3683,14 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         assert_eq!(catalog.albums().unwrap().len(), 1);
         assert!(catalog.photos_everywhere(&album).unwrap().is_empty(), "and its rows went with it");
         assert_eq!(catalog.photos_everywhere(&Filter::default()).unwrap().len(), 4, "but not the photographs");
+        std::fs::remove_dir_all(&first.path).unwrap();
+        std::fs::remove_dir_all(&second.path).unwrap();
     }
 
     #[test]
     fn a_photograph_gone_from_disk_leaves_its_album() {
         let catalog = Catalog::in_memory().unwrap();
-        let (first, _) = two_libraries(&catalog, "album-gone");
+        let (first, second) = two_libraries(&catalog, "album-gone");
         let photos = catalog.photos(first.id, &Filter::default()).unwrap();
         let key = catalog.create_album("Gone").unwrap();
         catalog.set_in_album(&key, &[photos[0].id, photos[1].id], true).unwrap();
@@ -3464,6 +3699,8 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.sync_library(&first).unwrap();
         let album = Filter { album: Some(key), ..Filter::default() };
         assert_eq!(names_of(&catalog.photos_everywhere(&album).unwrap()), ["b.RAF"]);
+        std::fs::remove_dir_all(&first.path).unwrap();
+        std::fs::remove_dir_all(&second.path).unwrap();
     }
 
     #[test]
@@ -3476,7 +3713,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.set_in_album(&key, &everything.iter().map(|photo| photo.id).collect::<Vec<_>>(), true).unwrap();
         drop(catalog);
 
-        let away = std::env::temp_dir().join("numa-test-album-unplugged-away");
+        let away = std::env::temp_dir().join(format!("numa-test-album-unplugged-away-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&away);
         std::fs::rename(&second.path, &away).unwrap();
         let catalog = Catalog::open(&home).unwrap();
@@ -3517,6 +3754,8 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         assert_eq!(names_of(&catalog.photos_everywhere(&raws).unwrap()), ["b.RAF"]);
         let picked = Filter { flag: Some(Flag::Picked), ..starred };
         assert_eq!(names_of(&catalog.photos_everywhere(&picked).unwrap()), ["d.JPG"]);
+        std::fs::remove_dir_all(&first.path).unwrap();
+        std::fs::remove_dir_all(&second.path).unwrap();
     }
 
     #[test]
@@ -3540,6 +3779,8 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
 
         assert_eq!(library_of(a.id), japan.id);
         assert_eq!(library_of(b.id), italy.id);
+        std::fs::remove_dir_all(&one).unwrap();
+        std::fs::remove_dir_all(&two).unwrap();
     }
 
     #[test]
@@ -3584,6 +3825,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
 
         let by_pick = analysed[pick[0]].0;
         assert_eq!(labelled[0].id, by_pick, "the window function and best_of_each disagree");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -3652,6 +3894,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
             photos.iter().map(|p| p.path.file_name().unwrap()).collect::<Vec<_>>(),
             "SQLite and Rust must agree, or one library sorts differently from two"
         );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -86,6 +86,13 @@ pub fn embedded_preview(path: &Path) -> Result<Option<DynamicImage>, String> {
     Ok(Some(orient_image(image, orientation)))
 }
 
+pub fn camera_jpeg(path: &Path, edge: u32) -> Option<DynamicImage> {
+    if !is_raw(path) {
+        return None;
+    }
+    embedded::at_least(path, edge).or_else(|| embedded_preview(path).ok().flatten())
+}
+
 fn developed_preview(path: &Path) -> Result<DynamicImage, String> {
 
     static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -118,7 +125,12 @@ fn open_heif(path: &Path) -> Result<(DynamicImage, ColourSpace), String> {
         _ => ColourSpace::Srgb,
     });
 
-    let full = heif_item(&context, primary);
+    let key = (path.to_path_buf(), bytes.len());
+    let known = PREVIEW_ONLY.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&key);
+    let full = match known {
+        true => Err("its full resolution needs HEVC Range Extensions".to_string()),
+        false => heif_item(&context, primary),
+    };
     if let Ok(image) = full {
         return Ok((image, space));
     }
@@ -126,18 +138,28 @@ fn open_heif(path: &Path) -> Result<(DynamicImage, ColourSpace), String> {
     let transforms = context.props(primary).map(|props| props.transforms).unwrap_or_default();
     for preview in heif_previews(&context, primary) {
         if let Ok(image) = heif_preview(&context, preview, &transforms) {
-            log::warn!(
-                "{}: only its {}x{} preview — this file's full resolution needs HEVC \
-                 Range Extensions, which the decoder here does not do",
-                path.display(),
-                image.width(),
-                image.height(),
-            );
+            if !known {
+                PREVIEW_ONLY.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key);
+                let said = SAID_PREVIEW_ONLY.swap(true, std::sync::atomic::Ordering::Relaxed);
+                let (width, height) = (image.width(), image.height());
+                match said {
+                    false => log::warn!(
+                        "{}: only its {width}x{height} preview — this file's full resolution needs HEVC \
+                         Range Extensions, which the decoder here does not do (said once; files like it \
+                         go straight to their previews)",
+                        path.display(),
+                    ),
+                    true => log::debug!("{}: only its {width}x{height} preview", path.display()),
+                }
+            }
             return Ok((image, space));
         }
     }
     full.map(|image| (image, space))
 }
+
+static PREVIEW_ONLY: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<(std::path::PathBuf, usize)>>> = std::sync::LazyLock::new(Default::default);
+static SAID_PREVIEW_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn icc_space(icc: &[u8]) -> ColourSpace {
     let word = |at: usize| icc.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
@@ -350,6 +372,36 @@ pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn camera_fields_of_a_folder() {
+        let Ok(dir) = std::env::var("FRAMES") else { return };
+        let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|entry| entry.path()).collect();
+        paths.retain(|path| is_raw(path));
+        paths.sort();
+        println!("file\troll\tdr\tprogram\tbias");
+        for path in paths {
+            let summary = summary(&path).unwrap_or_default();
+            let name = path.file_name().unwrap().to_string_lossy();
+            let (roll, dr) = (roll_angle(&path), dynamic_range_mode(&path));
+            println!("{name}\t{roll:?}\t{dr:?}\t{:?}\t{:?}", summary.exposure_program, summary.exposure_bias);
+        }
+    }
+
+    #[test]
+    fn the_dr_percentage_is_read_where_the_setting_says() {
+        let note = |setting: u16| move |tag: u16| match tag {
+            0x1402 => Some(setting),
+            0x1403 => Some(200),
+            0x140b => Some(400),
+            _ => None,
+        };
+        assert_eq!(dr_percent(note(0x001)), Some(200));
+        assert_eq!(dr_percent(note(0x000)), Some(400));
+        assert_eq!(dr_percent(note(0x100)), Some(100));
+        assert_eq!(dr_percent(note(0x8000)), None);
+    }
 
     #[test]
     fn the_exposure_match_lifts_the_median_to_the_cameras() {
@@ -650,7 +702,7 @@ mod tests {
 
     #[test]
     fn load_scaled_downscales_and_keeps_rgb_layout() {
-        let path = std::env::temp_dir().join("numa-test-scaled.png");
+        let path = std::env::temp_dir().join(format!("numa-test-scaled-{}.png", std::process::id()));
         image::RgbImage::from_fn(400, 200, |x, _| image::Rgb([x as u8, 1, 2]))
             .save(&path)
             .unwrap();
@@ -670,7 +722,7 @@ mod tests {
     fn every_plain_file_the_library_lists_decodes() {
         let picture = image::RgbImage::from_fn(40, 20, |x, _| image::Rgb([x as u8, 90, 200]));
         for ext in PLAIN_EXTENSIONS.iter().filter(|ext| !HEIF_EXTENSIONS.contains(ext)) {
-            let path = std::env::temp_dir().join(format!("numa-test-plain.{ext}"));
+            let path = std::env::temp_dir().join(format!("numa-test-plain-{}.{ext}", std::process::id()));
             picture.save(&path).unwrap_or_else(|err| panic!("{ext}: {err}"));
             let back = load_scaled(&path, 100).unwrap_or_else(|err| panic!("{ext}: {err}"));
             assert_eq!((back.width(), back.height()), (40, 20), "{ext}");
@@ -857,21 +909,8 @@ impl Laps {
     }
 }
 
-thread_local! {
-
-    static STOP: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicBool>>> = const { std::cell::RefCell::new(None) };
-}
-
-pub fn stoppable<R>(stop: Arc<std::sync::atomic::AtomicBool>, work: impl FnOnce() -> R) -> R {
-    STOP.with(|flag| *flag.borrow_mut() = Some(stop));
-    let result = work();
-    STOP.with(|flag| flag.borrow_mut().take());
-    result
-}
-
 pub fn stopped() -> Result<(), String> {
-    let stop = STOP.with(|flag| flag.borrow().as_ref().is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Relaxed)));
-    if stop {
+    if numa_core::power::stopped() {
         return Err("let go".to_string());
     }
     Ok(())
@@ -1428,7 +1467,7 @@ fn find_rendering(raw: &rawler::RawImage) -> Option<Arc<DngProfile>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<DngProfile>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    let key = format!("{}|{}|{:?}", raw.clean_make, raw.clean_model, dcp::automatic());
+    let key = format!("{}|{}|{:?}|{}", raw.clean_make, raw.clean_model, dcp::automatic(), dcp::generation());
     let mut cache = cache.lock().ok()?;
 
     cache
@@ -1484,7 +1523,7 @@ pub fn film_mode(path: &Path) -> Option<&'static str> {
     })
 }
 
-fn makernote_tag(bytes: &[u8], wanted: u16) -> Option<Vec<f32>> {
+pub(crate) fn makernote_tag(bytes: &[u8], wanted: u16) -> Option<Vec<f32>> {
     const MARKER: &[u8] = b"FUJIFILM";
 
     let u16_at = |at: usize| -> Option<u16> {
@@ -1521,7 +1560,7 @@ fn makernote_tag(bytes: &[u8], wanted: u16) -> Option<Vec<f32>> {
             let kind = u16_at(entry + 2)?;
             let values = u32_at(entry + 4)? as usize;
             let width = match kind {
-                3 => 2,
+                3 | 8 => 2,
                 4 => 4,
                 5 => 8,
                 10 => 8,
@@ -1543,6 +1582,9 @@ fn makernote_tag(bytes: &[u8], wanted: u16) -> Option<Vec<f32>> {
                 out.push(match kind {
                     3 => u16_at(at)? as f32,
                     4 => u32_at(at)? as f32,
+
+                    8 => u16_at(at)? as i16 as f32,
+                    9 => u32_at(at)? as i32 as f32,
                     5 => {
                         let (n, d) = (u32_at(at)?, u32_at(at + 4)?);
                         if d == 0 { 0.0 } else { n as f32 / d as f32 }
@@ -1673,6 +1715,37 @@ pub fn colour_setting(path: &Path) -> Option<u16> {
     makernote_tag(&bytes, 0x1003).and_then(|values| values.first().map(|v| *v as u16))
 }
 
+fn raf_head(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !is_raf(path) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(2 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+pub fn roll_angle(path: &Path) -> Option<f32> {
+    makernote_tag(&raf_head(path)?, 0x144d)?.first().copied()
+}
+
+pub fn dynamic_range_mode(path: &Path) -> Option<u16> {
+    let bytes = raf_head(path)?;
+    dr_percent(|tag| makernote_tag(&bytes, tag)?.first().map(|v| *v as u16))
+}
+
+fn dr_percent(tag: impl Fn(u16) -> Option<u16>) -> Option<u16> {
+    match tag(0x1402)? {
+        0x000 => tag(0x140b),
+        0x001 => tag(0x1403),
+        0x100 => Some(100),
+        0x200 => Some(230),
+        0x201 => Some(400),
+
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AfPoint {
     pub x: f32,
@@ -1718,17 +1791,34 @@ pub fn af_point(path: &Path) -> Option<AfPoint> {
     Some(AfPoint { x, y, zone: !single })
 }
 
-pub fn shot(path: &Path) -> Option<(f32, f32)> {
+fn settings_exif(path: &Path) -> Option<::exif::Exif> {
     use std::io::Read;
-    let exif = if is_raf(path) {
+    if is_raf(path) {
         let mut bytes = Vec::new();
         std::fs::File::open(path).ok()?.take(2 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
         let offset = u32::from_be_bytes(bytes.get(84..88)?.try_into().ok()?) as usize;
-        ::exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes.get(offset..)?)).ok()?
+        ::exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes.get(offset..)?)).ok()
     } else {
         let file = std::fs::File::open(path).ok()?;
-        ::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok()?
+        ::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok()
+    }
+}
+
+pub fn camera_exposure(path: &Path) -> Option<(f32, bool)> {
+    use ::exif::{In, Tag, Value};
+    let exif = settings_exif(path)?;
+    let ratio = |tag| match &exif.get_field(tag, In::PRIMARY)?.value {
+        Value::Rational(values) => Some(values.first()?.to_f64() as f32),
+        _ => None,
     };
+    let (shutter, aperture) = (ratio(Tag::ExposureTime)?, ratio(Tag::FNumber)?);
+    let iso = exif.get_field(Tag::PhotographicSensitivity, In::PRIMARY)?.value.get_uint(0)? as f32;
+    let flash = exif.get_field(Tag::Flash, In::PRIMARY).and_then(|field| field.value.get_uint(0)).is_some_and(|flash| flash & 1 == 1);
+    (shutter > 0.0 && aperture > 0.0 && iso > 0.0).then_some((shutter * iso / (aperture * aperture), flash))
+}
+
+pub fn shot(path: &Path) -> Option<(f32, f32)> {
+    let exif = settings_exif(path)?;
     let exposure = match &exif.get_field(::exif::Tag::ExposureTime, ::exif::In::PRIMARY)?.value {
         ::exif::Value::Rational(values) => values.first()?.to_f64() as f32,
         _ => return None,
@@ -1861,6 +1951,8 @@ pub struct Summary {
     pub shutter: Option<f32>,
     pub iso: Option<u32>,
     pub exposure_bias: Option<f32>,
+
+    pub exposure_program: Option<u16>,
     pub taken: Option<String>,
     pub film_mode: Option<String>,
 
@@ -1882,6 +1974,16 @@ impl Summary {
     pub fn megapixels(&self) -> f32 {
         (self.sensor.0 as f32 * self.sensor.1 as f32) / 1_000_000.0
     }
+}
+
+pub fn readable(path: &Path) -> Result<(), String> {
+    let decode = || -> Result<(), String> {
+        let source = rawler::rawsource::RawSource::new(path).map_err(|err| err.to_string())?;
+        let decoder = rawler::get_decoder(&source).map_err(|err| err.to_string())?;
+        decoder.raw_image(&source, &RawDecodeParams::default(), false).map(drop).map_err(|err| err.to_string())
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
+        .unwrap_or_else(|_| Err("the decoder stopped part-way through it".to_string()))
 }
 
 pub fn summary(path: &Path) -> Option<Summary> {
@@ -1931,6 +2033,7 @@ fn read_container_summary(path: &Path) -> Option<Summary> {
         shutter: ratio(Tag::ExposureTime),
         iso: number(Tag::PhotographicSensitivity),
         exposure_bias: ratio(Tag::ExposureBiasValue),
+        exposure_program: number(Tag::ExposureProgram).map(|program| program as u16),
         taken: text(Tag::DateTimeOriginal),
         sensor,
         file_size: std::fs::metadata(path).ok().map(|meta| meta.len()),
@@ -1979,6 +2082,7 @@ fn read_summary(path: &Path) -> Option<Summary> {
         shutter: ratio(&exif.exposure_time),
         iso: exif.iso_speed_ratings.map(u32::from).or(exif.iso_speed),
         exposure_bias: signed(&exif.exposure_bias),
+        exposure_program: exif.exposure_program,
         taken: exif.date_time_original.clone(),
 
         film_mode: (metadata.make == "Fujifilm").then(|| film_mode(path)).flatten().map(str::to_string),

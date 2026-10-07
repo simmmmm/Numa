@@ -1,3 +1,4 @@
+use numa_core::plane::{blur, Plane};
 use rayon::prelude::*;
 
 pub fn calibrate(data: &mut [f32], hues: [f32; 3], saturations: [f32; 3], shadow_tint: f32, weights: [f32; 3]) {
@@ -47,13 +48,9 @@ fn rotate_about_grey(v: [f32; 3], angle: f32) -> [f32; 3] {
 }
 
 pub fn dehaze(data: &mut [f32], width: usize, height: usize, amount: f32) {
-    if amount == 0.0 || width == 0 || height == 0 {
+    let Some(HazeShape { cell, grid: (grid_w, grid_h), take, strength }) = HazeShape::new(width, height, amount) else {
         return;
-    }
-    let strength = (amount / 100.0).clamp(-1.0, 1.0);
-
-    let cell = (width.max(height) / 64).max(1);
-    let (grid_w, grid_h) = (width.div_ceil(cell), height.div_ceil(cell));
+    };
 
     let mut dark = vec![f32::MAX; grid_w * grid_h];
     let mut mean = vec![[0.0f32; 4]; grid_w * grid_h];
@@ -77,7 +74,6 @@ pub fn dehaze(data: &mut [f32], width: usize, height: usize, amount: f32) {
 
     let mut order: Vec<usize> = (0..dark.len()).collect();
     order.sort_by(|a, b| dark[*b].total_cmp(&dark[*a]));
-    let take = (order.len() / 1000).max(1);
     let mut airlight = [0.0f32; 3];
     for &at in &order[..take] {
         for channel in 0..3 {
@@ -113,6 +109,154 @@ pub fn dehaze(data: &mut [f32], width: usize, height: usize, amount: f32) {
             }
         }
     });
+}
+
+const MIST_NEAR: f32 = 1.0 / 90.0;
+const MIST_FAR: f32 = 1.0 / 16.0;
+
+pub fn mist(data: &mut [f32], width: usize, height: usize, amount: f32) {
+    scatter(data, width, height, amount, MIST_LIGHTS);
+}
+
+fn scatter(data: &mut [f32], width: usize, height: usize, amount: f32, lights: f32) {
+    let amount = (amount / 100.0).clamp(-1.0, 1.0);
+    if amount == 0.0 || width == 0 || height == 0 {
+        return;
+    }
+    let black = amount < 0.0;
+    let strength = amount.abs() * if black { 0.6 } else { 0.5 };
+
+    let gives = |pixel: &[f32]| -> f32 {
+        match black {
+            true => smoothstep(0.25, 1.0, 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]),
+            false => 1.0,
+        }
+    };
+
+    const FACTOR: usize = 4;
+    let (small_w, small_h) = ((width / FACTOR).max(1), (height / FACTOR).max(1));
+    let shrink = |weight: &(dyn Fn(usize, usize, &[f32]) -> f32 + Sync)| -> Vec<[f32; 3]> {
+        (0..small_w * small_h)
+            .into_par_iter()
+            .map(|at| {
+                let (sx, sy) = (at % small_w, at / small_w);
+                let (ys, xs) = (sy * FACTOR..((sy + 1) * FACTOR).min(height), sx * FACTOR..((sx + 1) * FACTOR).min(width));
+                let count = (ys.len() * xs.len()).max(1) as f32;
+                let mut sum = [0.0f32; 3];
+                for y in ys {
+                    for x in xs.clone() {
+                        let pixel = &data[(y * width + x) * 3..][..3];
+                        let share = weight(x, y, pixel);
+                        for channel in 0..3 {
+                            sum[channel] += pixel[channel] * share;
+                        }
+                    }
+                }
+                sum.map(|value| value / count)
+            })
+            .collect()
+    };
+    let long = small_w.max(small_h) as f32;
+    let place = |x: usize, y: usize| {
+        let at = |v: usize, edge: usize| ((v as f32 + 0.5) / FACTOR as f32 - 0.5).clamp(0.0, (edge - 1) as f32);
+        (at(x, small_w), at(y, small_h))
+    };
+
+    let sources = (lights > 0.0).then(|| {
+        let plain = shrink(&|_, _, _| 1.0);
+        let luminance: Vec<f32> = plain.iter().map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).collect();
+        light_sources(&luminance, small_w, small_h, ((long * SOURCE_FRACTION) as usize).max(1))
+    });
+    let glows = |x: usize, y: usize, pixel: &[f32]| -> f32 {
+        let extra = sources.as_ref().map_or(0.0, |sources| {
+            let (gx, gy) = place(x, y);
+            lights * bilinear(sources, small_w, small_h, gx, gy)
+        });
+        gives(pixel) + extra
+    };
+    let small = shrink(&glows);
+
+    let soft = |plane: &Plane, radius: usize| (0..3).fold(blur(plane, radius), |plane, _| blur(&plane, radius));
+    let halo: Vec<Vec<f32>> = (0..3)
+        .map(|channel| {
+            let plane = Plane::new(small_w, small_h, small.iter().map(|light| light[channel]).collect());
+            let near = soft(&plane, ((long * MIST_NEAR) as usize).max(1));
+            let far = soft(&plane, ((long * MIST_FAR) as usize).max(1));
+
+            let veil = plane.data.iter().sum::<f32>() / plane.data.len() as f32;
+            near.data
+                .iter()
+                .zip(&far.data)
+                .map(|(near, far)| match black {
+                    true => 0.5 * near + 0.5 * far,
+                    false => 0.4 * near + 0.4 * far + 0.2 * veil,
+                })
+                .collect()
+        })
+        .collect();
+
+    data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
+        for (x, pixel) in row.chunks_exact_mut(3).enumerate() {
+            let (gx, gy) = place(x, y);
+            let own = gives(pixel);
+            for channel in 0..3 {
+                let received = bilinear(&halo[channel], small_w, small_h, gx, gy);
+                pixel[channel] = (pixel[channel] + strength * (received - pixel[channel] * own)).max(0.0);
+            }
+        }
+    });
+}
+
+const MIST_LIGHTS: f32 = 1.0;
+
+const SOURCE_FRACTION: f32 = 1.0 / 30.0;
+
+pub fn light_sources(luminance: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    let stops: Vec<f32> = luminance.iter().map(|value| value.max(1.0 / 1024.0).log2()).collect();
+    let key = stops.iter().sum::<f32>() / stops.len().max(1) as f32;
+    let opened = extreme(&extreme(&stops, width, height, radius, f32::min), width, height, radius, f32::max);
+    stops
+        .iter()
+        .zip(&opened)
+        .map(|(stops, opened)| smoothstep(1.0, 3.0, stops - opened) * smoothstep(2.5, 4.0, stops - key))
+        .collect()
+}
+
+fn extreme(values: &[f32], width: usize, height: usize, radius: usize, pick: fn(f32, f32) -> f32) -> Vec<f32> {
+    let rows: Vec<f32> = values
+        .par_chunks(width)
+        .flat_map_iter(|row| (0..width).map(move |x| row[x.saturating_sub(radius)..(x + radius + 1).min(width)].iter().copied().fold(row[x], pick)))
+        .collect();
+    (0..width * height)
+        .into_par_iter()
+        .map(|at| {
+            let (x, y) = (at % width, at / width);
+            (y.saturating_sub(radius)..(y + radius + 1).min(height)).map(|row| rows[row * width + x]).fold(rows[at], pick)
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HazeShape {
+
+    pub cell: usize,
+    pub grid: (usize, usize),
+
+    pub take: usize,
+
+    pub strength: f32,
+}
+
+impl HazeShape {
+    pub fn new(width: usize, height: usize, amount: f32) -> Option<Self> {
+        if amount == 0.0 || width == 0 || height == 0 {
+            return None;
+        }
+
+        let cell = (width.max(height) / 64).max(1);
+        let grid = (width.div_ceil(cell), height.div_ceil(cell));
+        Some(Self { cell, grid, take: (grid.0 * grid.1 / 1000).max(1), strength: (amount / 100.0).clamp(-1.0, 1.0) })
+    }
 }
 
 fn box_blur(values: &[f32], width: usize, height: usize) -> Vec<f32> {
@@ -209,13 +353,9 @@ pub fn grain(
     settings: [f32; 3],
     weights: [f32; 3],
 ) {
-    let [amount, size, roughness] = settings;
-    if amount == 0.0 || width == 0 || height == 0 {
+    let Some([strength, cell, rough]) = grain_shape(settings).filter(|_| width > 0 && height > 0) else {
         return;
-    }
-    let strength = amount / 100.0 * 0.12;
-    let cell = 1.0 + size / 100.0 * 4.0;
-    let rough = roughness / 100.0;
+    };
 
     data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row)| {
         let fy = (region[1] + (y as f32 + 0.5) / height as f32 * region[3]) * full[1];
@@ -242,6 +382,10 @@ pub fn grain(
             }
         }
     });
+}
+
+pub fn grain_shape([amount, size, roughness]: [f32; 3]) -> Option<[f32; 3]> {
+    (amount != 0.0).then(|| [amount / 100.0 * 0.12, 1.0 + size / 100.0 * 4.0, roughness / 100.0])
 }
 
 fn value_noise(x: f32, y: f32) -> f32 {
@@ -324,6 +468,84 @@ mod tests {
         let mut black = flat(4, 4, [0.0; 3]);
         grain(&mut black, 4, 4, [0.0, 0.0, 1.0, 1.0], [4.0, 4.0], settings, WEIGHTS);
         assert!(black.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn black_mist_glows_round_a_light_and_white_mist_lifts_the_blacks() {
+
+        let (w, h) = (240usize, 160usize);
+        let lamp = || -> Vec<f32> {
+            (0..w * h)
+                .flat_map(|i| {
+                    let (x, y) = ((i % w) as f32 - 120.0, (i / w) as f32 - 80.0);
+                    [if (x * x + y * y).sqrt() < 8.0 { 4.0 } else { 0.02 }; 3]
+                })
+                .collect()
+        };
+        let at = |data: &[f32], x: usize, y: usize| data[(y * w + x) * 3];
+        let mean = |data: &[f32]| data.iter().sum::<f32>() / data.len() as f32;
+        let before = lamp();
+
+        let mut black = lamp();
+        scatter(&mut black, w, h, -100.0, 0.0);
+        assert!(at(&black, 120, 95) > at(&before, 120, 95) * 3.0, "no halo: {}", at(&black, 120, 95));
+        assert!(at(&black, 120, 80) < at(&before, 120, 80), "the lamp itself gives the light away");
+        assert!((at(&black, 5, 5) - at(&before, 5, 5)).abs() < 0.002, "the far shadow fogged: {}", at(&black, 5, 5));
+
+        let mut white = lamp();
+        scatter(&mut white, w, h, 100.0, 0.0);
+
+        assert!(at(&white, 5, 5) > at(&before, 5, 5) * 1.05, "white mist left the blacks: {}", at(&white, 5, 5));
+
+        for moved in [&black, &white] {
+            assert!((mean(moved) - mean(&before)).abs() < mean(&before) * 0.03, "{} against {}", mean(moved), mean(&before));
+        }
+
+        let mut untouched = lamp();
+        mist(&mut untouched, w, h, 0.0);
+        assert_eq!(untouched, before);
+    }
+
+    #[test]
+    fn a_lamp_is_a_light_source_and_a_wall_or_a_white_car_is_not() {
+        let (w, h) = (120usize, 80usize);
+        let frame = |ground: f32, patches: &[([usize; 4], f32)]| -> Vec<f32> {
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    patches.iter().find(|([x0, y0, x1, y1], _)| (*x0..*x1).contains(&x) && (*y0..*y1).contains(&y)).map_or(ground, |patch| patch.1)
+                })
+                .collect()
+        };
+        let radius = w / 30;
+
+        let night = frame(0.01, &[([20, 20, 23, 23], 4.0), ([60, 20, 100, 60], 0.8)]);
+        let sources = light_sources(&night, w, h, radius);
+        assert!(sources[21 * w + 21] > 0.8, "the lamp: {}", sources[21 * w + 21]);
+        assert!(sources[40 * w + 80] < 0.1, "the wall: {}", sources[40 * w + 80]);
+
+        let day = frame(0.18, &[([20, 20, 24, 24], 0.6)]);
+        assert!(light_sources(&day, w, h, radius)[22 * w + 22] < 0.1, "the white car glows");
+    }
+
+    #[test]
+    fn light_sources_make_a_lamp_glow_more_and_keep_its_own_light() {
+        let (w, h) = (240usize, 160usize);
+        let lamp = || -> Vec<f32> {
+            (0..w * h)
+                .flat_map(|i| {
+                    let (x, y) = ((i % w) as f32 - 120.0, (i / w) as f32 - 80.0);
+                    [if (x * x + y * y).sqrt() < 4.0 { 4.0 } else { 0.02 }; 3]
+                })
+                .collect()
+        };
+        let at = |data: &[f32], x: usize, y: usize| data[(y * w + x) * 3];
+        let (mut plain, mut smart) = (lamp(), lamp());
+        scatter(&mut plain, w, h, -100.0, 0.0);
+        mist(&mut smart, w, h, -100.0);
+        assert!(at(&smart, 120, 90) > at(&plain, 120, 90) * 1.25, "{} against {}", at(&smart, 120, 90), at(&plain, 120, 90));
+
+        assert!((at(&smart, 120, 80) - at(&plain, 120, 80)).abs() < at(&plain, 120, 80) * 0.25);
     }
 
     #[test]

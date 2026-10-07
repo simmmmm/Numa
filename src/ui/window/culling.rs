@@ -130,6 +130,8 @@ async fn analyse_pending(
     button.set_sensitive(true);
     reload_grid(&state);
 
+    offer_clocks(&state);
+
     state.toast(&analysis_summary(total, failed, grouped));
 }
 

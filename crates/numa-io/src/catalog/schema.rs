@@ -205,7 +205,29 @@ CREATE TABLE IF NOT EXISTS photos (
     edits  TEXT,
     -- PERF-051: width over height, as the thumbnail has it; null until one
     -- has been seen. What the grid lays a photograph out by.
-    aspect REAL
+    aspect REAL,
+    -- LIB-026: which body (`exif::camera_key`, empty when the file does not
+    -- say; null until a scan has read it) and what its own clock said.
+    -- `taken` is that plus the body's offset in `clocks`, so everything that
+    -- orders or groups by `taken` is on the library's one timeline.
+    camera TEXT,
+    camera_time INTEGER
+);
+
+-- LIB-026: each body's clock, in seconds to add to what it wrote, and
+-- whether that is applied. A row is kept switched off rather than deleted, so
+-- the offset found is still there to switch back on.
+CREATE TABLE IF NOT EXISTS clocks (
+    camera  TEXT PRIMARY KEY,
+    seconds INTEGER NOT NULL,
+    applied INTEGER NOT NULL DEFAULT 1
+);
+
+-- LIB-027: frames of Numa's clock, and the moment the code in them showed —
+-- a slate, which says what its body's clock was off by and is no photograph.
+CREATE TABLE IF NOT EXISTS slates (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    shown    INTEGER NOT NULL
 );
 
 -- DOC-004: each photograph's history, so stepping back reaches past the moment
@@ -226,6 +248,17 @@ CREATE TABLE IF NOT EXISTS snapshots (
     created  INTEGER NOT NULL,
     edits    TEXT NOT NULL,
     PRIMARY KEY (photo_id, name)
+);
+
+-- DOC-008: which look a step of the history came with, by a fingerprint of the
+-- edit it left (`made::digest`), with the look's name and notes as they were
+-- then. Not by position: the history drops its oldest steps and the Apple
+-- clients save it without knowing of this.
+CREATE TABLE IF NOT EXISTS made_looks (
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    digest   TEXT NOT NULL,
+    look     TEXT NOT NULL,
+    PRIMARY KEY (photo_id, digest)
 );
 
 -- CULL: what a pass of the measures found. A separate table on purpose — these
@@ -345,6 +378,26 @@ CREATE TABLE IF NOT EXISTS found (
     photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
     asked    TEXT NOT NULL,
     chips    TEXT NOT NULL,
+    grid     BLOB NOT NULL
+);
+
+-- IO-033: where a photograph was taken, when the camera did not say and a
+-- track did. The camera's own position stays in its file and is not copied
+-- here; an export writes this one where the camera wrote none.
+CREATE TABLE IF NOT EXISTS positions (
+    photo_id  INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    latitude  REAL NOT NULL,
+    longitude REAL NOT NULL
+);
+
+-- GEOM-005: Auto's read of a photograph (`auto::scene::Scene`), in the frame
+-- as shot rather than the cropped one `found` is of, so the two are kept
+-- apart: its readings as JSON and the segmentation's grid as `found` keeps
+-- it. Derived: dropping it costs a read on the next press.
+CREATE TABLE IF NOT EXISTS auto_read (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    asked    TEXT NOT NULL,
+    scene    TEXT NOT NULL,
     grid     BLOB NOT NULL
 );
 "#;

@@ -1,0 +1,10 @@
+# START-015: ideas go to Discussions, where others can add to them; mail for
+# anyone without a GitHub account.
+blank_issues_enabled: false
+contact_links:
+  - name: An Idea or a Tip
+    url: https://github.com/simmmmm/Numa/discussions/new?category=ideas
+    about: Post it in Discussions, where others can read and add to it.
+  - name: Mail
+    url: mailto:support@numa.photo
+    about: For anyone without a GitHub account.

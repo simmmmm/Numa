@@ -117,19 +117,22 @@ pub(super) fn set_reference(state: &App) {
         only_active(state, None);
         return;
     };
+    hold_frame(state, &frame, &match name {
+        Some(name) => format!("Reference \u{00b7} {name}"),
+        None => "Reference".to_string(),
+    });
+    state.toast("This frame is the reference \u{2014} step to another to compare");
+}
 
+pub(super) fn hold_frame(state: &App, frame: &image::RgbImage, caption: &str) {
     state.reference.held.set(Held::Frame);
     only_active(state, Some(&state.reference.button));
     write_zoom_label(state);
 
-    *state.reference.texture.borrow_mut() = Some(texture_from(&frame));
+    *state.reference.texture.borrow_mut() = Some(texture_from(frame));
     queue_reference(state);
-    state.reference.caption.set_text(&match name {
-        Some(name) => format!("Reference \u{00b7} {name}"),
-        None => "Reference".to_string(),
-    });
+    state.reference.caption.set_text(caption);
     state.reference.pane.set_visible(true);
-    state.toast("This frame is the reference \u{2014} step to another to compare");
 }
 
 pub(super) fn clear_reference(state: &App) {

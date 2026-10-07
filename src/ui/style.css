@@ -62,6 +62,31 @@ button.numa-primary {
     font-feature-settings: "tnum";
 }
 
+/* IO-034: Proof for Print's state, in the same pill: its chooser, Out of
+   Range and Stop as the photo side's own small buttons, Out of Range white
+   while it hatches. */
+.photo-pill button {
+    min-height: 24px;
+    padding: 0 8px;
+    color: @numa_photo_ink;
+    background: none;
+    box-shadow: none;
+}
+
+.photo-pill button:hover {
+    background: alpha(@numa_photo_ink, 0.12);
+}
+
+.photo-pill button:checked {
+    background: @numa_photo_accent;
+    color: @numa_photo_on_accent;
+}
+
+.photo-pill .proof-note {
+    color: @numa_photo_name;
+    font-weight: 400;
+}
+
 /* ---------- Adjustment panel ---------- */
 
 .adjustment {
@@ -327,6 +352,38 @@ scale.numa-slider:hover slider {
     min-height: 30px;
 }
 
+/* LIB-029: what Numa saw by itself, drawn apart from anything the
+   photographer named: outlined and in italic, filled only when chosen. */
+.saw-chips button {
+    border-radius: 999px;
+    padding-left: 12px;
+    padding-right: 12px;
+    min-height: 26px;
+    font-size: 12px;
+    font-weight: 500;
+    font-style: italic;
+    background: none;
+    box-shadow: inset 0 0 0 1px alpha(currentColor, 0.35);
+}
+
+.saw-chips button:hover:not(:checked) {
+    background: alpha(currentColor, 0.08);
+}
+
+.saw-chips button:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+    box-shadow: none;
+}
+
+.saw-chips flowboxchild {
+    padding: 0;
+}
+
+.filter-chips .saw-chip label {
+    font-style: italic;
+}
+
 /* The name and the stars, with the pointer. */
 /* 12 px in and 8 up: the stars land where the rating's pill has its text. */
 .card-caption {
@@ -386,6 +443,27 @@ scale.numa-slider:hover slider {
 
 .loupe-bar button:hover {
     opacity: 1;
+}
+
+/* CULL-013: the band under the loupe — the tape of the shoot and the line
+   over it — on the view's ground with a hairline, as drawn (O6-Band). The
+   tape draws its marks in the accent (`color`), white on the dark scheme and
+   near-black on the light one, and its times at 12 px. */
+.tape-band {
+    background: @view_bg_color;
+    border-top: 1px solid @numa_rule;
+    padding: 8px 16px 12px;
+}
+
+.tape-title {
+    font-size: 13px;
+    font-weight: 700;
+    font-feature-settings: "tnum";
+}
+
+.tape {
+    color: @numa_accent;
+    font-size: 12px;
 }
 
 
@@ -500,7 +578,7 @@ listview.filmstrip-frames > row {
     min-height: 28px;
     font-size: 13px;
     font-weight: 600;
-    background: @numa_ground_chip;
+    background: alpha(currentColor, 0.1);
     box-shadow: none;
     border-color: transparent;
 }
@@ -516,6 +594,40 @@ listview.filmstrip-frames > row {
 
 .chip-row > button:checked:hover {
     background: alpha(@numa_accent, 0.9);
+}
+
+/* RENDER-024: the As Shot tile on the Looks tab — a chip's quiet fill at rest,
+   and chosen it is white with its ink on it, as a chosen chip is. */
+.camera-look-tile {
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: alpha(currentColor, 0.1);
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.camera-look-tile:hover:not(:checked) {
+    background: alpha(currentColor, 0.12);
+}
+
+.camera-look-tile:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.camera-look-tile:checked:hover {
+    background: alpha(@numa_accent, 0.9);
+}
+
+.camera-look-tile .title {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.camera-look-tile .recipe {
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.75;
 }
 
 /* The mask bar's tools, set tighter where the bar is short of room. */
@@ -931,6 +1043,19 @@ button.rail-tab {
 
 /* The line above the rail: whose sliders these are. Quiet — no tint and no
    border, which the plan took away from the panel. */
+/* LIB-027: a camera clock found off, offered — a state, so a banner at the
+   top of the library, with the two frames that show it (the sketch's). */
+.clock-offer {
+    margin: 8px 16px 0 16px;
+    padding: 8px 12px 8px 16px;
+    border-radius: 14px;
+    background: alpha(currentColor, 0.05);
+}
+
+.clock-offer-frame {
+    border-radius: 3px;
+}
+
 .mask-scope {
     min-height: 34px;
     padding: 0 2px 0 10px;
@@ -1084,6 +1209,21 @@ button.before-toggle:checked {
     color: white;
 }
 
+/* CULL-015: a burst side by side in the loupe — the frame with the keys ringed
+   as the grid rings a selection, a rejected one dimmed as its card is. */
+.loupe-group > aspectframe > overlay {
+    border-radius: 3px;
+}
+
+.loupe-group > aspectframe > overlay.current {
+    outline: 3px solid @numa_photo_ink;
+    outline-offset: 1px;
+}
+
+.loupe-group > aspectframe > overlay.rejected > picture {
+    opacity: 0.35;
+}
+
 /* UX-028, UX-035: the histogram on the photograph, on the photo-side card. */
 .photo-card .histogram {
     background: none;
@@ -1105,6 +1245,16 @@ menubutton.label-action > button {
     min-height: 24px;
     padding: 0;
 }
+
+/* FLOW-018: a burst's frames held together in the strip — closer, square
+   where they meet, one line under them all. The gap is the frames' own, not
+   the list's rows', so a joined side can drop it: a class put on a row while
+   the list binds it made the list report a height of a billion pixels. */
+listview.filmstrip-frames > row { margin: 0; }
+.filmstrip-frame { margin: 0 3px; }
+.filmstrip-frame.joined-left { margin-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.filmstrip-frame.joined-right { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.filmstrip-frame.burst:not(.current) { border-bottom-color: @numa_label; }
 
 /* UX-030: focus inside Numa's panel in the same ink as the rest of it. */
 .adjustment button:focus-visible {
@@ -1185,3 +1335,136 @@ menubutton.label-action > button {
     font-feature-settings: "tnum";
     color: white;
 }
+
+/* IO-030: the card's previews in the Import dialog — the grid's tiles, small,
+   the frames left on the card dimmed as its rejects are. */
+.card-strip > overlay {
+    border-radius: 3px;
+}
+
+.card-strip > overlay.rejected > picture {
+    opacity: 0.35;
+}
+
+.card-strip .strip-badge {
+    margin: 0;
+    padding: 0 4px;
+    font-size: 10px;
+}
+
+/* IO-027: Safe to Format's check, in Numa's accent. */
+.import-safe {
+    min-width: 56px;
+    min-height: 56px;
+    border-radius: 999px;
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+
+/* LIB-031: Tonight's first few, the grid's tiles small. */
+.card-strip > picture {
+    border-radius: 3px;
+}
+
+/* DOC-008: How It Was Made, on the photo-side card — a row a step; what is
+   in is white, what is coming is dimmed. Dark in both schemes: it sits on
+   the photograph. */
+.photo-card .section-header {
+    color: @numa_photo_name;
+}
+
+.made-row {
+    padding: 8px 0;
+    border-top: 1px solid @numa_photo_rule;
+    opacity: 0.45;
+    transition: opacity 120ms ease-out;
+}
+
+.made-row.shown {
+    opacity: 1;
+}
+
+.made-dot {
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 999px;
+    background: @numa_photo_ground_chip;
+}
+
+.made-row.shown .made-dot {
+    background: @numa_photo_accent;
+}
+
+.made-dot image {
+    color: @numa_photo_on_accent;
+    opacity: 0;
+}
+
+.made-row.shown .made-dot image {
+    opacity: 1;
+}
+
+.made-what {
+    font-size: 13px;
+    font-weight: 600;
+    color: @numa_photo_ink;
+}
+
+.made-tab {
+    font-size: 13px;
+    color: @numa_photo_name;
+}
+
+.made-why {
+    font-size: 12px;
+    color: @numa_photo_name;
+}
+
+.made-caption {
+    font-size: 12px;
+    color: @numa_photo_name;
+    font-feature-settings: "tnum";
+}
+
+/* FLOW-018: Rapid — the library by its moments, the moment's few sliders on
+   the right. Its photographs are the grid's own cards (`.grid-card` in
+   `.photo-rows`), selected and marked as the grid's are. */
+.rapid-list { padding: 16px 24px 24px; }
+/* FLOW-018: a burst as a stack — two frames' edges behind the one on top. */
+.photo-rows > overlay.grid-card.rapid-stack { box-shadow: 4px -4px 0 -1px @numa_thumb_rest, 8px -8px 0 -2px @numa_track_hover; }
+.rapid-side { background: @window_bg_color; border-left: 1px solid alpha(currentColor, 0.1); }
+.rapid-panel { padding: 16px; }
+.rapid-bar { padding: 8px 24px 0; }
+.rapid-page .rapid-bar { padding: 8px 16px; }
+/* FLOW-019: the moment's layers, top first as they lie — Look, This Photo,
+   Even — each under a hairline, numbered in a small chip as in the sketch. */
+.rapid-layer { padding: 12px 0 8px; border-top: 1px solid @numa_rule; }
+.rapid-layer:first-child { margin-top: 8px; }
+.rapid-layer-title { font-size: 13px; font-weight: 600; }
+.rapid-layer-about { font-size: 12px; color: @numa_name; }
+.rapid-layer-hint { font-size: 12px; color: @numa_label; margin: 8px 0 12px; }
+.rapid-count { font-size: 12px; color: @numa_name; font-feature-settings: "tnum"; }
+/* "Numa did": each part's name, and its switch's row dimmed when off. */
+.rapid-part { padding: 8px 0; }
+.rapid-part.off label { opacity: 0.45; }
+.rapid-part-name { font-size: 13px; font-weight: 600; }
+/* Chapters: a heading per chapter, their bar over the list, the one being
+   scrolled through kept at the top, and where to start one. */
+.rapid-chapter { padding-bottom: 4px; border-bottom: 1px solid @numa_rule; }
+.rapid-chapter-name { font-size: 20px; font-weight: 700; padding: 0 4px; }
+.rapid-sticky { background: @view_bg_color; padding: 4px 16px; border-bottom: 1px solid @numa_rule; }
+.rapid-sticky > menubutton > button { font-size: 15px; font-weight: 700; }
+/* FLOW-018: the moment the panel is about, on a quiet fill as a whole, as
+   LIB-006 sets the chosen preset apart. Outlined, it drew a second line round
+   a selected photograph's ring (the photographer, 7 October: "de dubbele
+   omlijning geeft een heel crappy effect"), and cards have no borders. The
+   shadow takes the fill 8px past the moment, so choosing one moves nothing. */
+.rapid-moment.chosen { background: alpha(@window_fg_color, 0.06); box-shadow: 0 0 0 8px alpha(@window_fg_color, 0.06); border-radius: 8px; }
+.rapid-handle:hover > label { text-decoration: underline; }
+.rapid-moment .rapid-start { opacity: 0; transition: opacity 120ms ease; }
+.rapid-moment:hover .rapid-start, .rapid-start:checked { opacity: 1; }
+.rapid-offer { padding: 4px 0; border-top: 1px dashed @numa_thumb_rest; }
+/* The frames Numa would keep, in a burst seen whole. */
+.photo-rows > overlay.grid-card.rapid-numa { outline: 2px dashed @numa_rest_tick; outline-offset: 4px; }
+.photo-rows > overlay.grid-card.rapid-numa:selected { outline: 3px solid @numa_accent; outline-offset: 1px; }

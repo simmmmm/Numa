@@ -88,6 +88,13 @@ fn make_frame(state: &App) -> gtk::Button {
     badge.set_valign(gtk::Align::End);
     stacked.add_overlay(&badge);
 
+    let hint = gtk::Label::new(None);
+    hint.add_css_class("strip-badge");
+    hint.set_halign(gtk::Align::Start);
+    hint.set_valign(gtk::Align::End);
+    hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    stacked.add_overlay(&hint);
+
     let frame = gtk::Button::new();
     frame.set_child(Some(&stacked));
     frame.add_css_class("filmstrip-frame");
@@ -107,6 +114,7 @@ fn bind_frame(state: &App, frame: &gtk::Button, index: usize) {
     let Some(picture) = stacked.child().and_downcast::<gtk::Picture>() else { return };
     let Some(mark) = picture.next_sibling() else { return };
     let Some(badge) = mark.next_sibling().and_downcast::<gtk::Label>() else { return };
+    let Some(hint) = badge.next_sibling().and_downcast::<gtk::Label>() else { return };
     let lazy = state.filmstrip.lazy.borrow();
     let Some(thumb) = lazy.get(index) else { return };
     let aspect = state.filmstrip.aspects.borrow().get(index).copied().unwrap_or(justified::UNKNOWN_ASPECT);
@@ -127,12 +135,47 @@ fn bind_frame(state: &App, frame: &gtk::Button, index: usize) {
         false => badge.remove_css_class("rejected"),
     }
 
+    drop(cards);
+    group_burst(state, frame, &hint, index);
+
     frame.set_tooltip_text(thumb.path.file_name().and_then(|name| name.to_str()));
     frame.set_widget_name(&thumb.id.to_string());
     match state.filmstrip.current.get() == Some(thumb.id) {
         true => frame.add_css_class("current"),
         false => frame.remove_css_class("current"),
     }
+}
+
+fn burst_at(state: &App, index: usize) -> Option<(i64, i64)> {
+    let id = state.filmstrip.lazy.borrow().get(index)?.id;
+    let burst = state.grid.cards.borrow().get(&id)?.burst?;
+    Some((numa::io::catalog::library_of(id), burst))
+}
+
+fn group_burst(state: &App, frame: &gtk::Button, hint: &gtk::Label, index: usize) {
+    let burst = burst_at(state, index);
+    let same = |other: usize| burst.is_some() && burst_at(state, other) == burst;
+    let (left, right) = (index > 0 && same(index - 1), same(index + 1));
+    for (class, on) in [("joined-left", left), ("joined-right", right), ("burst", left || right)] {
+        match on {
+            true => frame.add_css_class(class),
+            false => frame.remove_css_class(class),
+        }
+    }
+    hint.set_visible(right && !left);
+    if !hint.is_visible() {
+        return;
+    }
+    let run: Vec<usize> = (index..).take_while(|at| *at == index || same(*at)).collect();
+    let picked = {
+        let lazy = state.filmstrip.lazy.borrow();
+        let cards = state.grid.cards.borrow();
+        run.iter().filter(|at| lazy.get(**at).and_then(|thumb| cards.get(&thumb.id)).is_some_and(|photo| photo.flag == Flag::Picked)).count()
+    };
+    hint.set_text(&match picked {
+        0 => "Pick a few".to_string(),
+        n => format!("{n} of {} picked", run.len()),
+    });
 }
 
 pub(super) fn rebind_frame(state: &App, index: usize) {

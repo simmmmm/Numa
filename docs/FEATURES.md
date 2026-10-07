@@ -39,6 +39,7 @@ list.
 | `PERF` | Performance and robustness |
 | `UX` | User experience and accessibility |
 | `START` | Onboarding: from receiving the AppImage to a first edited photograph |
+| `FLOW` | Workflows: Rapid, a library by its moments with a kind of shoot's few controls |
 
 ---
 
@@ -171,17 +172,24 @@ entry does not exist, and the messages that say what is missing name
   progress rather than a fault. Counted per run of the queue, because only
   what is on screen is made and scrolling asks for more; a run that only read
   the cache says nothing. No Stop, since the cards on screen would stay blank.
-- ◻️ **START-013**: Crash reports, sent only when the photographer says so.
-  - **Rust panics.** A panic hook writes a report into the data folder. It
-    holds the version, how Numa runs (Flatpak, AppImage or a build), GTK,
-    the GPU line, and the panic with its backtrace. Paths become `~`, and
-    file names become `<photo>`.
-  - **Native crashes** (a driver, ONNX Runtime, Dawn). The panic hook never
-    runs for these, so a marker the way the GPU guard works: written at start,
-    removed on a clean exit.
+- ✅ **START-013**: Crash reports, sent only when the photographer says so.
+  Linux; on Apple the system collects crashes itself (TestFlight and App
+  Store Connect), for those who share analytics with developers.
+  - **What a crash leaves.** A signal handler writes `crash.txt` into the data
+    folder when Numa dies of SIGSEGV, SIGABRT, SIGBUS, SIGILL or SIGFPE — a
+    driver, ONNX Runtime, Dawn, or a panic in a GTK callback, which aborts. It
+    holds the version, how Numa runs (Flatpak, AppImage, a distribution's
+    package or built from source), GTK, the renderer, and the build ID with
+    where the program was loaded, so a stripped binary's addresses can be
+    looked up. The panic hook keeps the last panic with its backtrace beside
+    it; in its message every path but Numa's own folders becomes `<path>`,
+    and a photograph's name `<photo>`.
+  - **Only a crash.** Killed, logged out or the terminal closed leaves
+    nothing, and neither does a caught panic; a clean exit clears both files.
   - **At the next start** a toast says Numa closed unexpectedly. "Send
-    report…" shows the whole text before anything leaves. "Open on GitHub"
-    pre-fills an issue; Copy is there for anyone without an account.
+    Report…" shows the whole text, with the graphics card, before anything
+    leaves. "Open on GitHub" fills in the problem form; Copy is there for
+    anyone without an account, to mail.
   - No server and no cost. A crash server (GlitchTip) waits until there are
     more reports than one person reads. See ENGINEERING, *Hearing back*.
 - ◻️ **START-014**: What gets used, if the photographer agrees. Off until
@@ -197,11 +205,12 @@ entry does not exist, and the messages that say what is missing name
     apps, open source, EU hosting, free for 20,000 events a month — over the
     `curl` Numa already calls for the update check. See ENGINEERING,
     *Hearing back*.
-- ◻️ **START-015**: Ideas and tips from the photographer. "Send feedback…" in
-  the main menu: a text field and, ticked off by default, the debug information
-  of START-011. It opens GitHub Discussions (an Ideas category and issue forms,
-  both free), pre-filled. Mail is the way in for anyone without a GitHub
-  account.
+- ✅ **START-015**: Ideas and tips from the photographer. "Send Feedback…" in
+  the main menu (on Apple, the ⋯ menu on the Libraries page): a text field and,
+  off unless ticked, the debug information of START-011. "Post on GitHub"
+  opens a new discussion in the Ideas category, pre-filled; "Send by Mail" the
+  same in a mail to support@numa.photo, for anyone without a GitHub account.
+  Problems have an issue form, which About's "Report an Issue" opens.
 
 - ✅ **START-016**: (A second START-010 until 28 September.) The editor is
   not built while nobody is looking at it. It
@@ -286,15 +295,17 @@ entry does not exist, and the messages that say what is missing name
   button in the header opens the same dialog on whatever is there, or any
   folder (`importing.rs`, `numa::io::import`). The card is read from its
   `DCIM`, at the top or one folder down as a camera lists it. What a library
-  already has — the same name, size and first and last 64 kB — is left on the
-  card and said once ("3 already in Mallorca"). The rest is split into shoots
+  already has — the same name, size and first and last 64 kB; off a camera on
+  its cable, where GVFS fetches a whole file to read any of it (2 s a RAF), the
+  same name, size and time, whole quarter hours apart within a day for the
+  time zones — is left on the card and said once ("3 already in Mallorca"). The rest is split into shoots
   where the camera was put down for two days, and each is offered a place: the
   library whose dates it falls in or beside (two days either way), else a new
   folder where new ones go, read off the libraries there are — a year folder
   when most of them sit in one (`Fotos/2026/`), their common folder otherwise —
   named for its first day and renamable in the dialog; "Change…" puts it in
   any folder. An optional pattern renames (`{date} {time} {n} {name}`, one
-  count per frame so a RAW and its JPEG keep one stem). The copy is APP-005's —
+  count per frame so a RAW and its JPEG keep one stem). The copy was APP-005's (since 4 October IO-027's: hashed, synced and read back) —
   `.part` until whole, modified time kept, nothing overwritten; a name taken by
   a different photograph gets `-2` rather than losing either — with a count
   and a Stop on the toast; new folders become libraries, the rest are
@@ -553,7 +564,11 @@ entry does not exist, and the messages that say what is missing name
   largest preview that does stands in: 1280×1920 in 21 ms, turned by the
   primary's own `irot`, identical to ffmpeg's decode of the same frame. A
   photograph at 1920 across is a library, a loupe, a cull and a print at
-  postcard size; failing is none of those. It is logged once per file, and the
+  postcard size; failing is none of those. It is logged once a session —
+  it had been every opening of every file, one frame seven times in a row
+  while tethered (7 October) — and a file found to need its preview goes
+  straight to it the next time, without the decode that fails: 17.6 ms an
+  opening before, 7.4 ms after, on a Fujifilm HEIC of that day. The
   info panel then shows the preview's size, which is the honest number for what
   is on screen — the RAF beside it is the file to develop. `irot` turns
   counter-clockwise where `image`'s rotations turn clockwise, which is asserted
@@ -589,7 +604,9 @@ entry does not exist, and the messages that say what is missing name
 - ✅ **IO-023**: The library follows its folders without polling: a local one
   is watched (GIO file monitors), any one is compared by its folders' times
   when the window comes to the front, a rescan that found nothing changes
-  nothing on the main thread, and the once-a-minute walk is gone.
+  nothing on the main thread, and the once-a-minute walk is gone. A walk asked
+  for while another runs waits for it (30 September): dropped, a library
+  opened during a start was neither walked nor watched.
 - ✅ **IO-024**: JPEG export through jpeg-encoder (pure Rust): the same
   baseline 4:4:4 JPEG in 60 % of the processor time.
 - ✅ **IO-025**: JPEG XL lossy export at effort 3 instead of 7: an eighth of
@@ -597,6 +614,102 @@ entry does not exist, and the messages that say what is missing name
 - ✅ **IO-026**: A thumbnail from the smallest embedded JPEG that is still
   big enough (a CR3's PRVW, a NEF's second JPEG, a DNG's preview), not the
   largest.
+- ✅ **IO-027**: Two copies, both checked. The Import dialog's Copies group:
+  Second Copy (a folder on another drive, asked for once with Add a Second
+  Copy…, remembered on this machine, a switch to leave it out) and Check Both
+  Copies (on by default). Each file is hashed (xxh3-128) as it is read off the
+  card, written under `.part`, synced and renamed; then read back from the
+  disk — its pages dropped from the cache first — and compared. The second
+  place gets the library's checked copy on a thread of its own, so a slow
+  drive trails without holding the card up, and is read back the same way.
+  "Safe to Format" only when there are two places, every copy of every file
+  matched, every raw decoded (IO-028) and every frame on the card has a
+  checked copy; otherwise the done page says what is missing, lists every
+  problem by name, and Try Again copies those over the same files. Most cards
+  are never formatted and carry frames a library already has: the done page
+  has a row for them ("13 older frames · Already in Spring Walks", with how
+  long reading them off the card takes) and Check Them Too, which hashes each
+  card file beside its library copy and the second place's where there is
+  one, writes a receipt for what matched, and then says Safe to Format — or
+  names the frame whose copy is not the same and keeps it off (no Try Again
+  there: which side is right is the photographer's to say). A
+  copy that read back different is not left behind. Without a second copy:
+  "Copied and Checked — add a second copy to be safe to format." The library
+  is catalogued and opened as soon as it has every file; the done page comes
+  when the rest is done, with Eject Card where the card is a drive of its own
+  (never a folder on the photographer's disk). Tried in the rig on CC0 RAFs:
+  both places, receipts checked by `xxh128sum -c`, Try Again; Eject Card and a
+  real card reader not (`offload.rs`, `import_done.rs`, `import_verdict.rs`).
+  Check Them Too tried on a card of 13 older frames and one new: Safe to
+  Format; then with one library copy and one library-and-second copy
+  damaged: both named, not safe.
+- ✅ **IO-028**: The card checked while it can be reshot. Every raw of an
+  import is decoded once in full (the whole mosaic, nothing developed), from
+  the checked copy, four at a time beside the copy, and a frame that does not
+  decode is named: "DSCF4204.RAF could not be read — reshoot while you can."
+  Tried with a RAF cut short at 15 MB.
+- ✅ **IO-029**: A receipt for every import, in the plain format `xxh128sum`
+  writes — a hash and a path per file under a few comment lines (date, card,
+  counts, places, the command that checks it) — in the library's
+  `.numa/receipts/` and in the second place's `.numa-receipts/`; Receipt ·
+  Show on the done page. Check Copies Again (Preferences › Imports, and on
+  the done page; on by default): once a month, ten minutes after Numa opens
+  and not on battery, every file a receipt lists that is still there is read
+  again at the idle priority, and only one that no longer matches is said, in
+  a toast.
+- ✅ **IO-030**: Look first, on the card. The Import dialog shows the new
+  frames' embedded previews in a strip; Look at the Card… (or a frame in it)
+  steps through them full size — ← →, X leaves a frame on the card, P picks,
+  0–5 rate, U clears. Frames left on the card are not copied ("2 left on the
+  card", "Import 10"); the marks come into the library with the rest.
+- ✅ **IO-031**: Ratings from the camera. The stars a camera wrote
+  (`xmp:Rating`, which Fujifilm, Canon, Nikon and Sony put in the head of
+  their raws, or EXIF's Rating) go into the catalog on import when the
+  photograph has none and was not marked on the card; the done page says
+  "2 rated in the camera". Tried on RAFs rated with exiftool; no camera-rated
+  CR3, NEF or ARW was at hand.
+- ✅ **IO-032**: Previews first, the raw later. JPEGs a camera's phone app
+  brought across (Fujifilm XApp, Sony Creators' App, SnapBridge) are found
+  in the libraries when the card's raws are read — the same base name, the
+  same moment to the second, and the same body serial and firmware where both
+  files carry them — and the Import dialog offers "Already Here as JPEGs:
+  14 from the X-T5 app · the raws take their place · stars, flags, albums,
+  names and crops stay", a switch, on. On import each raw becomes that
+  photograph: its stars and flag (where the card gave none) and its albums
+  move to the raw, the names given to faces, a track's place and the shape
+  of its edit (crop, straightening, perspective, turn and flip) are given to
+  it; colour and tone set on the JPEG stay behind, and the done page says
+  what was carried. The JPEG stays in view as the raw's pair, as LIB-018
+  shows a RAW+JPEG shot together — unmarked, with its own edit, and set
+  aside by RAW Only like any pair — so one frame is never picked or exported
+  twice. A renamed JPEG, one saved again by another program, or one beside
+  its own raw already is not touched. Tried in the rig
+  with CC0 RAFs and 1600 px JPEGs made from them with the camera's EXIF;
+  measured on 2 313 RAFs of the archive (ENGINEERING); no real app transfer
+  was at hand.
+- ✅ **IO-033**: Places from a track. The Import dialog's Places group, From
+  a Track…, takes a GPX file or a Google Timeline export (Takeout's
+  Records.json, the monthly Semantic Location History, or the on-device
+  Timeline.json from Android or iOS), places each frame at its moment in UTC
+  (its clock less the zone it wrote) between the fixes either side, and says
+  "286 of 310 placed · 24 outside the track · 2 placed by the camera". A gap
+  over a quarter of an hour between two places is not guessed across; a long
+  stay in one place is. The catalog keeps the place and an export writes it
+  as EXIF GPS where the camera wrote none (Remove location leaves it out);
+  nothing is written into the raw. Later, from the library's main menu, Add
+  Places from a Track… does the same for the selection or the grid, to
+  photographs with no place yet, with Undo. Tried in the rig with a GPX and
+  an Android Timeline export over CC0 frames.
+- ✅ **IO-034**: Proof for Print — the photograph shown as a printer or lab's
+  ICC profile would print it (perceptual or relative colorimetric, the
+  paper's white shown), Out of Range as a neutral hatch, a state pill at the
+  photograph's top centre; profiles added from a file and kept in Numa's
+  data folder, sRGB always there. Only the view changes. The export's Proof
+  With converts JPEG, PNG and TIFF to an RGB profile and tags them with it.
+- ✅ **IO-035**: For a Book — the picks or the selection, in capture order,
+  as numbered folders a chapter each (days, or albums and Other) with
+  numbered files, sized at 300 ppi for a photo book (CEWE, Albelli, Popsa,
+  Blurb or a custom size), sRGB or a lab's profile, through the export.
 
 - ✅ **IO-011**: JPEG, PNG and — the brief's A3 — TIFF 16-bit, the round-trip
   format for every other editor. The extension follows the format rather than
@@ -1005,6 +1118,103 @@ entry does not exist, and the messages that say what is missing name
   end, Export 4… for the export dialog. The keys are in the tooltips. It
   replaces the floating line of keys ("0–5 rate · P pick · X reject") and
   stays away while the loupe is up.
+- ✅ **LIB-025**: Rate from the grid with the pointer. The five stars a
+  hovered card shows are the editor bar's in small: the star under the
+  pointer fills the ones before it, a click gives that rating to this
+  photograph alone (not the selection, and without selecting or opening
+  it), and clicking the rating it already has takes it off. Linux and the
+  Mac — on a touch screen there is no hover, so a tap stays the card's
+  (the photographer, 4 October).
+- ✅ **LIB-031**: Tonight. From the selection bar's ⋯ and the library's main
+  menu, a dialog with the day's picks (or the selection): "24 picks from
+  today, with their look", Size (Long edge 2048 by default), Into (a folder
+  per evening, ~/Pictures/Tonight/<library> · <day>, Change…) and Every Day
+  of the Trip; Make 24 writes sRGB JPEGs without a watermark through the
+  ordinary export, and a toast says "24 in Tonight" with Open Folder — Linux
+  has no share sheet, so the folder is the hand-off. With Every Day of the
+  Trip on, an import that brings in a day with picks makes that day's pack
+  by itself, once a day, its toast staying up until seen. Linux; the iPhone's
+  version (S4b, a shared album) is not built.
+- ✅ **LIB-026**: Camera clocks. A second body, a second shooter's camera
+  or a phone a few minutes off no longer puts its frames out of order: each
+  library keeps an offset in seconds per camera (make, model and body
+  serial; make and model where there is no serial), in its own catalog so
+  it travels with the folder. Everything ordered or grouped by capture time
+  — the grid's date order, bursts, the same scene again, the library
+  picker's dates, Rapid's moments — uses the corrected time, and a frame
+  scanned in later lands on the same timeline. A burst stays one camera's
+  sequence: lined-up frames of two bodies meet in the same scene again, never
+  inside one burst. Camera Clocks… in the main
+  menu lists each camera with its photographs and its offset, with a switch
+  to apply it; every change re-sorts at once and has Undo. The Info page
+  shows the corrected time and, where an offset applies, the camera's own
+  clock beside it.
+- ✅ **LIB-027**: Finding a camera's offset, offered and never applied
+  silently. From one moment two cameras both saw: near-identical frames of
+  two bodies within twenty minutes of each other (the burst hashes of
+  CULL-002), at least three of them agreeing within five seconds. From the
+  shooting rhythm, for shooters who share no framing: everyone fires at the
+  ring, the kiss, the goal, so the two bodies' shots second by second,
+  cross-correlated within twenty minutes on the days both shot, peak at the
+  offset — taken only when the peak stands at least twice as far above the
+  usual as the next best lag and as where the clocks are now, and only
+  where it agrees with any look-alike frames there are. From a
+  clock photo: Clock Photo… shows the time with a QR code of it, redrawn ten
+  times a second, and a frame of that screen found when the library is
+  analysed gives that camera's offset; such a frame is a slate, left out of
+  bursts and suggestions, and its Info says so. Or set by hand. What is
+  found is offered in a banner over the library with the frames that show
+  it — "Two cameras saw the same moment · The A7 IV's clock runs 3 min 12 s
+  ahead of the X-T5" — with Line Up (Undo in its toast) and Not Now, which
+  is remembered. One camera, or matches that do not agree: nothing is
+  offered.
+- ✅ **LIB-028**: Search the library by what is in the photographs, in
+  words, English or Dutch — "bride with bouquet", "reiger", "kitchen" — on
+  this computer. Ctrl+F or the magnifier at the start of the library's
+  header opens a field under the header; the answer is one more filter,
+  within the others, best first, and the chip row says "Words: …" with its
+  ✕ after All · Picks · ★ 3+, the count on the right. A model (SigLIP 2,
+  Apache-2.0, 412 MB) is asked for, with its size, when the field is first
+  opened, and the libraries the grid shows are then read in the background,
+  one at a time, on the quiet lane (PERF-072), never on battery or power
+  saving, and silently: UX-019's toast for a long run only while a search
+  waits on it. The numbers are kept per library in
+  `.numa/words.bin` beside its catalog, not in it, and a photograph whose
+  file changes is read again. People are found by name, which the model
+  cannot do (the photographer, 7 October: "als ik zoek op frederique krijg
+  ik nu random foto's te zien"): a word that is someone's first name, or
+  words that are a whole name, accents or not, narrow to the photographs
+  that person is in as the People place has them (LIB-014), every named
+  person at once for "tijmen en frederique"; the words left over ("op het
+  strand") go to the model and order those, and names alone need neither the
+  model nor its reading. An import, or a tethered session, has what
+  came in read for words as it lands (the photographer, 7 October: "met de
+  import zelf ook de zoekwoorden … en de foto geanalyseerd"), as a search
+  would — once the model is here, never downloading it unasked — and the
+  library it opens is analysed as Analyse would. Linux; the core is shared.
+- ✅ **LIB-029**: Things Numa Saw. A section in the Filter menu, after the
+  others: a fixed list of 150 everyday things a photographer points a camera
+  at (bride, bouquet, beach, dog, mountain, church, car, food, sunset, …),
+  each a chip only where some photograph has it, the most frequent first —
+  outlined and in italic, so they read as Numa's rather than the
+  photographer's, and Hide turns the section off. A chip narrows the grid
+  like any filter. Worked out from LIB-028's numbers, never written into
+  keywords, the catalog or an exported file.
+- ✅ **LIB-032**: The client's picks, back from a proofing gallery. Pixieset,
+  Pic-Time, ShootProof, Picdrop and SmugMug hand the photographer a list of
+  the file names the client marked; Paste the Client's Picks… in the
+  library's main menu takes it as it comes — commas, spaces, semicolons or a
+  name a line, quoted or not, with or without the extension, Lightroom's
+  "A OR B", a gallery's copies ("DSCF2210-2", "DSCF2210 (1)") and the names
+  Numa's export gave ("DSCF2210 - edited #007", any saved template), in any
+  case. Matched against the whole library on screen (every library when the
+  grid spans them), not what the filter shows; a RAW and its JPEG are one
+  name and both are marked. Under the list as it is pasted: "41 of 42
+  found", how many in each folder, and every name not found, by name. Make
+  Them: Picks, 5 Stars or Add to Album… (an album by that name, made if it
+  is new); one Undo in the toast takes all of it back. The other way, Copy
+  File Names (main menu, and the photograph menu) puts the selection's
+  names on the clipboard, each frame once, for a gallery's search.
 - ✅ **LIB-022**: A photograph that has been worked on shows the edit in the
   grid and the filmstrip, rather than the camera's own picture — seeing the
   render is what says it has been edited, and by then the original is the
@@ -1117,7 +1327,10 @@ is out of focus" is a slow way to compute a number we can get exactly.
   side, as two photographs. Raised on 2026-09-17 with a newly added folder. The
   photographer's choice: both stay cards of their own, and a file-type filter
   beside the flag filter narrows the grid to the RAWs or to everything else.
-  A rating or an edit is on the file it was given to, as for any card.
+  A rating or an edit is on the file it was given to, as for any card. A
+  pair made afterwards — the JPEG a camera's app brought and the raw that
+  took its place on import (IO-032) — is shown the same way: two cards side
+  by side in capture order, the marks on the raw.
 - ✅ **LIB-019**: Renaming a library the way it was meant. The Libraries dialog
   renamed what the picker shows (LIB-009), which is not what was wanted for a
   folder that was named wrongly on disk. Now the rename is of the folder itself,
@@ -1257,6 +1470,69 @@ is out of focus" is a slow way to compute a number we can get exactly.
   well-provenanced ONNX one (CULL-004), and within a burst of technically equal
   frames the choice is expression and gesture, which such a score is least
   able to judge.
+- ✅ **CULL-013**: The shoot as a tape, under the loupe's photograph (Resolve's
+  Source Tape, Final Cut's skimmer; drawing O6-Band). Every photograph of the
+  grid the loupe was opened from is a 5 px mark at its capture time, 7 apart
+  within two seconds; a jump in time adds a gap that grows by the doubling up
+  to a fixed 30 px from five minutes on, where the clock is printed (the day
+  where it changes). The frame on screen is the tall white mark; picked is
+  white, rejected dimmed, and each star makes a mark 2 px taller — the tile's
+  judgement at five pixels wide. A raw's own JPEG or HIF (CULL-002's twin) is
+  its raw's mark and is marked with it. The pointer skims: the loupe shows the
+  frame under it, selection and stars included, and goes back when it leaves;
+  a key while skimming makes that frame the one, a click goes there. A drag
+  chooses frames, Shift+click chooses up to a frame; the line above says
+  "Frames 27–38 · 12 photographs" with Reject 12, Pick 12 and Rate, and X, P,
+  U and 0–5 act on all of them as one mark: one Backspace, or the toast's
+  Undo, takes it back. Escape lets them go. Skimmed frames are not "passed"
+  in CULL-012's log: they were glanced at, not looked at. In time order
+  whatever the grid's sort. Pointer only: choosing frames has no keys yet.
+  One strip under the photograph (UX-029): the loupe's name, burst line and
+  bar (previous, next, the pick counter, Edit, back to the grid) moved into
+  the tape's line beside Review, the chosen frames in its middle.
+- ✅ **CULL-014**: Review — the shoot run through at full size in the loupe
+  (Resolve's Fast Review): Review in the tape's line or Shift+Space, from the
+  frame on screen to the end, or through the frames chosen on the tape. About
+  six frames a second; half a second on a frame with nothing within three
+  seconds of it; ten a second inside a stretch of eight or more frames each
+  within two seconds of the next. "Reviewing · 6 a second" at the top centre
+  of the photograph while it runs. Any key stops it on the frame on screen
+  and then does what it does there — X rejects that frame, Up picks it and
+  goes on, Left goes back one for a key pressed a frame late; Space and
+  Escape only stop. What is seen is what is marked: the key is not moved back
+  to a frame shown a moment earlier. It shows the loupe's own picture, the
+  camera's preview from the cache, and holds the next twelve frames ahead;
+  measured on a 56-frame demo shoot, cold and warm, it keeps the pace exactly
+  with no frame waited for, and unpaced it shows 18–27 frames a second
+  (`docs/ENGINEERING.md`, "Review, and the tape it runs on"). Frames shown by
+  Review are not "passed" in CULL-012's log either.
+- 🟡 **CULL-015**: The choosing screen — the loupe grown into the one place a
+  shoot is chosen in (the night study of 5 October, "Kiezen": nine places with
+  five ways of deciding become one; the photographer: "ik wil dit wel
+  hebben"). A frame in a burst opens the burst side by side, up to twelve at
+  once in as many columns as make each frame the largest, the frame with the
+  keys ringed as the grid rings a selection, a rejected one dimmed: choosing
+  within a series is comparing (Chang et al. 2016; Mantiuk et al. 2012), and
+  one frame and a bracket of pips asked the photographer to remember the
+  others. Stepping into a burst from outside it lands on its sharpest frame,
+  so the first Up keeps the frame Numa measured best with the rest on screen
+  to say whether it is; Shift+Down puts the rest out and goes on. Two keys a
+  burst. P and X now go on as Up and Down do — one rule wherever one
+  photograph has the keys. Z, or a double click on a frame, looks at one frame
+  alone, where 1:1 and the AF box are; the next burst opens side by side again.
+  What Numa saw is one pill at the photograph's top left, where the design
+  system keeps what Numa did: "Soft · slow shutter", "Eyes closed?", "Nearly
+  black", "Same scene as DSCF3274, 4 min later", the first of them and "+2",
+  all of them in its tooltip; nothing at all when there is nothing to say. In
+  a burst each frame says its own in one word, what every frame shares is said
+  once over the burst ("Soft · all 6"), and the sharpest says so. While the
+  loupe is up the library's chips, its key hint and the header's end (size,
+  Analyse, Filter, Export) step aside: the audit counted 34 things on screen
+  while a frame was judged. The dimmed neighbours are off unless F turns them
+  on (the tape says what came before and after); the AF box no longer goes
+  with them. Rapid's stacks open here too (FLOW-018, "A burst in one look").
+  Not yet: faces of a burst side by side, Compare folded in, Backspace beyond
+  the loupe.
 - 🟡 **CULL-003**: Faces, from YuNet (OpenCV Zoo, MIT, 232 kB) through
   `tract`. Turns the frame measure into the one that matters for a portrait: a
   crisp background with a soft face scores well on CULL-001 and is a reject.
@@ -1334,6 +1610,37 @@ dependency at all.
   takes off again. A name already taken for that photograph is refused, not
   replaced, as a preset's is. Deleting is at once, with Undo on the toast. The
   step's name lasts the session; reopened, it is named by what it changed.
+- ✅ **DOC-008**: How It Was Made — the photograph's own edit played back on
+  the photograph, from the camera's starting point to how it looks now, for
+  learning from an edit (one's own, a look's, a shared look's). In the editor's
+  main menu, the photograph's section. A card at the top left of the photograph,
+  the place of what Numa did, on the photo-side ground: `HOW IT WAS MADE` and a
+  ×, then a row for each step — what changed with its value and the tab it is
+  on ("Exposure +0.35 · Light"), and under it one line of why when a look
+  wrote one. Rows already in are white, the coming ones dimmed; Back, Pause or
+  Play and Forward at the foot, and the look's line beside them ("Look “Golden
+  Hour” · by Numa", or "3 of 8" for a step of one's own). About a second a step,
+  the photograph crossfading in 300 ms; with Reduce Motion it is only stepped.
+  The steps are the history Numa already keeps, read through `made.rs` (here
+  rather than in the interface, so the iPad and Mac read the same words):
+  consecutive moves of one slider are one step, and a look, a paste or a reset
+  is split into its settings, each with the photograph as it stood once that
+  one was in; more than eight settings at once that are not a look read as one
+  row. Playback never touches the edit or the history: the canvas is handed the
+  state on show through `rendered_document`, and the card closes the moment
+  anything is done to the photograph, or another is opened.
+
+  A look file may carry notes: an optional `by` and `notes`, one line of why
+  under each setting's word (`Highlights`, `Colour grading`), in the same JSON
+  as the edit. A Numa before this ignores them and one after keeps them
+  through an import, so a shared look keeps its notes. Numa's own twelve looks
+  carry theirs, and a test holds each one to say why of every setting it
+  changes and of none it does not. Which look a step came with is kept in the
+  library's catalog (`made_looks`) by a fingerprint of the edit it left, with
+  the look's name and notes as they were, so it survives a look's file being
+  edited or deleted, the history's hundred-step limit and an Apple client that
+  saves the history without knowing of it. Linux; the iPad and Mac read the
+  same steps from `numa-io` and draw their own card.
 
 ### CANVAS — Rendering and navigation
 
@@ -1508,6 +1815,8 @@ dependency at all.
   profile's rendering, not a simulation over it. If simulations come back it
   will be from tables fitted here against the camera's own JPEGs, which is the
   method every other colour decision in this program was settled by.
+  *4 October:* RENDER-024 follows each photograph's own camera JPEG instead
+  of a table per simulation, and so carries the recipe a table cannot.
 - ❌ **RENDER-007**: ~~Classic Negative, Nostalgic Neg and Bleach Bypass as
   cube LUTs.~~ *Withdrawn with RENDER-006.*
 - ✅ **RENDER-008**: Per-image exposure matched to the camera's own rendering.
@@ -1674,7 +1983,7 @@ dependency at all.
   curves the render uses (ICC 2.1, matrix and TRC), and littleCMS converting
   (200, 100, 50) out of each of the four agrees with Numa's own matrices to the
   code value.
-- 🟡 **RENDER-010**: The decode's passes on the graphics card. After rawler
+- ✅ **RENDER-010**: The decode's passes on the graphics card. After rawler
   has read the file, everything that was a pass over the whole frame on the
   processor — black and white, the demosaic (PPG, Markesteijn for X-Trans),
   the lift, the lens's falloff and geometry, false colour, the turn and the
@@ -1686,8 +1995,8 @@ dependency at all.
   a few X-Trans pixels). The processor stays the reference and the
   fallback — no card, a card still starting, a model on the card, an error
   or too little memory, and Preferences' "Use GPU acceleration" off all mean
-  the processor, as before; `NUMA_GPU=0` forces it. Linux only so far: the
-  Apple apps need Metal and a measurement on the devices first. Frugal
+  the processor, as before; `NUMA_GPU=0` forces it. On the Apple apps the
+  same passes run on Metal (RENDER-018). Frugal
   (PERF-024), 1:1 and the export take the integrated GPU and never wake a
   discrete one, and the editor's proxy comes from the mosaic (PERF-030),
   which measured as cheap as the integrated card and several times faster
@@ -1699,7 +2008,9 @@ dependency at all.
   Numa asking photographers to send a neutral raw of their camera (with its
   JPEG, or a grey or colour card); the sending itself happens outside Numa —
   "dat hoeft voor mij niet via numa te gaan behalve de cta" (the
-  photographer, 27 September). After v1.
+  photographer, 27 September). After v1. Since RENDER-025 (4 October) a
+  photographer fits their own camera in Numa instead, so the bodies still
+  waiting for a second CC0 scene need not ship.
 
   Built for v1: six, the pilot's that beat the matrix on held-out frames
   (EOS R5, D850, A7R III, E-M1 II, X-S10, X-T4; not the G9, Z 7 or K-1, and
@@ -1748,18 +2059,27 @@ dependency at all.
   (about 2.5 ms a drag frame; `NUMA_GPU_RENDER=0` turns it off); the dmabuf
   hand-over to GTK, where its first run logged page faults, stays behind
   `NUMA_GPU_DMABUF=1` until it is tried on the card (`docs/ENGINEERING.md`,
-  "The render on the graphics card").
+  "The render on the graphics card"). On Apple since 29 September (Numa-mac
+  `27ed0c1`, TestFlight 43), behind RENDER-018's switch: on the MacBook nine
+  bodies at most 1 level from the processor (mac-bench run 6).
 - ✅ **RENDER-019**: The render on the card takes the grade, point colour
   (and Show affected area), black and white and the vignette, from the
   numbers the processor's own code makes; within one level in 8 bits of the
   processor's (`docs/ENGINEERING.md`, "The card's stages — 29 September").
-- 🟡 **RENDER-020**: The render on the card takes masks: the processor makes
+- ✅ **RENDER-020**: The render on the card takes masks: the processor makes
   each mask's field, the card keeps it while only the adjustments move and
   runs the mask's white balance, colour noise reduction, basic adjustments,
   mixer, point colours, curves, black and white, grade and Color on its copy.
-  A mask's dehaze, luminance noise reduction, sharpening where the proxy
-  shows it, defringe, moiré, HDR/Clarity/Texture and grain still send the
-  render to the processor.
+  Since 4 October everything else a mask has too — dehaze, luminance noise
+  reduction, sharpening, defringe, moiré, HDR/Clarity/Texture and grain — on
+  a copy of the frame of its own, as the processor's `apply_masks` has it;
+  and the photograph's own dehaze, sharpening, defringe, moiré and grain
+  with them. What the stages before the operations leave is kept on the
+  card between renders, as on the processor, so a drag after them does not
+  run them again. Of the photographer's 280 edited photographs 268 render on
+  the card now (253 before); what is left is AI denoise, spot removal,
+  another working space and calibration (`docs/ENGINEERING.md`, "Every mask
+  on the card — 4 October").
 - ✅ **RENDER-021**: The render on the card takes luminance noise reduction
   and HDR, Clarity and Texture: guided filters and box blurs over planes of
   log luminance on the card, the local tone map's pivot as a reduction.
@@ -1771,7 +2091,7 @@ dependency at all.
   with the tone sliders, masks with HDR and a grade. An untouched photograph's Exposure drag went back to the processor,
   0.46 → 0.15 J a frame. Integrated GPUs, Apple and frugal mode keep what they
   did (`docs/ENGINEERING.md`, "Which device renders a drag — 29 September").
-- 🟡 **RENDER-018**: The decode's passes on Metal, for the iPhone, the iPad
+- ✅ **RENDER-018**: The decode's passes on Metal, for the iPhone, the iPad
   and the Mac. Safe math (a patched wgpu-hal: fast math failed the tolerance
   on five of nine bodies), unified-memory buffers, 8 M-pixel submissions;
   every plane its own buffer and in a buffer the passes before it are done
@@ -1779,9 +2099,14 @@ dependency at all.
   50 MP one in f16 (1:1 only, never an export). The editor's proxy on Metal
   on a Mac or iPad, frugal or not; the mosaic's on an iPhone; 1:1 cut from a
   frame Metal developed whole. Linux's card output is bit for bit main's.
-  Built and tested on Linux; off in the Apple app until the MacBook has run
-  the tolerance test and the timings on it (`docs/ENGINEERING.md`, "Metal
-  for the Apple apps").
+  On in the Apple app since 28 September (Numa-mac `0508fbf`, TestFlight
+  41): the MacBook passed the tolerance test in safe math on 0.29.0 — nine
+  bodies, at most 1 level in f32 (2 on the X-T5) and 1–2 in f16 — and an
+  iPhone's guessed limits put 20–24 MP frames on Metal in f32, 40–50 MP in
+  f16 and the rest on the processor (mac-bench run 5, Numa-mac
+  `docs/APPLE_PLAN.md`, "Metal"). Add-ons › Speed › Graphics Processor
+  (Metal) turns it off. Not measured on a real iPhone or iPad
+  (`docs/ENGINEERING.md`, "Metal for the Apple apps").
 - ✅ **RENDER-023**: Numa's own profile for every body the CC0 raws allow.
   The raw.pixls.us corpus grew to up to four CC0 raws a body (663 more,
   20.2 GB; Fujifilm, Sony, Canon and Nikon first), and every body with two
@@ -1805,6 +2130,52 @@ dependency at all.
   lost to the matrix (0.0105 against 0.0101); the other four have no second
   scene on raw.pixls.us. The X-T5's held (0.0375 → 0.0308 on five frames of
   other scenes, Adobe Standard 0.0372). 21 ship.
+- 🟡 **RENDER-025**: A camera profile for the photographer's own camera,
+  from their own neutral photographs. A row at the end of Preferences ›
+  Add-ons › Camera Profiles ("een klein beetje verstopt", 5 October) asks
+  which camera — the bodies behind the libraries' raws, the open
+  photograph's first — and says what it takes: at least eight
+  raws from that body in its standard colour (Fujifilm: Provia at Color 0;
+  Sony: Creative Style or Look Standard; Canon: Picture Style Standard, not
+  Auto; Nikon: Picture Control Standard; saturation 0), from more than one
+  day. Then it finds them in every library by the style in their maker
+  notes, fits a profile against the camera's own JPEGs as RENDER-023 does,
+  and tests it on a whole session the fit never saw. Kept only when it comes
+  out nearer the camera than what Automatic gave before; then it is "Your
+  <model>" in the photographer's profiles folder, and Automatic takes it
+  first. A make whose style Numa cannot read counts every frame, and the
+  dialog asks for neutral ones. The photographer, 4 and 5 October: "dan
+  hoeven we het niet perse mee te leveren maar kunnen we mensen hun eigen
+  camera gewoon laten fitten"; "eigenlijk alleen met neutrale foto's";
+  "Sony canon en nikon zijn volgens mij allemaal groter dan Fuji dus die
+  mensen moeten het ook kunnen doen." His X-T20 (81 Provia frames, 2022):
+  −12 % on another day's frames, 11 s (`docs/ENGINEERING.md`, "The
+  photographer's own"). Linux only so far.
+
+- ✅ **RENDER-024**: As Shot — a look that follows the camera's own JPEG of
+  this very photograph. Every raw carries the camera's rendering of it: the
+  film simulation, the recipe (Colour, Highlight and Shadow tone, DR, the WB
+  shift, Clarity) and the camera's choices for that frame, which no table per
+  simulation can carry (RENDER-006). Fitted per photo in a third of a second
+  (`numa_io::camera_look`): Numa's untouched render and the embedded JPEG at
+  1104 px, lined up for scale and shift, the JPEG's clipped pixels and the
+  edge left out, averaged 4×4; a third-order polynomial in display RGB, 20
+  terms a channel, held toward identity by anchors over the cube; above the
+  brightest value the JPEG showed unclipped it fades back to Numa's own, so
+  the raw's highlight headroom stays. The 61 numbers are kept in the document
+  and render identically anywhere; applied as a 33³ table where the LUT is,
+  before it, with a Strength, so Light and Colour still act first. Copied
+  with Colour, in history and presets; pasted, it follows each photo's own
+  JPEG (`fill`). Linux: Looks › From the Camera, under the profile, with what
+  the camera was set to (the Fujifilm MakerNote's recipe; "The camera's own
+  rendering" elsewhere). Refused where there is no JPEG, for a JPEG or HEIF
+  original, a merge, or a JPEG that does not line up (correlation under 0.8).
+  `tests/camera_look_fit.rs`, held-out 8×8 blocks: 389 CC0 raws of eight
+  makes, ΔE2000 2.85 untouched → 0.96 (p90 5.06 → 2.31); 64 X-T5 frames,
+  2.61 → 0.67, where a table per film simulation gets 1.37
+  (`docs/ENGINEERING.md`, "As Shot — 4 October"). The Apple apps have the
+  document field and the render, not the tile; their export does not fill a
+  pasted As Shot yet.
 
 ### OPTICS — Lens corrections
 
@@ -2113,31 +2484,17 @@ dependency at all.
   straighten and back, gives the whole frame again. Keystones and angles go
   through one fit (`crop_inside`), which also no longer grows a crop past the
   size it was drawn at.
-- ✅ **GEOM-002**: Auto perspective, from the photograph's own lines.
-
-  In a frame with converging verticals, how far a line leans depends on where
-  it is: lines left of centre lean one way, lines right of it the other, and
-  the lean grows with the distance from the middle. So the fit is *lean against
-  position* — one weighted least squares over the edge pixels, with no Hough
-  transform to tune and no vanishing point to find. Its slope is the keystone;
-  a lean every line shares whatever its position is not a keystone at all but a
-  camera that was not level, and that is the fit's intercept, so the straighten
-  angle falls out of the same arithmetic.
-
-  Which edges get a vote is decided by their gradient: an edge runs at a right
-  angle to its own, so a vertical line has a horizontal one. Anything within a
-  third of a right angle of upright votes on the vertical, anything that near
-  horizontal votes on the other, and a diagonal votes on neither because a
-  diagonal has nothing to say about which way is up.
-
-  It declines. Below four hundred edge pixels there is nothing to fit, and a
-  fit to nothing is a confident wrong answer; below two on the slider there is
-  nothing worth correcting, which is what a frame of foliage measures — no
-  architecture, but a great many short edges that fit to something very small.
-  A photograph it cannot read is left alone and says so.
-
-  Pressed twice it gives the same answer: the frame it measures is the one
-  without any correction on it, so it replaces rather than compounds.
+- ✅ **GEOM-002**: Auto perspective, from the buildings' vanishing point
+  (1 October; it was a fit of lean against position, whose intercept a
+  keystone biases). Perspective › Auto in the Crop tool and **Square Up** on
+  Auto's card both read GEOM-005's scene read: the vertical keystone that
+  sends the buildings' vertical vanishing point to infinity, `−200·p`, as the
+  Vertical slider has it — pressed twice it says the same thing. Only where
+  buildings fill 8 % of the frame and the fit's lean is sure to 0.5°: on the
+  demo library's distant villages and a hut among palms it came out at −6 to
+  −12, unsure by 0.8–2.6°. Refused on a photograph with masks or healed spots,
+  which nothing carries across a keystone yet: "Verticals not corrected — your
+  masks or spots would move". Square Up takes the roll from the same fit.
 - ✅ **DOC-006**: Undo and redo — and a snapshot put back is now the whole
   snapshot.
 
@@ -2176,11 +2533,142 @@ dependency at all.
   whichever way it is turned, and the crop, its straighten angle and the
   perspective are mirrored with it. In the history as "Flip". *Masks and
   healed spots stay where they were drawn, as they do after a quarter turn.*
+- ✅ **GEOM-005**: Auto straighten, from what the photograph shows (P1 of
+  `docs/PLAN_AUTO.md`, 1 October; the histogram of every line's angle it
+  replaced counted a sloping ridge and a receding pier as level). A **scene
+  read** (`auto::scene`), made once in the frame as shot — the turn and the
+  mirror, no crop, angle or keystone — and kept in the catalog (`auto_read`),
+  holds three kinds of reading, each kept as geometry so a keystone changed
+  later is taken into account:
+  - **The sea** (`auto::sea`): where the segmentation has sky directly on sea
+    or water across 40 % of the width, nothing standing on it and no land;
+    each column moved onto the strongest change of log luminance within two
+    cells along a continuous path, fitted with a deterministic RANSAC over
+    every pair of 64 columns and Tukey total least squares, and refused when
+    curved, broken or short. A lake's line needs a second reading beside it.
+  - **The buildings' vanishing point** (`auto::evidence::vanishing`), fitted
+    directly as `l = t + p·(l·y − x)`, so the roll is not biased by the
+    keystone; σ by resampling strips of the frame.
+  - **Trunks and posts** where there are no buildings: the same fit, at least
+    three structures apart that crowd round it, never on sloping, receding or
+    slope-following classes, people or animals. **Offered, never applied
+    alone**: on the demo library's hills and streams they agreed on tilts that
+    were not there.
+
+  Readings that disagree are refused unless it is the sea where the camera's
+  pitch puts the horizon; σ above 0.5° is refused; under 0.15° is "Already
+  level"; past 8° is "looks deliberate", offered when it is a sea. Auto applies
+  a level only where the crop it costs (`auto::corners`) loses under 5 % of the
+  area, cuts no face, cuts no person or animal that was whole and none the
+  frame already cut by more than a cell and a half, and keeps the horizon off
+  the edge, moving the crop within the 5 % if that is what it takes;
+  otherwise it offers it. The straighten is Auto's only at 0 or at what
+  Auto wrote (`AutoRecord.angle`). Straighten › Auto in the Crop tool reads the
+  same scene and applies its answer as asked, naming what it went by.
+  Measured on 91 of the photographer's frames (release, 16 threads; a first
+  run, with trunks and posts still able to level alone, and without eight sea
+  frames that hit an indexing bug fixed since): no level on sloping land or a
+  deliberate tilt; turned by known angles, the sea comes back within 0.014°
+  median and 0.13° at the 90th percentile, the buildings within 0.08° and
+  0.21°; a read takes 0.6 s on the processor. Again on 204 frames from
+  Japan, South America, Italy and Maastricht on 2 October: no level on
+  sloping land or a deliberate tilt, buildings within 0.10° median on turned
+  reads, and one failure — a breakwater in haze read as the sea's horizon, on
+  a turned read (`docs/PLAN_AUTO.md`, Status). The camera's
+  own roll (Fujifilm, maker-note 0x144d), checked against the read on 34 of
+  the photographer's frames: the read's sign, but 0.4° off it at the median
+  and 1.4° at the 90th percentile, so it is a bound — a camera that read
+  level refuses trunks and posts claiming more than 1.5° — and never a level
+  on its own.
+
+- 🟡 **GEOM-006**: Crops offered by Auto, never applied unasked (P3 of
+  `docs/PLAN_AUTO.md`, first version 2 October, second round 4 October).
+  Auto's card gets a Crop row: up to three proposals, each saying why ("1:1 ·
+  the subject on a third · 13 MP"), and a toggle group "As shot · 1 · 2 · 3"
+  — each choice its own named step, the light measured again — with the
+  proposals dashed over the photograph while "as shot" is chosen; the
+  pointer over a number draws that crop and the others faint. Candidates in
+  the frame's own shape, 4:5 or 5:4, 1:1 for a compact subject, 16:9 with a
+  horizon, and the other orientation for a tall subject in a landscape frame
+  (the birder's card), scaled down to 8 MP of the original; scored on the
+  subject on a third or centred, room in front of a face turned aside, the
+  horizon on a third, area, room round the subject, and the edges — no
+  sliver of a passer-by or a thing at the border, no bright mass along it;
+  "as shot" has to be beaten by 0.08 or the row says "Nothing in the frame
+  asks for a crop". No face cut or crowded at the top; a person may be cut
+  at the chest, the hips or mid-calf below their face — never at the neck,
+  waist, knees or ankles, placed from the face's height — and otherwise kept
+  whole, none cut deeper; an animal whole, by the grid and by YOLOX's box;
+  the horizon off the edges. Anyone who is not the subject and shows no
+  face may be cropped out altogether, never sliced. A crowd the
+  segmentation joins is split into its people by YOLOX's boxes and the
+  faces; the subject is the one under the camera's single AF point or with
+  a face, standing a point clear of the rest — people alike are one subject
+  together, and when together they fill more than 40 % of the frame no one
+  stands out and no crop is offered. With nobody in the frame, YOLOX's
+  largest animal or thing (a train, a boat) is the subject; with nothing
+  named, what the matting model sees stand out (a pagoda). Healed spots on
+  the photograph: no crops offered, they would move. Against the
+  photographer's own ten real crops: 3 within IoU 0.7, 8 within 0.5, none
+  cut through a face, a joint or an animal — the plan's gate is half within
+  0.7. Resting the pointer on a number shows the photograph as that crop
+  would leave it (5 October), with the light as it is; taking it measures
+  the light again.
+
+  The gate is not met and weights do not meet it (5 October): the area and
+  content weights at 0.15, 0.08 and 0, 16:9 offered without a horizon, and a
+  second place kept for a crop tighter than the first, every combination on
+  his 26 crops — at best 4 of the 10, and chosen leave-one-out (on nine,
+  tried on the tenth) 1 of 10. His crops are choices the rules cannot
+  predict; learning them is P5's, "Edits like you". The proposals stay ideas,
+  never applied.
 
 ### ADJ — Adjustments
 
 - ✅ **ADJ-001**: Exposure, contrast, highlights, shadows, whites, blacks — and
   Auto, which is a button and never a default.
+
+  **One Auto levels first, then sets the light, and says what it did on a
+  card** (P1 of `docs/PLAN_AUTO.md`, 1 October). The button on the Light page
+  and the **A** key read the photograph once (GEOM-005's scene read), level it
+  where the corners allow, and then measure the light on the frame as
+  levelled. Each is its own named step — "Auto · level", "Auto · light" — so
+  Ctrl+Z takes them back one at a time. A card at the top left of the
+  photograph has a row per part: the level and what said so ("0.5° by the sea
+  · keeps 97 %"), or why not ("No horizon or upright lines clear enough to
+  level by", "Straighten is yours (+1.0°) — left", "No level: healed spots
+  would move"); the buildings' keystone, refused with masks or spots on the
+  photograph; and the light ("Exposure and the endpoints set", or "already
+  right" when no slider moved). Each row is the part's name over one line of
+  why, with a switch: on where Auto applied it, off where it only asks, and
+  turning one measures the light again on the frame as it then is. At the
+  foot, **Compare** and **Undo All**; no toast beside the card. The sea it levelled by is drawn along
+  the horizon with its angle while the card is up, and **Shift+Space** shows
+  the photograph as it was before the press. In a burst whose sharpest frame
+  is another one (CULL-002's, the faces' sharpness where there are faces),
+  the card says which — "Frame 1 of 2 is the sharpest of this burst" — with
+  **Open**; and **Same Light** gives the burst's other frames this one's light,
+  the way Evoto's Match holds a shoot to a reference: Auto's ends as written
+  here, and each frame an exposure of its own so its middle lands where this
+  one's does (within 0.05 EV on a synthetic burst metered half a stop apart),
+  sliders set by hand on a frame left, levels each frame's own. Where Auto lit a subject, its mask's edge is drawn while the card
+  is up, the way a selected mask's is, so a wrong subject shows before the
+  light is judged. **Compare** on the card puts the photograph before Auto in
+  the reference pane beside it (CANVAS-006's, `hold_frame`). A merge is not
+  read; its light only. Not yet: sharpness measured on the subject's box
+  rather than the frame.
+
+  **The whole photograph first, a subject's mask only for backlight** (30
+  September; the mask's last rule, replaced on 2 October — below). The
+  photographer: "het moet de foto netjes belichten over de hele foto heen …
+  als een masker daarvoor beter werkt gebruik je wel een masker, maar het
+  moet niet zomaar hetzelfde riedeltje doen steeds". A
+  subject below 0.40 was lifted to 0.55 in a mask of its own, and a dark
+  jumper in a dim room was enough; now the subject has to sit a full stop
+  below the frame's own middle as well, and is lifted to the frame's level
+  rather than above it, and only a silhouette — under 0.22 on screen and a
+  stop and a half below the frame: dark shirts on a sunny pitch were lifted
+  1.7 stops by the first rule.
 
   **The exposure is measured on the ends, not the middle**, and the first
   version was measured on the middle and was wrong for it. Putting the median
@@ -2195,9 +2683,56 @@ dependency at all.
   pulled it to 0.461, and the picture came back a full stop darker than anyone
   intended. Over twenty-four frames the old rule moved the exposure on all
   twenty-four; the new one moves it on one — the only frame where an end had
-  actually run out. It comes down when the brightest half per cent is blown and
-  goes up when nothing is near white at all, and between those the camera's own
-  answer stands.
+  actually run out. It goes up when nothing is near white at all, and
+  otherwise the camera's own answer stands. It used to come down too, up to
+  ¾ of a stop, when the brightest half per cent was blown; since 5 October a
+  blown top end keeps the exposure and Whites and Highlights bring it in,
+  because coming down took the facades and faces with the sky (of seven
+  daylight frames brought down the whole ¾ on the blind set, four looked
+  worse than untouched and one better). Only a subject that itself burns out
+  still takes the exposure down. Already-good frames moved: 5 of 30 before,
+  2 of 30 after.
+
+  **Since 2 October the subject is lit by the exposure, not by a mask.** The
+  photographer: "ik vind het oke als er highlights of shadows clippen als het
+  betekent dat we het subject wel goed uitlichten (zonder maskers)". Where
+  the semantic model names a person or an animal, the matte has its shape
+and it fills 2 % of the frame (a cyclist of a few pixels took a blue-hour
+  street to daylight), Auto measures what of it is lit — a person's face,
+  and nothing for a person with none to see; an animal whole; with
+  Fujifilm's single AF point off the subject, nothing, and on it the face
+  nearest it — at its 90th
+  percentile, and when that sits below 0.55 on display and a stop or more
+  below the frame's upper middle (in shadow or against the light, not a dark
+  room), sets the frame's exposure — never so far that the subject's own
+  brightest two per cent pass white —
+  to bring it to 0.72, up to two stops (one on a finished picture); when the
+  subject's brightest two per cent are past white, it brings the exposure
+  down until they are not, up to a stop. Highlights then recovers what it can
+  of what went up with it, and the card says what it cost. A frame shot a
+  stop or more down, or low-key in itself (its middle under 0.15, or a tenth
+  of it near black), is not brought up, nor its black lifted ("Exposure set for
+  the face (+1.3); the brightest parts may clip"). Auto lays no mask and
+  no HDR; one it laid before goes with the next press, and a subject mask of
+  the photographer's means the ends set the exposure. The paragraphs below
+  describe the mask this replaced.
+
+  **What the file says, and the lights** (P2, 4 October). A stop or more of
+  compensation down holds the frame low-key in manual exposure too: the
+  photographer's M frames with compensation have Auto ISO moving under them.
+  Compensation up is not held — a hall shot at +1 that still came out dim
+  wanted lighter. DR200 and DR400 keep their headroom (no positive Whites); a
+  frame shot as Monochrome, Sepia or Acros gets no Vibrance, and faces over 2 %
+  of the frame cap it at 12. The top end leaves out what the segmentation calls
+  a light — lamp, light, chandelier, streetlight, sconce, traffic light — and on
+  a night every bright spot under 0.05 % of the frame, so a street of lamps no
+  longer takes a night down ¾ of a stop; by day the spots stay (sky between
+  branches). Fog, haze and high key (the middle nine tenths within 0.35 of
+  display) get no Blacks. A subject all but black against a frame three stops
+  brighter, under a warm light or with a stop down dialled in, is kept as a
+  silhouette. Measured against P1 on 30 night frames (none brightened), 30
+  already-good frames (2 changed, Whites only) and 149 frames from every trip
+  (16 changed, none in exposure).
 
   **It looks at the subject and builds the photograph around it**, and it does
   that with a mask rather than with a slider. A frame with every tone in its
@@ -2231,9 +2766,10 @@ dependency at all.
   automatic correction you cannot see the workings of is one you cannot
   disagree with — and taking it back is one click.
 
-  The mask is `Segment` rather than the pixels already in hand, so it survives
+  The mask is a recipe rather than the pixels already in hand, so it survives
   being saved: a catalog row keeps which classes a mask is made of, not a
-  megabyte of alpha.
+  megabyte of alpha. (This said `Segment`; the code makes `Shape::Subject` with
+  the matte on, which is a recipe as well. Corrected 1 October.)
 
   **The subject is measured on the pixels its own mask covers**, which took two
   goes. The first version measured with the matting model and adjusted a mask
@@ -2251,6 +2787,29 @@ dependency at all.
   Pressed twice, one subject: the previous mask is replaced rather than
   stacked, or the exposure doubles every time the button is hit.
 
+  **Only Auto's own mask, and only while it is as Auto left it** (1 October).
+  Auto used to delete every Subject mask without a name, and the Subject chip
+  makes its mask without one, so pressing Auto threw the photographer's own
+  mask away with its curve and its grade. Auto's mask now carries the
+  adjustment Auto gave it (`Mask.auto`) and the name "Subject · Auto", and
+  `Mask::as_auto_left_it` holds only while the whole mask is still what
+  `Mask::auto_subject` made: a tuned slider, a new name, a softer edge, a
+  curve, hiding it, inverting it or painting on it makes it the photographer's,
+  and so does another mask subtracting it. Auto neither removes such a mask nor
+  lifts the subject again on top of it; the toast says the light was set around
+  their own subject mask, and the HDR under it stays. Auto's own mask is
+  replaced where it stands, with its id, so nothing that refers to it breaks.
+  The lift the old Auto left (unnamed, with the photograph's Sharpening and
+  Colour noise in it and the edge `set_matte` gave it, `Mask::from_old_auto`)
+  is recognised and replaced on the next press; a mask from the builds before
+  the Subject chip made local masks could look the same, and would be replaced
+  too. A new Auto mask never takes an id that a deleted mask left behind in
+  another mask's subtractions. Duplicating Auto's mask makes a copy that is the
+  photographer's. Auto never selects its new mask, so the panel stays on the
+  photograph and the button stays in reach. A mask selected while Auto measured
+  stays selected, and if it is Auto's own and the answer replaces it, its
+  sliders are read again, so the next nudge cannot write the old lift back.
+
   **Auto lifts what the model can name, and nothing else** (FT-025). Measured
   over thirty photographs along the path the application actually takes:
   fourteen of them never reach the semantic model's opinion — no person, no
@@ -2264,9 +2823,9 @@ dependency at all.
   photographer choosing the frame is what makes "what stands out" the right
   question.
 
-  **The button is off the page for now**, at the photographer's call, until
-  the subject mask is reliably the shape of the subject. Everything behind it
-  stays built and measured; showing it again is two lines in `window.rs`.
+  **The button is on the page again**: `light.rs` builds and shows it. It had
+  been taken off, at the photographer's call, until the subject mask was
+  reliably the shape of the subject.
 
   **A refinement that keeps a sixteenth of the mask is declining** (FT-025).
   `matte::refine` is asked where an edge is; four of the sixteen frames where
@@ -2420,6 +2979,81 @@ dependency at all.
   stop over the bottom quarter, where the base curve had already crushed
   everything it could have moved. Auto predicts both with the render's own
   curve.
+
+  **What the photographer set, Auto leaves** (1 October). Auto wrote its six
+  sliders unconditionally, whatever was there: a bracket merge's HDR 50 went to
+  0 on the slider that has no row, and an exposure, a Whites or a preset's
+  Vibrance set by hand went to Auto's number. Now the document keeps what Auto
+  last wrote (`Document.auto`, an `AutoRecord`), and a slider is Auto's to set
+  only while it rests at 0 or still holds that value (`AutoRecord::may_set`).
+  Anything else stays, and is named in the toast ("exposure left as it was"),
+  HDR apart, which has no row. HDR keeps its place as the one slider Auto sets
+  for itself (HDR-001), on the same terms. Pressed again after a crop, Auto
+  replaces its own answers and nothing else. The record travels with undo and
+  the history (`EditState.auto`), so an undone answer is still Auto's; a step
+  that only changes the record is called "Auto". Which
+  sliders are Auto's is decided when the button is pressed and checked again
+  when the answer lands, so one reset in between stays reset.
+
+  **And the endpoints see the photographer's look.** `display_at` used to
+  build its Basic from nothing, so after Contrast +40, a tone slider or a
+  curve the ends landed somewhere other than where they were aimed. Whites,
+  Blacks and Highlights are now solved through the document's own contrast,
+  tone sliders and composite curve (`Look` in `auto.rs`), with the sliders
+  Auto may set at rest; a test aims the top end through Contrast +40 and shows
+  the old solve missing it. The exposure is not: it answers to the capture,
+  decided on the camera's rendering as before, because through the look a
+  Highlights −100 that recovers a sky reads as a dim frame and Contrast +45 as
+  a blown one, and Auto would move the whole photograph by ¾ of a stop against
+  the photographer's own choice. An end the photographer has shaped is theirs:
+  with their Highlights or Whites, or a curve that rolls off the white, Auto
+  leaves the top end alone, its own earlier answer there included; with their
+  Blacks, or a curve that fades the black, the bottom. HDR and Clarity are
+  local and not in `Look`, so through a kept HDR the top end lands a little
+  short of where it was aimed.
+
+  **Measured on the frame that is shown** — its crop, angle, turn, mirror and
+  keystone; the manual Lens sliders are left out, as they are from the mask
+  frame (1 October). `auto_tone` measured the
+  uncropped, unturned working image while the subject's alpha came from the
+  mask frame, which is cropped, straightened, turned, mirrored and keystoned.
+  After a crop to the right half a subject at the middle of the picture was
+  read at the middle of the whole frame; on a turned or mirrored photograph the
+  alpha fell on another region altogether; and a blown lamp cropped away still
+  pulled the exposure down. `auto::framed` gives `tone` the working image
+  through the same geometry the mask frame is made with. A test finds a dark
+  subject through five framings — the old path misread four of them — and
+  another crops a lamp away and sees the exposure stop answering to it.
+
+  **The lift is a local adjustment and nothing else.** It was built with
+  `Basic::with`, which starts from the photograph's defaults — Sharpening 25
+  and Colour noise 25 — so the subject was sharpened and denoised a second
+  time inside its mask. It starts from `Basic::local()` now, as every mask
+  does.
+
+  **Blacks has purchase since FT-028, and Auto now leaves a dark end where
+  this camera renders it** (1 October). "Blacks moves on none" stopped being
+  true when FT-028 rebuilt the control, and nobody re-measured: solved against
+  `BLACK_POINT` = 0.035 through the render's tone curve, a darkest half per
+  cent displayed at 0.06, 0.07, 0.08 or 0.09 — the band this entry measured for
+  a well-rendered frame off this camera — came out as Blacks −21, −30, −41 and
+  −53. Hidden contrast on almost every frame. Blacks now moves only outside
+  0.035–0.09, from Auto's own black point to the top of that band: up to 0.035
+  when the end is crushed below it, down to 0.09 (`DEEPEST_RENDERED`) when it
+  sits above, and not at all between.
+  Computed, not measured on photographs; `docs/PLAN_AUTO.md` §9 is the corpus
+  that decides whether the band stays.
+
+  The harness takes the path the application takes now: `run()` renders the
+  mask frame, asks `subject_mask` (the named gate the button uses, which the
+  harness used to skip) and measures `framed`. `CROP`, `TURN`, `MIRROR` and
+  `KEYSTONE` frame the document first (`CROP=x,y,width,height[,angle]` in
+  fractions of the frame, `TURN=90`, `180` or `270`, `MIRROR=1`, `KEYSTONE` the
+  Vertical amount), `FRAMES_LIST` names the frames, one path a line, and
+  `OUT_CSV` appends one row per frame. Cargo runs the test inside
+  `crates/numa-render`, so give absolute paths:
+  `FRAMES_LIST=$PWD/frames.txt OUT_CSV=$PWD/auto.csv cargo test -p numa-render
+  --release what_auto_now_does -- --ignored --nocapture`.
 - ✅ **ADJ-002**: Tone curve. Point curve on the composite channel, with the
   histogram behind it and the black and white points draggable. Monotonic cubic
   (Fritsch–Carlson), so a steep segment cannot make the curve turn back on
@@ -2664,6 +3298,38 @@ dependency at all.
   ("LUT"). A name whose file is gone renders as no LUT. In a wide export the
   table reads that space's values as if they were sRGB's (a `ponytail:` in
   `encode`).
+- ✅ **FILTER-010**: Mist — one slider, Black ↔ White, -100..100 through a
+  neutral zero, after a Tiffen Pro-Mist in front of the lens. A share of the
+  light is moved sideways in linear light, colour by colour, so a sodium lamp's
+  halo is orange and the frame keeps its brightness: what a pixel gives up its
+  neighbours receive. Two widths, a near halo (1/90 of the long edge) and a far
+  one (1/16), each three box passes so a point of light comes out round.
+  Below zero Black Mist: only what is over about half a stop above middle grey
+  scatters, so the lamps glow and the blacks stay deep. Above zero White Mist:
+  everything scatters, a fifth of it over the whole frame, which is the milky
+  veil that lifts the blacks. Placed after the tone map, before the masks and
+  the grade, where the glass would be. The frame's, not a mask's; copied with
+  the tone, a step in history ("Mist"). Worked out at a quarter size: about
+  2 ms on a 900-pixel proxy.
+
+  And the light sources glow more than a wall does. The sensor clips a lamp at
+  the same white as a lit wall though it was far brighter, and the glass
+  spreads light in proportion to how bright it really was; so the light
+  sources get twice the scatter, the extra added as glow rather than taken
+  from the lamp. It was a second slider, Light sources, for one evening; the
+  photographer could not tell what it was for, so it is its resting value and
+  always on. A source is found as a morphological
+  top-hat in stops (opened over a square 1/30 of the long edge: smaller and at
+  least 1–3 stops brighter than its surroundings) that is also 2.5–4 stops over
+  the frame's log average — which is what keeps a white car on daylit tarmac
+  from glowing like a headlight, the first try's mistake. Tried on night
+  streets in Osaka (lamps, the tower's lights, lanterns and signs found; the
+  people and the facades not) and a daylit crossing (nothing found).
+
+  ponytail: a frame with mist is rendered whole at 1:1, as Dehaze is, and the
+  card hands it to the processor. Handing tiles the frame's halo, as
+  `measure_tone` does for the tone map, and a card pass are the upgrades if
+  either is felt.
 
 ### DETAIL — Sharpening and noise
 
@@ -4124,6 +4790,14 @@ dependency at all.
   for two thousand — and the sweep is debounced, because a scroll says so on
   every frame and the answer changes by a row.
 
+  Moments the same since 7 October: its tiles start empty and a sweep gives
+  pixels to the tiles within a screen of the view and takes them back past
+  three. Every tile of a 2346-photograph shoot had been given a texture at
+  the grid's size as Moments opened, and the window's thread was busy for
+  10.7 s as they came in (`numa-scratch/kiezen/rig`, Xvfb and cairo); after,
+  0.8 s, then idle (the photographer: "het lagged nu nog een beetje als je
+  het opent").
+
   Measured after: **215 MB** with the folder open, and **236 MB** after
   scrolling the whole library end to end and back, where it stays. The
   filmstrip is the same list swept by the same code: 2336 frames, 137 decoded.
@@ -4451,7 +5125,9 @@ dependency at all.
   by the power-saver profile or the battery, and by the Apple apps through
   `set_frugal`. Frugal, nothing is decoded ahead until two steps the same
   way, and background work runs on a quarter of the cores. The decode ahead
-  always runs on its own low-priority pool and stops when it is let go.
+  always runs on its own low-priority pool and stops when it is let go; the
+  flag stays with that decode, not with the thread rayon runs other jobs on
+  while it waits.
 
 - ✅ **PERF-025**: An opening's colour stage is made off the main thread, and
   by the decode ahead with the neighbour's stored edits.
@@ -4572,11 +5248,13 @@ dependency at all.
 - ✅ **PERF-063**: An uncompressed raw is unpacked in two runs instead of a
   task per row: the same speed for a sixth to a seventh of the processor time
   (a 42 MP ARW 78 → 12 processor-ms).
-- 🟡 **PERF-064**: On the iPhone, iPad and Mac the core's threads say how
+- ✅ **PERF-064**: On the iPhone, iPad and Mac the core's threads say how
   much they are waited for: the photograph on screen at user-initiated, the
-  decode ahead at background, which keeps it on the efficiency cores. Needs
-  the Apple app to call `power::start_threads` first; not yet measured on a
-  device.
+  decode ahead at background, which keeps it on the efficiency cores. The
+  Apple app calls `startThreads()` first, in `NumaApp`'s `init`, since 0.29.0
+  (Numa-mac `7ba3fd2`, TestFlight 41). Measured on the MacBook's bench
+  (`docs/MAC_BENCH.md`, run 3: background 3.5–4× less energy), not yet in
+  the app on a device.
 - 🟡 **PERF-065**: The editor's proxy averaged from the mosaic, 6 % faster
   and the same to the bit. The two-pass separable warp proposed for it was
   measured against the stage's real cost and left as a proposal: the time
@@ -4645,6 +5323,21 @@ dependency at all.
   to 0.26), 566 ms and +8.1 GB of the card against float16's 415 ms and
   +8.2 GB (float32 as exported: 887 ms, +12.3 GB). The download is
   `birefnet_f32.onnx`, 973 MB; the float16 file answers until it is fetched.
+- ✅ **PERF-072**: A quiet lane for work nobody asked for (`power::quietly`):
+  the photographs read for search by words, one job at a time across Numa,
+  on two threads at nice 19, each job followed by a rest twice its length;
+  the words model is loaded on two threads for it. The photographer, 7
+  October: on a library opened for the first time words and Numa's work
+  ahead in Moments started at once, words at every core and the work ahead
+  at full priority with the card, "wat meteen weer mijn computer laat
+  loeien"; words were to go "op een laag pitje". The work ahead is no longer
+  unasked (FLOW-018, Let Numa Do…). It was on the lane for a day, where it
+  seemed to come back with no light; measured again on 7 October
+  (`numa-scratch/kiezen/rig-pool/probe.sh`), the lane, `power::background`
+  and a plain thread give the same proxy, frame and light bit for bit on all
+  22 Garden moments — the first four have none, and the slower lanes had not
+  reached the rest. Asked-for work runs on neither because it is waited on.
+  Linux; the lane is in the shared core.
 
 ### UX — Experience
 
@@ -4734,7 +5427,11 @@ dependency at all.
   found two of them nobody could name); nine labelled ones down the side fit.
   A 5 px dot marks a tab whose values are not all at neutral, read off the
   page itself rather than from a table of which slider belongs where — P1
-  moved nine sliders between tabs and P2 will move more.
+  moved nine sliders between tabs and P2 will move more. What is missing:
+  the page shows Grade one range at a time, All by default, so a grade on
+  Shadow, Mid or High while another range is chosen leaves Grade without its
+  dot (`refresh_rail_dots` reads only the sliders on the page; seen in the
+  inventory's screenshots 10 and 17).
 
   The panel is **372 px** where it was 240, of which the rail takes 66 — so
   the page itself gained 66. Measured at 1920×1080 maximised, the stack gives
@@ -5046,9 +5743,9 @@ dependency at all.
   or two (Sharp or Soft, Blown highlights, Deep shadows, Almost empty,
   faces, Eyes closed?, Slow for the lens) and how it was taken with
   Analyse's suggestion — not every measure with its threshold, which read
-  as a report. Selected is a ring in Numa's accent. Back from the editor or
-  the Libraries page, the keyboard is the grid's, so Space opens the loupe
-  rather than pressing Add Folder.
+  as a report. Selected is a ring in Numa's accent. From the start, and back
+  from the editor or the Libraries page, the keyboard is the grid's, so Space
+  opens the loupe rather than pressing Add Folder.
 - ✅ **UX-027**: The editor's bar, grouped by meaning (UX study, 30
   September, drawing "Editor · de balk", A). The verdict on the left — Back,
   the five stars, Pick and Reject; which photograph in the middle — the path
@@ -5190,6 +5887,326 @@ dependency at all.
   was "nog veel kleiner". Measured in the window's coordinates: in the
   handle's own the strip shook and the window stopped answering.
 
+### FLOW — Workflows: Rapid
+
+The research of 30 September (report and canvas "Numa Workflows") and the step
+back of 1 October (canvas pages "Een stap terug" to "De review, getekend";
+report "Numa als je eigen editor"): Numa stays the whole editor, and a
+photographer who needs speed gets a way of looking at a library with only the
+few things a kind of shoot is adjusted by — "zonder dat ze het hele edit
+programma door hoeven als ze toch maar 4-5 dingen aan hoeven te passen", and
+"eerder een alternatieve view van de library", not a route walked in and out
+of ("je gaat een route in of uit ipv 'laat me dit vanaf deze kant
+benaderen'"). On Linux, on the `workflows` branch, on hold (3 October).
+
+- 🟡 **FLOW-018**: Rapid — the library by its moments, named **Moments** on
+  screen since 6 October, once choosing had moved into the loupe (the
+  photographer: "het woord rapid ook niet echt meer klopt"; Rapid stays its
+  name in the code). View at the left of the library's bar chooses Grid or
+  Moments; it is remembered, and nothing is
+  entered or left. A moment is a run of frames without a pause of five
+  minutes, and one longer than 48 is cut where it pauses longest (across
+  8 563 frames of sixteen libraries, five minutes made 756 scenes of a median
+  five). Its photographs lie in justified rows at their own shape, as in the
+  grid (LIB-015), First Look's larger, and they are the grid's own cards:
+  selected with its white ring, marked by its pills (the pick's ⚑, the stars,
+  the white dot of a frame the photographer edited — quieter than the grid:
+  no Analyse suggestion, and no dot for Numa's own work, which the panel
+  says), Rapid adding no
+  colour of its own — the design system's parts throughout (2 October: the
+  sliders are Numa's, "Numa did" a section, Deliver… the page's one white
+  button, Numa's work ahead a banner, keys in tooltips and the shortcuts
+  window). A burst is a stack — its frames'
+  edges behind the best, "×6", and "Pick a Few" until something in it is
+  picked; a click or ↵ culls it (below). The editor's filmstrip holds a
+  burst together — its frames side by side closer, square where they meet,
+  one line under them, "Pick a Few" on the first, then "2 of 6 Picked" — and
+  only the look: every frame is still its own to click and step through ("ik
+  wilde de burst gecombineerd hebben in de thumbnails in de editor"). A frame
+  with
+  nothing in it, eyes shut, or soft where the shutter cannot explain it *and*
+  the rest of its moment is sharper is dimmed with the reason — soft against
+  the library alone marked whole moments of shallow focus. P, X, U and 0–5
+  mark the tile with the keys and move on; the arrows move; E, ↵ or a double
+  click open it in the editor, and Back returns to Rapid. Space puts it in the
+  loupe, as in the grid — a stack's frames side by side, as a click does —
+  and back in Rapid the keys are on the frame the looking ended on. One bar
+  over Rapid, the library's chips; Deliver… in the header where the grid
+  has Export, and the ways of looking (by time or likeness, First Look,
+  Clipping) under the size button's two sliders — Rapid had a second bar of
+  buttons, and the photographer, 5 October: "er zijn twee toolbars met
+  buttons wat wil je nou van me". First of all Rapid asks the
+  library's kind of shoot, big, in place of the moments until it is
+  answered ("de allerbelangrijkste dropdown rechtsboven vraagt je aandacht
+  helemaal niet"), and under the size button it can be changed —
+  Weddings and Events, Sports, Portraits, Property and Interiors, Products
+  and Food, Wildlife and Landscape, Travel and Street,
+  kept in its own `.numa`. The panel on the right is a moment's, and only
+  when one is chosen: a click on a moment's head sets the whole moment on a
+  quiet fill (an outline doubled a selected photograph's ring) and opens
+  the panel for it, until its ✕, Escape or the head again; the
+  arrows and a click on a photograph leave it where it is, and nothing in it
+  is about one photograph (7 October: "welk moment heb ik geselecteerd dan?
+  hoe weet ik dat? … wat als die groep 250 foto's is?" — it followed the
+  tile with the keys, often off screen, and said This Photo too). What is
+  one photograph's own — Match the Moment to This Photo, Detach from Moment
+  — is on its right-click menu. In the panel: the moment's time, how many,
+  how many picked, and four or five sliders set for the whole moment at
+  once, on its Even layer (FLOW-019; Events
+  and Property: exposure, warmth, highlights, shadows; Sports: exposure,
+  warmth, contrast, noise; Portraits: exposure, warmth, shadows, vibrance;
+  Products: exposure, whites, warmth, contrast; Wildlife: exposure,
+  highlights, contrast, noise; Travel: exposure, warmth, contrast, vibrance).
+  Warmth makes a moment one balance: the temperature, with the camera's own
+  tint of its first frame. Reset puts the moment's sliders back; All Tools is
+  the editor; Next Moment (Page Down) goes to the next one not yet seen, and a
+  moment left is marked Seen. Tiles show their stars, and a dot where the
+  photographer edited a frame.
+  **Let Numa Do…**, only when asked (the photographer, 7 October: "Alleen
+  op verzoek en dan met alle mogelijkheden die Numa kan doen, misschien wil
+  je alleen alles recht laten zetten" — it went through every moment by
+  itself as Moments opened, with a bar across the top, and the fans ran):
+  a button under What Numa did opens a dialog with a switch for each part —
+  Light, Even Exposure, Straighten, Square the Verticals, and Frame where the
+  kind has one — the last choice remembered, then This Moment or Every
+  Moment, the latter with UX-019's toast and its Stop and at the end how many
+  photographs changed ("Nothing in this moment needed it" for one). Asked
+  for, every frame of the moment is done, the ones worked on too; a part
+  asked again replaces only itself, so straightening later keeps the frame
+  Numa placed. The parts: one light per moment from
+  its middle frame (where Auto per photograph made 18 of 40 bursts flicker),
+  plus what it learned of the photographer's style in that light; and the
+  shape the kind wants — Weddings and Travel straightened by the horizon and
+  the uprights (from 0.2°), Property straightened with its verticals squared,
+  Sports framed 4:5 and Products 1:1 on the subject (FLOW-008's placing). The
+  level and the keystone are Auto's (GEOM-005's scene read): only a level its
+  readings agree on, and a keystone of two degrees or more, as the editor's.
+  Portraits get no skin: a document does not keep its faces, so evened skin
+  would show in the editor and nowhere else. Each frame is kept as it was, and
+  what Numa put on it part by part, in the library's catalog.
+  **Even Exposure**: within a moment, each frame is brought in line by what
+  the camera let in — shutter × ISO ÷ f², against the moment's middle — so a
+  frame auto ISO gave a stop more is given that stop back, and the moment's
+  exposure slider sets them all on top of their own correction. By the
+  camera's numbers, not measured brightness, which would grey a close-up of
+  the dress; frames with the flash, without EXIF, or more than 1½ stops out
+  (the light changed) are left.
+  **What Numa did**, in the moment's panel: Light (in numbers), Even Exposure, Straightened,
+  Verticals and Framed, each with a switch for the whole moment. A switch puts
+  the before's value back only where the slider is still Numa's — what the
+  photographer moved since stays. A moment Numa left has Let Numa Do This
+  Moment; Undo Numa's Work… in the library's menu takes all of it back.
+  (Light follows the moment, First Frame | Last Frame, is replaced by Key
+  Frames…, FLOW-021.)
+  **Note…** (N): what is off, in the photographer's words ("te warm", "too
+  dark", "the sky is blown"); before anything happens Numa says how it reads
+  it ("Warmth −300 K"), or that it does not know the words. For This Photo,
+  This Moment, or My Style — this moment and every one like it from now on.
+  **Your Style…** (panel and library menu): what Numa learned for this kind
+  per light (warm, mixed, daylight by the camera's balance) — the mean of the
+  last 20 changes, from sliders set after Numa (one per minute per slider) and
+  notes kept as style — with Forget; and the latest changes, dated, with
+  Undo. A moment's two ends are not learned from.
+  **Moments by hand**: S starts a new moment at the tile with the keys, M
+  merges the moment with the one before; kept with the library.
+  **Clipping** (J, as in Lightroom; remembered): every tile, the burst pair
+  and the check painted where they clip as set now — red where a channel is
+  at its top, blue where all three are at the bottom.
+  **Chapters** (Evoto's Storyline Mode): a moment's head says "Start Chapter
+  Here…" — the kind's chapters (Weddings: Getting Ready, First Look,
+  Ceremony, Portraits, Reception, Party), one's own name, or none — and the
+  chapter holds the moments after it until the next. Each is a heading a
+  click renames; the one scrolled through keeps its name at the top of the
+  list, and that name is a menu of them all, each with its photographs, a
+  click going to one (7 October, of a bar of chapter chips under the filter
+  chips and the name kept under both: "filters met pillen navigatie met
+  pillen nog een keer de title sticky — eenvoud").
+  For Weddings and Events and Travel, Numa offers the first ("Tell the day
+  in chapters?") and the next where the day pauses 20 minutes or more ("New
+  chapter here? A 36-minute pause" — Start First Look, or Not Here, which
+  it remembers), or where the camera's own balance jumps 1 500 K from one
+  moment to the next ("The light went from 3 200 K to 5 600 K"). Deliver counts the picks per chapter and writes them a
+  folder each, numbered in the day's order ("02 First Look/…").
+  **Stacks of the same picture**: a moment's frames are stacked where they
+  are the same picture — a burst, or within Analyse's "same scene" of the
+  stack's first frame, in whatever order they came (`workflows::same_picture`;
+  "als je 50x net niet dezelfde foto neemt wil je er toch maar een of twee").
+  **Numa keeps a few** (Evoto's "per cluster"): a stack says "Numa keeps
+  2" — the best of each stretch of the burst by sharpness and Analyse,
+  never eyes shut or blank, never the whole burst; how many is the kind's
+  (Products 3; Sports, Property, Travel 1; else 2) until set under Stacks
+  in the panel; P on a stack picks them.
+  **A burst in one look** (Evoto's Survey): a click on a stack, ↵ or Space
+  opens its frames side by side in the choosing screen (CULL-015) — the one
+  place a burst is chosen, where Rapid had a page of its own for it — with
+  the keys on Numa's sharpest: Up keeps, Shift+Down puts the rest out and goes
+  back to Rapid, Esc goes back with nothing more done; the keys are on the
+  stack in its place.
+  **By likeness** (Evoto's General Mode): Time | Likeness under the size
+  button;
+  Likeness joins moments Analyse found to be the same scene again ("Setup
+  1 · 10:05, 13:40 and 16:12"), the default for Products and Property.
+  **Its own size**: the library's size button sets Rapid's own photo size
+  and space between while Rapid is on screen ("rapid eigen maat"), kept
+  apart from the grid's. Its tiles load at the grid's thumbnail size, chosen
+  from the monitor (LIB-004): a fixed 360 pixels was stretched nearly four
+  times at the largest size on a 2× screen.
+  **Bursts**: a stack clicked (or ↵) opened the loupe on its frames only —
+  cull mode, with the note "A burst of 6 — pick the few worth keeping (↑ or
+  P), pass the rest (→). 2 picked. Space when you are done." — and back in
+  Rapid what was picked stands on its own in its place, burst or not, the
+  stack keeping the rest (the photographer, 2 October: "als je dan klaar
+  bent zijn het losse foto's ook al was het onderdeel van een burst").
+  **First Look**, under the size button: one frame from each moment as it
+  will go out;
+  a moment that is off is set in its panel, P puts a frame in the teaser, and
+  Share Teaser… writes it out (FLOW-009).
+  **Deliver…**: how many are picked across how many moments, the teaser, and
+  the moments with no pick; Check the Picks First goes through every pick
+  large, one at a time, with its moment's other picks beside it to see they
+  belong together — → next, ← back, X unpicks, E edits and Back returns to
+  the check — and at the end Deliver again, with Export N Picks… and Export
+  Teaser… through the export dialog (FLOW-011). Linux; Apple not yet.
+- ✅ **FLOW-019**: Three layers per moment, live (DaVinci Resolve's colour
+  groups: Group Pre-Clip · Clip · Group Post-Clip). A moment's photographs
+  share **Even** under each one's own edits — the moment's sliders, its
+  white balance, each frame's evening by the camera's numbers — and **Look**
+  over them: As Shot, a preset or a LUT, with a Strength. Between them is
+  **This Photo**. The panel: THIS MOMENT · its name, then Even, This Photo
+  (the sliders the photograph with the keys moved of its own, a double click
+  back to the moment's) and Look, numbered 1 to 3 down in the order they are
+  laid on (top first as layers lie read 3 to 1: "stappen van 3 tot 1 ipv 1
+  tot 3"), each with its switch or count. The moment's values live once, in the library's own
+  catalog; a frame names them, and they are put round its own edits wherever
+  it is read — tiles, the editor, export, a library's prints — so a change is
+  every frame at once and nothing goes stale. An edit in the editor or a
+  paste is written back as the frame's own. Detach from Moment keeps a frame
+  as it looks and lets the moment's changes pass it by; Join the Moment puts
+  it back, its own kept. A look moves sliders by what it moves an untouched
+  frame by, so a frame's exposure stays its own; its grade, curve and LUT go
+  where the frame has none. Numa's work ahead puts its light, warmth and
+  evening on the layers, the shape on each frame — a frame you had worked on
+  takes the light off its own again and looks as it did; a switch still moves only
+  what is still Numa's, and Undo Numa's Work takes both back. A library from
+  before is read as it was, and a moment is given layers the first time one
+  of them changes, the same picture to the pixel (tried: 0 pixels over 1 %).
+  Linux.
+- 🟡 **FLOW-020**: Match to This Photo. On the photograph with the keys, the
+  moment's Even set so every frame comes out as it does: what of its exposure
+  and balance is its own becomes the moment's; exposure by each frame's
+  camera numbers against it (as Even Exposure, 1½ stops at most, flash
+  left); colour per kind of camera — its own camera's frames take its
+  balance, another camera is moved by how far its frames' light reads from
+  the first camera's, each through its own matrix. The light's colour is read
+  from the pixels near grey under the camera's own balance (a field of red
+  tulips is not red light). Tried on four bodies of four scenes; two cameras
+  at one scene not yet (no CC0 pair).
+- ✅ **FLOW-021**: Key Frames… — where the light changes through a moment (a
+  ceremony into sunset, golden hour): Add This Photo on two or three frames,
+  set each one's Exposure and Warmth, and Numa ramps both between them by
+  capture time (the LRTimelapse idea), the balance in mireds; before the
+  first key the first, after the last the last. The frames say Key Frame,
+  and Even says how many it ramps between. Replaces Light follows the moment.
+  Linux.
+- ❌ **FLOW-001**: ~~A template: a name, its steps in order and a look.~~
+  *Replaced by FLOW-018's kinds of shoot: names photographers use ("The
+  Celebration" was the research's word, and nobody looks for it), a few
+  controls, no steps.*
+- ❌ **FLOW-002**: ~~Chosen when a folder is added.~~ *The kind is chosen in
+  Rapid's panel, when it is first wanted; adding a folder asks Analyse Now as
+  it did before.*
+- ❌ **FLOW-003**: ~~Continue Flow and the steps as pills.~~ *Rapid is a view
+  of the library: there is no route to be on.*
+- ❌ **FLOW-004**: ~~Numa sorts first.~~ *Withdrawn: in 220 reviews of
+  culling and editing tools no one had stopped checking an AI cull, and a
+  verdict is what pros abandon tools over; evidence is what they keep. Rapid
+  stacks bursts and says why a frame is weak, and the photographer chooses.*
+- ❌ **FLOW-016**: ~~The flow mode, where a route is walked.~~ *Replaced by
+  FLOW-018 ("te overnemend": locked into a process).*
+- ❌ **FLOW-005**: ~~Receive, a look given to one frame put on every frame
+  that arrives.~~ *Not in Rapid yet. What it found stays: a walk under way is
+  waited for rather than taken as the next library's (IO-023).*
+- ❌ **FLOW-006**: ~~Save as New Template.~~ *The kinds are Numa's own until
+  one's own are asked for.*
+- ❌ **FLOW-017**: ~~The review — Sort, Look and Finish as one pass.~~
+  *Replaced by FLOW-018: one photograph at a time was the same work
+  rearranged, not less of it. Kept from it: what Numa did on record in the
+  library's catalog, and Undo Numa's Work.*
+- 🟡 **FLOW-007**: Match — moments made alike: white balance from the
+  resolved as-shot value and exposure from the EXIF's total exposure, only
+  where the light did not change (round 2). In Rapid: one warmth per
+  moment, and Even Exposure from shutter × ISO ÷ f², frames more than 1½
+  stops out left as the light's own (FLOW-018). Across moments not yet.
+- 🟡 **FLOW-008**: Frame — one aspect for a moment (4:5 and 1:1 as they are,
+  3:2 and 16:9 turning with the photograph), on the subject or the faces. The
+  placing is in the shared core and tested, from the review it was first built
+  for: the subject is the largest person or animal the segmentation model
+  finds, not a crowd; 6 % of room on every side the camera did not cut, nobody
+  else of a size halved, the rule of thirds, and never a zoom — the largest
+  frame of its shape the photograph holds. On screen as Numa's work ahead
+  for Sports (4:5) and Products (1:1), with its switch; not yet a choice of
+  aspect per moment.
+- 🟡 **FLOW-009**: Teaser — a small set first, with a look, shared the same
+  night (round 2). Built as First Look in Rapid (FLOW-018); a look of its own
+  for the teaser not yet.
+- 🟡 **FLOW-010**: Chapters within a shoot, and Sort in rounds (round 2).
+  Moments split and joined by hand in Rapid (S, J); rounds not yet.
+- 🟡 **FLOW-011**: Deliver in layers, the export recipes as one template's
+  deliveries (round 2). Rapid's Deliver: the teaser and the picks, with a
+  check through the picks first; recipes per kind not yet.
+- ◻️ **FLOW-012**: The iPad as the first desk: safe copy, 100 % at the focus
+  point, the first round (round 3).
+- 🟡 **FLOW-013**: Receive without a second app — the camera on its cable,
+  each photograph in Numa the moment it is taken. A camera plugged in shows
+  in the library's header bar by name: the import button's camera gains the
+  camera's name, a stock menu button with Shoot Tethered… and Import… (the
+  photographer, 7 October: "net als Lightroom … meteen gevonden", and one
+  camera icon, not two), and goes back when it is pulled out — seen from the device nodes under /dev/bus/usb, so
+  nothing polls and the Flatpak sees it too; in a session it only names the
+  camera. Pressed, or Shoot Tethered… (the main menu, and the Import dialog's
+  From), it asks which camera (the first on a
+  cable, found by libgphoto2; "No camera found yet" with Look Again, and a
+  line on the camera's own setting: USB Tether Shooting on a Fujifilm, PC
+  Remote on a Sony), Into — the library whose days these are, or a new one
+  named for today where new ones go, as the Import suggests (Change…) — and
+  Same Edit as the Last (remembered). Start begins even before the camera is
+  there. While it runs a banner over the library says so ("Tethered to
+  Fujifilm X-T5 · 12 photographs into 2026-10-04") with Stop, and the main
+  menu has Stop Tethering; in the editor, where no banner is, a camera that
+  stops answering is a toast. Each frame is fetched whole into the library's
+  folder under the camera's name (`-2`, `-3` when taken, never over another
+  file), with only what Numa opens taken — not voice memos or films. It
+  opens in the loupe, the culling view (the photographer, 4 October:
+  "tethered meteen in culling modus"), and the next follows it there as long
+  as the photographer is still on the one before — gone back to an earlier
+  frame, or left for the grid, they are left there; in the editor it opens
+  in the editor, for someone adjusting the next frame. Numa reads each frame
+  as it comes in — Analyse on that frame alone — and the loupe says what the
+  card says, in a word or two beside the name ("DSCF0202.JPG · soft", "eyes
+  closed?"); evidence, never a reject of its own — in the research's 220
+  reviews a verdict is what photographers leave a tool over. With Same Edit
+  as the Last each new frame takes the edit of the one before it, crop
+  included — Lightroom's "Same as Previous", Capture One's "Copy from Last".
+  A camera switched off, asleep or unplugged is waited for and taken up
+  again ("Fujifilm X-T5 is back"); one set to give its card rather than to
+  shoot — an X-T5 in USB Card Reader, which libgphoto2 finds all the same —
+  is said in the banner ("Fujifilm X-T5 is set to read its card — choose USB
+  Tether Shooting in its connection settings"), known by its capture
+  settings being empty, and taken up when it is switched; one the file manager holds (GVFS mounts a
+  camera when it is plugged in) is asked for back. Linux, through libgphoto2,
+  opened when tethering is first wanted and never linked, and never in the
+  shared core (LGPL); the Flatpak carries it, the distribution packages
+  recommend it. Tried with a stand-in for the camera (`NUMA_TETHER_FROM`),
+  not yet with one on a cable. The Mac, through ImageCaptureCore, is on
+  Numa-mac's `tether` branch, not yet compiled.
+- 🟡 **FLOW-014**: Delivery per person by face, and a list of who was
+  already sent theirs (round 3). Rapid's Deliver has Export for N People…:
+  the picks each named person (People…) is in, a folder each, a photograph
+  of two in both. Deliver lists each with when their folder was written,
+  and offers only those who have none yet (or everyone again once all have).
+- ◻️ **FLOW-015**: One's own kinds of shoot and their controls, from the six
+  questions (round 3).
+
 ---
 
 ## Priorities
@@ -5198,20 +6215,23 @@ The status markers above are the roadmap; the tier lists that stood here went
 stale as items were built, so this list is generated from them instead. What
 is not yet built, in the order the groups appear:
 
+- planned — **START-014** What gets used, if the photographer agrees
+- partly built — **APP-007** Other languages — the Apple app's String Catalog, English for now
+- partly built — **CULL-009** Where the camera focused — the AF box built, no "focus missed?" verdict yet, Fujifilm only
 - partly built — **CULL-003** Faces, from YuNet
 - partly built — **CULL-004** A suggested rating, 0–5, shown beside the photograph and sortable
 - partly built — **CULL-005** A score learned from this photographer's own ratings
-- partly built — **RENDER-010** The decode's passes on the graphics card — Linux built, Apple (Metal) not
-- partly built — **RENDER-017** The editor's render on the graphics card — on since 29 September; the dmabuf hand-over still off
-- partly built — **RENDER-020** Masks in the render on the card — a mask's dehaze, HDR, grain and detail passes still on the processor
-- partly built — **RENDER-018** The decode's passes on Metal for the Apple apps — built and tested on Linux, off on Apple until the MacBook has checked it
 - planned — **RENDER-015** Numa's own camera profiles for every camera, and a call to send a neutral raw
+- partly built — **RENDER-017** The editor's render on the graphics card — on since 29 September; the dmabuf hand-over still off
 - planned — **DETAIL-008** Settle whether a developed frame is as sharp as Lightroom's and Capture One's, with numbers rather than an impression
 - partly built — **HDR-003** HDR output — HDR files built, the HDR screen deferred
 - partly built — **MASK-008** Background and people masks, and Person and Animal find a subject the semantic model has never heard of
 - partly built — **PERF-005** The grid decodes what is on screen
+- partly built — **PERF-065** The editor's proxy averaged from the mosaic — the two-pass warp left as a proposal
+- partly built — **PERF-049** AVX2, the DCP hue lookup and the histogram, measured
+- partly built — **UX-021** The rail — Grade's dot misses a range the page is not showing
 - done — **PERF-051** The grid and the filmstrip make widgets only for the cards on screen
-- partly built — **UX-021** The rail
+- partly built — **FLOW-013** Tethering — Linux built, the Mac (ImageCaptureCore) written and not yet compiled
 
 ---
 

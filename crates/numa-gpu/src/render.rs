@@ -1,6 +1,9 @@
 use crate::{block_on, ready, Gpu};
 use numa_core::image::LinearImage;
-use numa_render::card::{Adjustments, CameraProfileStage, MaskPlan, Plan, TablePlan};
+use numa_render::card::{Adjustments, CameraProfileStage, MaskPlan, Plan, TablePlan, Tail};
+use numa_render::detail::LumaShape;
+use numa_render::effects::HazeShape;
+use numa_render::local::ToneShape;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -63,6 +66,7 @@ struct Adjust {
     more: [u32; 4],
     gains: [f32; 4],
     tint: [f32; 4],
+    grain: [f32; 4],
 }
 
 #[repr(C)]
@@ -85,6 +89,7 @@ struct Params {
     crop2: [f32; 4],
     keystone: [f32; 4],
     vignette: [[f32; 4]; 2],
+    grain: [[f32; 4]; 2],
     adjust: Adjust,
     base: [[f32; 4]; 14],
 }
@@ -104,6 +109,9 @@ const DISPLAY_REFERRED: u32 = 64;
 const GEOMETRY: u32 = 128;
 const VIGNETTE: u32 = 256;
 const MASKS: u32 = 512;
+const DEHAZE: u32 = 4096;
+const GRAIN: u32 = 8192;
+const KEPT: u32 = 16384;
 
 const BASIC: u32 = 1;
 const SLOPE: u32 = 2;
@@ -118,6 +126,7 @@ const MASK_DENOISE: u32 = 512;
 const CURVES: u32 = 1024;
 const TINT: u32 = 2048;
 const CURVE_ONE: u32 = 4096;
+const MASK_GRAIN: u32 = 65536;
 
 const MIRROR: u32 = 1;
 const TRANSPOSE: u32 = 2;
@@ -148,9 +157,16 @@ const FEED_ONE: u32 = 0;
 const FEED_SQUARES: u32 = 1;
 const FEED_PAIR: u32 = 2;
 const FEED_DIFFERENCE: u32 = 3;
+const FEED_CHROMA: u32 = 4;
 const EMIT_ONE: u32 = 0;
 const EMIT_AB: u32 = 1;
 const EMIT_GUIDED: u32 = 2;
+
+const WHOLE: u32 = 0;
+const TO_TONE: u32 = 1;
+const FROM_TONE: u32 = 2;
+
+const SETTLED: u32 = 2;
 
 struct Planes {
 
@@ -167,18 +183,38 @@ struct Planes {
     bloom_s: u32,
     partials: u32,
     pivot: u32,
+    copy: u32,
+
+    haze: u32,
+
+    wide: u32,
     len: u32,
 }
 
 impl Planes {
-    fn new(width: u32, height: u32, workgroups: u32) -> Self {
+
+    fn of(plan: &Plan, workgroups: u32) -> Self {
+        let copy = plan.masks.iter().any(wide);
+        let haze = plan.dehaze.iter().chain(plan.masks.iter().filter_map(|mask| mask.dehaze.as_ref())).next();
+        let moire = plan.tail.moire.is_some() || plan.masks.iter().any(|mask| mask.tail.moire.is_some());
+        let haze_cells = haze.map_or(0, |haze| (haze.grid.0 * haze.grid.1) as u32);
+        let planes = Self::new(plan.width, plan.height, workgroups, copy, haze_cells, moire);
+        let any = copy || haze.is_some() || plan.denoise_luma.is_some() || plan.local.is_some() || plan.tail.is_some();
+        Self { len: if any { planes.len } else { 0 }, ..planes }
+    }
+
+    fn new(width: u32, height: u32, workgroups: u32, copy: bool, haze_cells: u32, moire: bool) -> Self {
         let n = width * height;
         let factor = numa_render::local::ToneShape::SUBSAMPLE as u32;
         let small = ((width / factor).max(1), (height / factor).max(1));
         let ns = small.0 * small.1;
         let s = 6 * n;
         let partials = s + 7 * ns;
-        Planes { log: 0, pair: n, ab: 3 * n, mid: 5 * n, small, s, pair_s: s + ns, ab_s: s + 3 * ns, base_s: s + 5 * ns, bloom_s: s + 6 * ns, partials, pivot: partials + workgroups, len: partials + workgroups + 1 }
+        let copy_at = partials + workgroups + 1;
+        let haze = if copy { copy_at + 3 * n } else { copy_at };
+        let wide = haze + if haze_cells > 0 { 6 * haze_cells + 1 } else { 0 };
+        let len = if moire { wide + 3 * n } else { wide };
+        Planes { log: 0, pair: n, ab: 3 * n, mid: 5 * n, small, s, pair_s: s + ns, ab_s: s + 3 * ns, base_s: s + 5 * ns, bloom_s: s + 6 * ns, partials, pivot: partials + workgroups, copy: copy_at, haze, wide, len }
     }
 }
 
@@ -272,6 +308,10 @@ fn mask_of(mask: &MaskPlan, field_at: u32, tables: &mut Vec<f32>) -> Adjust {
         a.flags[0] |= TINT;
         a.tint = [r, g, b, strength];
     }
+    if let Some([strength, cell, rough]) = mask.grain {
+        a.flags[0] |= MASK_GRAIN;
+        a.grain = [strength, cell, rough, 0.0];
+    }
     a.more[2] = field_at;
     a
 }
@@ -334,6 +374,12 @@ fn pack(plan: &Plan, groups_x: u32, source_groups_x: u32, stride_px: u32, overla
     if plan.denoise_luma.is_some() {
         flags |= LUMA;
     }
+    if plan.dehaze.is_some() {
+        flags |= DEHAZE;
+    }
+    if plan.prefix_kept() {
+        flags |= KEPT;
+    }
     if plan.local.is_some() {
         flags |= LOCAL;
     }
@@ -341,6 +387,11 @@ fn pack(plan: &Plan, groups_x: u32, source_groups_x: u32, stride_px: u32, overla
         flags |= VIGNETTE;
         p.vignette = [[stops, aspect, circle, power], [start, soft, corner, 0.0]];
     }
+    if let Some([strength, cell, rough]) = plan.grain {
+        flags |= GRAIN;
+        p.grain[0] = [strength, cell, rough, 0.0];
+    }
+    p.grain[1] = [plan.full[0], plan.full[1], 0.0, 0.0];
     p.curves_at[0] = tables.len() as u32;
     for (k, curve) in plan.curves.iter().enumerate() {
         match curve {
@@ -383,6 +434,7 @@ pub(crate) struct State {
     geometry: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
     mask_rows: wgpu::ComputePipeline,
+    mask_copy: wgpu::ComputePipeline,
     mask: wgpu::ComputePipeline,
     encode: wgpu::ComputePipeline,
     plane_rows: wgpu::ComputePipeline,
@@ -393,6 +445,15 @@ pub(crate) struct State {
     pivot_sum: wgpu::ComputePipeline,
     pivot_total: wgpu::ComputePipeline,
     tone_apply: wgpu::ComputePipeline,
+    haze_patches: wgpu::ComputePipeline,
+    haze_air: wgpu::ComputePipeline,
+    haze_apply: wgpu::ComputePipeline,
+    settle: wgpu::ComputePipeline,
+    mask_settle: wgpu::ComputePipeline,
+    tail_log: wgpu::ComputePipeline,
+    sharpen_apply: wgpu::ComputePipeline,
+    defringe_apply: wgpu::ComputePipeline,
+    moire_apply: wgpu::ComputePipeline,
 
     resident: Mutex<Vec<Resident>>,
 
@@ -424,6 +485,7 @@ pub(crate) fn build(device: &wgpu::Device) -> Option<State> {
             entry(9, storage(true)),
             entry(10, storage(false)),
             entry(11, storage(false)),
+            entry(12, storage(false)),
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("render"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
@@ -438,9 +500,12 @@ pub(crate) fn build(device: &wgpu::Device) -> Option<State> {
         })
     };
     let (colour, geometry, blur_rows, finish) = (pipeline("colour"), pipeline("geometry"), pipeline("blur_rows"), pipeline("finish"));
-    let (mask_rows, mask, encode) = (pipeline("mask_rows"), pipeline("mask"), pipeline("encode"));
+    let (mask_rows, mask_copy, mask, encode) = (pipeline("mask_rows"), pipeline("mask_copy"), pipeline("mask"), pipeline("encode"));
     let (plane_rows, plane_cols, luma_log, luma_apply) = (pipeline("plane_rows"), pipeline("plane_cols"), pipeline("luma_log"), pipeline("luma_apply"));
     let (subsample, pivot_sum, pivot_total, tone_apply) = (pipeline("subsample"), pipeline("pivot_sum"), pipeline("pivot_total"), pipeline("tone_apply"));
+    let (haze_patches, haze_air, haze_apply) = (pipeline("haze_patches"), pipeline("haze_air"), pipeline("haze_apply"));
+    let (settle, mask_settle, tail_log) = (pipeline("settle"), pipeline("mask_settle"), pipeline("tail_log"));
+    let (sharpen_apply, defringe_apply, moire_apply) = (pipeline("sharpen_apply"), pipeline("defringe_apply"), pipeline("moire_apply"));
     if let Some(error) = block_on(scope.pop()) {
         log::warn!("GPU: the render did not build ({error}); rendering on the processor");
         return None;
@@ -452,6 +517,7 @@ pub(crate) fn build(device: &wgpu::Device) -> Option<State> {
         geometry,
         finish,
         mask_rows,
+        mask_copy,
         mask,
         encode,
         plane_rows,
@@ -462,6 +528,15 @@ pub(crate) fn build(device: &wgpu::Device) -> Option<State> {
         pivot_sum,
         pivot_total,
         tone_apply,
+        haze_patches,
+        haze_air,
+        haze_apply,
+        settle,
+        mask_settle,
+        tail_log,
+        sharpen_apply,
+        defringe_apply,
+        moire_apply,
         resident: Mutex::new(Vec::new()),
         work: Mutex::new(None),
         #[cfg(target_os = "linux")]
@@ -563,6 +638,9 @@ struct Work {
 
     lin: wgpu::Buffer,
     lin_key: Option<u64>,
+
+    kept: wgpu::Buffer,
+    kept_key: Option<u64>,
 }
 
 impl Work {
@@ -592,6 +670,8 @@ impl Work {
             slots: vec![None; slots],
             lin: buffer("render lin", pixels * 12, U::STORAGE),
             lin_key: None,
+            kept: buffer("render kept", 16, U::STORAGE),
+            kept_key: None,
         }
     }
 
@@ -615,7 +695,7 @@ impl Work {
     }
 
     fn destroy(self) {
-        for buffer in [self.params, self.work, self.rows, self.out, self.hist, self.tables, self.back, self.steps, self.masks, self.fields, self.lin, self.planes] {
+        for buffer in [self.params, self.work, self.rows, self.out, self.hist, self.tables, self.back, self.steps, self.masks, self.fields, self.lin, self.planes, self.kept] {
             buffer.destroy();
         }
     }
@@ -623,62 +703,157 @@ impl Work {
 
 type Dispatch<'a> = (&'a wgpu::ComputePipeline, (u32, u32), Step);
 
-fn dispatches<'a>(state: &'a State, plan: &Plan, colour: bool, (groups, source_groups): ((u32, u32), (u32, u32)), planes: &Planes) -> Vec<Dispatch<'a>> {
+fn dispatches<'a>(state: &'a State, plan: &Plan, (colour, kept): (bool, bool), (groups, source_groups): ((u32, u32), (u32, u32)), planes: &Planes) -> Vec<Dispatch<'a>> {
     let mut passes: Vec<Dispatch> = Vec::new();
     let frame = |pipeline, step: Step| (pipeline, groups, step);
     let whole = (plan.width, plan.height);
-    if colour {
-        passes.push((&state.colour, source_groups, Step::default()));
-    }
-    if plan.geometry.is_some() {
-        passes.push(frame(&state.geometry, Step::default()));
-    }
-    if let Some(luma) = &plan.denoise_luma {
-        passes.push(frame(&state.luma_log, Step::default()));
-        guided(state, &mut passes, whole, luma.radius as u32, luma.floor, [planes.log, planes.pair, planes.ab, planes.mid]);
-        if luma.contrast > 0.0 {
-            let radius = 2 * luma.radius as u32;
-            passes.push(box_rows(state, whole, radius, FEED_DIFFERENCE, [planes.log, planes.pair, 0, planes.mid]));
-            passes.push(box_cols(state, whole, radius, EMIT_ONE, [planes.pair, planes.ab, 0, 0], 0.0));
-        }
-        let step = Step { at: [0, planes.mid, planes.ab, 0], numbers: [luma.contrast, luma.luminance, 0.0, 0.0], ..Step::default() };
-        passes.push(frame(&state.luma_apply, step));
-    }
-    if plan.denoise_colour.is_some() {
-        passes.push(frame(&state.blur_rows, Step::default()));
+    if !kept {
+        prefix(state, &mut passes, plan, colour, (groups, source_groups), planes);
     }
     passes.push(frame(&state.finish, Step::default()));
     if let Some(local) = &plan.local {
-        let small = planes.small;
-        let factor = numa_render::local::ToneShape::SUBSAMPLE as u32;
-        let epsilon = numa_render::local::ToneShape::EPSILON;
-        passes.push(plane(&state.subsample, small, small.0 * small.1, factor, [0; 4], [planes.log, planes.s, 0, 0], 0.0));
-        guided(state, &mut passes, small, local.small_radius as u32, epsilon, [planes.s, planes.pair_s, planes.ab_s, planes.base_s]);
-        if let Some(radius) = local.bloom_radius {
-            passes.push(box_rows(state, small, radius as u32, FEED_ONE, [planes.s, planes.pair_s, 0, 0]));
-            passes.push(box_cols(state, small, radius as u32, EMIT_ONE, [planes.pair_s, planes.bloom_s, 0, 0], 0.0));
-        }
-        if local.texture {
-            let radius = numa_render::local::ToneShape::texture_radius(plan.width.max(plan.height) as f32) as u32;
-            guided(state, &mut passes, whole, radius, epsilon, [planes.log, planes.pair, planes.ab, planes.mid]);
-        }
-        passes.push(frame(&state.pivot_sum, Step { at: [planes.base_s, planes.partials, 0, 0], shape: [small.0, small.1, 0, 0], ..Step::default() }));
-        passes.push((&state.pivot_total, (1, 1), Step { at: [planes.partials, planes.pivot, 0, 0], shape: [groups.0 * groups.1, 0, 0, 0], ..Step::default() }));
-        let more = [if local.bloom_radius.is_some() { planes.bloom_s } else { 0 }, if local.texture { planes.mid } else { 0 }, planes.pivot, 0];
-        let numbers = [local.base_scale, local.detail_scale, local.glow, local.texture_scale];
-        passes.push(frame(&state.tone_apply, Step { at: [planes.base_s, 0, 0, 0], shape: [small.0, small.1, 0, 0], more, numbers, ..Step::default() }));
+        tone_map(state, &mut passes, whole, groups, local, planes, 0);
     }
+
     for (index, mask) in plan.masks.iter().enumerate() {
-        let step = Step { what: [index as u32, 0, 0, 0], ..Step::default() };
-        if mask.denoise_colour.is_some() {
-            passes.push(frame(&state.mask_rows, step));
+        let m = index as u32;
+        let copy = if wide(mask) { planes.copy } else { 0 };
+        let mut held = 0;
+        if let Some(haze) = &mask.dehaze {
+            dehaze(state, &mut passes, groups, haze, planes, [m, 0, 0, copy]);
+            held = 1;
         }
-        passes.push(frame(&state.mask, step));
+        if let Some(luma) = &mask.denoise_luma {
+            passes.push(frame(&state.mask_copy, Step { what: [m, 0, held, copy], ..Step::default() }));
+            denoise_luma(state, &mut passes, whole, groups, luma, planes, copy);
+            held = 1;
+        }
+        if mask.denoise_colour.is_some() {
+            passes.push(frame(&state.mask_rows, Step { what: [m, WHOLE, held, copy], ..Step::default() }));
+        }
+        if mask.tail.is_some() {
+            passes.push(frame(&state.mask_settle, Step { what: [m, WHOLE, held, copy], ..Step::default() }));
+            tail(state, &mut passes, whole, groups, &mask.tail, planes, copy);
+            held = SETTLED;
+        }
+        let step = |phase| Step { what: [m, phase, held, copy], ..Step::default() };
+        match &mask.local {
+            None => passes.push(frame(&state.mask, step(WHOLE))),
+            Some(local) => {
+                passes.push(frame(&state.mask, step(TO_TONE)));
+                tone_map(state, &mut passes, whole, groups, local, planes, copy);
+                passes.push(frame(&state.mask, step(FROM_TONE)));
+            }
+        }
     }
     if !plan.masks.is_empty() || plan.local.is_some() {
         passes.push(frame(&state.encode, Step::default()));
     }
     passes
+}
+
+fn prefix<'a>(state: &'a State, passes: &mut Vec<Dispatch<'a>>, plan: &Plan, colour: bool, (groups, source_groups): ((u32, u32), (u32, u32)), planes: &Planes) {
+    let whole = (plan.width, plan.height);
+    if colour {
+        passes.push((&state.colour, source_groups, Step::default()));
+    }
+    if plan.geometry.is_some() {
+        passes.push((&state.geometry, groups, Step::default()));
+    }
+    if let Some(haze) = &plan.dehaze {
+        dehaze(state, passes, groups, haze, planes, [0; 4]);
+    }
+    if let Some(luma) = &plan.denoise_luma {
+        passes.push((&state.luma_log, groups, Step::default()));
+        denoise_luma(state, passes, whole, groups, luma, planes, 0);
+    }
+    if plan.denoise_colour.is_some() {
+        passes.push((&state.blur_rows, groups, Step::default()));
+    }
+    if plan.prefix_kept() {
+        passes.push((&state.settle, groups, Step::default()));
+        tail(state, passes, whole, groups, &plan.tail, planes, 0);
+    }
+}
+
+fn wide(mask: &MaskPlan) -> bool {
+    mask.dehaze.is_some() || mask.denoise_luma.is_some() || mask.tail.is_some() || mask.local.is_some()
+}
+
+fn tail<'a>(state: &'a State, passes: &mut Vec<Dispatch<'a>>, whole: (u32, u32), groups: (u32, u32), tail: &Tail, planes: &Planes, copy: u32) {
+    let what = [0, 0, 0, copy];
+    let blur = |passes: &mut Vec<Dispatch<'a>>, radius: u32, into: u32| {
+        passes.push(box_rows(state, whole, radius, FEED_ONE, [planes.log, planes.pair, 0, 0]));
+        passes.push(box_cols(state, whole, radius, EMIT_ONE, [planes.pair, into, 0, 0], 0.0));
+    };
+    if let Some(sharpen) = &tail.sharpen {
+        passes.push((&state.tail_log, groups, Step { what, ..Step::default() }));
+        let (below, mixed) = (sharpen.below as u32, sharpen.t >= 1e-3);
+        if below >= 1 {
+            blur(passes, below, planes.mid);
+        }
+        if mixed {
+            blur(passes, below + 1, planes.ab);
+        }
+        let step = Step { what, at: [planes.log, planes.mid, planes.ab, 0], shape: [below, u32::from(mixed), 0, 0], numbers: [sharpen.amount, sharpen.t, sharpen.floor, 0.0], ..Step::default() };
+        passes.push((&state.sharpen_apply, groups, step));
+    }
+    if let Some((amount, radius)) = tail.defringe {
+        passes.push((&state.tail_log, groups, Step { what, ..Step::default() }));
+        blur(passes, radius, planes.mid);
+        passes.push((&state.defringe_apply, groups, Step { what, at: [0, planes.mid, 0, 0], numbers: [amount, 0.0, 0.0, 0.0], ..Step::default() }));
+    }
+    if let Some((amount, near, far)) = tail.moire {
+        let n = whole.0 * whole.1;
+
+        for (radius, into) in [(near, planes.ab), (far, planes.wide)] {
+            for channel in 0..3 {
+                passes.push(plane(&state.plane_rows, whole, n, radius, [channel, FEED_CHROMA, 0, copy], [0, planes.pair, 0, 0], 0.0));
+                passes.push(box_cols(state, whole, radius, EMIT_ONE, [planes.pair, into + channel * n, 0, 0], 0.0));
+            }
+        }
+        passes.push((&state.moire_apply, groups, Step { what, at: [0, planes.ab, planes.wide, 0], numbers: [amount, 0.0, 0.0, 0.0], ..Step::default() }));
+    }
+}
+
+fn dehaze<'a>(state: &'a State, passes: &mut Vec<Dispatch<'a>>, groups: (u32, u32), haze: &HazeShape, planes: &Planes, what: [u32; 4]) {
+    let (grid_w, grid_h) = (haze.grid.0 as u32, haze.grid.1 as u32);
+    let step = Step { what, at: [planes.haze, 0, 0, 0], shape: [grid_w, grid_h, haze.cell as u32, haze.take as u32], numbers: [haze.strength, 0.0, 0.0, 0.0], ..Step::default() };
+    passes.push((&state.haze_patches, (grid_w, grid_h), step));
+    passes.push((&state.haze_air, (1, 1), step));
+    passes.push((&state.haze_apply, groups, step));
+}
+
+fn denoise_luma<'a>(state: &'a State, passes: &mut Vec<Dispatch<'a>>, whole: (u32, u32), groups: (u32, u32), luma: &LumaShape, planes: &Planes, copy: u32) {
+    guided(state, passes, whole, luma.radius as u32, luma.floor, [planes.log, planes.pair, planes.ab, planes.mid]);
+    if luma.contrast > 0.0 {
+        let radius = 2 * luma.radius as u32;
+        passes.push(box_rows(state, whole, radius, FEED_DIFFERENCE, [planes.log, planes.pair, 0, planes.mid]));
+        passes.push(box_cols(state, whole, radius, EMIT_ONE, [planes.pair, planes.ab, 0, 0], 0.0));
+    }
+    let step = Step { what: [0, 0, 0, copy], at: [0, planes.mid, planes.ab, 0], numbers: [luma.contrast, luma.luminance, 0.0, 0.0], ..Step::default() };
+    passes.push((&state.luma_apply, groups, step));
+}
+
+fn tone_map<'a>(state: &'a State, passes: &mut Vec<Dispatch<'a>>, whole: (u32, u32), groups: (u32, u32), local: &ToneShape, planes: &Planes, copy: u32) {
+    let small = planes.small;
+    let factor = ToneShape::SUBSAMPLE as u32;
+    let epsilon = ToneShape::EPSILON;
+    passes.push(plane(&state.subsample, small, small.0 * small.1, factor, [0; 4], [planes.log, planes.s, 0, 0], 0.0));
+    guided(state, passes, small, local.small_radius as u32, epsilon, [planes.s, planes.pair_s, planes.ab_s, planes.base_s]);
+    if let Some(radius) = local.bloom_radius {
+        passes.push(box_rows(state, small, radius as u32, FEED_ONE, [planes.s, planes.pair_s, 0, 0]));
+        passes.push(box_cols(state, small, radius as u32, EMIT_ONE, [planes.pair_s, planes.bloom_s, 0, 0], 0.0));
+    }
+    if local.texture {
+        let radius = ToneShape::texture_radius(whole.0.max(whole.1) as f32) as u32;
+        guided(state, passes, whole, radius, epsilon, [planes.log, planes.pair, planes.ab, planes.mid]);
+    }
+    passes.push((&state.pivot_sum, groups, Step { at: [planes.base_s, planes.partials, 0, 0], shape: [small.0, small.1, 0, 0], ..Step::default() }));
+    passes.push((&state.pivot_total, (1, 1), Step { at: [planes.partials, planes.pivot, 0, 0], shape: [groups.0 * groups.1, 0, 0, 0], ..Step::default() }));
+    let more = [if local.bloom_radius.is_some() { planes.bloom_s } else { 0 }, if local.texture { planes.mid } else { 0 }, planes.pivot, 0];
+    let numbers = [local.base_scale, local.detail_scale, local.glow, local.texture_scale];
+    passes.push((&state.tone_apply, groups, Step { what: [0, 0, 0, copy], at: [planes.base_s, 0, 0, 0], shape: [small.0, small.1, 0, 0], more, numbers }));
 }
 
 fn box_rows(state: &State, (width, height): (u32, u32), radius: u32, feed: u32, at: [u32; 4]) -> Dispatch<'_> {
@@ -690,6 +865,8 @@ fn box_cols(state: &State, (width, height): (u32, u32), radius: u32, emit: u32, 
 }
 
 const SEGMENT: u32 = 64;
+
+const HAZE_TAKE: usize = 16;
 
 fn plane(pipeline: &wgpu::ComputePipeline, (width, height): (u32, u32), invocations: u32, radius: u32, what: [u32; 4], at: [u32; 4], epsilon: f32) -> Dispatch<'_> {
     let blocks = invocations.div_ceil(256);
@@ -709,6 +886,30 @@ fn field_words(width: u32, height: u32) -> u64 {
 }
 
 const WAIT: wgpu::PollType = wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(2)) };
+
+fn read_back(gpu: &Gpu, back: &wgpu::Buffer, out_bytes: u64, read_frame: bool) -> Result<([u32; HISTOGRAM], Option<Vec<u8>>), String> {
+    let range = if read_frame { 0..out_bytes + HISTOGRAM as u64 * 4 } else { out_bytes..out_bytes + HISTOGRAM as u64 * 4 };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    back.map_async(wgpu::MapMode::Read, range.clone(), move |result| {
+        let _ = sender.send(result);
+    });
+    gpu.device.poll(WAIT).map_err(|err| format!("the card did not finish: {err}"))?;
+    receiver.recv().map_err(|_| "no answer from the card".to_string())?.map_err(|err| err.to_string())?;
+    let mut histogram = [0u32; HISTOGRAM];
+    let bytes = {
+        let view = back.get_mapped_range(range).map_err(|err| err.to_string())?;
+        let (frame, hist) = view.split_at(view.len() - HISTOGRAM * 4);
+        histogram.copy_from_slice(bytemuck::cast_slice(hist));
+        read_frame.then(|| {
+            use rayon::prelude::*;
+            let mut bytes = vec![0u8; frame.len()];
+            bytes.par_chunks_mut(1 << 20).zip(frame.par_chunks(1 << 20)).for_each(|(to, from)| to.copy_from_slice(from));
+            bytes
+        })
+    };
+    back.unmap();
+    Ok((histogram, bytes))
+}
 
 fn run(gpu: &Gpu, state: &State, proxy: &LinearImage, plan: &Plan, overlay: Overlay, output: Output) -> Result<Rendered, String> {
     let (width, height) = (plan.width, plan.height);
@@ -751,17 +952,32 @@ fn run(gpu: &Gpu, state: &State, proxy: &LinearImage, plan: &Plan, overlay: Over
     }
 
     let colour_key = proxy_key ^ colour_key.rotate_left(1);
-    let colour = work.lin_key != Some(colour_key);
+
+    let prefix_key = plan.prefix_key().map(|key| key ^ colour_key.rotate_left(7));
+    let kept_hit = prefix_key.is_some() && work.kept_key == prefix_key;
+    let colour = !kept_hit && work.lin_key != Some(colour_key);
     if colour {
         work.lin_key = None;
     }
-    let planes = Planes::new(width, height, groups.0 * groups.1);
-    let dispatches = dispatches(state, plan, colour, (groups, source_groups), &planes);
+    if prefix_key.is_some() && !kept_hit {
+        work.kept_key = None;
+        let bytes = u64::from(width) * u64::from(height) * 12;
+        if work.kept.size() < bytes {
+            work.kept.destroy();
+            work.kept = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("render kept"), size: bytes, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+        }
+    }
+
+    if plan.dehaze.iter().chain(plan.masks.iter().filter_map(|mask| mask.dehaze.as_ref())).any(|haze| haze.take > HAZE_TAKE) {
+        return Err("more hazy patches than the card picks".into());
+    }
+    let planes = Planes::of(plan, groups.0 * groups.1);
+    let dispatches = dispatches(state, plan, (colour, kept_hit), (groups, source_groups), &planes);
     if dispatches.len() > MAX_STEPS {
         return Err("more passes than the card takes".into());
     }
     let plane_bytes = u64::from(planes.len) * 4;
-    if (plan.denoise_luma.is_some() || plan.local.is_some()) && work.planes.size() < plane_bytes {
+    if work.planes.size() < plane_bytes {
         if plane_bytes > gpu.max_binding {
             return Err("planes larger than the card binds".into());
         }
@@ -786,6 +1002,7 @@ fn run(gpu: &Gpu, state: &State, proxy: &LinearImage, plan: &Plan, overlay: Over
     entries.push(wgpu::BindGroupEntry { binding: 9, resource: work.fields.as_entire_binding() });
     entries.push(wgpu::BindGroupEntry { binding: 10, resource: work.lin.as_entire_binding() });
     entries.push(wgpu::BindGroupEntry { binding: 11, resource: work.planes.as_entire_binding() });
+    entries.push(wgpu::BindGroupEntry { binding: 12, resource: work.kept.as_entire_binding() });
     let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render"), layout: &state.layout, entries: &entries });
 
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -818,26 +1035,7 @@ fn run(gpu: &Gpu, state: &State, proxy: &LinearImage, plan: &Plan, overlay: Over
     encoder.copy_buffer_to_buffer(&work.hist, 0, &work.back, out_bytes, HISTOGRAM as u64 * 4);
     gpu.queue.submit([encoder.finish()]);
 
-    let range = if read_frame { 0..out_bytes + HISTOGRAM as u64 * 4 } else { out_bytes..out_bytes + HISTOGRAM as u64 * 4 };
-    let (sender, receiver) = std::sync::mpsc::channel();
-    work.back.map_async(wgpu::MapMode::Read, range.clone(), move |result| {
-        let _ = sender.send(result);
-    });
-    gpu.device.poll(WAIT).map_err(|err| format!("the card did not finish: {err}"))?;
-    receiver.recv().map_err(|_| "no answer from the card".to_string())?.map_err(|err| err.to_string())?;
-    let mut histogram = [0u32; HISTOGRAM];
-    let bytes = {
-        let view = work.back.get_mapped_range(range).map_err(|err| err.to_string())?;
-        let (frame, hist) = view.split_at(view.len() - HISTOGRAM * 4);
-        histogram.copy_from_slice(bytemuck::cast_slice(hist));
-        read_frame.then(|| {
-            use rayon::prelude::*;
-            let mut bytes = vec![0u8; frame.len()];
-            bytes.par_chunks_mut(1 << 20).zip(frame.par_chunks(1 << 20)).for_each(|(to, from)| to.copy_from_slice(from));
-            bytes
-        })
-    };
-    work.back.unmap();
+    let (histogram, bytes) = read_back(gpu, &work.back, out_bytes, read_frame)?;
     let pixels = match bytes {
         Some(bytes) => Pixels::Rgba { bytes, stride: stride_px as usize * 4 },
         #[cfg(target_os = "linux")]
@@ -846,7 +1044,13 @@ fn run(gpu: &Gpu, state: &State, proxy: &LinearImage, plan: &Plan, overlay: Over
         None => unreachable!("only a read back off Linux"),
     };
     if let Some(work) = kept.as_mut() {
-        work.lin_key = Some(colour_key);
+
+        if !kept_hit {
+            work.lin_key = Some(colour_key);
+        }
+        if prefix_key.is_some() {
+            work.kept_key = prefix_key;
+        }
     }
     Ok(Rendered { width, height, histogram, pixels })
 }

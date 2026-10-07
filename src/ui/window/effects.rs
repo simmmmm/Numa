@@ -15,7 +15,7 @@ pub(super) fn build_effects(
         effects.append(&slider_row(state, name, scale, *readout));
     }
 
-    for (title, range, frame_only) in [("Vignette", 23..27, true), ("Grain", 27..30, false)] {
+    for (title, range, frame_only) in [("Mist", 39..40, true), ("Vignette", 23..27, true), ("Grain", 27..30, false)] {
         let header = section_header(title);
         if frame_only {
             global_only(header.as_ref());

@@ -1,6 +1,8 @@
 use super::*;
 
 pub(super) fn begin_open(state: &App) -> u64 {
+
+    how_made::reset();
     state.render.tile.set(None);
     *state.render.failed_key.borrow_mut() = None;
     state.render.full_resolution_stale.set(false);
@@ -11,6 +13,10 @@ pub(super) fn begin_open(state: &App) -> u64 {
 
 pub(super) fn rendered_document(state: &App, photo: &OpenPhoto) -> Document {
     let mut document = photo.document.clone();
+
+    if let Some(step) = how_made::shown() {
+        step.restore(&mut document);
+    }
 
     if state.colour.point_show.is_active() {
         let mut points = document.point_colours();
@@ -373,6 +379,8 @@ fn write_opened_sliders(state: &App, basic: Basic, balance: WhiteBalance) {
 
 pub(super) fn write_rest_of_panel(state: &App) {
 
+    hide_plan(state);
+
     if state.panel.stack.visible_child_name().as_deref() == Some("presets") {
         fill_presets_page(state);
     }
@@ -383,6 +391,7 @@ pub(super) fn write_rest_of_panel(state: &App) {
     write_lens(state);
     ai_denoise::write(state);
     lut::write(state);
+    camera_look::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);

@@ -104,7 +104,8 @@ fn a_display_p3_picture_is_read_as_display_p3() {
 fn auto_leaves_a_finished_pictures_ends_where_they_were() {
     let path = scratch("auto.png");
     chart().save(&path).unwrap();
-    let basic = numa_render::auto::tone(&numa_io::raw::decode_linear_any(&path).unwrap(), None).basic;
+    let document = Document::new(path.display().to_string());
+    let basic = numa_render::auto::tone(&numa_io::raw::decode_linear_any(&path).unwrap(), None, &document).basic;
     assert!(
         basic.tone.exposure >= 0.0 && basic.tone.whites >= 0.0 && basic.tone.blacks <= 0.0,
         "{:?}",

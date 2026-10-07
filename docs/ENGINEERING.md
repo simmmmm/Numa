@@ -245,6 +245,59 @@ run taught the fitter:
   (0.0375 → 0.0308, Adobe Standard 0.0372). The A7R III's went, and so did the
   EOS R5's, D850's, X-S10's and X-T4's, which nothing can measure honestly yet.
 
+### The photographer's own (RENDER-025)
+
+The same fit, run by the photographer from the Looks tab on their own
+library (`fit::own_profile`), so a body need not be one Numa ships a profile
+for. What changed on the way from a test to a button:
+
+- **Only neutral frames, and the photographer brings them.** A fit against
+  the camera's JPEGs learns whatever the camera was set to, so only frames in
+  its standard colour count (`style::of`, from the maker notes: Fujifilm's
+  Provia at Color 0, Sony's, Canon's and Nikon's Standard at saturation 0).
+  The entry — a row at the end of Preferences › Add-ons › Camera Profiles,
+  with no photograph to go by — first asks which camera (`fit::cameras`, up
+  to 200 raws asked per format), then says what it needs in the maker's
+  words for the setting (`style::setting`, the same sentence on every
+  client). `fit::find_frames` then asks every raw of the open photograph's
+  format its style first and its body second (the slower question), in an
+  order that covers the whole span first — the index's bits reversed — and
+  stops at 96 neutral frames, of which 24 are fitted, spread over the time
+  they cover. 2 313 RAFs, none neutral: 4.0 s with the files in the page
+  cache.
+- **A session is held out, not a frame.** RENDER-023 held out a frame more
+  than half an hour from every other. On a library that rule held out
+  nothing: the X-T20's 81 Provia frames are one evening and one day of
+  continuous shooting, every frame within half an hour of the next. Frames
+  are now chained into sessions (under half an hour apart) and whole
+  sessions held out, the smallest first, until a quarter of the frames and
+  never past half. The grid and smoothness are chosen on a quarter of the
+  fitting frames, as RENDER-012 chose them.
+- **It is kept only if it wins.** The held-out frames are measured against
+  what Automatic gave the body before — Numa's own, RawTherapee's, an earlier
+  fit — and the profile is written to the photographer's folder only when it
+  is nearer the camera's JPEGs than that. Named "Your <model>", with Numa's
+  signature, which is how `dcp::choose` knows to take it before Numa's own
+  under Automatic, and how `standard_rank` knows it is not the standard one.
+- **Four caches had to hear about it.** The folder scan, the picker's names
+  and `by_name` are cleared by `dcp::forget`; the decode's profile per body
+  (`raw::find_rendering`) and the recently opened proxies (PERF-031) carry
+  `dcp::generation` in their keys. Without the last two the photograph
+  reopened in its old colour.
+
+Measured on the photographer's own raws, release build:
+
+| Body | Frames | Before | Fitted | Time |
+|---|---|---|---|---|
+| X-T20, Provia at Color 0 (2022), 24 of its 81 neutral frames | 12 fitted, 9 held out (another day) | 0.0498 (RawTherapee's) | **0.0436**, −12 % | 11 s |
+| X-T5, Classic Chrome (Japan 2026), the fit's speed only | 18 fitted, 6 held out | 0.0468 (Numa's own, a neutral profile) | 0.0388 | 21 s |
+
+The second row is not a camera profile: it learns a film simulation, which
+the Looks tab never fits from. It is there for the time. In the
+photographer's X-T5 library (2023–2026) not one frame is on Provia at Color
+0, and the button says so: "0 neutral photographs from your X-T5; a profile
+takes 8 · 2 313 in another style, most Classic Chrome".
+
 ## Orientation
 
 A sensor always reads out the same way round, so a portrait frame is stored
@@ -1256,14 +1309,13 @@ cropped copy of it, a per-pixel bounds table and the output at once; that is a
 
 **How far a fingerprint can be trusted.** `tests/reference_render.rs` renders
 every reference frame on both decode routes, and it is what every claim of "no
-photograph changed" in this file rests on. One thing has to be known about it
-before relying on one: **the render is not bit-stable between processes, and a
-hash comparison therefore cannot prove that nothing changed.**
+photograph changed" in this file rests on. **The render is bit-stable: the
+same binary on the same frame gives the same bytes at any thread count, in any
+process, so a hash that differs is news.** It was not always measured so, and
+the history matters for reading older claims here.
 
-Measured on 20 September, ten runs of the same binary on the same frame: eight
-gave one hash and two gave another on the draft route, seven and three on the
-Markesteijn route. Comparing the renditions byte for byte rather than by hash
-says what the difference actually is:
+On 20 September (FT-022), ten runs of the same binary on the same frame gave
+two hashes, eight to two on the draft route and seven to three on Markesteijn:
 
     FRAME DSCF9580.RAF  moved 1876 bytes, worst 1
     BEST  DSCF9580.RAF  moved    7 bytes, worst 1
@@ -1271,43 +1323,58 @@ says what the difference actually is:
     BEST  DSCF9580.RAF  moved  936 bytes, worst 1
     ...
 
-Between 7 and 3 400 bytes of 119 443 968, and **never more than one code value
-of 255**. In the floating-point pipeline it is at most 122 ULP and 3.6e-6
-absolute. It is a rounding difference, not a difference in the photograph.
+Between 7 and 3 400 bytes of 119 443 968, never more than one code value of
+255, at most 122 ULP in the float pipeline. One and two rayon threads were
+exact; eight and sixteen moved in most repeats. FT-023 then asked every pass on
+its own (`tests/determinism.rs`) and found nothing in the program that could
+do it: there is no cross-thread floating-point reduction in the render.
+`blur_rows` runs by row and `blur_columns` by fixed 64-column strips, each
+carrying its own running sum; the luminance planes are ordered `collect`s; the
+tone-map pivot is a sequential `f64` sum. All of it is safe Rust whose answer
+cannot depend on the schedule. Yet `sharpen` disagreed with itself in bursts,
+a few ULP in all three channels of a pixel at once, down the same columns —
+and only while another process was building the workspace.
 
-Three things are known about where it comes from. The decode is exactly
-reproducible — `decode_linear` and `decode_linear_best` both hash the same on
-every run. `RAYON_NUM_THREADS=1` and `=2` are exactly reproducible end to end;
-from three threads up it wobbles, which is the signature of work-stealing
-changing how buffers and iterations line up rather than of a race writing the
-wrong pixel. And the first step whose output moves is `detail::denoise_colour`,
-whose `blur` is itself reproducible on synthetic data — so the wobble is in how
-the same arithmetic gets laid out, not in the algorithm.
+**FT-023, 5 October: it is gone, and it was the machine.** Forty processes, ten
+each at `RAYON_NUM_THREADS` 1, 2, 8 and 16, on the seven reference frames
+(DSCF5591, 6275, 6372, 6469, 6566, 6663, 6760) and both routes: 560 renditions,
+every one identical to the byte to the first. Inside one process, every detail
+pass 20 times at 16 threads, fresh buffers and reused, on DSCF9580 and on
+DSCF7577 (which moved nine times in nine on 20 September): nothing moved. And
+the run that decides it — commit `0bbd316`, the code that wobbled on 20
+September, rebuilt with the same compiler (rustc 1.98.1) and asked the same
+question on the same two frames: 0 of 9 repeats moved at 1, 2, 8 and 16
+threads, and `sharpen` on a fresh buffer each round — 19 of 19 moved that day —
+moved 0 of 19 at a load average of 20 to 25. Same code, same frames, same
+compiler; what moved then was not the arithmetic. All of it ran while another
+session was compiling the workspace (up to sixteen `rustc` at once), the load
+the bursts came with.
 
-Two earlier statements in this file were wrong and are withdrawn. An early
-report that `main` gave four hashes in six runs was recorded here as "has not
-reproduced": it reproduces, and the fourteen matching runs that were used to
-dismiss it were luck. And the wobble was recorded as invisible after the
-eight-bit quantisation and absent from the bilinear draft: it survives the
-quantisation, and the draft route moves *more* bytes than the Markesteijn one.
+What it was is not known, and was not chased further. The machine has had
+kernel 7.2.6 → 7.2.9 and AMD microcode 20260910 → 20260916 since (the
+microcode was installed on 19 September after that day's boot, so 20
+September still ran the old one), but the bursts also stopped within that same
+boot, so neither is a proof. If it comes back, `tests/determinism.rs` counts it
+per pass, and the next step is the machine — memtest86+, or the EXPO profile
+off — before another search through the renderer.
 
-**So "byte-identical" means zero code values moved, not one hash.** Set
-`REF_DIR` and the harness writes each rendition the first time and compares it
-byte for byte afterwards. The floor to judge against is the one above: a couple
-of thousand bytes at worst 1. A real change is nothing like it — A9's median
-moved every Fuji Markesteijn rendition by millions of bytes. The two are three
-orders of magnitude apart, so the test still answers the question it is for; it
-just has to be asked in bytes.
+**So the harness still compares bytes.** Set `REF_DIR` and it writes each
+rendition the first time and reports, on every later run, how many bytes moved
+and by how much. "Byte-identical" means zero code values moved, and a count
+rather than a boolean means a returning wobble (a few thousand bytes, worst 1)
+reads differently from a real change (A9's median moved every Fuji
+Markesteijn rendition by millions).
 
-**What it cannot see.** rawler's X-Trans Markesteijn splits the frame into
-64-pixel tiles and writes them in parallel through a shared raw pointer, on the
-stated assumption that two tiles never write the same pixel (`markesteijn.rs`,
-`SharedColor2D` and the `unsafe` write inside `process_tile`). Measured, two
-runs of the same commit differ in about four channels out of 119 million, by
-around 4e-6 — so the assumption is very nearly true and not quite. That is a
-second, smaller source on top of the one above, and the same conclusion applies
-to it: worth knowing about, not worth acting on until something measures it
-larger.
+**rawler's Markesteijn writes are disjoint.** It splits the frame into 128-pixel
+tiles and writes them in parallel through a shared raw pointer
+(`markesteijn.rs`, `SharedColor2D`, the `unsafe` write in `process_tile`). An
+earlier note here measured four channels moving between two runs and called
+the no-overlap assumption "very nearly true". It is exactly true: tiles step by
+`TS − 2·pad` and each writes only `pad..size−pad` of itself, so neighbours meet
+without overlap, and a tile short enough to be the last cannot have a
+successor (one more tile needs over `2·pad` rows left, which would have made
+this one full). Those four channels were the same fault as above; the Best
+route is identical over the forty processes.
 
 **What gets rendered, and at what size.** Interactive editing does *not* simply
 run on a proxy. It renders the region on screen at the resolution the screen can
@@ -1329,6 +1396,55 @@ correction or a manual lens correction. `tiles_cleanly` declines what measures
 the whole frame: local tone mapping and texture, dehaze, and face retouching,
 whose radii are a fraction of the face. `spots_within` declines a healed spot
 whose patch reaches past the cut.
+
+---
+
+## Proofing for print (IO-034, IO-035)
+
+A lab or printer profile is almost always lookup tables (RGB or CMYK against
+Lab), which `render::display` does not read. moxcms does — pure Rust,
+BSD-3/Apache-2.0, already compiled into the build under `image` — so adding
+it to `numa-render` linked nothing new and nothing GPL. Little CMS was not
+needed.
+
+**The view** is one table per profile and intent (`render::proof`): 33³ sRGB
+points sent into the printer with the chosen intent (perceptual falls back to
+relative colorimetric where a profile has no perceptual tables), back out
+relative colorimetric, then multiplied by the paper's white over D50 in XYZ —
+absolute colorimetric, which moxcms treats as relative, done by hand, and
+only for a printer-class profile (an sRGB file's "media white" is often D65
+unadapted, which is no paper). Each frame is then one tetrahedral look-up a
+pixel, on its way to a texture after the histogram, so the histogram, the
+clipboard, the files and the edit never see it. A proofed frame always goes
+through the processor's hands: the card's dmabuf path is skipped while
+proofing.
+
+**Out of range** is the colour sent in relative colorimetric and read back,
+more than 5 ΔE76 (lcms's own gamut threshold) from where it should land
+*with the paper's black point compensated*. Without the compensation
+FOGRA30's uncoated paper hatched every shadow of a garden photograph — every
+paper's black is lighter than the screen's — and said nothing useful; with
+it the hatch sits on the orange and the deep greens that really do not
+print. The hatch is grey, three pixels in eight on the diagonal: red is the
+mask's and the reject's.
+
+Measured, release build, 16 threads, with colord's FOGRA30L/FOGRA39L CMYK
+profiles (`NUMA_PRINT_ICC=… cargo test --release -p numa-render --lib
+a_real_printer -- --ignored --nocapture`):
+
+| | time |
+|---|---|
+| the table, once per profile or intent | 31 ms |
+| a 2560 × 1707 frame, hatch on | 5.2–5.9 ms |
+
+**The export's Proof With** develops in sRGB, converts with moxcms's 8- or
+16-bit transform (sixty-four rows to a worker) and embeds the profile's own
+bytes instead of Numa's. RGB profiles only — a file for a lab is RGB; a CMYK
+profile proofs — and only JPEG, PNG and TIFF, without HDR's gain map. Added
+profiles are copied into `data_dir()/print-profiles`; a setting names a file
+there, never a path. **For a Book** is the same export with every job given
+its destination (`ExportJob::to`), so the folders and numbers are a plan in
+`io::book` and none of the writing is new.
 
 ---
 
@@ -1573,6 +1689,113 @@ which of two frames came first. A camera with no clock set writes
 is worse than no date at all, so that one is refused. The date arithmetic is
 Howard Hinnant's `days_from_civil`, which is the whole of what this needs and
 therefore the whole reason there is no date crate in the dependency list.
+
+## Camera clocks — 4 October
+
+`LIB-026`, `LIB-027`. Everything above orders by `taken`, and `taken` is one
+body's clock. A second shooter's camera, or a phone a few minutes off, puts
+its frames in the wrong place in every one of those orders without saying so:
+the grid, the runs of CULL-002, the same scene again, Rapid's moments.
+
+**One column carries it.** `photos` now keeps what the body's clock said in
+`camera_time` and which body in `camera` (`exif::camera_key`: make, model and
+body serial; make and model without one, as Sony and every phone write), and
+`taken` becomes `camera_time` plus that body's applied offset from the new
+`clocks` table. So none of the readers changed — the capture sort and its
+tie-breaks, `analysed()`, the library picker's dates, the loupe, Rapid on its
+branch all read `taken` and are on the corrected timeline without knowing
+clocks exist. Two places write it: `apply_scan`, which adds the offset as it
+inserts or updates a row (so a frame scanned in after its body was lined up
+lands in line), and `set_clock`, which rewrites one body's rows in the same
+transaction as the clock. A change regroups the runs and the echoes on the
+new timeline and reloads the grid. The camera is read in the same read as the
+date, from the same directories; a library catalogued before has `camera`
+null, which the next scan reads once — `known_files` hands `None` for it and
+`unchanged` is false until it is filled.
+
+**Finding an offset from one moment** (`clocks::shared_moments`). Every body
+is lined up with the body with the most frames. For each frame of the other
+body, its one closest frame of the reference within twenty minutes (by the
+clocks as they stand), by CULL-002's two hashes summed — kept when that is at
+or under `ECHO`, 24, the threshold FT-029 C8 measured for "the same scene".
+Each match proposes an offset: the reference's time less this body's own. The
+densest run of offsets five seconds wide is the answer if it holds at least
+three matches, and its median is the offset. One best match per frame keeps a
+burst of one moment on both sides agreeing and look-alikes from other minutes
+scattered. Nothing is offered for a body already within five seconds of it,
+one whose clock was set (switched off counts: that was a decision), or one
+declined at about that offset.
+
+Measured on the rig's library — an X-T5 (20 frames), an A7 IV whose clock is
+192 s ahead (17, five of them the X-T5's moments cropped 4 % and 5 % brighter)
+and an iPhone (6): the five shared moments are 8, 9, 10, 11 and 14 apart, the
+closest unrelated pair within twenty minutes 42, of 273. Found: −192 s, five
+agreeing. On a real trip, Japan's 2 311 analysed raws from one X-T5 dealt out
+alternately as two bodies (`one_body_dealt_out_as_two`): with no shift, +1 s
+with 331 agreeing — the frame between them, and not offered, being in line;
+with the second body's clock 192 s ahead, −191 s; 0.1 ms for the search. With
+it an hour off, nothing: twenty minutes is the window. The photographer's own
+sixteen analysed libraries hold one body each but for two iPhone frames in
+Italy 2022 and one in Stockholm — three agreeing matches cannot happen there,
+so nothing is ever offered.
+
+**Finding it from the rhythm** (`clocks::rhythm`). Two shooters rarely
+stand side by side, so most of the time there are no look-alikes at all. What
+they do share is when they fire: the ring, the kiss, the confetti, the goal.
+So the second body's shots are counted against the reference's by how far
+apart they are, every pair within twenty minutes on the days both shot (the
+cross-correlation of the two trains of shots, without a bin for every second
+of the day), smoothed by a two-second triangle, and the peak's lag is the
+offset. It counts only when the peak, above the median of all lags, stands at
+least twice as high as the next best lag fifteen seconds or more away, and
+twice as high as the lag the clocks have now, with ten frames coinciding at
+it. Three agreeing look-alikes still win; without them the rhythm answers, and
+where there are some look-alikes it has to agree with one of them.
+
+Measured on Japan's 2 311 raws dealt alternately to two pretend bodies, the
+second's frames given hashes of their own so nothing is alike — only the
+rhythm can find it (`one_body_dealt_out_as_two`):
+
+| the second body's clock | found | peak over next best | over where the clocks are |
+|---|---|---|---|
+| in line | −2 s, not offered | 5.9× | 1.2× |
+| 192 s ahead | −194 s | 5.9× | 33× |
+| 600 s behind | +598 s | 5.8× | 128× |
+| 1 100 s ahead | −1 102 s | 5.6× | 194× |
+| 192 s ahead, one frame in four | −190 s | 4.8× | 19× |
+
+Two seconds off, which is the dealing: the second body has the frame after
+the reference's. The negative control, two unrelated trips with the second's
+days laid on the first's (Japan against Portugal 2025, and against Chile and
+Argentina 2026): peaks of 1.3× and 1.0× over the next best, nothing offered.
+A simulated wedding (two hundred moments, the second shooter at three in five
+of them, nothing alike) stands at 10.8×, the same with unrelated moments at
+1.0×. In the rig, two CC0 shooters with no scene in common (127 and 72
+frames, the second 192 s ahead) were offered exactly −192 s and lined up.
+
+**A clock photo** (`clocks::code`, `clocks::read`). Clock Photo… shows the
+time and a QR code of `NUMA:` and the milliseconds of local time read as UTC,
+as `exif::taken` reads a camera's, redrawn ten times a second; level M keeps
+that version 1, 21 modules, the largest modules for a screen photographed
+across a room. Analyse reads every frame for a code at its 640-pixel size
+(`rqrr`, MIT/Apache, and `qrcode` to draw it): 3.1 ms on a photograph with
+none, and a code is read from four pixels a module, about a fifth of the frame
+wide (`how_small_a_code_reads`). Both sides floor to the second, as the camera
+does. A frame with a code is a slate: its row in `slates`, out of the runs,
+best of burst and suggested stars, and its Info says so. In the rig a frame of
+the dialog's own screen, given an X-H2's EXIF two minutes ahead, came back as
+exactly that.
+
+**A burst is one body's.** Lined up, two bodies' frames of one moment are
+seconds apart and alike, and the runs took them as one burst, so best of
+burst chose between two shooters. `cull::bursts_by_body` makes each body's
+runs from its own frames only; the two still meet in the same scene again.
+
+Not done, and why. A body set to another time zone is hours off and outside
+the twenty minutes: Set by Hand or a clock photo covers it, and reading
+`OffsetTimeOriginal` to take zones out first is the step after. A body that
+shot little, or a shoot with a steady rhythm (a timelapse, a sports drive at
+fixed intervals) has no peak that stands out, and nothing is offered.
 
 ## Keeping up with the folder
 
@@ -2518,8 +2741,8 @@ with AI.
 
 Numa knows nothing about how it fares on anyone else's computer: a crash on
 another machine is invisible, and so is which tools matter. START-013, 014
-and 015 plan three ways to hear back. Nothing is built yet; this is the
-decision and why.
+and 015 plan three ways to hear back. This was the decision and why; START-015
+was built on 4 October and START-013 the same day (below), START-014 waits.
 
 **What holds for all three.**
 - Off until the photographer says yes, and asked once, the way the update
@@ -2578,11 +2801,56 @@ purpose needs.
   - KDE's KUserFeedback is Qt.
 
 **Ideas and tips (START-015).** GitHub Discussions with an Ideas category,
-and issue forms for bugs, both free. "Send feedback…" in the main menu
+and issue forms for bugs, both free. "Send Feedback…" in the main menu
 pre-fills one, with START-011's debug information only if the photographer
 ticks it. Most photographers do not have a GitHub account, so mail is the
 second way in. It shows their address to one person, which is their choice
 to make.
+- Everything rides in the URL: `discussions/new?category=ideas&title=…&body=…`,
+  or a `mailto:` with subject and body. Nothing leaves Numa; the browser or
+  the mail app shows it first, and the photographer sends it. The first line
+  becomes the title, and the debug information goes in a `<details>` block.
+- Escaped to RFC 3986's unreserved characters on both sides — Linux with
+  `glib::Uri::escape_string`, Swift by hand — because Swift's
+  `URLComponents` leaves a `+` standing, which GitHub reads as a space.
+- A URL has a ceiling (about 8 000 characters at GitHub, 2 000 in some mail
+  apps), so a very long text is cut there. Feedback is a paragraph, and the
+  debug information is twenty lines.
+- The issue form (`.github/ISSUE_TEMPLATE/problem.yml`) and the chooser's
+  links to the Ideas and to mail go to the public repository with the next
+  publish; Discussions is switched on in its settings.
+
+**Crashes, as built (START-013, 4 October).** Two things changed from the
+plan above once it ran.
+- **A signal handler, not a marker.** A marker removed on a clean exit also
+  stays behind after a logout (GTK leaves with `_exit` when the display goes),
+  a `kill -9`, the OOM killer and Ctrl+C in a terminal — the photographer
+  starts dev builds from one every day, and would have been told Numa crashed
+  each time. So `src/crash.rs` sets a handler for SIGSEGV, SIGABRT, SIGBUS,
+  SIGILL and SIGFPE that only opens, writes and closes (`crash.txt`: a header
+  made at start, and one line per signal), then hands over to what was there
+  before — std's stack-overflow check — and raises the signal again so the
+  process still dies of it. Only that file makes a report. The cost is the
+  OOM killer, which sends SIGKILL and goes unreported.
+- **The panic hook overwrites, except once.** The hook runs for caught panics
+  too — rawler's, behind `catch_unwind` — so `last-panic.txt` holds the last
+  one and means nothing without `crash.txt`. A panic in a GTK callback is
+  followed by std's own "panic in a function that cannot unwind", which
+  overwrote the panic that said what went wrong; found in the README rig with
+  a throwaway panic in a timeout, and that one now gets a line under it.
+- **Measured** in a release build: a caught panic costs 2.7 ms the first time
+  (the symbols are read) and 25–60 µs after, backtrace included.
+- **The trace** is std's own short cut (between `__rust_end_short_backtrace`
+  and `__rust_begin_short_backtrace`), in `{:#}` so every frame keeps its
+  address, without the crate hashes. With the build ID and the load address in
+  the header, `addr2line -e numa.debug <address − base>` finds a frame from
+  the Flatpak's `.Debug` extension.
+- **Installed in `startup`, cleared in `shutdown`**, which run only in the
+  instance that stays: a second start hands itself over and exits, and must
+  not clear the first one's files. A crash after a clean exit — a driver
+  letting go of the card — is not written.
+- **The report** opens in a dialog, not an alert: an alert is 372 px wide in
+  libadwaita 1.5, the AppImage's, and `prefer-wide-layout` is 1.6.
 
 Sources: [GlitchTip review and pricing, 2026](https://cubeapm.com/blog/glitchtip-pricing-and-review/),
 [Self-host Sentry or GlitchTip, 2026](https://danubedata.ro/blog/self-host-sentry-glitchtip-error-tracking-2026),
@@ -3072,6 +3340,17 @@ straight through a shoot wastes one decode at the end of the run; every jump
 that is not followed by a step wastes one; a turn back wastes one. Frugal,
 the jumps and turns cost nothing extra and the first two steps of every run
 decode as a jump would.
+
+The flag that lets a decode go (`power::stoppable`) was the thread's, and a
+rayon thread is not one job's: waiting — in a join, or on rawler's pool,
+which a raw decode waits on — it runs whatever its pool is handed. Shown on
+7 October with one-thread pools: a second job handed to the pool ran inside
+the let-go decode's wait and read "let go" for itself, and a second decode
+ahead run there cleared the first one's flag on its way out, so the first
+went on to the end for nothing. Now every job handed to `background` or the
+quiet lane starts with no flag, and a flag comes back after whatever ran
+inside it, after a panic too. A decode inside another job's par_iter on the
+same pool could still read it; none runs there.
 
 **For the Apple apps.** Everything in the shared crates reaches them: the
 decoders through the workspace table (their `Cargo.lock` will see rawler move
@@ -3810,7 +4089,8 @@ photographer's M3 Pro (`docs/MAC_BENCH.md`, branch mac-bench), utility still
 ran on the performance cores, and background kept work on the efficiency
 cores at 3.5–4 times less energy; waited-for work was fastest and cheapest at
 user-initiated on all cores. Linux keeps nice 10. Compiled for
-`aarch64-apple-ios` (std built from source) and not run.
+`aarch64-apple-ios` (std built from source) and not run; the app calls it
+first since 0.29.0 (Numa-mac `7ba3fd2`).
 
 **PERF-065: the develop-small stage, and why not a two-pass warp.** The
 proposal was a separable warp, reading each photosite once per pass, for
@@ -4065,10 +4345,13 @@ not run it yet):
 
 **Left for later:**
 
-- The MacBook: the tolerance test in safe math on this code, the timing
-  and energy matrix Metal against the mosaic, and the `iphone` phase
-  (MAC_BENCH's workflow). Until then the Apple app builds without Metal
-  (numa-ffi's `metal` feature is off).
+- ~~The MacBook: the tolerance test in safe math on this code and the
+  `iphone` phase.~~ Run the same night (mac-bench run 5, 0.29.0): nine
+  bodies within tolerance in f32 and f16, 20–24 MP on Metal in f32 at
+  256 MB / 1 GB, 40–50 MP in f16, the refused frames on the processor. Metal
+  is on in the Apple app since then (Numa-mac `0508fbf`, numa-ffi's `metal`
+  a default feature, Add-ons › Speed to switch it off). Still to run: the
+  timing and energy matrix, Metal against the mosaic, on this code.
 - The real limits of an iPhone and an iPad (the app logs them once
   Metal is on), and what `os_proc_available_memory` says at an open.
 - Geometry folded into the passes that read it, which would take the
@@ -4545,6 +4828,133 @@ most half a millisecond on the integrated GPU.
   noise reduction's recolouring is its own pass; the others half a day each.
 - **Rows by shared memory** on the integrated GPU and Apple: Texture's row
   boxes are 4.7–5.0 ms of its 27.8 ms frame.
+
+## Every mask on the card — 4 October
+
+RENDER-020's rest, branch `card-masks`. A mask with dehaze, luminance noise
+reduction, sharpening, defringe, moiré, HDR, Clarity, Texture or grain sent
+the whole render to the processor; so did the photograph's own dehaze,
+sharpening (where the proxy shows it), defringe, moiré and grain.
+
+**Which of his photographs.** His 280 edited photographs (the sixteen
+catalogues' `edits`, read-only) through `card::plan`, with what each mask
+asks for read from the JSON, since a found mask has no pixels outside the
+app: **253 on the card before, 268 now** — 10 more by the photograph's own
+stages, 5 by masks (7 of his masks have Clarity or Texture, 3 of them
+dehaze too; DSCF2843 has dehaze 14, Clarity 17, Texture 87). The other 12:
+AI denoise (5), spot removal (4), another working space (2), calibration (1).
+
+**A mask's own copy.** `apply_masks` works a mask out on a copy of the
+frame and fades it in; the stages that read neighbours read the copy. So
+does the card now: a mask that has any of them gets a frame-sized copy at the
+end of `planes`, and the `Step` says which mask, which phase of `mask`, and
+whether the copy already holds where the mask starts. In the processor's
+order: dehaze into the copy, `mask_copy` (its log luminance) and the
+luminance passes on it, colour noise reduction's rows, `mask_settle` and the
+detail tail on it, `mask` up to the tone map (every pixel, as the tone map
+reads the whole copy, and its log luminance), the tone map on the copy, and
+`mask` from there — curves, black and white, grade, Color, grain — faded in
+by the field. A mask with none of them is the one pass it was.
+
+The processor works a mask out on the rows it covers and 64 more each side,
+or on the whole frame where it measures one (HDR, Clarity, Texture,
+dehaze); the card works the whole frame. Every blur in the other passes
+reaches less than 64 rows at the proxy's scale (luminance noise reduction 2
+and twice that, moiré's far blur 10 × the scale), so the rows the mask
+covers come out the same.
+
+**Dehaze** is three passes: a workgroup per patch (its darkest channel and
+its mean, reduced in workgroup memory), one workgroup for the rest — the
+haziest patches by repeated maximum, the first of equals winning as the
+processor's stable sort has it; the airlight's grey; the transmission and
+its two 3 × 3 blurs, the grid at most 65 × 65 — and the unmixing per pixel.
+**The detail tail** — sharpening, defringe, moiré, `detail::passes` after
+colour noise reduction — needs that reduction done first, where the card
+used to fold it into `finish`: with any of the three, `settle` writes the
+denoised frame into `work` (`mask_settle` into the copy) and `finish` reads
+it from there. Sharpening's two blurs mixed by the radius's fraction,
+defringe's gradient of a blurred log luminance and moiré's six chroma blurs
+are the box passes RENDER-021 made, with one new feed (a channel's chroma).
+**Grain** is per pixel; `effects::grain`'s hash is in 64 bits, so the
+shader multiplies in pairs of 32-bit words (checked against `u64` on 200 000
+random lattice points: equal).
+
+As before, every number is the processor's: `effects::HazeShape`,
+`detail::SharpenShape`, `effects::grain_shape`, `detail::defringe_radius`
+and `moire_radii` are what `dehaze`, `sharpen`, `grain`, `defringe` and
+`moire` now call themselves — the same arithmetic moved, so the processor's
+output is unchanged.
+
+**The same picture.** `the_card_renders_what_the_processor_does` has 58
+edits now, 16 of them new — dehaze either way and cropped, grain alone and
+coarse with a vignette on a turned frame, sharpening at a whole and at a
+fractional radius, defringe, moiré, all of them together, and masks with
+each of the new stages, his DSCF2843's kind among them — on three bodies
+raw and 20 of them finished: at most 1 level in 8 bits everywhere, on at
+most 0.096 % of values (the X-T5's grain, coarse and rough: two `pow`s a
+pixel and lattice coordinates in the thousands), histograms within 0.05 %. None of them is empty on
+the processor: defringe at 100 moves 3.7 % of the X-T5's values, moiré
+3.9 %, sharpening 24 %, dehaze and grain nearly all.
+
+**The prefix, kept on the card too.** The processor keeps what the stages
+before the operations leave — dehaze, the noise reduction, the detail
+passes — while a slider after them moves (PERF-020). The card did not: it
+kept the colour stage (`lin`) and ran the rest every frame, which on the
+integrated GPU made defringe and moiré 42 ms a drag frame where the
+processor's draft paid nothing for them. Now, where a plan has dehaze,
+luminance noise reduction or a detail pass (`Plan::prefix_kept`), `settle`
+writes the frame after them into a buffer of its own, `kept`, keyed on the
+colour stage's key and the plan's prefix as text (`Plan::prefix_key`); the
+next render with the same key starts `finish` from it and dispatches none of
+them. A render from `kept` neither runs the colour stage nor vouches for
+`lin`, so a render in between with another white and nothing to keep cannot
+leave the one after it reading the wrong colour stage
+(`a_kept_prefix_is_the_same_picture`, which walks through exactly that).
+
+**What a drag costs, and who renders it.** `what_a_drag_costs` on the
+X-T5's 2 400-pixel proxy, an Exposure drag, 120 frames at 60 a second:
+
+| edit | processor (draft) | RX 9070 | integrated GPU |
+|---|---|---|---|
+| untouched | 1.5 ms, 0.017 CPU-s | 2.3 ms | 9.0 ms |
+| luminance NR 30 | 1.5 ms, 0.017 CPU-s | 2.1 ms (2.9 before) | 5.8 ms (16.5 before) |
+| dehaze 30, grain 25 | 4.8 ms, 0.065 CPU-s | 2.5 ms | 12.2 ms (17.0 unkept) |
+| defringe 40, moiré 40 | 1.5 ms, 0.017 CPU-s | 2.1 ms | 5.8 ms (41.9 unkept) |
+| a mask: dehaze, Clarity, Texture (DSCF2843's kind) | 8.8 ms, **0.097–0.110 CPU-s** | 4.4 ms | 55.5 ms |
+| a mask: sharpening, defringe, moiré, colour NR | 13.8 ms, **0.117 CPU-s** | 4.6 ms | 49.5 ms |
+
+(The first run that night had two other sessions busy on the processor; the
+table is from the second, idle 35 W. The DSCF2843 row is from both.)
+
+The photograph's dehaze and detail passes are in the processor's kept
+prefix — the defringe row costs what untouched does — so `Plan::heavy`
+counts them as nothing, as it does luminance noise reduction. A mask's
+count: dehaze 19, sharpening 21, defringe 25, moiré 43 CPU-ns a draft pixel,
+timed alone on the 1 200-pixel draft, and grain 53. The local tone map was
+one number, 40; the table of 29 September already showed HDR and Clarity at
+about 24 and Texture's guided filter over the whole draft at 53, and
+DSCF2843's mask came out under the line with 40, so now it is 24, and 29
+more with Texture; and a mask that measures the frame works all of it
+rather than its rows, another 12. That mask sums to 0.109 CPU-s and measured
+0.097 and 0.110: on the line, where the energy is about even either way. On
+the RX 9070 the two masks go to the card and dehaze with grain stays on the
+processor.
+
+**The integrated GPU and a mask's neighbourhoods.** RENDER-022 gives the
+integrated GPU (and frugal mode) everything the card has. A mask's tone map,
+dehaze and detail passes run every frame over the whole 2 400-pixel proxy —
+the processor's draft is a quarter of that — so on the integrated GPU they
+are 50–55 ms a frame, where the processor's draft is 9–14 ms with six or
+seven cores busy, and the joules a frame are about the same (0.58 against
+0.52). Before this branch those photographs went to the processor because
+the card lacked the stage. The photographer chose the card for them too, the
+same day: "Ik vind de resultaten van de gpu steeds veel beter dus ik heb
+liever alsnog dat die het doet" — the whole proxy rather than half of it.
+RENDER-022's rule stands as it was.
+
+**Memory.** The copy is 12 bytes a pixel and moiré's far blurs another 12:
+46 MB each at 2 400 × 1 600, only while a render asks for them; dehaze's grid
+is 100 KB.
 
 ## The processor's render, the rest of it — 29 September
 
@@ -5224,3 +5634,598 @@ the Coolpix P7700, the Pentax K2000, the Panasonic DC-FZ45 and DMC-GM1S (the
 body is there under another name or aspect), and four Hasselblads (X1D II
 50C, CFV-50c twice, CFV 100C: model strings rawler does not match). Nothing
 for them upstream to take.
+
+## A card copied the way film is — 4 October
+
+IO-027–031 (`crates/numa-io/src/offload.rs`, `receipt.rs`;
+`src/ui/window/import_done.rs`, `import_look.rs`). Film's offload tools —
+Hedge, Silverstack, ShotPut — have for a decade hashed every file, read every
+copy back and compared it, and kept a list of the hashes (ASC MHL) before
+anyone may format a card. No photo application reads its copy back; Photo
+Mechanic writes to two places and leaves the checking to the photographer.
+The study behind it is `numa-scratch/leren-van/m/M1_verify.md` (lesson 1,
+"Veilig binnen").
+
+**What it costs, M1** (150 uncompressed RAFs of 87 MB, 13.1 GB, cold, the
+SN850X): xxh3-128 hashes at 2.0 GB/s on one thread and 5.2 on eight
+(44 ms and 17 ms a RAF); SHA-256 1.5 GB/s, MD5 0.8. Hashing is never the
+bottleneck — the card reader and the destination are. A 64 GB card at a
+UHS-II reader's 300 MB/s copies in about 3.6 minutes; reading the copy back
+from the internal NVMe adds about 32 s on one thread (+15 %), from a USB SSD
+about a minute, from a spinning disk or a NAS seven to ten. Hence the second
+place on a thread of its own, trailing.
+
+**What it costs here** (release build, `measure_a_card`, 94 CC0 Fujifilm RAFs
+of raw.pixls.us from X-A10 to GFX 100, 5.86 GB, cold source, the same NVMe
+for card and destinations):
+
+| | library done | everything done |
+|---|---|---|
+| `std::fs::copy`, no sync | 4.8 s | — |
+| two places, synced, not read back | 6.7 s | 18.3 s |
+| checked, one place | 9.6 s | 15.7 s |
+| checked, two places | 9.4 s | 16.4 s |
+
+The read-back is 2.9 s for 5.86 GB — 2 GB/s, M1's single-thread figure. The
+sync per file is the rest of the gap to a plain copy, and it is not
+optional: a copy still in the page cache is not on the disk, and reading it
+back would compare memory with itself. So each file is `sync_all`ed before
+its rename and its pages dropped (`posix_fadvise(DONTNEED)`) before the
+read-back. "Everything" is the decode (IO-028), four raws at a time from the
+start: about 16 s for the 94, most of it the 100 MP GFX frames — slower than
+this disk, faster than a card reader (the same 5.86 GB is 20 s at 300 MB/s),
+so on a real card the check of the card ends a moment after the copy. In the
+rig, 12 RAFs to two places: the library catalogued and open after 0.4 s, the
+done page at 2.2 s.
+
+**Decisions.**
+
+- *The card is read once.* The source is hashed while it is copied; the
+  second place is fed from the library's checked copy, not from the card.
+  The decode reads the checked copy too: the same bytes, on a faster disk.
+- *xxh3-128*, the MHL default and `xxh128sum`'s, so a receipt is a plain
+  `xxh128sum` file that checks itself without Numa. Through `twox-hash`
+  (MIT), already in the build under `ruzstd`: nothing new is compiled.
+- *A truncated frame passes every hash.* The card gave those bytes, and the
+  copies have them. Only a decode finds it, which is IO-028's reason; and a
+  reader that dropped a block hashes consistently wrong in the same way, so
+  a frame that does not decode is also never "safe" and gets Try Again.
+- *Frames already in a library are checked on request.* They were matched by
+  name, size and both ends (C7), and reading them all on every import would
+  double the time of a card that is never formatted — which is most cards.
+  So the done page offers Check Them Too, with its cost at a card reader's
+  300 MB/s: each card file and its library copy are hashed side by side
+  (`rayon::join`), and the second place's copy at `second_folder` when there
+  is one. Every frame matched and no copy differing is what lets "Safe to
+  Format" be said. One matching copy is enough for an older frame — Check
+  Them Too reads, it makes no new copies, so a frame imported before there
+  was a second place stays on one drive. What
+  matched gets a receipt (`…-older.xxh128`) in the library and the second
+  place. A differing copy is named and not copied over: an older copy that
+  is not the card's could be either side's fault.
+- *The receipt is written once everything is done*, one per library and one
+  for the second place, each listing its files from its own root (the
+  library's, not the folder's: a `.numa` in a subfolder would make the
+  thumbnail cache take it for a library).
+
+Not tried: a real card reader, a camera on a cable, and Eject Card on a real
+removable drive (the rig's card is a folder; Eject is only offered for a mount
+that is the card itself).
+
+
+## After the camera, and tonight — 4 October
+
+IO-032, IO-033, LIB-031 (`crates/numa-io/src/capture.rs`, `stand_in.rs`,
+`track.rs`, `catalog/after_camera.rs`; `src/ui/window/import_jpegs.rs`,
+`tracks.rs`, `tonight.rs`). Lessons 4 and 7 of the study of neighbouring apps
+(`numa-scratch/leren-van`): the camera makers' companion apps average 1.70
+stars, two thirds of the bad reviews about connecting, so Numa builds no
+camera link — it takes up what the app brought across, the phone's track and
+the evening's hand-off.
+
+**What a photograph's head says** (`capture::read`). One read of the first
+256 kB gives the moment to the second (DateTimeOriginal), the zone
+(OffsetTimeOriginal), Model, BodySerialNumber, Software and whether a GPS
+latitude is there: the raw's own directories for a TIFF-shaped raw, the CMT
+boxes of a CR3, the first EXIF block otherwise (a JPEG, a HEIF, the JPEG
+inside a RAF). Measured on the archive, release build, eight threads: 527 RAFs
+of Chile and Argentina cold in 189 ms, all 527 with a zone, 27 placed by the
+camera; 2 313 RAFs of Japan, 320 placed (14 %; M2's sample said 10 %).
+
+**The same frame** (`stand_in::same_frame`): the same base name (any case),
+the same DateTimeOriginal to the second, and the same body serial and the
+same firmware line wherever both files carry one. Both times are the one
+body's own clock, so a clock offset (LIB-026) cancels out and is not needed.
+A JPEG saved again by another program carries that program's Software line
+and is left alone; a renamed one is never looked at; a JPEG with its own raw
+beside it is the camera's RAW+JPEG pair (LIB-018), not a stand-in. Only the
+raws a JPEG shares a name with are read. Measured against the camera's own
+pictures, which share name, time, serial and firmware as an app's transfer
+does: Japan's 2 313 RAFs against 2 343 JPEGs and HEIFs, 2 306 found in
+0.77 s — every raw that had a picture of its name (the other 7 have none);
+Chile's 527 against 290 HEIFs, 289 found in 45 ms (the 290th has no raw).
+No false match is possible without the same second, serial and firmware;
+the counter coming round gives the same name another second, which the unit
+test holds. Not measured: a real XApp or Creators' App transfer, none was at
+hand — if an app rewrites Software or the time, nothing matches and the JPEG
+simply stays.
+
+**Taking the place** (`Catalog::take_place`). The raw's own row (made by the
+import's scan) gets the JPEG's stars and flag where it has none — the marks
+given on the card are applied after and win — and its albums; those three
+leave the JPEG, so one frame is never picked, counted or exported twice.
+The names given to faces in it (by name, into the raw's library), its place,
+and the part of its edit that means the same on a raw (`stand_in::carry`:
+Crop and Rotate, fractions of the frame; colour and tone were set on the
+camera's rendering and stay) are given to the raw as well. The JPEG keeps
+its row, its file, its own edit and history: it stays in view as the raw's
+pair, the way LIB-018 shows a RAW+JPEG shot together — two cards, next to
+each other in capture order (the same second), RAW Only showing one. No
+state of its own: a first version set the JPEG aside, out of view, which
+left no way back to it. In the rig (12 CC0 RAFs, three 1600 px JPEGs made
+from them with the camera's EXIF, one renamed, one with Software "Snapseed
+2.0"): 3 found, the renamed and the edited ones left; the raw of the first
+with its 4 stars, pick, album, crop and place, the curve left on the JPEG
+beside it; RAW Only shows 12 of 17.
+
+**Placing from a track** (`track::place`). A fix is a UTC time and a place;
+a photograph's moment in UTC is its wall clock less its zone, or less this
+computer's offset where the camera wrote none. Between two fixes the place is
+on the straight line between them; a gap over 15 minutes between two places
+more than 250 m apart is refused ("outside the track"), a long gap in one
+place is not (a Timeline visit is a start and an end at one place; a logger
+paused at the hotel); two minutes beyond either end take the end. The
+camera's own position is never replaced. GPX through roxmltree (MIT, already
+in the build for LensFun); the Timeline exports through serde_json, walked
+whole for the spellings Google has used (E7 numbers with `timestamp` or
+`timestampMs`, `"52.1°, 4.3°"` and `"geo:52.1,4.3"` points, visits and
+activities with their start and end, iOS's minutes after a segment's start).
+In the rig, a GPX over 09:00–10:50 against twelve frames 09:02–12:09: 5 of 12
+placed, 5 outside, 2 placed by the camera (the X-H2 samples carry GPS); then
+an Android Timeline over 11:00–12:30 from the library placed the 5 others,
+three at the visit and two on the path. The place lives in the library's
+`positions` table and an export writes it as EXIF GPS (version 2.3, degrees,
+minutes and seconds to a ten-thousandth) where the camera's EXIF has none;
+Remove location leaves it out. Read back with exiftool from the pack below.
+
+**Tonight**: the ordinary export with its own settings (long edge, sRGB JPEG,
+no watermark, the photographer's creator, copyright and location choice) into
+`~/Pictures/Tonight/<library> · <day>`, a day being the camera's wall-clock
+date. `export::next_path` now counts on beside a name whose template has no
+`{index}` ("DSCF4101 2.jpg"), where it used to find no free name at all.
+Every Day of the Trip runs after an import's done page has everything, for
+each day the import brought in that has picks and no pack yet, one pack after
+another; the days are kept per library, so never twice. In the rig the four
+picks of the day came out at 2048 px, cropped as edited, with the track's GPS
+and the album as a keyword.
+
+### Left
+- LIB-026's clock offset goes into `Capture::utc` when `klokken` is merged;
+  the stand-in match does not need it.
+- A pair made afterwards in two libraries (the raw imported elsewhere than
+  its JPEG) is two cards in two libraries; nothing joins them.
+- Add Places from a Track… has no Stop; heads read in seconds even for ten
+  thousand frames on a local disk.
+
+## As Shot — 4 October
+
+Branch `camera-look` (RENDER-024). leren-van M5 had measured the idea in
+Python (`numa-scratch/leren-van/m/M5_camera_look.md`): a small transform
+fitted per photo from Numa's untouched render to the raw's own camera JPEG
+lands at ΔE2000 0.8–1.2 where a table per film simulation lands at 2.0–2.6.
+This is that, in the app, measured with the app's own fit and render.
+
+**The pairs** (`numa_io::camera_look::Views`). Numa's untouched render —
+`Document::new`, as-shot white balance, the document's own profile — from a
+proxy at 1104 px, beside the camera's JPEG at the same size (the smallest
+embedded one that big, never a render of ours). The JPEG carries the
+camera's lens correction and sometimes another crop, so the two are lined up
+on brightness: Numa's frame cut to the JPEG's shape about its middle, then a
+search over scale (0.94–1.10, then a quarter step) and shift (±8 px, then an
+eighth of a pixel) for the best correlation. Most of the X-T5 frames land at
+1.00, a fifth at 1.03 (by lens), the CC0 X-T5s and the A7 III at 1.02–1.03,
+most Panasonics at 1.00. A correlation under 0.8 is refused: below it As
+Shot did not help (14 CC0 frames between 0.5 and 0.8, median 4.26 → 4.39,
+five of them worse). Then the JPEG's clipped pixels (any channel
+at 250 or more) and 4 % of each edge are left out, and 4×4 blocks averaged,
+so a pixel of disagreement about where an edge is does not read as colour.
+
+**The fit** (`numa_core::camera_look`). A third-order polynomial in display
+RGB, 20 terms a channel, least squares on the blocks, with identity samples
+on a 6³ grid of the cube weighted at 0.5 % of the real ones together. Without
+them the held-out error is lower and the look is wild where the frame never
+went — the 99th percentile of how far it moves a node of the cube was 57 ΔE
+on the 64 X-T5 frames; 0.2 % gives 0.64 and 9.7, 0.5 % 0.67 and 8.0, 2 %
+0.76 and 6.8, 10 % 0.87 and 5.2. 0.5 % is where the two stop trading much.
+Above the knee — the 99.5th percentile of the brightest channel among the
+pairs, the brightest the JPEG showed unclipped — the polynomial is not
+evaluated: the look's change at the knee is carried up the pixel's own colour
+and fades linearly to nothing at white, monotonic whenever the knee's answer
+is not above white, which it is clamped to. Where the camera clipped the sky,
+the raw's detail stays Numa's. 61 numbers, in the document.
+
+**Where it applies.** In `encode`, on the display values the curves leave,
+before a LUT and the same way: baked to a 33³ table once per fit and read
+tetrahedrally, at its Strength. The scene-linear stages — the photographer's
+Light, Colour, masks — run before it, so they still mean what they say. The
+card does not do LUTs and so hands a frame with As Shot to the processor. A
+look takes `encode` off PERF-041's table path: 6.6 → 22.2 ms for a
+2400×1600 frame here (20 renders each, release), the same as a LUT costs.
+
+**Measured** (`tests/camera_look_fit.rs`, release, `dev/capped.sh`): the fit
+on the 4×4 blocks of half a 16-pixel checkerboard, the render through
+`develop16_at` with the fit in the document, ΔE2000 against the JPEG on the
+8×8 blocks of the other half — M5's held-out score at M5's size. Beside it
+on the same blocks: nothing done, a table per film simulation (the same fit
+from the other frames of that simulation), and M5's local variant (6×4
+tiles, second order, blended), which the renderer does not have.
+
+| median ΔE2000, held out | n | untouched | table | As Shot | p90 untouched → As Shot | local |
+|---|---|---|---|---|---|---|
+| CC0, one raw a body, 8 makes | 389 | 2.85 | — | **0.96** | 5.06 → 2.31 | 0.67 |
+| Fujifilm | 52 | 3.35 | — | 0.69 | | 0.48 |
+| Sony | 70 | 2.63 | — | 0.86 | | 0.67 |
+| Canon | 71 | 3.18 | — | 1.27 | | 0.80 |
+| Nikon | 52 | 3.06 | — | 1.40 | | 0.80 |
+| Panasonic | 94 | 2.61 | — | 0.97 | | 0.77 |
+| Olympus / Pentax / Leica | 18 / 21 / 9 | 2.85 / 1.80 / 3.41 | — | 0.80 / 0.53 / 0.97 | | 0.62 / 0.39 / 0.71 |
+| X-T5, the photographer's (M5c's set) | 64 | 2.61 | 1.37 | **0.67** | 4.10 → 1.06 | 0.48 |
+| Classic Chrome | 20 | 2.02 | 1.29 | 0.57 | | 0.39 |
+| Reala ACE | 16 | 1.25 | 1.26 | 0.66 | | 0.49 |
+| Astia | 16 | 3.80 | 1.54 | 0.85 | | 0.58 |
+| Nostalgic Neg | 12 | 2.88 | 1.44 | 0.74 | | 0.51 |
+
+Under ΔE 2: 84 % of the CC0 blocks, 94 % of the X-T5's. The CC0 table
+column is empty because the CC0 raws are one or two frames a body and mostly
+Provia. Every number is below M5c's (untouched 3.2, table 2.0, per photo
+0.9), most likely for the scale in the line-up, which M5 did not search.
+Of the 389, five came out worse than untouched; of the 64, three, each
+already close untouched: 0.19 → 0.27 and 0.37 → 1.58 on two near-black frames
+(the knee at its floor, 0.05: nothing in them is brighter), 0.51 → 0.56. The fit, render and line-up take
+0.23 s median on a CC0 raw and 0.34 s on a 40 MP X-T5; 22 CC0 raws carry no
+JPEG and 16 were refused for not lining up.
+
+**Not done, and why.** The local variant is worth 0.2 on the X-T5 and 0.5–0.6
+on Canon and Nikon — there it is mostly the camera's own vignetting
+correction, which Numa does not make for those lenses, not colour. A look
+that depends on where a pixel is needs the pixel's place in the uncropped
+frame inside `encode`, through crop, turn, perspective and 1:1 tiles; that is
+a change of its own, and for those makes a lens-shading correction is the
+better home. The JPEG's colour space is taken as sRGB (an Adobe RGB preview
+would make the look duller; RENDER-023 found most tagged ones are sRGB
+anyway). The Apple apps have the field and the render, not the tile, and
+their export does not call `fill` for a pasted As Shot.
+
+## Search by words — 4 October
+
+Branch `vinden` (LIB-028/029), after the night study's M3
+(`numa-scratch/leren-van/m/M3_search.md`). SigLIP 2 base patch16-224 (Google,
+Apache-2.0, so the closed Apple core may carry it too) puts a photograph and a
+line of text in one space of 768 numbers; a search is one run of the text
+model and a dot product per photograph. Everything here on this machine (Ryzen
+7 9800X3D, 16 threads), release builds, every run under `dev/capped.sh`.
+Scripts: `m/search_variants.py`, `m/search_floor.py`, `m/things_calib.py`;
+the Rust measurement is `words_measure` in `numa-io/src/words/tests.rs`.
+
+**Which vision file.** onnx-community publishes the vision half as float32,
+float16 and three 8-bit kinds. On M3's 46 CC0 photographs, through Numa's own
+path (the 320-pixel library thumbnail, squashed to 224), ONNX Runtime 1.30 on
+the processor, milliseconds a photograph:
+
+| file | size | 1 thread | 4 | 16 | English top-1, MRR | Dutch top-1, MRR |
+|---|---|---|---|---|---|---|
+| float32 | 372 MB | 153 | 44 | 67 | 21/22, 0.98 | 13/18, 0.80 |
+| **uint8** ("quantized") | 95 MB | 108 | 30 | 39 | 20/22, 0.94 | 14/18, 0.82 |
+| int8 | 95 MB | 70 | 22 | 100 | 18/22, 0.89 | 13/18, 0.78 |
+| float16 | 186 MB | 180 | 56 | 318 | 21/22, 0.98 | 13/18, 0.80 |
+
+(The 16-thread column was taken with the desktop busy; the Rust figures below
+are the ones to read for speed.) The uint8 file keeps the full model's answers
+but one, at a quarter of its size; float16 gives float32's answers and is the
+slowest of the four on a processor without float16 arithmetic. So uint8, with
+the text half in int8 (283 MB, the bulk of it Gemma's 256 000-word vocabulary)
+and the tokenizer (34 MB): **412 MB**, fetched from Hugging Face when the field
+is first opened. Neither is on the mirror yet; START-017's float16 packing
+could later bring float32's answers at a smaller download.
+
+**One photograph to a run.** The 8-bit model scales its values over the whole
+input tensor, so in a batch a photograph's numbers depend on the photographs
+beside it (Dutch MRR 0.77 at one, 0.72 at four, 0.76 at sixteen). A photograph
+read again after its file changed should come out as it did the first time, so
+the model runs one photograph at a time; the thumbnails are loaded 32 at a
+time on the background pool. Reading the 46 JPEGs:
+
+| model run | photographs a second | peak memory |
+|---|---|---|
+| **1 photograph, 16 threads** | 43–54 | 0.19 GB |
+| 4 photographs, 16 threads | 52 | 0.28 GB |
+| 16 photographs, 16 threads | 41 | 0.67 GB |
+| 32 photographs, 16 threads | 35 | 0.69 GB |
+| 16 photographs, 4 threads | 29 | 0.66 GB |
+
+**Reading a library**, as the application does it (`read_library`: 32
+thumbnails on the low-priority pool, nice 10, then the model at nice 10 too,
+its threads made by a thread of that pool), on the README rig's CC0
+libraries with no thumbnail cached, so every raw's preview is decoded:
+Cities 12 in 0.4 s (29 a second, the model's load included), Garden 22 in
+0.5 s (46), Mountains and Sea 38 in 0.9 s (43), at a peak of 0.79 GB, most of
+it 32 previews at full size at once; from cached thumbnails the peak is the
+models' 0.2–0.4 GB. About **four minutes for 10 000 photographs** on an idle
+machine. Nothing is read while the machine is frugal (battery or power saver,
+PERF-024), nor before the photographer has searched by words once; a library
+already read costs one look per session.
+
+**What it finds** (Rust path, uint8, one at a time): English top-1 19/22, MRR
+0.92; Dutch 12/18, MRR 0.77 ("woonkamer", "kerkelijke ceremonie" and
+"sterretjes in de nacht" are where Dutch loses). Text is 10 ms a search with
+the first load amortised, 5 ms warm. The tokenizer is Numa's own 60 lines:
+the file's whole recipe is "space becomes ▁, characters, merges by rank,
+bytes for the rest, `<eos>`", and it gives Hugging Face's `tokenizers` 0.23
+ids on every string tried (`gives_hugging_faces_ids`), so the 20-odd crates of
+`tokenizers` were not worth linking. One surprise: Gemma's vocabulary has no
+`<0x09>`, the tab being a character of its own. Checked again on 4 October
+against 2 065 phrases (English and Dutch queries, accents in NFC and NFD,
+digits, punctuation, case, runs of spaces, tabs and newlines, emoji, other
+scripts, 400-word texts; `gives_hugging_faces_ids_for_a_corpus`): all but 13
+the same. The 13 were text that spells one of the file's 249 added tokens —
+`<eos>`, `<b>`, `<table>`, `[@BOS@]` — which Hugging Face takes whole and
+this one spelled out as characters; they are found first now, longest first.
+
+**The floor.** Cosines of matches and non-matches overlap (a match's median
+0.087, a non-match's 99th percentile 0.091), so no single number separates
+them; the order does. A search shows what is at least 0.07 and within 0.03 of
+the best: English 61 shown, 62 % of them right, 78 % of the right ones; Dutch
+76 shown, 42 % right, 76 %; a search with nothing to find ("a dog", "fiets",
+"paard", …, 12 of them) shows 1.5. Within 0.05 the right ones were 86 % and
+71 % at 59 % and 33 % precision, and "zeemeeuw" showed 20 of the rig's 72,
+one of them the gull — at 0.03 a weak search no longer brings half the
+library along.
+
+**Things Numa Saw.** 150 words, each put as SigLIP's own sentence ("this is a photo of
+bouquet." read best of three phrasings), made into numbers once a session
+(0.78 s). A photograph has a word when it is among its three best and scores
+0.10 or more: against labels by hand for 36 of the words on the 46
+photographs, 92 % of what it says is right and it says 36 % of what it could;
+three best at 0.09 was 83 % and 53 %, five best at 0.07 72 % and 71 %. It
+should be right when it speaks, so 0.10. What it still gets wrong there: a
+tent in a sunset, a fountain for a heron at the water.
+
+**Kept beside the catalog.** `.numa/words.bin`: eight bytes naming the vision
+file (another file's numbers are not comparable, so a file with other bytes is
+started again), then a record per photograph — its path inside the library,
+the file's modification time, 768 half floats — 1.55 kB, so 78 MB for 50 000.
+Appended, never rewritten; the latest record for a path counts, a record cut
+short by a stop mid-write ends the file, and a photograph whose time changed
+is read again. Records of removed photographs stay (`ponytail:` in `Index::add`).
+
+## Review, and the tape it runs on — 4 October
+
+CULL-013 and CULL-014, branch `band`, from the drawing O6-Band. Rig, demo
+shoot and logs: `numa-scratch/band-rig/` (`make_lib.py` copies CC0 raws of
+the README rig and sets their capture times with exiftool: 56 shots in four
+long bursts, short ones, single frames, gaps of 9 to 42 minutes and two
+RAW+JPEG pairs).
+
+**One tape, two pure functions.** The tape is the grid the loupe was opened
+from, as shots in capture order — a raw's own JPEG or HIF folded into its raw
+by `analysis::twins`, so a RAW+JPEG shoot is not every frame twice — read
+when the loupe opens (the grid only changes under it by closing it). Where a
+mark goes and how long Review stays on a frame are `cull::tape::layout` and
+`cull::tape::pace_ms`, arithmetic on capture times with their tests in
+`numa-cull`, so an Apple tape would draw and pace the same. Only the marks in
+sight are drawn, found by `partition_point`, so the width of the shoot costs
+nothing per frame.
+
+**In passing, not looked at.** Skimming and Review put a frame in the loupe
+through `tape::show_quietly`: the selection moves with it, so the stars, P
+and X act on what is seen, but the grid under the loupe does not scroll and
+CULL-012's log records no "passed" — a frame shown for a sixth of a second
+was not a decision. The first key, a click or the end of Review settles on
+the frame on screen, and from there it is looked at as any other.
+
+**Holding ahead.** The loupe held four frames, re-asked at every step for
+any not yet arrived — harmless at four, a dozen duplicate decodes a frame at
+Review's twelve ahead. A frame is now asked for once (`loupe.asked`, cleared
+when a load is dropped as unwanted, arrives, or the loupe closes). Review
+waits for the next frame rather than showing it blank or skipping it, and
+counts the wait.
+
+**Measured** (release build, Xvfb at 2880 × 1620, scale 2, GSK's cairo
+renderer, NVMe, `NUMA_TIMING`):
+
+| run | shown | asked for | waited for a decode |
+|---|---|---|---|
+| demo shoot, the loupe's previews made as it went (cold) | 55 frames in 14.03 s | 14.00 s | 0 ms |
+| demo shoot, again | 55 in 14.04 s | 14.00 s | 0 ms |
+| 406 frames (hard links, mostly long bursts), stopped by hand | 206 in 26.05 s, 7.9 a second | — | 0 ms |
+| demo shoot, unpaced (every pace set to 1 ms, not committed), cold / warm / cold / warm | 26.9 / 18.3 / 23.0 / 21.9 a second | — | 20 / 2 / 74 / 2 ms |
+
+So the pace is kept to the hundredth of a second and decoding is not what
+limits it: unpaced, Review shows three to four times the default rate and
+twice the burst rate, and what waits then is the main thread drawing a
+1920-pixel frame through cairo at scale 2, not the previews (24 ms cold a
+file, "Reading the head of a raw"). Not measured: a library on a USB disk,
+where a cold preview costs the disk's seek, and the photographer's own
+40 MP raws.
+
+## Tethering through libgphoto2, opened rather than linked — 4 October
+
+FLOW-013, branch `tether`. A camera on its cable puts each photograph into a
+library as it is taken (`src/tether.rs` for libgphoto2, `tethering.rs` for
+the window). What darktable, digiKam and Entangle tether with on Linux is
+libgphoto2, and it is LGPL; the rule for the shared core (the Apple apps are
+built from it) is no LGPL beyond rawler's relink kit, so it lives in the
+Linux application's own crate and nowhere under `crates/`.
+
+**Opened, not linked.** `dlopen("libgphoto2.so.6")` — the soname since
+2.5.0 in 2012 — and the seventeen functions used, looked up by name. The
+`gphoto2` crate would link it at build time, which every channel would then
+have to carry to build at all: five OBS distributions, the AppImage's Ubuntu
+container, CI, and the Flathub manifest, which is the photographer's. Opened
+at run time, Numa builds without it and runs without it (Shoot Tethered… is
+then not in the menu); every desktop with GVFS's camera support already has
+it. The packages recommend it, the Flatpak builds it (the GNOME 50 runtime
+has its libusb, libexif, libltdl, libxml2, libcurl and libjpeg, not
+libgphoto2), and the AppImage uses the system's. Opening it costs 8 ms, so
+the start does not ask (START-016); it is asked beside the window two
+seconds in.
+
+**The session** is a thread, since every libgphoto2 call blocks: wait for the
+camera's next event (400 ms, which is also how long a Stop takes to be
+heard), and on `GP_EVENT_FILE_ADDED` fetch the file whole into memory and
+write it into the folder as `.<name>.part`, then hard-link it to its name. A
+hard link refuses a name that is taken, so the check and the claim are one
+step and nothing is written over; the hidden part keeps the folder watch from
+walking half a file. Only `raw::is_supported` files are fetched — a camera
+announces voice memos and films too. A file is not deleted from the camera:
+on a card it is the photographer's backup, and where the camera captured to
+its own memory libgphoto2's drivers release it on download.
+
+**A camera that goes away** — off, asleep, unplugged — is an error from the
+wait. The camera is let go and opened again every two seconds, the window
+told once per change, not at every attempt; stability is what photographers
+hold against Lightroom's tethering in Adobe's own forums. **GVFS** mounts a
+camera the moment it is plugged in, so the file manager can show it, and
+holds it while mounted: `gp_camera_init` then fails with
+`GP_ERROR_IO_USB_CLAIM`. The session says so, and the window unmounts every
+`gphoto2://` mount (not `mtp://`, which is phones); the next attempt has it.
+While a session runs, the plugged-in banner does not offer the camera for
+import.
+
+**One walk at a time.** What came in is put in the catalog by a walk of the
+library, as everything else is. The folder watch (IO-023) walks too, three
+seconds after a change, and its rebuild of the grid closed the loupe under
+the photographer; and a walk begun before a frame landed and applied after
+it would take the frame for one deleted (`apply_scan` removes what a
+complete walk did not see). So the session waits for `scanning` like the
+watch does, and the watch leaves the session's library alone until it stops,
+when it walks it once.
+
+**Where it shows.** In the loupe (the photographer, 4 October: "tethered
+meteen in culling modus"), in the editor if that is where they are, and
+afterwards only to someone still on the frame before — the rule is "follow
+the newest while looking at the last one". Analyse runs on each frame alone
+(`measure_photo`, then `save_analysis_batch`) and the result goes onto the
+card already on screen rather than through a rebuild; the loupe's caption
+now carries the card's note, which is nothing for a frame with nothing
+wrong.
+
+**Without a camera** — the rigs, the guide's screenshots —
+`NUMA_TETHER_FROM=<folder>` makes a session "take" that folder's photographs
+one every three seconds, as a camera named after the folder. In the rig
+(`numa-scratch/tether-rig`, Xvfb, its own copy of the catalogue): the loupe
+opening on the first frame and following the next; stepped back to an
+earlier frame, the loupe stayed there as two more came in, and left for the
+grid, the grid stayed; the editor following with Same Edit as the Last
+carrying +1.30 exposure from one frame to the next two; the same names five
+times over as `-2` to `-6`; a blurred JPEG read as "soft" in the loupe
+within the three seconds; Stop, with the count. With libgphoto2 and no camera,
+a session says Waiting within 0.3 s (`tether::tests`).
+
+### Left
+
+- Not yet tried with a camera on a cable. darktable's users report the X-T5
+  tethers through libgphoto2 (live view poor, which this does not use); the
+  X-T3 has an open shutter bug that only matters to a shutter on screen.
+- No shutter on screen, no live view, no camera settings: the camera's own
+  button takes the picture. libgphoto2 has all three (`gp_camera_capture`);
+  they are Capture One's ground, for when it is asked for.
+- The first camera on a cable is the one; two at once is not chosen between.
+- The Mac: written on Numa-mac's `tether` branch (`Tether.swift`), not yet
+  compiled. ImageCaptureCore tethers a camera by default since macOS 14
+  (`requestEnableTethering` does nothing now), lists the card first when a
+  session opens (only frames added after its catalog is complete are
+  fetched), and the sandbox makes a new day's folder a save panel's.
+
+## A moment's layers — 4 October
+
+Branch `lagen`, on `workflows` (FLOW-019, FLOW-020, FLOW-021). Rapid's panel
+used to write its four or five sliders into every frame of a moment, and
+Numa's work into every frame beside a record of it (`Did`). A moment's
+exposure then lived forty times, and a frame changed in the editor was a
+fortieth copy gone its own way. Now a moment's values live once, and are put
+round each frame's own edits wherever the frame is read — DaVinci Resolve's
+colour groups (Group Pre-Clip · Clip · Group Post-Clip), whose Photo page in
+Resolve 21 shares nodes across an album.
+
+**Where they live.** `numa_io::layers::Layers`, one JSON record per moment
+in the library's own catalog (`settings`, `moment-layers/<record>`), so it
+travels with the folder: Even (the moment's sliders as amounts added to each
+frame's own, its white balance, per frame the stops of Numa's evening, a
+matched balance and the capture time, the key frames) and Look (a preset —
+kept inside the record, so the library carries its look — or a LUT's name,
+and a strength). A frame names its record in its document
+(`Document::moment`, absent when `None`, so no stored stack changes text).
+
+**How they compose.** The catalog does it, so nothing above it knows:
+`load_edits` and `edits_json` return `Layers::compose(own)`, and `save_edits`
+writes back `Layers::decompose(document)` — the editor, a paste, Copy
+Settings and export all see the photograph as it looks and change only what
+is its own. Rapid alone reads and writes the own edits (`own_edits`,
+`save_own_edits`). The order is Even, the frame's own, Look:
+
+- *Even* adds the moment's tone sliders, vibrance and noise, the frame's
+  stops (Numa's evening when it is on, plus the key frames' ramp) to the
+  exposure, and gives a frame with no balance of its own the ramp's, its
+  matched one, or the moment's, in that order. Sums are held at the
+  sliders' ends.
+- *Look* is the preset applied to an untouched frame at its strength
+  (`presets::at_strength`), and only the *difference* that makes is added
+  to the frame's sliders — a preset's tone part would otherwise put every
+  frame's exposure back to the preset's. Its grade, curve, mixer, point
+  colours, LUT and film simulation go where the frame has none of its own.
+- Taking it off runs backwards. Where a sum was held at a slider's end the
+  inverse is not exact, and a balance the editor set to the moment's own
+  value is read as the moment's; both render the same.
+
+A stored stack that names no moment is returned as the very text it was,
+not parsed and written again: every thumbnail is cached under that text,
+and a library from before keeps all of its. A linked one costs 38 µs per
+read (both parsed, composed with a preset at 80, written; a 48-frame record
+of 3.5 kB; release, 2 000 runs) — 38 ms for a thousand cards.
+
+**Which record.** A moment is not a stored thing — it is cut from capture
+times, the photographer's cuts and joins, and the filter — so a record is
+found by the frames: the one most of a moment's frames name. It is claimed
+when one of its layers changes (`rapid_layers::claim`): if frames outside the
+moment name it too (the moment was cut in two, a filter hides some), the
+moment gets a copy of its own, and the others keep theirs; every frame of the
+moment then names it, except those detached. Reading never writes. When
+Numa's work ahead claims a moment, a frame the photographer had worked on
+takes what Numa's light adds to the moment off its own edits again, so it
+looks as it did and still follows later changes (in the rig, a frame lifted
+2.4 stops: RMSE 0.009 before and after, the selection ring's edge). Whether
+a frame is untouched is read from the catalog: the card's mark lagged an
+edit just made in the editor, and the frame took Numa's light.
+
+**From before.** A moment none of whose frames names a record is shown as
+`layers::adopt` would give it, and given that the first time one of its
+layers changes: Numa's evening is taken out of each frame's exposure into its
+stops, the value most frames share on each slider becomes the moment's (each
+frame keeps its difference as its own), a balance becomes the moment's where
+every frame has the same one, and Numa's light and warmth move to the
+record; each frame's `Did` keeps only its shape. Same picture to the pixel:
+`a_moment_from_before_layers_renders_the_same`, and in the rig an old
+Rapid library (Numa's work ahead, two moments' sliders and a note, written
+by the `workflows` build) gave tiles with 0 pixels more than 1 % apart,
+RMSE 9 × 10⁻⁵, before and after a slider moved and was put back.
+
+**Match to This Photo (FLOW-020).** Per frame, the camera's numbers
+(`raw::camera_exposure`) and the colour of its light, from the pixels near
+grey under the camera's own balance (`layers::average`, 20 % from grey,
+then `CameraProfile::neutral_of_camera`). The first try averaged the whole
+frame, as grey world does: a close-up of red tulips read as 2 741 K and was
+rendered blue; near-grey pixels read it as 4 435 K. Colour is per kind of
+camera (a hash of its matrix), not per frame: the reference camera's frames
+take the reference's balance, and another camera is moved by how far the mean
+of its frames' light is from the reference camera's, in mireds and tint — the
+same light through two sensors. Tried on four bodies (Sony A700 and A450,
+Panasonic G5 and TZ91) of four scenes, since there is no CC0 pair of cameras
+at one scene; that test is still owed.
+
+**Key frames (FLOW-021).** Stops and a balance per key, ramped at compose
+time from the frames' capture times (kept in the record), the balance
+linearly in mireds — halfway from 6 000 K to 3 000 K is 4 000 K, which is
+how far apart the two lights look. Nothing per frame is written, so a key
+moved is the whole ramp moved. It replaces Light follows the moment, which
+wrote every frame.

@@ -194,8 +194,10 @@ pub(super) fn duplicate_mask(state: &App, index: usize) {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
         let mut masks = photo.document.masks();
-        let Some(original) = masks.get(index).cloned() else { return };
-        masks.insert(index + 1, original);
+        let Some(mut copy) = masks.get(index).cloned() else { return };
+
+        copy.auto = None;
+        masks.insert(index + 1, copy);
         photo.document.set_masks(masks);
         photo.view = None;
     }
@@ -375,6 +377,26 @@ pub(super) fn remove_mask_now(state: &App, index: usize) {
     schedule_history_push(state);
 }
 
+pub(super) fn show_selection(state: &App, target: Basic, mask_colour: numa::core::mask::Tint) {
+    state.applying.set(true);
+    state.sliders.write(target);
+    state.mask_overlay.sliders_hold.set(state.mask_overlay.selected_mask.get());
+
+    state.colour.mask_temperature.set_value(target.balance.temperature as f64);
+
+    state.colour.mask_tint.set_value(-target.balance.tint as f64);
+
+    state.light.curve_area.queue_draw();
+    state.colour.mask_hue.set_value(mask_colour.hue as f64);
+    state.colour.mask_colour_strength.set_value(mask_colour.saturation as f64);
+    refresh_slider_marks(state);
+    state.applying.set(false);
+
+    write_mixer(state);
+    write_point_colours(state);
+    write_grading(state);
+}
+
 pub(super) fn select_mask(state: &App, index: Option<usize>) {
     timed("select_mask", || select_mask_now(state, index))
 }
@@ -396,23 +418,7 @@ pub(super) fn select_mask_now(state: &App, index: Option<usize>) {
     };
 
     let selected = state.mask_overlay.selected_mask.get();
-    state.applying.set(true);
-    state.sliders.write(target);
-    state.mask_overlay.sliders_hold.set(selected);
-
-    state.colour.mask_temperature.set_value(target.balance.temperature as f64);
-
-    state.colour.mask_tint.set_value(-target.balance.tint as f64);
-
-    state.light.curve_area.queue_draw();
-    state.colour.mask_hue.set_value(mask_colour.hue as f64);
-    state.colour.mask_colour_strength.set_value(mask_colour.saturation as f64);
-    refresh_slider_marks(state);
-    state.applying.set(false);
-
-    write_mixer(state);
-    write_point_colours(state);
-    write_grading(state);
+    show_selection(state, target, mask_colour);
 
     if selected != state.mask_overlay.brush_owner.get() {
         state.mask_overlay.brush_owner.set(selected);

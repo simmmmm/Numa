@@ -1,7 +1,7 @@
 use numa_core::color::WhiteBalance;
 use numa_core::curve::Curve;
 use numa_core::beautify::Beautify;
-use numa_core::document::{Basic, Document, Perspective};
+use numa_core::document::{AutoRecord, Basic, Document, Perspective};
 use numa_core::grading::Grading;
 use numa_core::mask::Mask;
 use numa_core::mixer::Mixer;
@@ -45,6 +45,10 @@ pub struct EditState {
     pub ai_sharpen: f32,
 
     pub lut: Option<numa_core::lut::LutChoice>,
+
+    pub camera_look: Option<numa_core::camera_look::CameraLook>,
+
+    pub auto: Option<AutoRecord>,
 }
 
 impl EditState {
@@ -70,6 +74,8 @@ impl EditState {
         document.ai_denoise = self.ai_denoise;
         document.ai_sharpen = self.ai_sharpen;
         document.lut = self.lut.clone();
+        document.camera_look = self.camera_look.clone();
+        document.auto = self.auto;
     }
 
     pub fn untouched() -> Self {
@@ -97,6 +103,8 @@ impl EditState {
             ai_denoise: document.ai_denoise,
             ai_sharpen: document.ai_sharpen,
             lut: document.lut.clone(),
+            camera_look: document.camera_look.clone(),
+            auto: document.auto,
         }
     }
 }
@@ -269,6 +277,73 @@ impl std::fmt::Display for Step {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fmt {
+
+    Signed(usize),
+
+    Positive,
+
+    Radius,
+
+    Middle,
+}
+
+pub struct Slider {
+    pub name: &'static str,
+    pub tab: &'static str,
+    pub fmt: Fmt,
+    pub at: fn(&mut Basic) -> &mut f32,
+}
+
+impl Slider {
+    pub fn value(&self, basic: &Basic) -> f32 {
+        let mut copy = *basic;
+        *(self.at)(&mut copy)
+    }
+}
+
+pub const SLIDERS: [Slider; 38] = [
+    Slider { name: "Exposure", tab: "Light", fmt: Fmt::Signed(2), at: |b| &mut b.tone.exposure },
+    Slider { name: "Contrast", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.tone.contrast },
+    Slider { name: "Highlights", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.tone.highlights },
+    Slider { name: "Shadows", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.tone.shadows },
+    Slider { name: "Whites", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.tone.whites },
+    Slider { name: "Blacks", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.tone.blacks },
+    Slider { name: "Vibrance", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.presence.vibrance },
+    Slider { name: "Saturation", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.presence.saturation },
+    Slider { name: "HDR", tab: "Light", fmt: Fmt::Signed(0), at: |b| &mut b.presence.hdr },
+    Slider { name: "Clarity", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.presence.clarity },
+    Slider { name: "Texture", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.presence.texture },
+    Slider { name: "Sharpening", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.sharpen },
+    Slider { name: "Sharpening radius", tab: "Detail", fmt: Fmt::Radius, at: |b| &mut b.detail.sharpen_radius },
+    Slider { name: "Sharpening mask", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.sharpen_masking },
+    Slider { name: "Noise reduction", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.denoise_luma },
+    Slider { name: "Noise detail", tab: "Detail", fmt: Fmt::Middle, at: |b| &mut b.detail.denoise_detail },
+    Slider { name: "Noise contrast", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.denoise_contrast },
+    Slider { name: "Colour noise", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.denoise_colour },
+    Slider { name: "Defringe", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.defringe },
+    Slider { name: "Moiré", tab: "Detail", fmt: Fmt::Positive, at: |b| &mut b.detail.moire },
+    Slider { name: "Dehaze", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.effects.dehaze },
+    Slider { name: "Vignette", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.effects.vignette },
+    Slider { name: "Vignette midpoint", tab: "Effects", fmt: Fmt::Middle, at: |b| &mut b.effects.vignette_midpoint },
+    Slider { name: "Vignette roundness", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.effects.vignette_roundness },
+    Slider { name: "Vignette feather", tab: "Effects", fmt: Fmt::Middle, at: |b| &mut b.effects.vignette_feather },
+    Slider { name: "Grain", tab: "Effects", fmt: Fmt::Positive, at: |b| &mut b.effects.grain },
+    Slider { name: "Grain size", tab: "Effects", fmt: Fmt::Positive, at: |b| &mut b.effects.grain_size },
+    Slider { name: "Grain roughness", tab: "Effects", fmt: Fmt::Middle, at: |b| &mut b.effects.grain_roughness },
+    Slider { name: "Mist", tab: "Effects", fmt: Fmt::Signed(0), at: |b| &mut b.effects.mist },
+    Slider { name: "Shadows tint", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.shadow_tint },
+    Slider { name: "Red hue", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.red_hue },
+    Slider { name: "Red saturation", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.red_saturation },
+    Slider { name: "Green hue", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.green_hue },
+    Slider { name: "Green saturation", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.green_saturation },
+    Slider { name: "Blue hue", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.blue_hue },
+    Slider { name: "Blue saturation", tab: "Colour", fmt: Fmt::Signed(0), at: |b| &mut b.calibration.blue_saturation },
+    Slider { name: "Lens distortion", tab: "Detail", fmt: Fmt::Signed(0), at: |b| &mut b.optics.lens_distortion },
+    Slider { name: "Lens vignetting", tab: "Detail", fmt: Fmt::Signed(0), at: |b| &mut b.optics.lens_vignetting },
+];
+
 impl EditState {
 
     pub fn difference_from(&self, previous: &EditState) -> String {
@@ -276,50 +351,10 @@ impl EditState {
     }
 
     pub fn changes_from(&self, previous: &EditState) -> Vec<Change> {
-        let sliders: [(&str, fn(&Basic) -> f32); 37] = [
-            ("Exposure", |b| b.tone.exposure),
-            ("Contrast", |b| b.tone.contrast),
-            ("Highlights", |b| b.tone.highlights),
-            ("Shadows", |b| b.tone.shadows),
-            ("Whites", |b| b.tone.whites),
-            ("Blacks", |b| b.tone.blacks),
-            ("Vibrance", |b| b.presence.vibrance),
-            ("Saturation", |b| b.presence.saturation),
-            ("HDR", |b| b.presence.hdr),
-            ("Clarity", |b| b.presence.clarity),
-            ("Texture", |b| b.presence.texture),
-            ("Sharpening", |b| b.detail.sharpen),
-            ("Sharpening radius", |b| b.detail.sharpen_radius),
-            ("Sharpening mask", |b| b.detail.sharpen_masking),
-            ("Noise reduction", |b| b.detail.denoise_luma),
-            ("Noise detail", |b| b.detail.denoise_detail),
-            ("Noise contrast", |b| b.detail.denoise_contrast),
-            ("Colour noise", |b| b.detail.denoise_colour),
-            ("Defringe", |b| b.detail.defringe),
-            ("Moiré", |b| b.detail.moire),
-            ("Dehaze", |b| b.effects.dehaze),
-            ("Vignette", |b| b.effects.vignette),
-            ("Vignette midpoint", |b| b.effects.vignette_midpoint),
-            ("Vignette roundness", |b| b.effects.vignette_roundness),
-            ("Vignette feather", |b| b.effects.vignette_feather),
-            ("Grain", |b| b.effects.grain),
-            ("Grain size", |b| b.effects.grain_size),
-            ("Grain roughness", |b| b.effects.grain_roughness),
-            ("Shadows tint", |b| b.calibration.shadow_tint),
-            ("Red hue", |b| b.calibration.red_hue),
-            ("Red saturation", |b| b.calibration.red_saturation),
-            ("Green hue", |b| b.calibration.green_hue),
-            ("Green saturation", |b| b.calibration.green_saturation),
-            ("Blue hue", |b| b.calibration.blue_hue),
-            ("Blue saturation", |b| b.calibration.blue_saturation),
-            ("Lens distortion", |b| b.optics.lens_distortion),
-            ("Lens vignetting", |b| b.optics.lens_vignetting),
-        ];
-
-        let mut changed: Vec<Change> = sliders
+        let mut changed: Vec<Change> = SLIDERS
             .iter()
-            .filter(|(_, read)| read(&self.basic) != read(&previous.basic))
-            .map(|(name, _)| Change::Word(name))
+            .filter(|slider| slider.value(&self.basic) != slider.value(&previous.basic))
+            .map(|slider| Change::Word(slider.name))
             .collect();
 
         if self.white_balance != previous.white_balance {
@@ -378,8 +413,16 @@ impl EditState {
         if self.lut != previous.lut {
             changed.push(Change::Word("LUT"));
         }
+
+        if self.camera_look.as_ref().map(|look| look.strength) != previous.camera_look.as_ref().map(|look| look.strength) {
+            changed.push(Change::Word("As Shot"));
+        }
         if let Some(mask) = mask_change(&self.masks, &previous.masks) {
             changed.push(mask);
+        }
+
+        if changed.is_empty() && self.auto != previous.auto {
+            changed.push(Change::Word("Auto"));
         }
         changed
     }
@@ -441,6 +484,15 @@ mod tests {
         let mut mask = Mask::new(Shape::radial());
         change(&mut mask);
         vec![mask]
+    }
+
+    #[test]
+    fn a_step_that_only_moves_autos_record_is_called_auto() {
+        let before = state(|_| {});
+        let after = state(|document| {
+            document.auto = Some(numa_core::document::AutoRecord { vibrance: Some(10.0), ..Default::default() })
+        });
+        assert_eq!(after.changes_from(&before), vec![Change::Word("Auto")]);
     }
 
     #[test]

@@ -24,16 +24,26 @@ impl Picture {
         match self {
             Picture::Pixels(mut image) => {
                 let overlay = overlay_of(state);
-                if overlay.is_off() {
-                    return (Some(texture_from(&image)), Some(image));
+                let marked = !overlay.is_off();
+                if marked {
+                    render::histogram::mark_clipping(&mut image, overlay);
                 }
-                render::histogram::mark_clipping(&mut image, overlay);
-                (Some(texture_from(&image)), None)
+
+                let texture = match proof::proofing(state) {
+                    Some((proof, hatch)) => texture_from(&proof.shown(&image, hatch)),
+                    None => texture_from(&image),
+                };
+                (Some(texture), (!marked).then_some(image))
             }
-            Picture::Rgba { width, height, bytes, stride } => (
-                Some(gtk::gdk::MemoryTexture::new(width as i32, height as i32, gtk::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(bytes), stride).upcast()),
-                None,
-            ),
+            Picture::Rgba { width, height, mut bytes, stride } => {
+                if let Some((proof, hatch)) = proof::proofing(state) {
+                    proof.apply_rgba(&mut bytes, width as usize, stride, hatch);
+                }
+                (
+                    Some(gtk::gdk::MemoryTexture::new(width as i32, height as i32, gtk::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(bytes), stride).upcast()),
+                    None,
+                )
+            }
             #[cfg(feature = "gpu")]
             Picture::Card(shown) => (dmabuf_texture(state, shown), None),
         }
@@ -73,7 +83,8 @@ pub(super) fn ask(state: &App, photo: &OpenPhoto) -> Option<CardAsk> {
             proxy: photo.proxy.clone(),
             inputs: photo.inputs.clone(),
             overlay: u32::from(overlay.shadows) | u32::from(overlay.highlights) << 1,
-            dmabuf: dmabuf_shown(state),
+
+            dmabuf: dmabuf_shown(state) && proof::proofing(state).is_none(),
         })
     }
     #[cfg(not(feature = "gpu"))]

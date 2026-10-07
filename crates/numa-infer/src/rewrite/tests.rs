@@ -88,7 +88,7 @@ fn census(model: &[u8]) -> (HashMap<String, usize>, usize) {
 
 #[test]
 fn the_rewrite_changes_the_graph_and_not_the_answer() {
-    let dir = std::env::temp_dir().join("numa-rewrite-test");
+    let dir = std::env::temp_dir().join(format!("numa-rewrite-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (before, after) = (dir.join("before.onnx"), dir.join("after.onnx"));
@@ -159,7 +159,7 @@ fn attention_by_head_is_the_same_attention() {
     let (counts, _) = census(&rewritten);
     assert_eq!((counts["Softmax"], counts["MatMul"], counts["Split"]), (12, 24, 5));
 
-    let dir = std::env::temp_dir().join("numa-rewrite-attention");
+    let dir = std::env::temp_dir().join(format!("numa-rewrite-attention-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (before, after) = (dir.join("before.onnx"), dir.join("after.onnx"));
     std::fs::write(&before, &model).unwrap();
@@ -234,7 +234,7 @@ fn a_deformable_convolution_by_row_is_the_same_convolution() {
     assert_eq!((counts.get("Sum"), counts.get("Conv")), (None, None));
     assert_eq!((counts["GatherND"], counts["MatMul"]), (4 * k as usize, k as usize));
 
-    let dir = std::env::temp_dir().join("numa-rewrite-deformable-test");
+    let dir = std::env::temp_dir().join(format!("numa-rewrite-deformable-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (before, after) = (dir.join("before.onnx"), dir.join("after.onnx"));

@@ -61,5 +61,13 @@
         "balance": 0
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "Softer contrast",
+    "Highlights": "Calms the brightest parts",
+    "Saturation": "Mutes the colour for the fade",
+    "Tone curve": "Lifts the blacks into a fade",
+    "Colour grading": "Blue-green in the highlights, blue over all"
   }
 }

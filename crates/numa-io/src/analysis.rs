@@ -25,6 +25,8 @@ pub fn measure_photo(path: &Path) -> Result<Measured, String> {
         };
         let mut frame = cull::measure::of(&image);
 
+        frame.clock = crate::clocks::read(&image);
+
         if let Some((exposure, focal35)) = raw::shot(path) {
             frame.exposure = exposure;
             frame.focal35 = focal35;
@@ -115,6 +117,9 @@ pub fn regroup_bursts(catalog: &Catalog, library_id: i64) -> Result<(usize, cull
             .collect();
     let (twinned, analysed): (Vec<_>, Vec<_>) = analysed.into_iter().partition(|(id, _, _)| twin_of.contains_key(id));
 
+    let slates: std::collections::HashSet<i64> = catalog.slates(library_id)?.into_iter().map(|(id, ..)| id).collect();
+    let analysed: Vec<_> = analysed.into_iter().filter(|(id, _, _)| !slates.contains(id)).collect();
+
     let frames: Vec<cull::Frame> = analysed.iter().map(|(_, frame, _)| *frame).collect();
     let hashes: Vec<u64> = frames.iter().map(|frame| frame.hash).collect();
 
@@ -122,7 +127,10 @@ pub fn regroup_bursts(catalog: &Catalog, library_id: i64) -> Result<(usize, cull
         .iter()
         .map(|(id, _, _)| marks.get(id).map_or(0, |photo| photo.taken.unwrap_or(photo.mtime)))
         .collect();
-    let groups = cull::bursts(&hashes, &taken, cull::BURST_TOLERANCE);
+
+    let bodies = catalog.bodies(library_id)?;
+    let body: Vec<&str> = analysed.iter().map(|(id, _, _)| bodies.get(id).map_or("", String::as_str)).collect();
+    let groups = cull::bursts_by_body(&hashes, &taken, &body, cull::BURST_TOLERANCE);
     let faces: Vec<Option<f32>> = analysed.iter().map(|(_, _, face)| *face).collect();
     let best = cull::best_of_each(&frames, &faces, &groups);
 

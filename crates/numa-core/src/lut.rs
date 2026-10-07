@@ -34,6 +34,12 @@ impl Lut {
         }
     }
 
+    pub fn from_fn(size: usize, f: impl Fn([f32; 3]) -> [f32; 3]) -> Lut {
+        let step = |i: usize| i as f32 / (size - 1) as f32;
+        let table = (0..size * size * size).map(|i| f([step(i % size), step((i / size) % size), step(i / (size * size))])).collect();
+        Lut { size, cube: true, domain_min: [0.0; 3], domain_max: [1.0; 3], table }
+    }
+
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
 
         let at: [f32; 3] = std::array::from_fn(|c| {

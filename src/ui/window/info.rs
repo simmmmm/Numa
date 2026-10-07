@@ -301,6 +301,11 @@ fn append_photo_groups(state: &App, photo: &OpenPhoto) {
 
     let mut body: Vec<(&str, String)> = Vec::new();
     let mut shot: Vec<(&str, String)> = Vec::new();
+
+    let clock = match &photo.source {
+        Source::Photo { id, .. } => state.catalog.clock_of(*id),
+        Source::Bracket { .. } => None,
+    };
     if let Some(summary) = &photo.summary {
         if let Some(camera) = &summary.camera {
             body.push(("Body", camera.clone()));
@@ -329,8 +334,18 @@ fn append_photo_groups(state: &App, photo: &OpenPhoto) {
             Some(bias) if bias != 0.0 => shot.push(("Compensation", format!("{bias:+.1} EV"))),
             _ => {}
         }
-        if let Some(taken) = &summary.taken {
-            shot.push(("Taken", taken.clone()));
+        match clock.as_ref().and_then(|clock| Some((clock.taken?, clock.own?))) {
+            Some((taken, own)) => {
+                shot.push(("Taken", numa::io::clocks::when(taken)));
+                if taken != own {
+                    shot.push(("Camera's clock", numa::io::clocks::when(own)));
+                }
+            }
+            None => {
+                if let Some(taken) = &summary.taken {
+                    shot.push(("Taken", taken.clone()));
+                }
+            }
         }
     }
 
@@ -351,6 +366,15 @@ fn append_photo_groups(state: &App, photo: &OpenPhoto) {
             group.add(&fact_row(name, &value));
         }
         state.info.page.append(&group);
+    }
+
+    if clock.is_some_and(|clock| clock.slate.is_some()) {
+        let slate = adw::PreferencesGroup::new();
+        slate.set_title("Clock Photo");
+        slate.set_description(Some(
+            "A photo of Numa's clock: it says how far this camera's clock was off. It is left out of bursts, best of burst and suggested stars.",
+        ));
+        state.info.page.append(&slate);
     }
 
     if let Some(summary) = &photo.summary {

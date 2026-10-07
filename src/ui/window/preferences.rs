@@ -48,6 +48,15 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
     page.add(&colour_group(state));
     page.add(&opening_group(dialog));
 
+    let imports = adw::PreferencesGroup::new();
+    imports.set_title("Imports");
+    imports.set_description(Some(
+        "Every photograph an import listed in its receipt and still there is read again and compared. \
+         Only a photograph that has changed is mentioned.",
+    ));
+    imports.add(&import_done::recheck_row(state));
+    page.add(&imports);
+
     if let Some(path) = appimage() {
         let menu = adw::PreferencesGroup::new();
         menu.set_title("Applications Menu");
@@ -101,7 +110,10 @@ fn addons_page(
     page.set_icon_name(Some("application-x-addon-symbolic"));
     page.add(&downloads::models_group(dialog, folder_row));
     page.add(&downloads::gpu_group(state, dialog));
-    page.add(&downloads::profiles_group(dialog, folder_row));
+    let profiles = downloads::profiles_group(dialog, folder_row);
+
+    profiles.add(&own_profile::row(state, dialog));
+    page.add(&profiles);
     page
 }
 
@@ -431,10 +443,14 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     library_group.add(&row("Previous / next burst, on its best frame", "Ctrl+Left / Ctrl+Right"));
     library_group.add(&row("Reject the rest of the burst and go on to the next", "Shift+Down"));
     library_group.add(&row("The neighbours beside the photograph in the loupe, on or off", "F"));
+    library_group.add(&row("Review the shoot at full size, and stop", "Shift+Space"));
+    library_group.add(&row("Choose frames on the tape up to the one clicked", "Shift+click"));
+    library_group.add(&row("Let the frames chosen on the tape go", "Escape"));
     library_group.add(&row("Compare the selection side by side", "C"));
     library_group.add(&row("Select all", "Ctrl+A"));
     library_group.add(&row("Clear the selection", "Ctrl+Shift+A"));
     library_group.add(&row("Rescan the library", "F5"));
+    library_group.add(&row("Search the library by what is in the photographs", "Ctrl+F"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
     library_group.add(&row("Flag the selection picked, again to clear", "P"));
     library_group.add(&row("Flag the selection rejected, again to clear", "X"));
@@ -442,6 +458,19 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     library_group.add(&row("Paste copied edits onto the selection", "Ctrl+V"));
     library_group.add(&row("Move the selection to the trash, after asking", "Delete"));
     page.add(&library_group);
+
+    let rapid_group = adw::PreferencesGroup::new();
+    rapid_group.set_title("Moments");
+    rapid_group.add(&row("Pick, reject or clear the photograph and go on", "P / X / U"));
+    rapid_group.add(&row("Look at it in the loupe, a stack side by side", "Space"));
+    rapid_group.add(&row("A stack — a burst — side by side", "Enter or a click"));
+    rapid_group.add(&row("Start a new moment here", "S"));
+    rapid_group.add(&row("Merge the moment with the one before", "M"));
+    rapid_group.add(&row("The next moment not yet seen", "Page Down"));
+    rapid_group.add(&row("Where the photographs clip, on or off", "J"));
+    rapid_group.add(&row("A note in your own words", "N"));
+    rapid_group.add(&row("In First Look, into the teaser or out", "P"));
+    page.add(&rapid_group);
 
     let editor_group = adw::PreferencesGroup::new();
     editor_group.set_title("Editor");
@@ -452,6 +481,8 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     editor_group.add(&row("Flag the open photo rejected, again to clear", "X"));
     editor_group.add(&row("Clear the open photo's flag", "U"));
     editor_group.add(&row("Hold to compare against the as-shot original", "Space"));
+    editor_group.add(&row("Auto: level the photograph and set its light", "A"));
+    editor_group.add(&row("Hold to compare against the photograph before Auto, while its card is up", "Shift+Space"));
     editor_group.add(&row("Show what the camera recorded", "I"));
     editor_group.add(&row("Guides: none, thirds, grid", "G"));
     editor_group.add(&row("Panel tabs, in order", "Alt+1 – Alt+9"));

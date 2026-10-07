@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn the_cache_forgets_what_was_used_longest_ago() {
-        let dir = std::env::temp_dir().join("numa-thumbs-prune-test");
+        let dir = std::env::temp_dir().join(format!("numa-thumbs-prune-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let now = std::time::SystemTime::now();
@@ -291,10 +291,10 @@ mod tests {
     fn second_load_comes_from_cache() {
         const MTIME: i64 = 1_700_000_000;
 
-        let dir = std::env::temp_dir().join("numa-thumbs-test");
+        let dir = std::env::temp_dir().join(format!("numa-thumbs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("photo.png");
         RgbImage::from_fn(900, 600, |x, y| image::Rgb([x as u8, y as u8, 9]))
@@ -327,9 +327,9 @@ mod tests {
 
         const MTIME: i64 = 1_700_000_000;
 
-        let dir = std::env::temp_dir().join("numa-thumbs-edited-test");
+        let dir = std::env::temp_dir().join(format!("numa-thumbs-edited-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("photo.png");
         RgbImage::from_pixel(300, 200, image::Rgb([128, 128, 128])).save(&source).unwrap();
@@ -362,9 +362,9 @@ mod tests {
     fn a_moved_library_brings_its_thumbnails() {
         const MTIME: i64 = 1_700_000_000;
 
-        let dir = std::env::temp_dir().join("numa-thumbs-library-test");
+        let dir = std::env::temp_dir().join(format!("numa-thumbs-library-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        numa_core::paths::use_test_cache(std::env::temp_dir().join("numa-thumbs-test-cache"));
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
         let here = dir.join("here");
         std::fs::create_dir_all(here.join(LIBRARY_DIR)).unwrap();
         std::fs::create_dir_all(here.join("shoot")).unwrap();
