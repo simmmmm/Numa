@@ -39,6 +39,9 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_look: Option<crate::camera_look::CameraLook>,
 
+    #[serde(default, skip_serializing_if = "crate::tone::ToneMapping::is_camera")]
+    pub tone_mapping: crate::tone::ToneMapping,
+
     #[serde(skip)]
     pub output_space: ColourSpace,
     pub operations: Vec<Operation>,
@@ -394,6 +397,7 @@ impl Document {
             ai_sharpen: 0.0,
             lut: None,
             camera_look: None,
+            tone_mapping: Default::default(),
             output_space: ColourSpace::default(),
             operations: Vec::new(),
             faces: Vec::new(),
@@ -718,6 +722,7 @@ impl Document {
             && self.ai_sharpen == 0.0
             && self.lut.is_none()
             && self.camera_look.is_none()
+            && self.tone_mapping.is_camera()
             && self.moment.is_none()
     }
 
@@ -728,6 +733,7 @@ impl Document {
         if parts.colour {
             self.film_simulation = source.film_simulation.clone();
             self.colour_profile = source.colour_profile.clone();
+            self.tone_mapping = source.tone_mapping;
 
             self.lut = source.lut.clone();
 

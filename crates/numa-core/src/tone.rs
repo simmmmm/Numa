@@ -1,3 +1,6 @@
+use crate::profile::{multiply, multiply_matrix, Matrix3};
+use crate::space::ColourSpace;
+
 pub const MIDDLE_GREY: f32 = 0.18;
 
 const CAMERAS: [f32; TABLE_LEN] = [
@@ -115,6 +118,73 @@ pub fn scene_for(display: f32, display_referred: bool) -> f32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ToneMapping {
+    #[default]
+    Camera,
+    Agx,
+}
+
+impl ToneMapping {
+    pub fn is_camera(&self) -> bool {
+        *self == ToneMapping::Camera
+    }
+}
+
+pub struct Agx {
+
+    into: Matrix3,
+
+    back: Matrix3,
+}
+
+const SRGB_TO_REC2020: Matrix3 = [
+    [0.627_403_9, 0.329_283_04, 0.043_313_066],
+    [0.069_097_29, 0.919_540_4, 0.011_362_316],
+    [0.016_391_439, 0.088_013_31, 0.895_595_3],
+];
+const REC2020_TO_SRGB: Matrix3 = [
+    [1.660_491, -0.587_641_14, -0.072_849_865],
+    [-0.124_550_48, 1.132_899_9, -0.008_349_423],
+    [-0.018_150_763, -0.100_578_9, 1.118_729_7],
+];
+const AGX_INSET: Matrix3 = [
+    [0.856_627_15, 0.095_121_24, 0.048_251_606],
+    [0.137_318_97, 0.761_242, 0.101_439_04],
+    [0.111_898_21, 0.076_799_42, 0.811_302_4],
+];
+const AGX_OUTSET: Matrix3 = [
+    [1.127_100_6, -0.110_606_64, -0.016_493_939],
+    [-0.141_329_76, 1.157_823_7, -0.016_493_939],
+    [-0.141_329_76, -0.110_606_64, 1.251_936_4],
+];
+
+const AGX_MIN_EV: f32 = -12.473_93;
+const AGX_MAX_EV: f32 = 4.026_069;
+
+impl Agx {
+    pub fn new(working: ColourSpace) -> Agx {
+        let into = multiply_matrix(&AGX_INSET, &SRGB_TO_REC2020);
+        Agx {
+            into: working.convert_to(ColourSpace::Srgb).map_or(into, |to| multiply_matrix(&into, &to)),
+            back: ColourSpace::Srgb.convert_to(working).map_or(REC2020_TO_SRGB, |from| multiply_matrix(&from, &REC2020_TO_SRGB)),
+        }
+    }
+
+    pub fn shown(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let sigmoid = multiply(&self.into, rgb).map(|value| {
+            agx_contrast(((value.max(1e-10).log2() - AGX_MIN_EV) / (AGX_MAX_EV - AGX_MIN_EV)).clamp(0.0, 1.0))
+        });
+        let linear = multiply(&AGX_OUTSET, sigmoid).map(|value| value.max(0.0).powf(2.2));
+        multiply(&self.back, linear).map(|value| ColourSpace::Srgb.encode(value))
+    }
+}
+
+fn agx_contrast(x: f32) -> f32 {
+    let (x2, x4) = (x * x, x * x * x * x);
+    15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.002_32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +241,51 @@ mod tests {
         assert!(scene_value_for(0.0).is_finite());
         assert!(scene_value_for(1.0).is_finite());
         assert!(scene_value_for(0.0) > 0.0);
+    }
+
+    #[test]
+    fn agx_takes_a_bright_colour_toward_white() {
+        let agx = Agx::new(ColourSpace::Srgb);
+        let grey = agx.shown([MIDDLE_GREY; 3]);
+        assert!(grey.iter().all(|value| (value - grey[0]).abs() < 1e-3), "{grey:?}");
+        assert!((0.45..0.55).contains(&grey[0]), "{grey:?}");
+        assert!(agx.shown([0.0; 3])[0] < 0.01);
+        let mut previous = 0.0;
+        for step in 0..60 {
+            let value = agx.shown([0.001 * 1.3f32.powi(step); 3])[1];
+            assert!(value >= previous, "went backwards at step {step}");
+            previous = value;
+        }
+
+        let spread = |rgb: [f32; 3]| rgb.iter().fold(f32::MIN, |a, &b| a.max(b)) - rgb.iter().fold(f32::MAX, |a, &b| a.min(b));
+        let blue = |stops: f32| [0.05, 0.1, 1.0].map(|value: f32| value * MIDDLE_GREY * stops.exp2());
+        assert!(spread(agx.shown(blue(3.0))) < spread(blue(3.0).map(curve)) - 0.1);
+        assert!(agx.shown(blue(10.0)).iter().all(|&value| value > 0.9), "{:?}", agx.shown(blue(10.0)));
+    }
+
+    #[test]
+    fn agx_is_three_js() {
+        let agx = Agx::new(ColourSpace::Srgb);
+        for (light, theirs) in [
+            ([0.18, 0.18, 0.18], [0.5005, 0.5005, 0.5005]),
+            ([0.3, 0.12, 0.05], [0.6024, 0.4277, 0.3101]),
+            ([0.072, 0.144, 1.44], [0.4377, 0.5817, 0.8934]),
+            ([4.0, 1.0, 0.2], [0.9722, 0.8112, 0.6807]),
+        ] {
+            let ours = agx.shown(light);
+            assert!(ours.iter().zip(theirs).all(|(a, b)| (a - b).abs() < 2e-3), "{light:?}: {ours:?} against {theirs:?}");
+        }
+    }
+
+    #[test]
+    fn agx_is_the_same_in_another_working_space() {
+        let colour = [0.3f32, 0.12, 0.05];
+        let srgb = Agx::new(ColourSpace::Srgb).shown(colour);
+        let into = ColourSpace::Srgb.convert_to(ColourSpace::DisplayP3).unwrap();
+        let back = ColourSpace::DisplayP3.convert_to(ColourSpace::Srgb).unwrap();
+        let p3 = Agx::new(ColourSpace::DisplayP3).shown(multiply(&into, colour));
+        let again = multiply(&back, p3.map(|value| ColourSpace::Srgb.decode(value))).map(|value| ColourSpace::Srgb.encode(value));
+        assert!(srgb.iter().zip(again).all(|(a, b)| (a - b).abs() < 1e-3), "{srgb:?} {again:?}");
     }
 
     fn original_at_stops(stops: f32) -> f32 {

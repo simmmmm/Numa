@@ -80,6 +80,7 @@ fn edits(path: &str) -> Vec<(&'static str, Document)> {
         ("white balance 3200 K", with(&|d| d.white_balance = Some(WhiteBalance { temperature: 3200.0, tint: -8.0 }))),
         ("no camera profile", with(&|d| d.colour_profile = Some(numa_render::NO_COLOUR_PROFILE.to_string()))),
         ("curves", with(&curves)),
+        ("AgX", with(&|d| d.tone_mapping = numa_core::tone::ToneMapping::Agx)),
         ("mixer", with(&mixer)),
         ("turned 90", with(&|d| d.set_rotation(90.0))),
         ("mirrored, turned 270", with(&|d| {
@@ -386,7 +387,7 @@ fn the_card_renders_what_the_processor_does() {
         let finished = finished_picture(&raw, &path.to_string_lossy());
         for (source, kind) in [(&raw, "raw"), (&finished, "finished")] {
             for (what, document) in edits(&path.to_string_lossy()) {
-                if kind == "finished" && !matches!(what, "untouched" | "exposure +1.5" | "curves" | "mixer" | "vibrance +60" | "straightened 3.7°" | "grading" | "mask: gradient" | "mask: radial, warmth" | "mask: colour NR, curves" | "HDR +60" | "luminance NR 40" | "Clarity -40" | "mask: HDR, Clarity, Texture" | "dehaze +40" | "mask: dehaze, Clarity, Texture" | "grain 40" | "mask: grain" | "moiré 100" | "mask: sharpen, defringe, moiré, colour NR") {
+                if kind == "finished" && !matches!(what, "untouched" | "exposure +1.5" | "curves" | "AgX" | "mixer" | "vibrance +60" | "straightened 3.7°" | "grading" | "mask: gradient" | "mask: radial, warmth" | "mask: colour NR, curves" | "HDR +60" | "luminance NR 40" | "Clarity -40" | "mask: HDR, Clarity, Texture" | "dehaze +40" | "mask: dehaze, Clarity, Texture" | "grain 40" | "mask: grain" | "moiré 100" | "mask: sharpen, defringe, moiré, colour NR") {
                     continue;
                 }
                 let inputs = numa_io::inputs::render_inputs(&document);

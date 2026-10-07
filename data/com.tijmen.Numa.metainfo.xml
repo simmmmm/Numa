@@ -51,6 +51,20 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.37.0" date="2026-10-07">
+      <description>
+        <p>
+          The photo info is a panel at the left of the editor: press I or the
+          info button beside the photograph's name to fold it open or shut.
+          Once open, it stays open until you shut it.
+        </p>
+        <p>
+          Tone mapping on Looks: next to the camera's own curve, AgX, which
+          takes very bright colours to white as film does, so lamps, neon and
+          sunsets keep their colour.
+        </p>
+      </description>
+    </release>
     <release version="0.36.0" date="2026-10-07">
       <description>
         <p>

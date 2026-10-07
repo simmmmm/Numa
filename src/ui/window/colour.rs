@@ -5,6 +5,9 @@ pub(super) struct State {
 
     pub(super) profile_picker: gtk::DropDown,
 
+    pub(super) tone_camera: gtk::ToggleButton,
+    pub(super) tone_agx: gtk::ToggleButton,
+
     pub(super) picking_band: Rc<Cell<bool>>,
     pub(super) band_pipette: gtk::ToggleButton,
 
@@ -36,6 +39,8 @@ impl State {
     pub(super) fn new() -> Self {
         Self {
             profile_picker: gtk::DropDown::from_strings(&[]),
+            tone_camera: gtk::ToggleButton::with_label("Camera"),
+            tone_agx: gtk::ToggleButton::with_label("AgX"),
             picking_band: Rc::new(Cell::new(false)),
             band_pipette: gtk::ToggleButton::new(),
             white_pipette: gtk::ToggleButton::new(),
@@ -428,6 +433,43 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
     row
 }
 
+pub(super) fn build_tone_mapping(state: &App) -> gtk::Box {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    section.append(&section_header("Tone mapping"));
+    let row = chip_row();
+    row.set_homogeneous(true);
+    row.set_margin_top(8);
+    let (camera, agx) = (&state.colour.tone_camera, &state.colour.tone_agx);
+    camera.set_tooltip_text(Some("The curve the cameras themselves draw, read off their own JPEGs"));
+    agx.set_tooltip_text(Some("AgX: bright colours roll off to white as on film, so lamps, neon and sunsets keep their hue"));
+    agx.set_group(Some(camera));
+    camera.set_active(true);
+
+    agx.connect_toggled(glib::clone!(
+        #[strong] state,
+        move |agx| {
+            if state.applying.get() {
+                return;
+            }
+            let mapping = match agx.is_active() {
+                true => numa::core::tone::ToneMapping::Agx,
+                false => numa::core::tone::ToneMapping::Camera,
+            };
+            {
+                let mut open = state.open.borrow_mut();
+                let Some(photo) = open.as_mut().filter(|photo| photo.document.tone_mapping != mapping) else { return };
+                photo.document.tone_mapping = mapping;
+            }
+            request_render(&state);
+            schedule_history_push(&state);
+        }
+    ));
+    row.append(camera);
+    row.append(agx);
+    section.append(&row);
+    section
+}
+
 fn profile_choices(state: &App) -> Vec<Option<String>> {
     let mut choices = vec![None, Some(render::NO_COLOUR_PROFILE.to_string())];
     choices.extend(camera_profiles(state).into_iter().map(|(name, _)| Some(name)));
@@ -451,12 +493,14 @@ fn camera_profiles(state: &App) -> Vec<(String, dcp::Source)> {
 }
 
 pub(super) fn refresh_profile_picker(state: &App) {
-    let (chosen, automatic) = {
+    let (chosen, automatic, mapping, finished) = {
         let open = state.open.borrow();
         let Some(photo) = open.as_ref() else { return };
         (
             photo.document.colour_profile.clone(),
             photo.proxy.rendering.as_ref().map(|profile| profile.name.clone()),
+            photo.document.tone_mapping,
+            photo.proxy.display_referred,
         )
     };
 
@@ -476,7 +520,16 @@ pub(super) fn refresh_profile_picker(state: &App) {
     state.colour.profile_picker.set_model(Some(&model));
     let index = profile_choices(state).iter().position(|choice| *choice == chosen);
     state.colour.profile_picker.set_selected(index.unwrap_or(0) as u32);
+    match mapping {
+        numa::core::tone::ToneMapping::Agx => state.colour.tone_agx.set_active(true),
+        numa::core::tone::ToneMapping::Camera => state.colour.tone_camera.set_active(true),
+    }
     state.applying.set(false);
+
+    if let Some(row) = state.colour.tone_agx.parent() {
+        row.set_sensitive(!finished);
+        row.set_tooltip_text(finished.then_some("A finished picture keeps its own tone curve"));
+    }
 
     write_profile_note(state, chosen, automatic, index.is_some());
 }

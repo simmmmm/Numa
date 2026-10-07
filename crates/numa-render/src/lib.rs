@@ -516,7 +516,7 @@ pub fn apply_stack<'a>(
 pub fn apply_stack_kept(document: &Document, working: &std::sync::Arc<LinearImage>, detail_scale: f32) -> RgbImage {
     let (data, width, height) = kept::finished(document, working, detail_scale, WHOLE_FRAME, true, local::Tone::Own);
     let looks = looks_of(document);
-    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, &looks);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, document.tone_mapping, &looks);
     kept::recycle(data);
     frame
 }
@@ -538,7 +538,7 @@ pub fn apply_pixels_kept(
     };
     let (data, width, height) = kept::finished(document, working, detail_scale, region, false, tone);
     let looks = looks_of(document);
-    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, &looks);
+    let frame = encode(width, height, &data, &document.curves(), document.working_space, document.output_space, working.display_referred, document.tone_mapping, &looks);
     kept::recycle(data);
     frame
 }
@@ -624,7 +624,7 @@ where
     let display_referred = working.display_referred;
     let (data, width, height) = finished(document, working, detail_scale, region, tone);
     let looks = looks_of(document);
-    encode(width, height, &data, &document.curves(), document.working_space, document.output_space, display_referred, &looks)
+    encode(width, height, &data, &document.curves(), document.working_space, document.output_space, display_referred, document.tone_mapping, &looks)
 }
 
 pub(crate) fn looks_of(document: &Document) -> Vec<(std::sync::Arc<numa_core::lut::Lut>, f32)> {
@@ -958,8 +958,9 @@ pub fn develop_hdr<'a>(
     };
     let curves = document.curves();
     let looks = looks_of(document);
-    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space, display_referred, &looks);
+    let frame = encode(width, height, &data, &curves, document.working_space, document.output_space, display_referred, document.tone_mapping, &looks);
     let shape = shaper(&curves);
+    let agx = (document.tone_mapping == tone::ToneMapping::Agx && !display_referred).then(|| tone::Agx::new(document.working_space));
     let weights = document.working_space.luminance_weights();
     let ceiling = HDR_STOPS.exp2();
     let gain = data
@@ -969,9 +970,8 @@ pub fn develop_hdr<'a>(
             if scene <= tone::MIDDLE_GREY {
                 return 1.0;
             }
-            let sdr: f32 = (0..3)
-                .map(|channel| weights[channel] * ColourSpace::Srgb.decode(shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))))
-                .sum();
+            let shown = shown(agx.as_ref(), pixel, display_referred);
+            let sdr: f32 = (0..3).map(|channel| weights[channel] * ColourSpace::Srgb.decode(shape(channel, shown[channel].clamp(0.0, 1.0)))).sum();
             (scene.min(ceiling) / sdr.max(1e-6)).max(1.0)
         })
         .collect();
@@ -1752,7 +1752,7 @@ fn encode_srgb(
     working: ColourSpace,
     output: ColourSpace,
 ) -> RgbImage {
-    encode(width, height, data, curves, working, output, false, &[])
+    encode(width, height, data, curves, working, output, false, Default::default(), &[])
 }
 
 fn shaper(curves: &[Curve]) -> impl Fn(usize, f32) -> f32 + Sync {
@@ -1770,6 +1770,13 @@ fn shaper(curves: &[Curve]) -> impl Fn(usize, f32) -> f32 + Sync {
     move |channel: usize, display: f32| read(&channels[channel], read(&composite, display))
 }
 
+fn shown(agx: Option<&tone::Agx>, pixel: &[f32], display_referred: bool) -> [f32; 3] {
+    match agx {
+        Some(agx) => agx.shown([pixel[0], pixel[1], pixel[2]]),
+        None => std::array::from_fn(|channel| tone::shown(pixel[channel], display_referred)),
+    }
+}
+
 fn encode<T: Sample>(
     width: u32,
     height: u32,
@@ -1780,6 +1787,8 @@ fn encode<T: Sample>(
     output: ColourSpace,
 
     display_referred: bool,
+
+    tone_mapping: tone::ToneMapping,
 
     looks: &[(std::sync::Arc<numa_core::lut::Lut>, f32)],
 ) -> Frame<T>
@@ -1794,6 +1803,12 @@ where
         looks.iter().fold(display, |display, (lut, amount)| lut.mix(display, *amount).map(|value| value.clamp(0.0, 1.0)))
     };
 
+    let agx = (tone_mapping == tone::ToneMapping::Agx && !display_referred).then(|| tone::Agx::new(working));
+    let shaped = |pixel: &[f32]| -> [f32; 3] {
+        let shown = shown(agx.as_ref(), pixel, display_referred);
+        std::array::from_fn(|channel| shape(channel, shown[channel].clamp(0.0, 1.0)))
+    };
+
     let recode = (working != output || output != ColourSpace::Srgb)
         .then(|| (working.convert_to(output), output));
 
@@ -1802,9 +1817,7 @@ where
             .zip(data.par_chunks_exact(3))
             .for_each(|(bytes, pixel)| {
 
-                let display = looked(std::array::from_fn(|channel| {
-                    shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))
-                }));
+                let display = looked(shaped(pixel));
                 let shaped: [f32; 3] = display.map(|value| ColourSpace::Srgb.decode(value));
                 let turned = match &matrix {
                     Some(matrix) => std::array::from_fn(|channel| {
@@ -1820,7 +1833,7 @@ where
         return Frame::from_raw(width, height, out).expect("buffer matches dimensions");
     }
 
-    if looks.is_empty() {
+    if looks.is_empty() && agx.is_none() {
         if let Some(bytes) = (&mut out as &mut dyn std::any::Any).downcast_mut::<Vec<u8>>() {
             let exact = |channel: usize, value: f32| u8::quantise(shape(channel, tone::shown(value, display_referred).clamp(0.0, 1.0)));
             let encoder = Encoder::for_curves(curves, display_referred, &exact);
@@ -1836,9 +1849,7 @@ where
     out.par_chunks_exact_mut(3)
         .zip(data.par_chunks_exact(3))
         .for_each(|(bytes, pixel)| {
-            let display = looked(std::array::from_fn(|channel| {
-                shape(channel, tone::shown(pixel[channel], display_referred).clamp(0.0, 1.0))
-            }));
+            let display = looked(shaped(pixel));
             for (byte, value) in bytes.iter_mut().zip(display) {
                 *byte = T::quantise(value);
             }
@@ -1928,7 +1939,7 @@ mod tests {
         for curves in &curves {
             let shape = shaper(curves);
             for referred in [false, true] {
-                let fast = encode::<u8>(width, 1, &data, curves, ColourSpace::Srgb, ColourSpace::Srgb, referred, &[]);
+                let fast = encode::<u8>(width, 1, &data, curves, ColourSpace::Srgb, ColourSpace::Srgb, referred, Default::default(), &[]);
                 for (index, (byte, value)) in fast.as_raw().iter().zip(&data).enumerate() {
                     let exact = u8::quantise(shape(index % 3, tone::shown(*value, referred).clamp(0.0, 1.0)));
                     assert_eq!(*byte, exact, "{value:e} moved a code value");
@@ -3449,9 +3460,9 @@ mod tests {
         let lut = std::sync::Arc::new(numa_core::lut::parse_cube(&text).unwrap());
         let data = [0.18f32, 0.18, 0.18];
         let srgb = ColourSpace::Srgb;
-        let plain: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[]);
-        let inverted: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[(lut.clone(), 1.0)]);
-        let half: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, &[(lut, 0.5)]);
+        let plain: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Default::default(), &[]);
+        let inverted: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Default::default(), &[(lut.clone(), 1.0)]);
+        let half: RgbImage = encode(1, 1, &data, &[], srgb, srgb, false, Default::default(), &[(lut, 0.5)]);
         let code = plain.get_pixel(0, 0)[0] as i32;
         assert!((inverted.get_pixel(0, 0)[0] as i32 - (255 - code)).abs() <= 1);
         assert!((half.get_pixel(0, 0)[0] as i32 - 128).abs() <= 1);
