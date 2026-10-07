@@ -19,6 +19,12 @@
 // has colour noise reduction of its own), faded in by its field, and `encode`
 // does what comes after the masks and the eight bits.
 //
+// A mask with luminance noise reduction or HDR, Clarity or Texture of its own
+// works on a copy of the frame in `planes`, as `apply_masks` does: `mask_copy`
+// (the copy with its white balance, and its log luminance), the luminance
+// passes on it; `mask` up to its tone map, into the copy; the tone map on it;
+// `mask` from there, faded in.
+//
 // RENDER-021: the passes that read a pixel's neighbourhood work on planes of
 // one value — log luminance, its box blurs, a guided filter's a and b — in
 // `planes`, each pass told by its `step` what to read and write. Luminance
@@ -41,6 +47,7 @@ struct Adjust {
     more: vec4<u32>,           // black and white's offset; a mask's curves' offset, field's offset, colour NR's radius
     gains: vec4<f32>,          // a mask's white balance gains, its colour NR's amount
     tint: vec4<f32>,           // a mask's Color at a luminance of 1, its strength
+    grain: vec4<f32>,          // a mask's grain: strength, lattice cell, roughness
 };
 
 struct Params {
@@ -61,6 +68,7 @@ struct Params {
     crop2: vec4<f32>,          // the turned frame's half size, sin and cos of the angle
     keystone: vec4<f32>,       // vertical, horizontal, stretch
     vignette: array<vec4<f32>, 2>, // `effects::vignette_shape`
+    grain: array<vec4<f32>, 2>,    // the grain's strength, lattice cell, roughness; the whole frame at full resolution
     adjust: Adjust,
     base: array<vec4<f32>, 14>,// the base curve's 53 values
 };
@@ -77,6 +85,9 @@ const VIGNETTE: u32 = 256u;
 const MASKS: u32 = 512u;
 const LUMA: u32 = 1024u;    // luminance noise reduction: the frame is in `work` after it
 const LOCAL: u32 = 2048u;   // HDR, Clarity or Texture: `finish` into `work`, `encode` after
+const DEHAZE: u32 = 4096u;  // dehaze: the frame is in `work` after it
+const GRAIN: u32 = 8192u;
+const KEPT: u32 = 16384u;   // the stages before the operations kept: `settle` into `kept`, `finish` from there
 
 // `Adjust.flags.x`.
 const BASIC: u32 = 1u;
@@ -92,6 +103,7 @@ const MASK_DENOISE: u32 = 512u;
 const CURVES: u32 = 1024u;
 const TINT: u32 = 2048u;
 const CURVE_ONE: u32 = 4096u; // and the next three: composite, red, green, blue
+const MASK_GRAIN: u32 = 65536u;
 
 // `p.src.w`: how the frame is turned.
 const MIRROR: u32 = 1u;
@@ -106,7 +118,7 @@ const LOOKUP: u32 = 256u;
 // What one dispatch is asked, `STEP` bytes apart in their buffer: offsets
 // are into `planes`.
 struct Step {
-    what: vec4<u32>,           // the mask; a plane pass's feed and emit
+    what: vec4<u32>,           // the mask, its phase, whether its copy holds its start, the copy's offset; a plane pass's feed and emit
     at: vec4<u32>,             // source, destination, guide, second source
     shape: vec4<u32>,          // the plane's width, height, the radius, groups_x
     more: vec4<u32>,           // tone_apply: the glow's, Texture's band's and the pivot's offsets (0: none)
@@ -127,6 +139,9 @@ struct Step {
 @group(0) @binding(9) var<storage, read> fields: array<u32>;
 @group(0) @binding(10) var<storage, read_write> lin: array<f32>;
 @group(0) @binding(11) var<storage, read_write> planes: array<f32>;
+// RENDER-020: the frame the stages before the operations leave, kept from
+// one render to the next while only what comes after them moves.
+@group(0) @binding(12) var<storage, read_write> kept: array<f32>;
 
 fn has(flag: u32) -> bool {
     return (p.size.z & flag) != 0u;
@@ -407,13 +422,20 @@ fn work_at(j: u32) -> vec3<f32> {
     return vec3<f32>(work[j * 3u], work[j * 3u + 1u], work[j * 3u + 2u]);
 }
 
-// The frame before luminance noise reduction: the colour stage's, or the
-// geometry's.
-fn shaped_at(j: u32) -> vec3<f32> {
+// The frame the colour stage left, turned and cropped where it is.
+fn turned_at(j: u32) -> vec3<f32> {
     if (has(GEOMETRY)) {
         return work_at(j);
     }
     return vec3<f32>(lin[j * 3u], lin[j * 3u + 1u], lin[j * 3u + 2u]);
+}
+
+// The frame before luminance noise reduction: that, or dehaze's.
+fn shaped_at(j: u32) -> vec3<f32> {
+    if (has(DEHAZE)) {
+        return work_at(j);
+    }
+    return turned_at(j);
 }
 
 // The frame before `finish`: that, or luminance noise reduction's.
@@ -430,8 +452,33 @@ fn put_work(i: u32, pixel: vec3<f32>) {
     work[i * 3u + 2u] = pixel.z;
 }
 
+// RENDER-020: a mask's own copy of the frame, at `step.what.w` in `planes`.
+fn copy_at(j: u32) -> vec3<f32> {
+    let at = step.what.w + j * 3u;
+    return vec3<f32>(planes[at], planes[at + 1u], planes[at + 2u]);
+}
+
+fn put_copy(i: u32, pixel: vec3<f32>) {
+    let at = step.what.w + i * 3u;
+    planes[at] = pixel.x;
+    planes[at + 1u] = pixel.y;
+    planes[at + 2u] = pixel.z;
+}
+
+// Where a mask's copy starts: the frame with its white balance — or, once its
+// luminance noise reduction has run, the copy.
+fn mask_start(j: u32, m: Adjust) -> vec3<f32> {
+    if (step.what.z != 0u) {
+        return copy_at(j);
+    }
+    if (does(m, GAINS)) {
+        return max(work_at(j) * m.gains.xyz, vec3<f32>(0.0));
+    }
+    return work_at(j);
+}
+
 // Colour noise reduction, first half: the box along the row — of the frame,
-// or of `work` with a mask's gains on it first, the mask's own copy.
+// or of a mask's own copy.
 fn box_row(i: u32, r: i32, gains: vec3<f32>, masked: bool) {
     let width = p.size.x;
     let x = i32(i % width);
@@ -439,7 +486,9 @@ fn box_row(i: u32, r: i32, gains: vec3<f32>, masked: bool) {
     var sum = vec3<f32>(0.0);
     for (var dx = -r; dx <= r; dx++) {
         let j = y * width + u32(clamp(x + dx, 0, i32(width) - 1));
-        if (masked) {
+        if (masked && step.what.z != 0u) {
+            sum += copy_at(j);
+        } else if (masked) {
             sum += max(work_at(j) * gains, vec3<f32>(0.0));
         } else {
             sum += frame_at(j);
@@ -696,6 +745,76 @@ fn after(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     return pixel;
 }
 
+// RENDER-020: FILTER-007, `effects::grain` — value noise on two turned
+// lattices, laid by where a pixel is in the whole frame at full resolution.
+// The processor's hash is in 64 bits; here in pairs of 32-bit words, low
+// first.
+fn mul_wide(a: u32, b: u32) -> vec2<u32> {
+    let a0 = a & 0xffffu;
+    let a1 = a >> 16u;
+    let b0 = b & 0xffffu;
+    let b1 = b >> 16u;
+    let p00 = a0 * b0;
+    let p01 = a0 * b1;
+    let p10 = a1 * b0;
+    let middle = (p00 >> 16u) + (p01 & 0xffffu) + (p10 & 0xffffu);
+    return vec2<u32>((p00 & 0xffffu) | (middle << 16u), a1 * b1 + (p01 >> 16u) + (p10 >> 16u) + (middle >> 16u));
+}
+
+fn mul64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+    let low = mul_wide(a.x, b.x);
+    return vec2<u32>(low.x, low.y + a.x * b.y + a.y * b.x);
+}
+
+// Right by `n`, 0 < n < 32.
+fn shr64(v: vec2<u32>, n: u32) -> vec2<u32> {
+    return vec2<u32>((v.x >> n) | (v.y << (32u - n)), v.y >> n);
+}
+
+fn widen(x: i32) -> vec2<u32> {
+    return vec2<u32>(bitcast<u32>(x), select(0u, 0xffffffffu, x < 0));
+}
+
+fn grain_hash(x: i32, y: i32) -> f32 {
+    var h = mul64(widen(x), vec2<u32>(0x7F4A7C15u, 0x9E3779B9u)) ^ mul64(widen(y), vec2<u32>(0x27D4EB4Fu, 0xC2B2AE3Du));
+    h = h ^ shr64(h, 31u);
+    h = mul64(h, vec2<u32>(0x1CE4E5B9u, 0xBF58476Du));
+    h = h ^ shr64(h, 29u);
+    return f32(h.y >> 8u) / 16777216.0 * 2.0 - 1.0;
+}
+
+fn value_noise(x: f32, y: f32) -> f32 {
+    let x0 = floor(x);
+    let y0 = floor(y);
+    let fx = x - x0;
+    let fy = y - y0;
+    let sx = fx * fx * (3.0 - 2.0 * fx);
+    let sy = fy * fy * (3.0 - 2.0 * fy);
+    let ix = i32(x0);
+    let iy = i32(y0);
+    let top = grain_hash(ix, iy) + (grain_hash(ix + 1, iy) - grain_hash(ix, iy)) * sx;
+    let bottom = grain_hash(ix, iy + 1) + (grain_hash(ix + 1, iy + 1) - grain_hash(ix, iy + 1)) * sx;
+    return top + (bottom - top) * sy;
+}
+
+// `g`: the strength, the lattice's cell, the roughness.
+fn grain(pixel: vec3<f32>, x: u32, y: u32, g: vec4<f32>) -> vec3<f32> {
+    let luma = luminance(pixel);
+    if (luma <= 0.0) {
+        return pixel;
+    }
+    let full = p.grain[1];
+    let fx = (f32(x) + 0.5) / f32(p.size.x) * full.x;
+    let fy = (f32(y) + 0.5) / f32(p.size.y) * full.y;
+    let coarse = value_noise((0.8 * fx - 0.6 * fy) / g.y, (0.6 * fx + 0.8 * fy) / g.y);
+    let fine = value_noise((0.28 * fx + 0.96 * fy) / g.y * 2.3 + 17.0, (-0.96 * fx + 0.28 * fy) / g.y * 2.3 + 31.0);
+    let noise = coarse * (1.0 - g.z * 0.5) + fine * g.z * 0.5;
+    let tone = pow(min(luma, 1.0), 1.0 / 2.2);
+    let midtone = 4.0 * tone * (1.0 - tone);
+    let grained = max(tone + noise * g.x * midtone, 0.0);
+    return pixel * pow(grained / max(tone, 1e-6), 2.2);
+}
+
 // `effects::vignette` over the whole frame.
 fn vignette(pixel: vec3<f32>, x: u32, y: u32) -> vec3<f32> {
     let v0 = p.vignette[0];
@@ -839,6 +958,9 @@ fn show(i: u32, pixel_in: vec3<f32>) {
     if (has(VIGNETTE)) {
         pixel = vignette(pixel, x, y);
     }
+    if (has(GRAIN)) {
+        pixel = grain(pixel, x, y, p.grain[0]);
+    }
     let r8 = code(0u, pixel.x);
     let g8 = code(1u, pixel.y);
     let b8 = code(2u, pixel.z);
@@ -879,6 +1001,33 @@ fn flush_hist(lid: vec3<u32>) {
     }
 }
 
+// The frame after colour noise reduction.
+fn denoised(i: u32) -> vec3<f32> {
+    if (has(DENOISE)) {
+        return recolour(frame_at(i), i, min(i32(p.misc.z), 64), p.misc.y);
+    }
+    return frame_at(i);
+}
+
+// RENDER-020: that, into `kept`, for the detail passes after it.
+@compute @workgroup_size(256)
+fn settle(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i < p.size.x * p.size.y) {
+        put_kept(i, denoised(i));
+    }
+}
+
+fn kept_at(j: u32) -> vec3<f32> {
+    return vec3<f32>(kept[j * 3u], kept[j * 3u + 1u], kept[j * 3u + 2u]);
+}
+
+fn put_kept(i: u32, pixel: vec3<f32>) {
+    kept[i * 3u] = pixel.x;
+    kept[i * 3u + 1u] = pixel.y;
+    kept[i * 3u + 2u] = pixel.z;
+}
+
 // Colour noise reduction's column and recolouring, then everything after
 // `prefix`: straight to the eight bits, or — with masks — back into `work`.
 @compute @workgroup_size(256)
@@ -887,9 +1036,11 @@ fn finish(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) l
     workgroupBarrier();
     let i = index_of(wid, lid);
     if (i < p.size.x * p.size.y) {
-        var pixel = frame_at(i);
-        if (has(DENOISE)) {
-            pixel = recolour(pixel, i, min(i32(p.misc.z), 64), p.misc.y);
+        var pixel: vec3<f32>;
+        if (has(KEPT)) {
+            pixel = kept_at(i);
+        } else {
+            pixel = denoised(i);
         }
         pixel = adjust(pixel, p.adjust);
         if (has(LOCAL)) {
@@ -905,6 +1056,40 @@ fn finish(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) l
     flush_hist(lid);
 }
 
+// `mask`'s phases (`step.what.y`).
+const WHOLE: u32 = 0u;
+const TO_TONE: u32 = 1u;     // up to the tone map: the copy and its log luminance, every pixel
+const FROM_TONE: u32 = 2u;   // the rest, from the copy the tone map left
+// `step.what.z`: 1, the copy holds where the mask starts; `SETTLED`, its colour
+// noise reduction has run on it too.
+const SETTLED: u32 = 2u;
+
+// A mask's copy after its colour noise reduction, for the detail passes after it.
+@compute @workgroup_size(256)
+fn mask_settle(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i < p.size.x * p.size.y) {
+        let m = masks[step.what.x];
+        var local = mask_start(i, m);
+        if (does(m, MASK_DENOISE)) {
+            local = recolour(local, i, min(i32(m.more.w), 64), m.gains.w);
+        }
+        put_copy(i, local);
+    }
+}
+
+// A mask's copy of the frame where it starts, and its log luminance: what its
+// luminance noise reduction reads.
+@compute @workgroup_size(256)
+fn mask_copy(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i < p.size.x * p.size.y) {
+        let local = mask_start(i, masks[step.what.x]);
+        put_copy(i, local);
+        planes[i] = log_luma(local);
+    }
+}
+
 // RENDER-020: one mask of `apply_masks` — its copy of the frame, worked out
 // where its field reaches and faded in by it.
 @compute @workgroup_size(256)
@@ -914,20 +1099,29 @@ fn mask(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
         return;
     }
     let m = masks[step.what.x];
+    let phase = step.what.y;
     let pair = unpack2x16unorm(fields[m.more.z + i / 2u]);
     let weight = select(pair.x, pair.y, (i & 1u) != 0u);
-    if (weight <= 0.0) {
+    // The tone map reads the whole copy, so all of it is made.
+    if (weight <= 0.0 && phase != TO_TONE) {
         return;
     }
+    var local: vec3<f32>;
+    if (phase == FROM_TONE) {
+        local = copy_at(i);
+    } else {
+        local = mask_start(i, m);
+        if (does(m, MASK_DENOISE) && step.what.z != SETTLED) {
+            local = recolour(local, i, min(i32(m.more.w), 64), m.gains.w);
+        }
+        local = adjust(local, m);
+        if (phase == TO_TONE) {
+            put_copy(i, local);
+            planes[i] = log_luma(local);
+            return;
+        }
+    }
     let base = work_at(i);
-    var local = base;
-    if (does(m, GAINS)) {
-        local = max(local * m.gains.xyz, vec3<f32>(0.0));
-    }
-    if (does(m, MASK_DENOISE)) {
-        local = recolour(local, i, min(i32(m.more.w), 64), m.gains.w);
-    }
-    local = adjust(local, m);
     if (does(m, CURVES)) {
         local = mask_curves(local, m);
     }
@@ -935,6 +1129,9 @@ fn mask(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     if (does(m, TINT)) {
         let luma = luminance(local);
         local += (luma * m.tint.xyz - local) * m.tint.w;
+    }
+    if (does(m, MASK_GRAIN)) {
+        local = grain(local, i % p.size.x, i / p.size.x, m.grain);
     }
     put_work(i, base + (local - base) * weight);
 }
@@ -969,6 +1166,7 @@ const FEED_ONE: u32 = 0u;
 const FEED_SQUARES: u32 = 1u;
 const FEED_PAIR: u32 = 2u;
 const FEED_DIFFERENCE: u32 = 3u;
+const FEED_CHROMA: u32 = 4u;
 const EMIT_ONE: u32 = 0u;
 const EMIT_AB: u32 = 1u;
 const EMIT_GUIDED: u32 = 2u;
@@ -985,6 +1183,11 @@ fn feed(j: u32) -> vec2<f32> {
         }
         case 3u: {
             return vec2<f32>(planes[at + j] - planes[step.at.w + j], 0.0);
+        }
+        case 4u: {
+            // A channel's chroma, the brightness divided out, for moiré.
+            let pixel = tail_at(j);
+            return vec2<f32>(pixel[step.what.x] / max(luminance(pixel), 1e-5), 0.0);
         }
         default: {
             return vec2<f32>(planes[at + j], 0.0);
@@ -1085,6 +1288,10 @@ fn luma_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
         back = planes[step.at.z + i] * step.numbers.x;
     }
     let gain = exp2((planes[step.at.y + i] + back - planes[i]) * step.numbers.y);
+    if (step.what.w != 0u) {
+        put_copy(i, max(copy_at(i) * gain, vec3<f32>(0.0)));
+        return;
+    }
     // Read before written: with geometry the frame is `work` itself.
     put_work(i, max(shaped_at(i) * gain, vec3<f32>(0.0)));
 }
@@ -1191,5 +1398,306 @@ fn tone_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
         let spill = max(upsampled(step.more.x, step.shape.x, step.shape.y, x, y) - original, 0.0);
         mapped += spill * scales.z;
     }
+    if (step.what.w != 0u) {
+        put_copy(i, max(copy_at(i) * exp2(mapped - original), vec3<f32>(0.0)));
+        return;
+    }
     put_work(i, max(work_at(i) * exp2(mapped - original), vec3<f32>(0.0)));
+}
+
+// RENDER-020: FILTER-006, `effects::dehaze`, of the frame (into `work`) or of
+// a mask's copy (`step.what.w`). `step.shape`: the grid of patches across and
+// down, a patch's edge, how many of the haziest the airlight is taken from;
+// `step.at.x`: where its numbers are in `planes` — the patches' darkest
+// values, their means (three each), the transmission and a second one for
+// its blur, the airlight's grey.
+
+const HAZE_TAKE: u32 = 16u;
+
+var<workgroup> haze_dark: array<f32, 256>;
+var<workgroup> haze_sum: array<vec4<f32>, 256>;
+var<workgroup> haze_pick: array<u32, 256>;
+var<workgroup> haze_chosen: array<u32, HAZE_TAKE>;
+var<workgroup> haze_grey: f32;
+
+fn haze_source(j: u32) -> vec3<f32> {
+    if (step.what.w != 0u) {
+        return mask_start(j, masks[step.what.x]);
+    }
+    return turned_at(j);
+}
+
+// One workgroup a patch: its darkest channel and its mean.
+@compute @workgroup_size(256)
+fn haze_patches(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let cell = step.shape.z;
+    let x0 = wid.x * cell;
+    let y0 = wid.y * cell;
+    let across = min(x0 + cell, p.size.x) - x0;
+    let count = across * (min(y0 + cell, p.size.y) - y0);
+    var dark = 3.4e38;
+    var sum = vec4<f32>(0.0);
+    for (var k = lid.x; k < count; k += 256u) {
+        let pixel = haze_source((y0 + k / across) * p.size.x + x0 + k % across);
+        dark = min(dark, min(min(pixel.x, pixel.y), pixel.z));
+        sum += vec4<f32>(pixel, 1.0);
+    }
+    haze_dark[lid.x] = dark;
+    haze_sum[lid.x] = sum;
+    for (var half = 128u; half > 0u; half /= 2u) {
+        workgroupBarrier();
+        if (lid.x < half) {
+            haze_dark[lid.x] = min(haze_dark[lid.x], haze_dark[lid.x + half]);
+            haze_sum[lid.x] += haze_sum[lid.x + half];
+        }
+    }
+    workgroupBarrier();
+    if (lid.x == 0u) {
+        let cells = step.shape.x * step.shape.y;
+        let g = wid.y * step.shape.x + wid.x;
+        let mean = haze_sum[0].xyz / haze_sum[0].w;
+        planes[step.at.x + g] = haze_dark[0];
+        planes[step.at.x + cells + g * 3u] = mean.x;
+        planes[step.at.x + cells + g * 3u + 1u] = mean.y;
+        planes[step.at.x + cells + g * 3u + 2u] = mean.z;
+    }
+}
+
+// `box_blur` of the transmission, from `source` into `to`.
+fn haze_blur(lid: u32, source: u32, to: u32) {
+    let w = step.shape.x;
+    let h = step.shape.y;
+    for (var c = lid; c < w * h; c += 256u) {
+        let x = c % w;
+        let y = c / w;
+        var sum = 0.0;
+        var count = 0.0;
+        for (var yy = max(y, 1u) - 1u; yy < min(y + 2u, h); yy++) {
+            for (var xx = max(x, 1u) - 1u; xx < min(x + 2u, w); xx++) {
+                sum += planes[source + yy * w + xx];
+                count += 1.0;
+            }
+        }
+        planes[to + c] = sum / count;
+    }
+}
+
+// One workgroup: the haziest patches (the darkest channel highest, the first
+// of equals, as the processor's stable sort has them), the airlight's grey,
+// the transmission, blurred twice.
+@compute @workgroup_size(256)
+fn haze_air(@builtin(local_invocation_id) lid: vec3<u32>) {
+    let cells = step.shape.x * step.shape.y;
+    let at = step.at.x;
+    let take = step.shape.w;
+    for (var k = 0u; k < take; k++) {
+        var best = -3.4e38;
+        var best_at = cells;
+        for (var c = lid.x; c < cells; c += 256u) {
+            var chosen = false;
+            for (var q = 0u; q < k; q++) {
+                chosen = chosen || haze_chosen[q] == c;
+            }
+            if (!chosen && planes[at + c] > best) {
+                best = planes[at + c];
+                best_at = c;
+            }
+        }
+        haze_dark[lid.x] = best;
+        haze_pick[lid.x] = best_at;
+        for (var half = 128u; half > 0u; half /= 2u) {
+            workgroupBarrier();
+            if (lid.x < half) {
+                let other = lid.x + half;
+                if (haze_dark[other] > haze_dark[lid.x] || (haze_dark[other] == haze_dark[lid.x] && haze_pick[other] < haze_pick[lid.x])) {
+                    haze_dark[lid.x] = haze_dark[other];
+                    haze_pick[lid.x] = haze_pick[other];
+                }
+            }
+        }
+        workgroupBarrier();
+        if (lid.x == 0u) {
+            haze_chosen[k] = haze_pick[0];
+        }
+        workgroupBarrier();
+    }
+    if (lid.x == 0u) {
+        var air = vec3<f32>(0.0);
+        for (var k = 0u; k < take; k++) {
+            let g = haze_chosen[k];
+            air += vec3<f32>(planes[at + cells + g * 3u], planes[at + cells + g * 3u + 1u], planes[at + cells + g * 3u + 2u]) / f32(take);
+        }
+        haze_grey = max((air.x + air.y + air.z) / 3.0, 1e-4);
+        planes[at + 6u * cells] = haze_grey;
+    }
+    workgroupBarrier();
+    let grey = haze_grey;
+    for (var c = lid.x; c < cells; c += 256u) {
+        planes[at + 4u * cells + c] = clamp(1.0 - 0.95 * planes[at + c] / grey, 0.0, 1.0);
+    }
+    storageBarrier();
+    haze_blur(lid.x, at + 4u * cells, at + 5u * cells);
+    storageBarrier();
+    haze_blur(lid.x, at + 5u * cells, at + 4u * cells);
+}
+
+// Each pixel unmixed from the airlight by the transmission where it is.
+@compute @workgroup_size(256)
+fn haze_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i >= p.size.x * p.size.y) {
+        return;
+    }
+    let w = step.shape.x;
+    let h = step.shape.y;
+    let cell = f32(step.shape.z);
+    let cells = w * h;
+    let t_at = step.at.x + 4u * cells;
+    let gx = clamp((f32(i % p.size.x) + 0.5) / cell - 0.5, 0.0, f32(w - 1u));
+    let gy = clamp((f32(i / p.size.x) + 0.5) / cell - 0.5, 0.0, f32(h - 1u));
+    let x0 = u32(gx);
+    let y0 = u32(gy);
+    let x1 = min(x0 + 1u, w - 1u);
+    let y1 = min(y0 + 1u, h - 1u);
+    let fx = gx - f32(x0);
+    let fy = gy - f32(y0);
+    let top = planes[t_at + y0 * w + x0] * (1.0 - fx) + planes[t_at + y0 * w + x1] * fx;
+    let bottom = planes[t_at + y1 * w + x0] * (1.0 - fx) + planes[t_at + y1 * w + x1] * fx;
+    let t = top * (1.0 - fy) + bottom * fy;
+    let air = planes[step.at.x + 6u * cells];
+    let strength = step.numbers.x;
+    let pixel = haze_source(i);
+    var out: vec3<f32>;
+    if (strength > 0.0) {
+        let kept = 1.0 - 0.8 * strength * (1.0 - max(t, 0.1));
+        out = max((pixel - air) / kept + air, vec3<f32>(0.0));
+    } else {
+        let added = -strength * 0.25;
+        out = pixel * (1.0 - added) + air * added;
+    }
+    if (step.what.w != 0u) {
+        put_copy(i, out);
+    } else {
+        put_work(i, out);
+    }
+}
+
+// RENDER-020: `detail::passes` after colour noise reduction — DETAIL-001's
+// sharpening, OPTICS-003's defringe and DETAIL-006's moiré — on the frame
+// `settle` left in `kept`, or on a mask's copy (`step.what.w`).
+
+fn tail_at(j: u32) -> vec3<f32> {
+    if (step.what.w != 0u) {
+        return copy_at(j);
+    }
+    return kept_at(j);
+}
+
+fn put_tail(i: u32, pixel: vec3<f32>) {
+    if (step.what.w != 0u) {
+        put_copy(i, pixel);
+    } else {
+        put_kept(i, pixel);
+    }
+}
+
+@compute @workgroup_size(256)
+fn tail_log(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i < p.size.x * p.size.y) {
+        planes[i] = log_luma(tail_at(i));
+    }
+}
+
+// `sharpen`: the log luminance (`at.x`) over its base — its blur at `below`
+// (`at.y`, or itself where `below` is nought) mixed towards the next radius's
+// (`at.z`) by `t` — a gain within a stop each way.
+@compute @workgroup_size(256)
+fn sharpen_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i >= p.size.x * p.size.y) {
+        return;
+    }
+    let log = planes[step.at.x + i];
+    var base = log;
+    if (step.shape.x >= 1u) {
+        base = planes[step.at.y + i];
+    }
+    if (step.shape.y != 0u) {
+        base += (planes[step.at.z + i] - base) * step.numbers.y;
+    }
+    let detail = log - base;
+    let floor = step.numbers.z;
+    var weight = 1.0;
+    if (floor > 0.0) {
+        let soft = min(abs(detail) / floor, 1.0);
+        weight = soft * soft;
+    }
+    let gain = clamp(exp2(step.numbers.x * detail * weight), 0.5, 2.0);
+    put_tail(i, max(tail_at(i) * gain, vec3<f32>(0.0)));
+}
+
+// `defringe`: where the blurred log luminance (`at.y`) steps, a purple or
+// green cast pulled towards the channels it overran, the brightness kept.
+@compute @workgroup_size(256)
+fn defringe_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    if (i >= p.size.x * p.size.y) {
+        return;
+    }
+    let w = i32(p.size.x);
+    let h = i32(p.size.y);
+    let x = i32(i % p.size.x);
+    let y = i32(i / p.size.x);
+    let soft = step.at.y;
+    let gx = planes[soft + u32(y * w + min(x + 1, w - 1))] - planes[soft + u32(y * w + max(x - 1, 0))];
+    let gy = planes[soft + u32(min(y + 1, h - 1) * w + x)] - planes[soft + u32(max(y - 1, 0) * w + x)];
+    let edge = clamp((sqrt(gx * gx + gy * gy) - 0.10) / 0.10, 0.0, 1.0);
+    if (edge <= 0.0) {
+        return;
+    }
+    let pixel = tail_at(i);
+    let reference = max(max(max(pixel.x, pixel.y), pixel.z), 1e-5);
+    let purple = (min(pixel.x, pixel.z) - pixel.y) / reference;
+    let greenish = (pixel.y - max(pixel.x, pixel.z)) / reference;
+    let purple_side = purple >= greenish;
+    let found = clamp((select(greenish, purple, purple_side) - 0.06) / 0.06, 0.0, 1.0);
+    if (found <= 0.0) {
+        return;
+    }
+    let pull = edge * found * step.numbers.x;
+    var neutral = vec3<f32>(pixel.y);
+    if (!purple_side) {
+        neutral = vec3<f32>(pixel.x, (pixel.x + pixel.z) * 0.5, pixel.z);
+    }
+    var out = pixel + (neutral - pixel) * pull;
+    let after = luminance(out);
+    if (after > 1e-6) {
+        out = max(out * (luminance(pixel) / after), vec3<f32>(0.0));
+    }
+    put_tail(i, out);
+}
+
+// `moire`: the chroma's wobble about its near blur (`at.y`, three planes)
+// beyond the transition between that and its far one (`at.z`), settled to
+// the far one at the pixel's own brightness.
+@compute @workgroup_size(256)
+fn moire_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = index_of(wid, lid);
+    let n = p.size.x * p.size.y;
+    if (i >= n) {
+        return;
+    }
+    let pixel = tail_at(i);
+    let bright = max(luminance(pixel), 1e-5);
+    let chroma = pixel / bright;
+    let close = vec3<f32>(planes[step.at.y + i], planes[step.at.y + n + i], planes[step.at.y + 2u * n + i]);
+    let wide = vec3<f32>(planes[step.at.z + i], planes[step.at.z + n + i], planes[step.at.z + 2u * n + i]);
+    let wobble = dot(abs(chroma - close), vec3<f32>(1.0));
+    let transition = dot(abs(close - wide), vec3<f32>(1.0));
+    let found = clamp((wobble - transition * 1.6 - 0.05) / 0.05, 0.0, 1.0);
+    if (found <= 0.0) {
+        return;
+    }
+    put_tail(i, max(pixel + (wide * bright - pixel) * (found * step.numbers.x), vec3<f32>(0.0)));
 }

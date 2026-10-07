@@ -36,6 +36,10 @@ ndarray.workspace = true
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 avif-serialize = "0.8"
 jpeg-encoder = { version = "0.6", features = ["simd"] }
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_128", "std"] }
+
+qrcode = { version = "0.14", default-features = false }
+rqrr = { version = "0.11", default-features = false }
 
 [dev-dependencies]
 lensfun = "=0.7.0"

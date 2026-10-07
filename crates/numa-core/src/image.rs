@@ -374,6 +374,36 @@ pub fn crop_inside(rect: [f32; 4], angle: f32, perspective: Perspective, width: 
     fit(rect, angle, perspective, width, height, 1.0)
 }
 
+pub fn into_crop(width: f32, height: f32, rect: [f32; 4], angle: f32, perspective: Perspective, point: [f32; 2]) -> [f32; 2] {
+    let [x, y, w, h] = rect;
+    let (half_width, half_height) = (width / 2.0, height / 2.0);
+    let (vertical, horizontal) = perspective.coefficients();
+    let stretch = perspective.stretch();
+
+    let (sx, sy) = (point[0] * width - half_width, point[1] * height - half_height);
+    let depth = 1.0 + vertical / half_height * sy + horizontal / half_width * sx;
+    let (qx, qy) = (sx / depth, sy / depth);
+
+    let (rx, ry) = ((qx + half_width - (x + w / 2.0) * width) * stretch, (qy + half_height - (y + h / 2.0) * height) / stretch);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (dx, dy) = (rx * cos + ry * sin, ry * cos - rx * sin);
+    [0.5 + dx / (w * width), 0.5 + dy / (h * height)]
+}
+
+pub fn crop_corners(width: f32, height: f32, rect: [f32; 4], angle: f32, perspective: Perspective) -> [[f32; 2]; 4] {
+    let source_of = source_map(width, height, rect, angle, perspective);
+    let (hw, hh) = (rect[2] * width / 2.0, rect[3] * height / 2.0);
+    [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(dx, dy)| {
+        let (x, y) = source_of(dx, dy);
+        [x / width, y / height]
+    })
+}
+
+pub fn levelled(rect: [f32; 4], from: f32, to: f32, perspective: Perspective, width: f32, height: f32) -> [f32; 4] {
+    let view = crop_in_view(width, height, rect, from, perspective);
+    crop_inside(crop_from_view(width, height, view, to, perspective), to, perspective, width, height)
+}
+
 fn fit(rect: [f32; 4], angle: f32, perspective: Perspective, width: f32, height: f32, largest: f32) -> [f32; 4] {
     let [x, y, w, h] = rect;
     let (half_width, half_height) = (width / 2.0, height / 2.0);
@@ -526,6 +556,24 @@ mod tests {
             }
         }
         LinearImage::new(3, 2, data)
+    }
+
+    #[test]
+    fn a_point_goes_into_a_crop_and_back() {
+        let (width, height) = (600.0, 400.0);
+        let rect = [0.2, 0.15, 0.5, 0.6];
+        for perspective in [
+            Perspective::default(),
+            Perspective { vertical: 30.0, horizontal: -12.0, aspect: 20.0 },
+        ] {
+            let source_of = source_map(width, height, rect, 3.5, perspective);
+            for (dx, dy) in [(0.0, 0.0), (-120.0, 80.0), (140.0, -100.0)] {
+                let (sx, sy) = source_of(dx, dy);
+                let [u, v] = into_crop(width, height, rect, 3.5, perspective, [sx / width, sy / height]);
+                let back = ((u - 0.5) * rect[2] * width, (v - 0.5) * rect[3] * height);
+                assert!((back.0 - dx).abs() < 0.01 && (back.1 - dy).abs() < 0.01, "{perspective:?} ({dx}, {dy}) came back as {back:?}");
+            }
+        }
     }
 
     #[test]

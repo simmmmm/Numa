@@ -8,8 +8,12 @@ use crate::raw;
 const RENDER_EDGE: u32 = 1024;
 
 pub(super) fn render(path: &Path, max_edge: u32, edits: &str) -> Result<RgbImage, String> {
-    let document: Document =
+    let mut document: Document =
         serde_json::from_str(edits).map_err(|err| format!("{}: {err}", path.display()))?;
+
+    if let Err(why) = crate::camera_look::fill(&mut document) {
+        log::info!("{}: As Shot left out: {why}", path.display());
+    }
 
     let (proxy, _) = raw::proxy_from_mosaic(path, max_edge.max(RENDER_EDGE))?;
 

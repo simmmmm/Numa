@@ -10,6 +10,7 @@ Rules-Requires-Root: no
 Package: numa
 Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}, libvulkan1, hicolor-icon-theme
+Recommends: libgphoto2-6t64 | libgphoto2-6
 Description: RAW photo editor and library
  Numa is a RAW photo editor and library. Add a folder, cull the shoot,
  develop the frames you keep and export them. Your originals are never

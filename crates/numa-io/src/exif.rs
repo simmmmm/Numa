@@ -1,13 +1,50 @@
 use std::path::Path;
 
 pub fn taken(path: &Path) -> Option<i64> {
+    stamp(path).taken
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stamp {
+    pub taken: Option<i64>,
+    pub camera: String,
+}
+
+pub fn stamp(path: &Path) -> Stamp {
     let read = || from_head(path).or_else(|| from_container(path)).or_else(|| from_raf(path)).or_else(|| from_raw(path));
-    unix_seconds(&std::panic::catch_unwind(read).ok().flatten()?)
+    match std::panic::catch_unwind(read).ok().flatten() {
+        Some((date, camera)) => Stamp { taken: unix_seconds(&date), camera },
+        None => Stamp::default(),
+    }
+}
+
+pub fn camera_key(make: &str, model: &str, serial: &str) -> String {
+    let clean = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (make, model) = (clean(make), clean(model));
+    match make.is_empty() && model.is_empty() {
+        true => String::new(),
+        false => format!("{make}|{model}|{}", clean(serial)),
+    }
+}
+
+fn ascii(exif: &::exif::Exif, number: u16) -> String {
+    exif.fields()
+        .find(|field| field.tag.number() == number)
+        .and_then(|field| match &field.value {
+            ::exif::Value::Ascii(parts) => parts.first().map(|bytes| String::from_utf8_lossy(bytes).trim_end_matches('\0').to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn camera_in(exif: &::exif::Exif) -> String {
+    let serial = Some(ascii(exif, 0xa431)).filter(|serial| !serial.trim().is_empty()).unwrap_or_else(|| ascii(exif, 0xc62f));
+    camera_key(&ascii(exif, 0x010f), &ascii(exif, 0x0110), &serial)
 }
 
 const HEAD: u64 = 256 << 10;
 
-fn from_head(path: &Path) -> Option<String> {
+fn from_head(path: &Path) -> Option<(String, String)> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
     let mut head = vec![0u8; 12];
@@ -35,25 +72,65 @@ fn from_head(path: &Path) -> Option<String> {
     })
 }
 
-fn date_in(tiff: &[u8]) -> Option<String> {
-    let exif = match ::exif::Reader::new().continue_on_error(true).read_raw(tiff.to_vec()) {
-        Ok(exif) => exif,
-        Err(::exif::Error::PartialResult(partial)) => partial.into_inner().0,
-        Err(_) => return None,
-    };
+fn date_in(tiff: &[u8]) -> Option<(String, String)> {
+    let exif = directories(tiff)?;
     let field = exif.fields().find(|field| field.tag.number() == 0x9003)?;
-    Some(field.display_value().to_string())
+    Some((field.display_value().to_string(), camera_in(&exif)))
 }
 
-fn from_container(path: &Path) -> Option<String> {
+fn directories(tiff: &[u8]) -> Option<::exif::Exif> {
+    match ::exif::Reader::new().continue_on_error(true).read_raw(tiff.to_vec()) {
+        Ok(exif) => Some(exif),
+        Err(::exif::Error::PartialResult(partial)) => Some(partial.into_inner().0),
+        Err(_) => None,
+    }
+}
+
+pub fn rating(path: &Path) -> Option<u8> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
+    let stars = xmp_rating(&head).filter(|stars| *stars > 0).or_else(|| exif_rating(&head))?;
+    (1..=5).contains(&stars).then_some(stars as u8)
+}
+
+fn xmp_rating(head: &[u8]) -> Option<i64> {
+    let at = head.windows(10).position(|w| w == b"xmp:Rating")? + 10;
+    let value: String = head
+        .get(at..(at + 8).min(head.len()))?
+        .iter()
+        .map(|&byte| byte as char)
+        .skip_while(|c| matches!(c, '=' | '"' | '\'' | '>' | ' '))
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    value.parse().ok()
+}
+
+fn exif_rating(head: &[u8]) -> Option<i64> {
+    let tiff = if matches!(head.get(..2), Some(b"II" | b"MM")) {
+        let mut tiff = head.to_vec();
+
+        let magic: [u8; 2] = if tiff[0] == b'I' { [42, 0] } else { [0, 42] };
+        tiff.get_mut(2..4)?.copy_from_slice(&magic);
+        tiff
+    } else {
+        let at = head.windows(6).position(|w| w == b"Exif\0\0")? + 6;
+        head[at..].to_vec()
+    };
+    let exif = directories(&tiff)?;
+    let field = exif.fields().find(|field| field.tag.number() == 0x4746)?;
+    field.value.get_uint(0).map(i64::from)
+}
+
+fn from_container(path: &Path) -> Option<(String, String)> {
     let file = std::fs::File::open(path).ok()?;
     let mut reader = std::io::BufReader::new(file);
     let exif = ::exif::Reader::new().read_from_container(&mut reader).ok()?;
     let field = exif.get_field(::exif::Tag::DateTimeOriginal, ::exif::In::PRIMARY)?;
-    Some(field.display_value().to_string())
+    Some((field.display_value().to_string(), camera_in(&exif)))
 }
 
-fn from_raf(path: &Path) -> Option<String> {
+fn from_raf(path: &Path) -> Option<(String, String)> {
     if !crate::raw::is_raf(path) {
         return None;
     }
@@ -83,21 +160,25 @@ fn from_raf(path: &Path) -> Option<String> {
     )
     .ok()?;
 
-    ifd.get_entry_recursive(DATE_TIME_ORIGINAL)
-        .and_then(|entry| entry.value.as_string().cloned())
-        .map(|date| date.trim().to_string())
-        .filter(|date| !date.is_empty())
+    let text = |tag: u16| {
+        ifd.get_entry_recursive(tag).and_then(|entry| entry.value.as_string().cloned()).unwrap_or_default().trim().to_string()
+    };
+    let date = Some(text(DATE_TIME_ORIGINAL)).filter(|date| !date.is_empty())?;
+
+    Some((date, camera_key(&text(0x010f), &text(0x0110), &text(0xa431))))
 }
 
-fn from_raw(path: &Path) -> Option<String> {
+fn from_raw(path: &Path) -> Option<(String, String)> {
     let source = rawler::rawsource::RawSource::new(path).ok()?;
     let decoder = rawler::get_decoder(&source).ok()?;
     let params = rawler::decoders::RawDecodeParams::default();
     let metadata = decoder.raw_metadata(&source, &params).ok()?;
-    metadata.exif.date_time_original.clone()
+
+    let serial = metadata.exif.serial_number.clone().unwrap_or_default();
+    Some((metadata.exif.date_time_original.clone()?, camera_key(&metadata.make, &metadata.model, &serial)))
 }
 
-fn unix_seconds(text: &str) -> Option<i64> {
+pub(crate) fn unix_seconds(text: &str) -> Option<i64> {
     let mut parts = text.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty());
     let mut next = || parts.next()?.parse::<i64>().ok();
     let (year, month, day) = (next()?, next()?, next()?);
@@ -149,7 +230,28 @@ mod tests {
         std::fs::write(&path, &tiff).unwrap();
         let found = from_head(&path);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(unix_seconds(&found.expect("a date")), unix_seconds("2022:07:17 12:14:32"));
+        assert_eq!(unix_seconds(&found.expect("a date").0), unix_seconds("2022:07:17 12:14:32"));
+    }
+
+    #[test]
+    fn a_body_is_its_make_model_and_serial() {
+        assert_eq!(camera_key("FUJIFILM", "X-T5", "2D001165"), "FUJIFILM|X-T5|2D001165");
+        assert_eq!(camera_key("SONY ", " ILCE-7M4", ""), "SONY|ILCE-7M4|");
+        assert_eq!(camera_key("", "", "123"), "", "a file that names no camera");
+    }
+
+    #[test]
+    fn the_cameras_stars_are_read_from_its_xmp() {
+        assert_eq!(xmp_rating(b"<x xmp:Rating=\"4\" y>"), Some(4));
+        assert_eq!(xmp_rating(b"..<xmp:Rating>3</xmp:Rating>.."), Some(3));
+        assert_eq!(xmp_rating(b"<xmp:Rating>-1</xmp:Rating>"), Some(-1));
+        assert_eq!(xmp_rating(b"no rating here"), None);
+        let path = std::env::temp_dir().join(format!("numa-rating-{}.raf", std::process::id()));
+        for (written, read) in [("5", Some(5)), ("0", None), ("-1", None)] {
+            std::fs::write(&path, format!("FUJIFILMCCD-RAW <xmp:Rating>{written}</xmp:Rating>")).unwrap();
+            assert_eq!(rating(&path), read, "{written}");
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -165,7 +267,7 @@ mod tests {
             let whole = from_container(path).or_else(|| from_raf(path)).or_else(|| from_raw(path));
             match from_head(path) {
                 Some(head) => {
-                    assert_eq!(unix_seconds(&head), whole.as_deref().and_then(unix_seconds), "{line}");
+                    assert_eq!(unix_seconds(&head.0), whole.and_then(|(date, _)| unix_seconds(&date)), "{line}");
                     same += 1;
                 }
                 None => left += 1,
@@ -216,7 +318,8 @@ mod tests {
             if !crate::raw::is_raf(&path) {
                 continue;
             }
-            let (fast, slow) = (from_raf(&path), from_raw(&path));
+
+            let (fast, slow) = (from_raf(&path).map(|(date, _)| date), from_raw(&path).map(|(date, _)| date));
             assert_eq!(fast, slow, "{}", path.display());
             assert!(fast.is_some(), "{} has a date and neither path found it", path.display());
             compared += 1;

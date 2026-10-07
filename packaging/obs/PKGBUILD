@@ -7,6 +7,7 @@ url="https://github.com/simmmmm/Numa"
 license=(GPL-3.0-or-later)
 depends=(gtk4 libadwaita vulkan-icd-loader hicolor-icon-theme)
 makedepends=(rust openssl)
+optdepends=('libgphoto2: tethered shooting (Shoot Tethered…)')
 options=(!debug !lto)
 source=("numa-$pkgver.tar.xz")
 sha256sums=(SKIP)

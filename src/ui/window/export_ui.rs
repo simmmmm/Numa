@@ -3,12 +3,18 @@ use super::*;
 pub(super) struct ExportJob {
     pub(super) source: Source,
     pub(super) document: Document,
+
+    pub(super) to: Option<PathBuf>,
+
+    pub(super) subfolder: Option<String>,
 }
 
 pub(super) fn open_job(state: &App) -> Option<ExportJob> {
     state.open.borrow().as_ref().map(|photo| ExportJob {
         source: photo.source.clone(),
         document: photo.document.clone(),
+        to: None,
+        subfolder: None,
     })
 }
 
@@ -106,9 +112,12 @@ pub(super) fn export_selection(state: &App, parent: &impl IsA<gtk::Widget>) {
 pub(super) fn selected_jobs(state: &App) -> Vec<ExportJob> {
     let selected = selected_ids(state);
     let cards = state.grid.cards.borrow();
-    selected
+    photo_jobs(state, selected.into_iter().filter_map(|id| cards.get(&id).map(|photo| (id, photo.path.clone()))))
+}
+
+pub(super) fn photo_jobs(state: &App, photos: impl IntoIterator<Item = (i64, PathBuf)>) -> Vec<ExportJob> {
+    photos
         .into_iter()
-        .filter_map(|id| cards.get(&id).map(|photo| (id, photo.path.clone())))
         .map(|(id, path)| {
             let document = state
                 .catalog
@@ -116,7 +125,7 @@ pub(super) fn selected_jobs(state: &App) -> Vec<ExportJob> {
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| Document::new(path.to_string_lossy().to_string()));
-            ExportJob { source: Source::Photo { id, path }, document }
+            ExportJob { source: Source::Photo { id, path }, document, to: None, subfolder: None }
         })
         .collect()
 }
@@ -200,7 +209,7 @@ fn formats() -> Vec<(export::Format, &'static str)> {
     formats
 }
 
-const EXPORT_PRESETS: &str = "export-presets";
+pub(super) const EXPORT_PRESETS: &str = "export-presets";
 
 #[derive(Clone)]
 struct Controls {
@@ -223,6 +232,10 @@ struct Controls {
     watermark_size: adw::SpinRow,
     template: adw::EntryRow,
     destination: Rc<RefCell<PathBuf>>,
+
+    proof: adw::ComboRow,
+    profiles: Vec<numa::io::print::Profile>,
+    choice: Rc<RefCell<(Option<String>, bool)>>,
 }
 
 impl Controls {
@@ -243,6 +256,7 @@ impl Controls {
         let size = combo("Size", &sizes.iter().map(String::as_str).collect::<Vec<_>>());
 
         let sharpen = switch("Sharpen after resizing", "Puts back the edge the reduction took off");
+        let (proof, profiles) = proof_row();
         let hdr = switch("HDR", "Brighter highlights on screens that can show them");
 
         let metadata = switch("Keep the camera's data", "Camera, lens, exposure, date");
@@ -273,7 +287,7 @@ impl Controls {
 
         let presets = adw::PreferencesGroup::new();
         let file = adw::PreferencesGroup::new();
-        for row in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), quality.upcast_ref(), size.upcast_ref(), sharpen.upcast_ref(), hdr.upcast_ref()] {
+        for row in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), proof.upcast_ref(), quality.upcast_ref(), size.upcast_ref(), sharpen.upcast_ref(), hdr.upcast_ref()] {
             file.add(row);
         }
         let extra = adw::PreferencesGroup::new();
@@ -307,6 +321,9 @@ impl Controls {
             watermark_size,
             template,
             destination: destination.clone(),
+            proof,
+            profiles,
+            choice: state.editor_page.proof.choice.clone(),
         };
         presets.add(&preset_row(state, &controls));
         controls.connect_sensitivity();
@@ -342,6 +359,9 @@ impl Controls {
                 corner: export::Corner::ALL.get(self.corner.selected() as usize).copied().unwrap_or(export::Corner::BottomRight),
                 size: self.watermark_size.value() as u16,
             },
+            proof: (self.proof.selected() as usize).checked_sub(1).and_then(|at| self.profiles.get(at)).map(|profile| {
+                numa::io::print::Target { file: profile.file.clone(), perceptual: self.choice.borrow().1 }
+            }),
         }
     }
 
@@ -367,6 +387,8 @@ impl Controls {
         self.corner.set_selected(export::Corner::ALL.iter().position(|one| *one == settings.watermark.corner).unwrap_or(0) as u32);
         self.watermark_size.set_value(settings.watermark.size as f64);
         self.template.set_text(&settings.template);
+        let proofed = settings.proof.as_ref().and_then(|target| self.profiles.iter().position(|profile| profile.file == target.file));
+        self.proof.set_selected(proofed.map_or(0, |at| at as u32 + 1));
         self.refresh();
     }
 
@@ -378,11 +400,24 @@ impl Controls {
             export::Format::Jxl => "100 is lossless",
             _ => "92 is where a copy stops being distinguishable",
         });
-        self.hdr.set_sensitive(format == export::Format::Jpeg);
+
+        let labs = matches!(format, export::Format::Jpeg | export::Format::Png | export::Format::Tiff);
+        let proofed = labs && self.proof.selected() > 0;
+        self.proof.set_sensitive(labs);
+        self.proof.set_subtitle(&match (proofed, self.profiles.is_empty()) {
+            (true, _) => format!(
+                "Converted to it, {}, and tagged with it — for a lab that asks for its own profile",
+                if self.choice.borrow().1 { "perceptual" } else { "relative colorimetric" }
+            ),
+            (false, true) => "A lab's own profile: add one in the editor, under Proof for Print".to_string(),
+            (false, false) => "Most labs take sRGB".to_string(),
+        });
+        self.hdr.set_sensitive(format == export::Format::Jpeg && !proofed);
         self.metadata.set_sensitive(format.carries_metadata());
         for row in [self.space.upcast_ref::<gtk::Widget>(), self.size.upcast_ref(), self.watermark.upcast_ref()] {
             row.set_sensitive(!dng);
         }
+        self.space.set_sensitive(!dng && !proofed);
         let reduced = (1..=EDGES.len() as u32).contains(&self.size.selected());
         self.sharpen.set_sensitive(!dng && reduced);
         self.size.set_subtitle(match self.size.selected() as usize > EDGES.len() {
@@ -392,6 +427,7 @@ impl Controls {
         let chosen = ColourSpace::ALL.get(self.space.selected() as usize).copied().unwrap_or_default();
         self.space.set_subtitle(&match (format, chosen) {
             (export::Format::Dng, _) => "The raw data, with a preview in sRGB".to_string(),
+            _ if proofed => "The profile below decides".to_string(),
             (export::Format::Avif, ColourSpace::AdobeRgb | ColourSpace::ProPhoto) => {
                 "Written as Display P3: AVIF has no code for this one".to_string()
             }
@@ -400,13 +436,19 @@ impl Controls {
     }
 
     fn connect_sensitivity(&self) {
-        for row in [&self.format, &self.space, &self.size] {
+        for row in [&self.format, &self.space, &self.size, &self.proof] {
             row.connect_selected_notify(glib::clone!(
                 #[strong(rename_to = controls)] self,
                 move |_| controls.refresh()
             ));
         }
     }
+}
+
+pub(super) fn proof_row() -> (adw::ComboRow, Vec<numa::io::print::Profile>) {
+    let profiles: Vec<_> = numa::io::print::profiles().into_iter().filter(|profile| profile.rgb).collect();
+    let names: Vec<&str> = std::iter::once("None").chain(profiles.iter().map(|profile| profile.name.as_str())).collect();
+    (combo("Proof With", &names), profiles)
 }
 
 fn combo(title: &str, names: &[&str]) -> adw::ComboRow {
@@ -531,7 +573,7 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
 
 const EDGES: [u32; 5] = [4096, 2560, 2048, 1600, 1080];
 
-fn folder_row(destination: &Rc<RefCell<PathBuf>>) -> adw::ActionRow {
+pub(super) fn folder_row(destination: &Rc<RefCell<PathBuf>>) -> adw::ActionRow {
     let folder = adw::ActionRow::new();
     folder.set_title("Folder");
     set_row_subtitle(&folder, &destination.borrow().display().to_string());

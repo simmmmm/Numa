@@ -68,5 +68,16 @@
         "balance": 0
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "Softer contrast",
+    "Saturation": "Faded colour",
+    "Vignette": "Dark edges, as from an old lens",
+    "Grain": "Visible grain",
+    "Grain size": "Medium-sized grain",
+    "Grain roughness": "Uneven grain",
+    "Tone curve": "Lifted blacks and softened whites",
+    "Colour grading": "Green-teal in the shadows, yellow in the highlights"
   }
 }

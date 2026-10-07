@@ -115,7 +115,7 @@ pub(super) const PANEL_TABS: [(&str, &str, &str, Option<&str>); 9] = [
     ("presets", "Looks", "Looks — the camera profile, presets and LUTs", Some("starred-symbolic")),
     ("light", "Light", "Light", Some("display-brightness-symbolic")),
     ("colour", "Colour", "Colour", Some("color-select-symbolic")),
-    ("effects", "Effects", "Presence, vignette and grain", None),
+    ("effects", "Effects", "Presence, mist, vignette and grain", None),
     ("grade", "Grade", "Colour grading", None),
     ("detail", "Detail", "Detail — judge these at 1:1", Some("edit-find-symbolic")),
     ("masks", "Masks", "Masks", None),
@@ -141,6 +141,8 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     top.set_margin_bottom(0);
     top.append(&section_header("Camera profile"));
     top.append(&build_profile_picker(state));
+
+    top.append(&camera_look::build(state));
 
     let choice = chip_row();
     choice.set_homogeneous(true);

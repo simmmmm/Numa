@@ -1,11 +1,16 @@
 pub mod analysis;
 pub mod avif;
+pub mod book;
+pub mod camera_look;
+pub mod capture;
 pub mod catalog;
+pub mod clocks;
 pub mod copy;
 pub mod dcp;
 pub mod denoised;
 pub mod dng;
 pub mod exif;
+pub mod fit;
 pub mod export;
 pub mod foreign;
 pub mod gainmap;
@@ -14,18 +19,29 @@ pub mod icc;
 pub mod jxl;
 pub mod import;
 pub mod inputs;
+pub mod layers;
 pub mod lensfun;
 pub mod luts;
+pub mod made;
 pub mod mask_store;
 pub mod masks;
 pub mod models;
 pub mod notes;
+pub mod offload;
+pub mod picks;
 pub mod presets;
+pub mod print;
 pub mod previews;
 pub mod raw;
+pub mod receipt;
+pub mod stand_in;
+pub mod style;
 pub mod thumbs;
+pub mod track;
 pub mod update;
 pub mod upscale;
+pub mod words;
+pub mod workflows;
 pub mod xmp;
 
 use numa_core::paths::NAME;
@@ -61,7 +77,7 @@ mod tests {
 
     #[test]
     fn the_old_name_takes_its_catalog_with_it() {
-        let base = std::env::temp_dir().join("numa-adopt-test");
+        let base = std::env::temp_dir().join(format!("numa-adopt-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join(FORMER_NAME).join("models")).unwrap();
         std::fs::write(base.join(FORMER_NAME).join("catalog.db"), b"ratings and edits").unwrap();
@@ -83,7 +99,7 @@ mod tests {
 
     #[test]
     fn a_catalog_under_the_new_name_wins() {
-        let base = std::env::temp_dir().join("numa-adopt-keeps");
+        let base = std::env::temp_dir().join(format!("numa-adopt-keeps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join(FORMER_NAME)).unwrap();
         std::fs::create_dir_all(base.join(NAME)).unwrap();

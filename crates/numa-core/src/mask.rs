@@ -512,6 +512,8 @@ impl Shape {
 
 pub const SUBJECT_CLASSES: [u16; 2] = [12, 126];
 
+pub const AUTO_SUBJECT: &str = "Subject · Auto";
+
 impl<'de> Deserialize<'de> for Mask {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let mut mask = Mask::deserialize(deserializer)?;
@@ -596,6 +598,9 @@ pub struct Mask {
 
     #[serde(default)]
     pub muted: Vec<u16>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<Basic>,
 
     #[serde(skip)]
     pub matted: bool,
@@ -815,6 +820,7 @@ impl Mask {
             strokes: Vec::new(),
             minus: Vec::new(),
             minus_masks: Vec::new(),
+            auto: None,
             id: 0,
             map: Pixels::default(),
             unshaped: Pixels::default(),
@@ -999,6 +1005,48 @@ impl Mask {
             && self.colour.is_identity()
     }
 
+    pub fn auto_subject(lift: Basic) -> Self {
+        let mut mask = Mask::new(Shape::Subject);
+        mask.set_matte(true);
+        mask.basic = lift;
+        mask.auto = Some(lift);
+        mask.name = Some(AUTO_SUBJECT.to_string());
+        mask
+    }
+
+    pub fn as_auto_left_it(&self) -> bool {
+        let Some(lift) = self.auto else { return false };
+        let made = Mask { id: self.id, ..Mask::auto_subject(lift) };
+        serde_json::to_value(self).ok() == serde_json::to_value(&made).ok()
+    }
+
+    pub fn from_old_auto(&self) -> bool {
+        self.auto.is_none()
+            && self.shape == Shape::Subject
+            && self.matte
+            && !self.inverted
+            && self.name.is_none()
+            && self.basic.tone.exposure > 0.0
+            && self.basic == Basic::with(|b| b.tone.exposure = self.basic.tone.exposure)
+            && self.feather == 0.0
+            && self.shift == 0.0
+            && self.matte_edge == 0.0
+            && !self.fine
+            && self.muted.is_empty()
+            && self.curve.is_identity()
+            && self.channel_curves.iter().all(Curve::is_identity)
+            && self.mixer.is_identity()
+            && self.point_colours.is_identity()
+            && self.grading.is_identity()
+            && self.colour.is_identity()
+            && self.visible
+            && self.opacity >= 1.0
+            && self.points.is_empty()
+            && self.strokes.is_empty()
+            && self.minus.is_empty()
+            && self.minus_masks.is_empty()
+    }
+
     pub fn field_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let shape = Mask {
@@ -1010,6 +1058,7 @@ impl Mask {
             grading: Grading::default(),
             colour: Tint::default(),
             name: None,
+            auto: None,
             ..self.clone()
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

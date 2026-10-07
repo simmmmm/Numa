@@ -1,0 +1,23 @@
+# START-011/015: a problem, with what a report needs asked for up front.
+name: Report a Problem
+description: Something in Numa does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Numa did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: debug
+    attributes:
+      label: Debug information
+      description: About → Troubleshooting → Debug Information, copied here.
+      render: text
+  - type: input
+    id: camera
+    attributes:
+      label: Camera
+      description: The camera the photograph came from, if it is about one.

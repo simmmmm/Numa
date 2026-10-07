@@ -6,9 +6,24 @@ pub(super) struct PresetOn {
     pub(super) name: String,
     pub(super) preset: numa::io::presets::Preset,
     pub(super) amount: f64,
+
+    pub(super) notes: numa::io::presets::Notes,
 }
 
 impl OpenPhoto {
+
+    pub(super) fn push_snapshot(&mut self) -> Option<(i64, String, numa::io::made::AppliedLook)> {
+        let snapshot = EditState::of(&self.document);
+        let look = match (&self.before_preset, &self.source) {
+            (Some(on), Source::Photo { id, .. }) if on.left == snapshot => {
+                let applied = numa::io::made::AppliedLook { name: on.name.clone(), notes: on.notes.clone() };
+                Some((*id, numa::io::made::digest(&snapshot), applied))
+            }
+            _ => None,
+        };
+        self.history.push(snapshot);
+        look
+    }
 
     pub(super) fn preset_base(&self) -> &Document {
         match &self.before_preset {
@@ -78,7 +93,10 @@ impl Kind {
             Kind::Presets => {
                 let label = name.rsplit('/').next().unwrap_or(name).to_string();
                 match numa::io::presets::load(&self.folder(), name) {
-                    Ok(preset) => apply_edit(state, &preset.document, preset.parts, &format!("“{label}” applied to"), Some(&label)),
+                    Ok(preset) => {
+                        let notes = numa::io::presets::notes(&self.folder(), name);
+                        apply_edit(state, &preset.document, preset.parts, &format!("“{label}” applied to"), Some((&label, notes)))
+                    }
                     Err(err) => state.toast(&err),
                 }
             }
@@ -200,14 +218,22 @@ thread_local! {
 const HOVER_REST: u64 = 160;
 
 pub(super) fn preview_preset(state: &App, kind: Kind, name: &str) {
-    if name.is_empty() || state.open.borrow().is_none() {
+    if name.is_empty() {
+        return;
+    }
+    let name = name.to_string();
+
+    preview_document(state, move |photo| kind.on(photo, &name));
+}
+
+pub(super) fn preview_document(state: &App, made: impl FnOnce(&OpenPhoto) -> Option<Document> + 'static) {
+    if state.open.borrow().is_none() {
         return;
     }
     let booking = HOVER.with(|hover| {
         hover.set(hover.get() + 1);
         hover.get()
     });
-    let name = name.to_string();
     glib::timeout_add_local_once(
         std::time::Duration::from_millis(HOVER_REST),
         glib::clone!(
@@ -219,8 +245,7 @@ pub(super) fn preview_preset(state: &App, kind: Kind, name: &str) {
                 let paintable = {
                     let open = state.open.borrow();
                     let Some(photo) = open.as_ref() else { return };
-
-                    let Some(document) = kind.on(photo, &name) else { return };
+                    let Some(document) = made(photo) else { return };
 
                     let scale = photo.proxy.width.max(photo.proxy.height) as f32
                         / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
@@ -249,6 +274,10 @@ pub(super) fn preview_preset(state: &App, kind: Kind, name: &str) {
     );
 }
 
+pub(super) fn previewing() -> bool {
+    SHOWING.get()
+}
+
 pub(super) fn end_preview(state: &App) {
     let booked = HOVER.with(|hover| {
         hover.set(hover.get() + 1);
@@ -263,10 +292,13 @@ pub(super) fn end_preview(state: &App) {
 
 pub(super) fn edit_here(state: &App) -> Result<Document, String> {
     if let Some(photo) = state.open.borrow().as_ref() {
-        return Ok(photo.document.clone());
+        return Ok(Document { moment: None, ..photo.document.clone() });
     }
     let id = selected_ids(state).first().copied().ok_or("Select a photo to make a preset from")?;
-    state.catalog.load_edits(id)?.ok_or_else(|| "That photo has no edits to keep".to_string())
+
+    let mut document = state.catalog.load_edits(id)?.ok_or_else(|| "That photo has no edits to keep".to_string())?;
+    document.moment = None;
+    Ok(document)
 }
 
 pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindow) {
@@ -580,7 +612,14 @@ fn fill_card(state: &App, kind: Kind, card: &gtk::Picture, name: &str) {
                 continue;
             }
             let Some((key, document, small)) = card_job(&state, kind, &name) else { continue };
-            let Ok(rendered) = gio::spawn_blocking(move || render::develop(&document, &*small, &render_inputs(&document))).await else {
+            let Ok(rendered) = gio::spawn_blocking(move || {
+
+                let mut document = document;
+                let _ = numa::io::camera_look::fill(&mut document);
+                render::develop(&document, &*small, &render_inputs(&document))
+            })
+            .await
+            else {
                 continue;
             };
 
@@ -701,5 +740,13 @@ pub(super) fn refresh_strength(state: &App) {
         state.applying.set(true);
         scale.set_value(at * 100.0);
         state.applying.set(false);
+    }
+}
+
+pub(super) fn note_look(state: &App, look: Option<(i64, String, numa::io::made::AppliedLook)>) {
+    if let Some((id, digest, look)) = look {
+        if let Err(err) = state.catalog.note_look(id, &digest, &look) {
+            log::warn!("could not note the look: {err}");
+        }
     }
 }

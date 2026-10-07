@@ -69,5 +69,17 @@
         "balance": 0
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "Less contrast for a gentler tone",
+    "Highlights": "Keeps the brightest parts from clipping",
+    "Shadows": "Lifts the shadows, as faded film does",
+    "Saturation": "Colour a touch quieter",
+    "Vibrance": "Keeps the quiet colours alive",
+    "Grain": "A little grain, as on film",
+    "Grain size": "Fine grain",
+    "Tone curve": "Raises the black point for a soft base",
+    "Colour grading": "Cool shadows, warm highlights"
   }
 }

@@ -22,11 +22,11 @@ fn model() -> Option<std::sync::Arc<Model>> {
 }
 
 pub fn people(frame: &RgbImage) -> Option<Vec<Spot>> {
-    let boxes = detect(frame)?;
+    let boxes: Vec<[f32; 4]> = objects(frame)?.into_iter().filter(|(class, _)| *class == 0).map(|(_, box_)| box_).collect();
     Some(passers_by(&boxes, frame.width() as f32, frame.height() as f32))
 }
 
-fn detect(frame: &RgbImage) -> Option<Vec<[f32; 4]>> {
+pub fn objects(frame: &RgbImage) -> Option<Vec<(usize, [f32; 4])>> {
     let model = model()?;
 
     let scale = (SIDE as f32 / frame.width() as f32).min(SIDE as f32 / frame.height() as f32);
@@ -50,7 +50,7 @@ fn detect(frame: &RgbImage) -> Option<Vec<[f32; 4]>> {
     };
     let values: Vec<f32> = output.iter().copied().collect();
 
-    let mut found: Vec<(f32, [f32; 4])> = Vec::new();
+    let mut found: Vec<(f32, usize, [f32; 4])> = Vec::new();
     let mut row = 0;
     for stride in [8usize, 16, 32] {
         let cells = SIDE / stride;
@@ -58,23 +58,24 @@ fn detect(frame: &RgbImage) -> Option<Vec<[f32; 4]>> {
             for cx in 0..cells {
                 let prediction = values.get(row * 85..row * 85 + 85)?;
                 row += 1;
-                let score = prediction[4] * prediction[5];
+                let (class, best) = prediction[5..].iter().enumerate().fold((0, 0.0f32), |a, (i, p)| if *p > a.1 { (i, *p) } else { a });
+                let score = prediction[4] * best;
                 if score < SURE {
                     continue;
                 }
                 let centre = [(prediction[0] + cx as f32) * stride as f32, (prediction[1] + cy as f32) * stride as f32];
                 let size = [prediction[2].exp() * stride as f32, prediction[3].exp() * stride as f32];
                 let corners = [centre[0] - size[0] / 2.0, centre[1] - size[1] / 2.0, centre[0] + size[0] / 2.0, centre[1] + size[1] / 2.0];
-                found.push((score, corners.map(|value| value / scale)));
+                found.push((score, class, corners.map(|value| value / scale)));
             }
         }
     }
 
     found.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut kept: Vec<[f32; 4]> = Vec::new();
-    for (_, candidate) in found {
-        if kept.iter().all(|box_| overlap(box_, &candidate) < 0.45) {
-            kept.push(candidate);
+    let mut kept: Vec<(usize, [f32; 4])> = Vec::new();
+    for (_, class, candidate) in found {
+        if kept.iter().all(|(other, box_)| *other != class || overlap(box_, &candidate) < 0.45) {
+            kept.push((class, candidate));
         }
     }
     Some(kept)

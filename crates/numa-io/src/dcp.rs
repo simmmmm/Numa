@@ -332,12 +332,43 @@ pub fn automatic() -> Automatic {
 fn choose(ranked: &[(Option<u8>, DngProfile, Source)], automatic: Automatic) -> Option<&DngProfile> {
     let standard = || ranked.iter().find(|(rank, ..)| rank.is_some());
     let numa = || ranked.iter().find(|(.., source)| *source == Source::Numa);
+    let fitted = || ranked.iter().find(|(_, profile, source)| *source == Source::Yours && fitted_by_numa(profile));
     match automatic {
-        Automatic::Numa => numa().or_else(standard),
+        Automatic::Numa => fitted().or_else(numa).or_else(standard),
         Automatic::Standard => standard(),
         Automatic::Matrix => None,
     }
     .map(|(_, profile, _)| profile)
+}
+
+fn fitted_by_numa(profile: &DngProfile) -> bool {
+    profile.hue_sat_map.as_ref().is_some_and(|table| table.scene_referred)
+}
+
+type Scans = std::sync::Mutex<std::collections::HashMap<String, Vec<(Option<u8>, DngProfile, Source)>>>;
+type Names = std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Source)>>>;
+type ByName = std::sync::Mutex<std::collections::HashMap<String, Option<std::sync::Arc<DngProfile>>>>;
+static SCANS: std::sync::OnceLock<Scans> = std::sync::OnceLock::new();
+static NAMES: std::sync::OnceLock<Names> = std::sync::OnceLock::new();
+static BY_NAME: std::sync::OnceLock<ByName> = std::sync::OnceLock::new();
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn forget() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if let Some(Ok(mut scans)) = SCANS.get().map(|c| c.lock()) {
+        scans.clear();
+    }
+    if let Some(Ok(mut names)) = NAMES.get().map(|c| c.lock()) {
+        names.clear();
+    }
+    if let Some(Ok(mut by_name)) = BY_NAME.get().map(|c| c.lock()) {
+        by_name.clear();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,10 +382,10 @@ pub enum Source {
 }
 
 fn standard_rank(profile: &DngProfile, source: Source, model: &str) -> Option<u8> {
-    if source == Source::Numa {
+    let yours = source == Source::Yours;
+    if source == Source::Numa || (yours && fitted_by_numa(profile)) {
         return None;
     }
-    let yours = source == Source::Yours;
     if profile.name.eq_ignore_ascii_case("Adobe Standard") {
         return Some(0);
     }
@@ -385,11 +416,7 @@ fn make_first_word(make: &str) -> &str {
 }
 
 fn ranked(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<HashMap<String, Vec<(Option<u8>, DngProfile, Source)>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = SCANS.get_or_init(Default::default);
     let Ok(mut cache) = cache.lock() else { return scan(make, model) };
     cache.entry(format!("{make}|{model}")).or_insert_with(|| scan(make, model)).clone()
 }
@@ -445,12 +472,7 @@ fn scan(make: &str, model: &str) -> Vec<(Option<u8>, DngProfile, Source)> {
 }
 
 pub fn by_name(name: &str) -> Option<std::sync::Arc<DngProfile>> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<DngProfile>>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache.lock().ok()?;
+    let mut cache = BY_NAME.get_or_init(Default::default).lock().ok()?;
 
     cache
         .entry(name.to_string())
@@ -460,18 +482,13 @@ pub fn by_name(name: &str) -> Option<std::sync::Arc<DngProfile>> {
 
                 .filter(|path| header_mentions(path, |_, profile| profile.contains(name), name))
                 .find_map(|path| read(&path).ok().filter(|profile| profile.name == name))
-                .map(Arc::new)
+                .map(std::sync::Arc::new)
         })
         .clone()
 }
 
 pub fn names_for_camera(make: &str, model: &str) -> Vec<(String, Source)> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<HashMap<String, Vec<(String, Source)>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut cache) = cache.lock() else { return Vec::new() };
+    let Ok(mut cache) = NAMES.get_or_init(Default::default).lock() else { return Vec::new() };
 
     cache
         .entry(format!("{make}|{model}"))
@@ -738,6 +755,31 @@ mod tests {
     }
 
     #[test]
+    fn automatic_takes_the_photographers_own_fit_first() {
+        let profile = |name: &str, table| DngProfile {
+            name: name.into(),
+            camera: None,
+            color_matrix: [None, None],
+            forward_matrix: [None, None],
+            illuminant: [None, None],
+            hue_sat_map: table,
+            look_table: None,
+            tone_curve: None,
+        };
+        let table = numa_core::profile::fit_hue_sat_map(&[], [6, 2, 1], 1.0);
+        let rawtherapee = (Some(1), profile("FUJIFILM X-T4", None), Source::RawTherapee);
+        let numa = (None, profile("Numa X-T4", Some(table.clone())), Source::Numa);
+        let fitted = (None, profile("Your X-T4", Some(table.clone())), Source::Yours);
+        let all = [rawtherapee, numa, fitted];
+        let name = |automatic| choose(&all, automatic).map(|profile| profile.name.clone());
+        assert_eq!(name(Automatic::Numa).as_deref(), Some("Your X-T4"));
+        assert_eq!(name(Automatic::Standard).as_deref(), Some("FUJIFILM X-T4"));
+        assert_eq!(name(Automatic::Matrix), None);
+
+        assert_eq!(standard_rank(&profile("Your X-T4", Some(table)), Source::Yours, "X-T4"), None);
+    }
+
+    #[test]
     fn finds_only_an_exact_match() {
         if sample().is_none() {
             eprintln!("no system DCP profiles; skipping");
@@ -809,7 +851,7 @@ mod tests {
 
     #[test]
     fn rejects_files_that_are_not_profiles() {
-        let path = std::env::temp_dir().join("numa-not-a.dcp");
+        let path = std::env::temp_dir().join(format!("numa-not-a-{}.dcp", std::process::id()));
         std::fs::write(&path, b"this is not a TIFF").unwrap();
         assert!(read(&path).is_err());
         std::fs::remove_file(&path).unwrap();

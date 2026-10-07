@@ -53,6 +53,13 @@ fn build_canvas_overlay(state: &App) -> gtk::Overlay {
     overlay.add_overlay(&build_crop_overlay(state));
     overlay.add_overlay(&build_mask_overlay(state));
     overlay.add_overlay(&build_retouch_overlay(state));
+
+    how_made::build(state);
+    overlay.add_overlay(&how_made::fader());
+
+    overlay.add_overlay(&build_plan_line(state));
+    overlay.add_overlay(&build_plan_pill(state));
+    overlay.add_overlay(&build_plan_card(state));
     overlay.add_controller(overlay_dot_remove(state));
 
     overlay
@@ -135,6 +142,8 @@ fn append_panel_split(state: &App, body: &gtk::Box, scroller: &gtk::ScrolledWind
     let photograph = gtk::Overlay::new();
     photograph.set_child(Some(scroller));
     photograph.add_overlay(&build_histogram_hud(state));
+
+    photograph.add_overlay(&how_made::card());
     beside.append(&photograph);
 
     let canvas_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -423,6 +432,13 @@ fn install_photo_actions(state: &App) {
     ));
     actions.add_action(&copy);
 
+    let made = gio::SimpleAction::new("how-made", None);
+    made.connect_activate(glib::clone!(
+        #[strong] state,
+        move |_, _| how_made::toggle(&state)
+    ));
+    actions.add_action(&made);
+
     let guides = gio::SimpleAction::new_stateful("guides", Some(glib::VariantTy::BYTE), &0u8.to_variant());
     guides.connect_change_state(glib::clone!(
         #[strong] state,
@@ -458,6 +474,10 @@ fn fill_photo_menu(state: &App) {
     edit.append_submenu(Some("Guides"), &guides);
 
     edit.append(Some("Histogram"), Some("editor.histogram"));
+
+    edit.append(Some("Proof for Print…"), Some("editor.proof"));
+
+    edit.append(Some("How It Was Made"), Some("editor.how-made"));
     state.editor_page.photo_menu.insert_section(0, None, &edit);
 }
 
@@ -503,16 +523,23 @@ pub(super) fn zoom_badge(state: &App) -> gtk::Box {
     label.set_visible(false);
     badge.append(&spinner);
     badge.append(&label);
+    let proof = proof::build(state);
+    badge.append(&proof);
 
     let fit = glib::clone!(
         #[weak] badge,
         #[weak] label,
         #[weak] spinner,
-        move || badge.set_visible(label.get_visible() || spinner.get_visible())
+        #[weak] proof,
+        move || {
+            badge.set_visible(label.get_visible() || spinner.get_visible() || proof.get_visible());
+            badge.set_can_target(proof.get_visible());
+        }
     );
     fit();
     label.connect_visible_notify(glib::clone!(#[strong] fit, move |_| fit()));
-    spinner.connect_visible_notify(move |_| fit());
+    spinner.connect_visible_notify(glib::clone!(#[strong] fit, move |_| fit()));
+    proof.connect_visible_notify(move |_| fit());
     badge
 }
 
@@ -575,6 +602,8 @@ pub(super) struct State {
 
     pub(super) info_button: gtk::MenuButton,
     pub(super) before: gtk::ToggleButton,
+
+    pub(super) proof: proof::State,
 }
 
 impl State {
@@ -602,6 +631,7 @@ impl State {
             shown: Rc::new(Cell::new(0)),
             info_button: gtk::MenuButton::new(),
             before: gtk::ToggleButton::new(),
+            proof: proof::State::new(),
         }
     }
 }

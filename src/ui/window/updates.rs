@@ -87,6 +87,8 @@ pub(super) fn key_hint(state: &App, key: &'static str, text: &str) -> adw::Banne
 
 pub(super) fn banners(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+    column.append(&tether_banner());
     for banner in [&state.grid.card_banner, &state.grid.extras_banner, &state.grid.update_banner] {
         column.append(banner);
     }

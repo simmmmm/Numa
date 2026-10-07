@@ -12,9 +12,13 @@ pub struct Plan {
 
     pub camera: Option<Camera>,
 
+    pub dehaze: Option<effects::HazeShape>,
+
     pub denoise_luma: Option<detail::LumaShape>,
 
     pub denoise_colour: Option<(f32, u32)>,
+
+    pub tail: Tail,
 
     pub adjustments: Adjustments,
 
@@ -24,6 +28,10 @@ pub struct Plan {
 
     pub vignette: Option<[f32; 7]>,
 
+    pub grain: Option<[f32; 3]>,
+
+    pub full: [f32; 2],
+
     pub curves: [Option<[f32; curve::LOOKUP]>; 4],
 
     pub display_referred: bool,
@@ -32,6 +40,7 @@ pub struct Plan {
     pub toe: f32,
 }
 
+#[derive(Debug)]
 pub struct GeometryPlan {
 
     pub mirror: bool,
@@ -40,6 +49,7 @@ pub struct GeometryPlan {
     pub crop: Option<CropPlan>,
 }
 
+#[derive(Debug)]
 pub struct CropPlan {
 
     pub size: (f32, f32),
@@ -102,6 +112,31 @@ pub struct PointsPlan {
     pub highlight: Option<[f32; 4]>,
 }
 
+#[derive(Default, Debug)]
+pub struct Tail {
+    pub sharpen: Option<detail::SharpenShape>,
+    pub defringe: Option<(f32, u32)>,
+    pub moire: Option<(f32, u32, u32)>,
+}
+
+impl Tail {
+    fn of(detail: &numa_core::document::Detail, (width, height): (usize, usize), scale: f32) -> Self {
+
+        let big = width >= 3 && height >= 3;
+        let (near, far) = detail::moire_radii(scale);
+        let amount = |slider: f32| Some((slider / 100.0).clamp(0.0, 1.0)).filter(|amount| *amount > 0.0 && big);
+        Tail {
+            sharpen: detail::SharpenShape::new(detail.sharpen / 100.0, detail.sharpen_radius, detail.sharpen_masking / 100.0, scale),
+            defringe: amount(detail.defringe).map(|amount| (amount, detail::defringe_radius(scale) as u32)),
+            moire: amount(detail.moire).map(|amount| (amount, near as u32, far as u32)),
+        }
+    }
+
+    pub fn is_some(&self) -> bool {
+        self.sharpen.is_some() || self.defringe.is_some() || self.moire.is_some()
+    }
+}
+
 pub struct MaskPlan {
 
     pub key: u64,
@@ -110,12 +145,21 @@ pub struct MaskPlan {
 
     pub gains: Option<[f32; 3]>,
 
+    pub dehaze: Option<effects::HazeShape>,
+
+    pub denoise_luma: Option<detail::LumaShape>,
+
     pub denoise_colour: Option<(f32, u32)>,
+    pub tail: Tail,
     pub adjustments: Adjustments,
+
+    pub local: Option<local::ToneShape>,
 
     pub curves: Option<[Option<[f32; curve::LOOKUP]>; 4]>,
 
     pub tint: Option<([f32; 3], f32)>,
+
+    pub grain: Option<[f32; 3]>,
 }
 
 const CARD_FRAME_NS: f32 = 1e8;
@@ -130,10 +174,53 @@ impl Plan {
             let basic = a.basic.as_ref().map_or(0.0, |b| on(b.tone.is_some(), 27.0) + on(b.slope.is_some(), 17.0));
             basic + on(a.mixer.is_some(), 61.0) + on(a.points.is_some(), 106.0) + on(a.monochrome.is_some(), 56.0) + on(a.grading.is_some(), 92.0)
         }
+        fn tail(tail: &Tail) -> f32 {
+            on(tail.sharpen.is_some(), 21.0) + on(tail.defringe.is_some(), 25.0) + on(tail.moire.is_some(), 43.0)
+        }
 
-        let masks: f32 = self.masks.iter().map(|mask| 12.0 + adjustments(&mask.adjustments) + on(mask.denoise_colour.is_some(), 40.0) + on(mask.curves.is_some(), 320.0)).sum();
-        let ns = 18.0 + adjustments(&self.adjustments) + masks + on(self.local.is_some(), 40.0) + on(self.vignette.is_some(), 14.0);
+        fn local(shape: &Option<local::ToneShape>) -> f32 {
+            shape.as_ref().map_or(0.0, |shape| 24.0 + on(shape.texture, 29.0))
+        }
+
+        let masks: f32 = self
+            .masks
+            .iter()
+            .map(|mask| {
+                12.0 + adjustments(&mask.adjustments)
+                    + on(mask.denoise_colour.is_some(), 40.0)
+                    + on(mask.curves.is_some(), 320.0)
+                    + local(&mask.local)
+
+                    + on(mask.local.is_some() || mask.dehaze.is_some(), 12.0)
+                    + on(mask.dehaze.is_some(), 19.0)
+                    + tail(&mask.tail)
+                    + on(mask.grain.is_some(), 53.0)
+            })
+            .sum();
+        let ns = 18.0
+            + adjustments(&self.adjustments)
+            + masks
+            + local(&self.local)
+            + on(self.vignette.is_some(), 14.0)
+            + on(self.grain.is_some(), 53.0);
         ns * (self.width * self.height) as f32 / 4.0 >= CARD_FRAME_NS
+    }
+}
+
+impl Plan {
+
+    pub fn prefix_kept(&self) -> bool {
+        self.dehaze.is_some() || self.denoise_luma.is_some() || self.tail.is_some()
+    }
+
+    pub fn prefix_key(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        self.prefix_kept().then(|| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+            format!("{:?}", (self.width, self.height, self.source, &self.geometry, &self.dehaze, &self.denoise_luma, self.denoise_colour, &self.tail)).hash(&mut hasher);
+            hasher.finish()
+        })
     }
 }
 
@@ -185,6 +272,10 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
     if basic_now.optics.lens_distortion != 0.0 || basic_now.optics.lens_vignetting != 0.0 {
         return Err("manual lens correction");
     }
+
+    if basic_now.effects.mist != 0.0 {
+        return Err("mist");
+    }
     let (geometry, (width, height)) = geometry_stage(document, source.width, source.height);
 
     let mut basic = basic_now;
@@ -199,17 +290,10 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
     if !document.faces().is_empty() && !document.beautify().is_identity() {
         return Err("face retouching");
     }
-    if basic.effects.dehaze != 0.0 {
-        return Err("dehaze");
-    }
+    let dehaze = effects::HazeShape::new(width as usize, height as usize, basic.effects.dehaze);
     let detail = &basic.detail;
     let denoise_luma = detail::LumaShape::new(detail.denoise_luma / 100.0, detail.denoise_detail / 100.0, detail.denoise_contrast / 100.0, detail_scale);
-    if detail.sharpen.clamp(0.0, 100.0) > 0.0 && detail.sharpen_radius * detail_scale >= 0.5 {
-        return Err("sharpening");
-    }
-    if detail.defringe > 0.0 || detail.moire > 0.0 {
-        return Err("defringe or moiré");
-    }
+    let tail = Tail::of(detail, (width as usize, height as usize), detail_scale);
     let colour = (detail.denoise_colour / 100.0).clamp(0.0, 1.0);
     let denoise_colour = (colour > 0.0 && 4.0 * detail_scale >= 0.5).then(|| (colour, (4.0 * detail_scale).round().max(1.0) as u32));
     let calibration = &basic.calibration;
@@ -233,10 +317,7 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
     };
 
     let white_point = camera.as_ref().map_or(FINISHED_WHITE, |camera| camera.white_point);
-    let masks = masks_stage(document, (width as usize, height as usize), white_point, detail_scale)?;
-    if basic_now.effects.grain != 0.0 {
-        return Err("grain");
-    }
+    let masks = masks_stage(document, (width as usize, height as usize), white_point, detail_scale);
     let vignette = effects::vignette_shape([width as f32, height as f32], [
         basic_now.effects.vignette,
         basic_now.effects.vignette_midpoint,
@@ -244,13 +325,16 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
         basic_now.effects.vignette_feather,
     ]);
 
-    if lut_of(document).is_some() {
-        return Err("a LUT");
+    if !looks_of(document).is_empty() {
+        return Err("a LUT or As Shot");
     }
     let curves = document.curves().map(|curve| (!curve.is_identity()).then(|| curve.lookup()));
     let base_curve = std::array::from_fn(|k| tone::curve(MIDDLE_GREY * (k as f32 / 4.0 - 8.0).exp2()));
 
     let toe = -1.0 / (tone::curve(MIDDLE_GREY * (-9.0f32).exp2()) / base_curve[0]).log2();
+
+    let grain = effects::grain_shape([basic_now.effects.grain, basic_now.effects.grain_size, basic_now.effects.grain_roughness]);
+    let full = [width as f32, height as f32].map(|edge| edge / detail_scale.max(1e-6));
 
     Ok(Plan {
         width,
@@ -258,12 +342,16 @@ pub fn plan(document: &Document, source: &LinearImage, inputs: &RenderInputs, de
         source: (source.width, source.height),
         geometry,
         camera,
+        dehaze,
         denoise_luma,
         denoise_colour,
+        tail,
         local,
         adjustments,
         masks,
         vignette,
+        grain,
+        full,
         curves,
         display_referred: source.display_referred,
         base_curve,
@@ -300,7 +388,7 @@ fn adjustments(mixer: &numa_core::mixer::Mixer, points: &PointColours, grading: 
     }
 }
 
-fn masks_stage(document: &Document, (width, height): (usize, usize), from: numa_core::color::WhiteBalance, detail_scale: f32) -> Result<Vec<MaskPlan>, &'static str> {
+fn masks_stage(document: &Document, (width, height): (usize, usize), from: numa_core::color::WhiteBalance, detail_scale: f32) -> Vec<MaskPlan> {
     let map = document.masks_map.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     let masks = std::sync::Arc::new(document.masks());
     let mut plans = Vec::new();
@@ -309,25 +397,7 @@ fn masks_stage(document: &Document, (width, height): (usize, usize), from: numa_
             continue;
         }
         let basic = &mask.basic;
-        let detail = &basic.detail;
-        if basic.effects.dehaze != 0.0 {
-            return Err("a mask's dehaze");
-        }
-        if detail.denoise_luma > 0.0 && 2.0 * detail_scale >= 0.5 {
-            return Err("a mask's luminance noise reduction");
-        }
-        if detail.sharpen > 0.0 && detail.sharpen_radius * detail_scale >= 0.5 {
-            return Err("a mask's sharpening");
-        }
-        if detail.defringe > 0.0 || detail.moire > 0.0 {
-            return Err("a mask's defringe or moiré");
-        }
-        if basic.presence.hdr != 0.0 || basic.presence.clarity != 0.0 || basic.presence.texture != 0.0 {
-            return Err("a mask's HDR, Clarity or Texture");
-        }
-        if basic.effects.grain > 0.0 {
-            return Err("a mask's grain");
-        }
+        let (detail, presence) = (&basic.detail, &basic.presence);
 
         let key = {
             use std::hash::{Hash, Hasher};
@@ -349,13 +419,19 @@ fn masks_stage(document: &Document, (width, height): (usize, usize), from: numa_
             key,
             of: (masks.clone(), index, (width, height), map),
             gains,
+            dehaze: effects::HazeShape::new(width, height, basic.effects.dehaze),
+            denoise_luma: detail::LumaShape::new(detail.denoise_luma / 100.0, detail.denoise_detail / 100.0, detail.denoise_contrast / 100.0, detail_scale),
             denoise_colour: (colour > 0.0 && 4.0 * detail_scale >= 0.5).then(|| (colour, (4.0 * detail_scale).round().max(1.0) as u32)),
+            tail: Tail::of(detail, (width, height), detail_scale),
             adjustments: Adjustments { basic: Some(basic_stage(basic)), ..adjustments(&mask.mixer, &mask.point_colours, &mask.grading) },
+            local: (presence.hdr != 0.0 || presence.clarity != 0.0 || presence.texture != 0.0)
+                .then(|| local::ToneShape::new(width, height, [presence.hdr / 100.0, presence.clarity / 100.0, presence.texture / 100.0])),
             curves: curved.then(|| [&mask.curve, red, green, blue].map(|curve| (!curve.is_identity()).then(|| curve.lookup()))),
             tint: (!mask.colour.is_identity()).then(|| tint_of(mask.colour, ColourSpace::Srgb.luminance_weights())),
+            grain: (basic.effects.grain > 0.0).then(|| effects::grain_shape([basic.effects.grain, basic.effects.grain_size, basic.effects.grain_roughness])).flatten(),
         });
     }
-    Ok(plans)
+    plans
 }
 
 fn camera_stage(document: &Document, source: &LinearImage, inputs: &RenderInputs, profile: &numa_core::color::CameraProfile) -> Camera {

@@ -43,5 +43,11 @@
         "balance": 0
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Shadows": "Opens the shadows a little",
+    "Vibrance": "A little more colour",
+    "Colour grading": "Amber through the whole picture, strongest overall"
   }
 }

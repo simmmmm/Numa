@@ -8,10 +8,21 @@ enum Facet {
     BestOfBurst,
     Type,
     Folder,
+
+    Words,
+    Thing,
 }
 
-const EVERY_FACET: [Facet; 6] =
-    [Facet::Rating, Facet::Flag, Facet::Questionable, Facet::BestOfBurst, Facet::Type, Facet::Folder];
+const EVERY_FACET: [Facet; 8] = [
+    Facet::Rating,
+    Facet::Flag,
+    Facet::Questionable,
+    Facet::BestOfBurst,
+    Facet::Type,
+    Facet::Folder,
+    Facet::Words,
+    Facet::Thing,
+];
 
 const FLAGS: [(&str, Option<Flag>); 4] =
     [("All", None), ("Picked", Some(Flag::Picked)), ("Unflagged", Some(Flag::None)), ("Rejected", Some(Flag::Rejected))];
@@ -40,6 +51,9 @@ struct Shown {
     quick: Vec<gtk::ToggleButton>,
     count: gtk::Label,
     clear: gtk::Button,
+
+    order: gtk::MenuButton,
+    direction: gtk::Button,
 }
 
 pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> gtk::Revealer {
@@ -73,13 +87,26 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     end.append(&analyse);
     end.append(&button);
     end.append(&group);
+
+    let deliver = rapid::deliver_button(state);
+    deliver.set_visible(false);
+    end.append(&deliver);
+    rapid::of(state).views.connect_visible_child_name_notify(glib::clone!(
+        #[weak] group,
+        #[weak] deliver,
+        move |views| {
+            let page = views.visible_child_name();
+            group.set_visible(!matches!(page.as_deref(), Some("rapid" | "check")));
+            deliver.set_visible(page.as_deref() == Some("rapid"));
+        }
+    ));
     cullbar::keep_focus(end.upcast_ref());
 
     state.grid.welcome.bind_property("visible", end, "visible").invert_boolean().sync_create().build();
 
-    let (chips, chip_row, quick, count, clear) = build_chips(state);
+    let (chips, chip_row, quick, count, clear, order, direction) = build_chips(state);
     state.grid.welcome.bind_property("visible", &chips, "visible").invert_boolean().sync_create().build();
-    let shown = Shown { button, rating, flag, kind, actions, chip_row, quick, count, clear };
+    let shown = Shown { button, rating, flag, kind, actions, chip_row, quick, count, clear, order, direction };
 
     state.libraries.show_filter.replace(Some(Box::new(glib::clone!(
         #[strong] state,
@@ -131,11 +158,13 @@ fn build_filter_button(state: &App) -> (gtk::MenuButton, Vec<gtk::ToggleButton>,
     column.append(&picker);
 
     let popover = gtk::Popover::new();
+
+    column.append(&words::things_section(state, &popover));
     popover.add_css_class("numa-content");
     popover.set_child(Some(&column));
     let button = gtk::MenuButton::new();
     button.set_label("Filter");
-    button.set_tooltip_text(Some("Narrow the library by rating, flag, Analyse, type or folder"));
+    button.set_tooltip_text(Some("Narrow the library by rating, flag, Analyse, type, folder or what Numa saw"));
     button.set_popover(Some(&popover));
     (button, rating, flag, kind)
 }
@@ -203,7 +232,7 @@ fn quick_press(filter: &mut Filter, at: usize, on: bool) {
     }
 }
 
-fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>, gtk::Label, gtk::Button) {
+fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>, gtk::Label, gtk::Button, gtk::MenuButton, gtk::Button) {
     let quick_row = chip_row();
     let quick: Vec<gtk::ToggleButton> = QUICK
         .iter()
@@ -229,12 +258,12 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
             button
         })
         .collect();
+
     let chip_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    chip_row.set_hexpand(true);
     let count = gtk::Label::new(None);
     count.add_css_class("dim-label");
     count.add_css_class("numeric");
-    count.set_hexpand(true);
-    count.set_xalign(1.0);
     let everything = gtk::Button::with_label("Clear");
     everything.add_css_class("flat");
     everything.connect_clicked(glib::clone!(
@@ -246,13 +275,46 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
     bar.append(&quick_row);
     bar.append(&chip_row);
     bar.append(&count);
+    let (order, direction) = order_buttons();
+    bar.append(&order);
+    bar.append(&direction);
     bar.append(&everything);
     everything.set_focus_on_click(false);
     let chips = gtk::Revealer::new();
     chips.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     chips.set_child(Some(&bar));
     chips.set_reveal_child(true);
-    (chips, chip_row, quick, count, everything)
+    (chips, chip_row, quick, count, everything, order, direction)
+}
+
+fn order_buttons() -> (gtk::MenuButton, gtk::Button) {
+    let keys = gio::Menu::new();
+    for (target, label, _) in SORTS {
+        let item = gio::MenuItem::new(Some(label), None);
+        item.set_action_and_target_value(Some("win.sort"), Some(&target.to_variant()));
+        keys.append_item(&item);
+    }
+    let order = gtk::MenuButton::new();
+    order.set_menu_model(Some(&keys));
+    order.set_has_frame(false);
+    order.set_label("Date");
+    order.set_tooltip_text(Some("Sort by"));
+    let direction = gtk::Button::with_label("Oldest First");
+    direction.add_css_class("flat");
+    direction.set_action_name(Some("win.sort-reversed"));
+    direction.set_focus_on_click(false);
+    (order, direction)
+}
+
+fn direction_words(sort: Sort, reversed: bool) -> (&'static str, &'static str) {
+    let (ahead, back) = match sort {
+        Sort::Captured => ("Oldest First", "Newest First"),
+        Sort::Name => ("A to Z", "Z to A"),
+        Sort::Rating => ("Highest First", "Lowest First"),
+        Sort::Sharpness => ("Sharpest First", "Softest First"),
+        Sort::Suggested => ("Best First", "Weakest First"),
+    };
+    if reversed { (back, ahead) } else { (ahead, back) }
 }
 
 fn show_filter(state: &App, shown: &Shown) {
@@ -276,8 +338,18 @@ fn show_filter(state: &App, shown: &Shown) {
         };
         action.set_state(&value);
     }
+    let name = SORTS.iter().find(|(_, _, sort)| *sort == filter.sort).map_or("Date", |(_, label, _)| *label);
+    shown.order.set_label(name);
 
-    let facets = facets(&filter, folder.as_deref());
+    let grid = !rapid::is_on(state);
+    shown.order.set_visible(grid);
+    shown.direction.set_visible(grid);
+    let (now, other) = direction_words(filter.sort, filter.reversed);
+    shown.direction.set_label(now);
+    shown.direction.set_tooltip_text(Some(&format!("{now} — click for {}", other.to_lowercase())));
+
+    let (words, thing) = words::chips(state);
+    let facets = facets(&filter, folder.as_deref(), words.as_deref(), thing);
     let applying = state.applying.replace(true);
     for (button, on) in shown.quick.iter().zip(quick_on(&filter, !facets.is_empty())) {
         button.set_active(on);
@@ -317,6 +389,10 @@ fn chip(state: &App, facet: Facet, label: &str) -> gtk::Button {
     let chip = gtk::Button::new();
     chip.set_child(Some(&inside));
     chip.add_css_class("filter-chip");
+
+    if facet == Facet::Thing {
+        chip.add_css_class("saw-chip");
+    }
     chip.set_focus_on_click(false);
     chip.set_tooltip_text(Some("Remove This Filter"));
     chip.connect_clicked(glib::clone!(
@@ -326,7 +402,7 @@ fn chip(state: &App, facet: Facet, label: &str) -> gtk::Button {
     chip
 }
 
-fn facets(filter: &Filter, folder: Option<&Path>) -> Vec<(Facet, String)> {
+fn facets(filter: &Filter, folder: Option<&Path>, words: Option<&str>, thing: Option<&str>) -> Vec<(Facet, String)> {
     let mut facets = Vec::new();
     match filter.min_rating {
         0 => {}
@@ -348,6 +424,12 @@ fn facets(filter: &Filter, folder: Option<&Path>) -> Vec<(Facet, String)> {
     if let Some(folder) = folder {
         facets.push((Facet::Folder, folder.display().to_string()));
     }
+    if let Some(words) = words {
+        facets.push((Facet::Words, words.to_string()));
+    }
+    if let Some(thing) = thing {
+        facets.push((Facet::Thing, thing.to_string()));
+    }
     facets
 }
 
@@ -359,7 +441,7 @@ fn let_through(filter: &mut Filter, facet: Facet) {
         Facet::BestOfBurst => filter.best_of_burst = false,
         Facet::Type => filter.file_type = FileType::Any,
 
-        Facet::Folder => {}
+        Facet::Folder | Facet::Words | Facet::Thing => {}
     }
 }
 
@@ -369,6 +451,12 @@ fn clear(state: &App, facets: &[Facet]) {
     }
     if facets.contains(&Facet::Folder) {
         state.libraries.folder.replace(None);
+    }
+    if facets.contains(&Facet::Thing) {
+        words::forget_thing(state);
+    }
+    if facets.contains(&Facet::Words) {
+        words::forget_query(state);
     }
     reload_grid(state);
 }
@@ -384,19 +472,6 @@ fn unnarrowed(state: &App) -> Option<usize> {
         false => state.catalog.photos(library.id, &filter),
     };
     photos.ok().map(|photos| photos.len())
-}
-
-pub(super) fn sort_menu() -> gio::Menu {
-    let orders = gio::Menu::new();
-    for (target, label, _) in SORTS {
-        let item = gio::MenuItem::new(Some(label), None);
-        item.set_action_and_target_value(Some("win.sort"), Some(&target.to_variant()));
-        orders.append_item(&item);
-    }
-    orders.append(Some("Reverse Order"), Some("win.sort-reversed"));
-    let menu = gio::Menu::new();
-    menu.append_section(Some("Sort By"), &orders);
-    menu
 }
 
 fn install_sort_actions(state: &App, window: &adw::ApplicationWindow) -> Vec<gio::SimpleAction> {
@@ -503,13 +578,26 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
         row.append(scale);
         panel.append(&row);
     }
+
+    let options = rapid::view_options(state);
+    panel.append(&options);
+
+    let syncing = Rc::new(Cell::new(false));
     for scale in [&size, &gap] {
         scale.connect_value_changed(glib::clone!(
             #[strong] state,
+            #[strong] syncing,
             #[weak] size,
             #[weak] gap,
             move |_| {
                 let sizes = (size.value() as f32, gap.value() as f32);
+                if syncing.get() {
+                    return;
+                }
+                if rapid::is_on(&state) {
+                    rapid::set_sizes(&state, sizes);
+                    return;
+                }
                 state.grid.wall.set_sizes(sizes.0, sizes.1);
                 state.catalog.remember(GRID_SIZES, &sizes);
 
@@ -523,9 +611,26 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
     }
     let popover = gtk::Popover::new();
     popover.set_child(Some(&panel));
+    popover.connect_show(glib::clone!(
+        #[strong] state,
+        #[weak] size,
+        #[weak] gap,
+        #[weak] options,
+        move |_| {
+            options.set_visible(rapid::is_on(&state));
+            let (height, spacing) = match rapid::is_on(&state) {
+                true => rapid::sizes(&state),
+                false => state.catalog.recall::<(f32, f32)>(GRID_SIZES).unwrap_or((justified::ROW_HEIGHT, justified::SPACING)),
+            };
+            syncing.set(true);
+            size.set_value(height as f64);
+            gap.set_value(spacing as f64);
+            syncing.set(false);
+        }
+    ));
     let sizes = gtk::MenuButton::new();
     sizes.set_icon_name("numa-sliders-symbolic");
-    sizes.set_tooltip_text(Some("Size of the photographs and the space between them"));
+    sizes.set_tooltip_text(Some("Size of the photographs and the space between them; in Moments, how they are grouped and shown"));
     sizes.set_popover(Some(&popover));
     sizes
 }
@@ -536,15 +641,18 @@ mod tests {
 
     #[test]
     fn a_chip_for_each_facet_that_narrows_and_none_for_the_rest() {
-        assert!(facets(&Filter::default(), None).is_empty());
+        assert!(facets(&Filter::default(), None, None, None).is_empty());
         let filter = Filter { min_rating: 3, flag: Some(Flag::Picked), best_of_burst: true, ..Filter::default() };
-        let chips: Vec<String> = facets(&filter, Some(Path::new("2024/Rome"))).into_iter().map(|(_, label)| label).collect();
-        assert_eq!(chips, ["★ 3 and Up", "Picked", "Best of Each Burst", "2024/Rome"]);
+        let chips: Vec<String> = facets(&filter, Some(Path::new("2024/Rome")), Some("Words: bride with bouquet"), Some("bouquet"))
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+        assert_eq!(chips, ["★ 3 and Up", "Picked", "Best of Each Burst", "2024/Rome", "Words: bride with bouquet", "bouquet"]);
         let mut cleared = filter.clone();
         for facet in EVERY_FACET {
             let_through(&mut cleared, facet);
         }
-        assert!(facets(&cleared, None).is_empty());
+        assert!(facets(&cleared, None, None, None).is_empty());
     }
 
     #[test]
@@ -557,6 +665,6 @@ mod tests {
         assert!(quick_says(&filter, Facet::Flag) && quick_says(&filter, Facet::Rating));
         filter.best_of_burst = true;
         quick_press(&mut filter, 0, true);
-        assert!(facets(&filter, None).is_empty());
+        assert!(facets(&filter, None, None, None).is_empty());
     }
 }

@@ -138,85 +138,99 @@ pub(super) fn remake_masks(state: &App) {
     state.mask_overlay.area.queue_draw();
 }
 
-pub(super) fn auto_perspective(state: &App) {
-    let measured = {
+type Framing = (([f32; 4], f32, f32), Perspective, bool);
+
+fn framing_at(state: &App) -> Option<Framing> {
+    let (perspective, mirrored) = {
         let open = state.open.borrow();
-        let Some(photo) = open.as_ref() else { return };
-
-        let angle = photo.document.crop().map_or(0.0, |(_, angle)| angle);
-        let kept = Perspective { vertical: 0.0, ..photo.document.perspective() };
-        let luma = framed_luma(&photo.document, &photo.working, angle, kept);
-
-        let height = photo.document.crop().map_or(1.0, |([_, _, _, height], _)| height);
-        render::auto::perspective(&luma).map(|found| Perspective { vertical: found.vertical / height, ..kept })
+        let document = &open.as_ref()?.document;
+        (document.perspective(), document.mirrored())
     };
+    Some((geometry_now(state)?, perspective, mirrored))
+}
 
-    let Some(perspective) = measured else {
-        state.toast("No converging verticals clear enough to square up");
-        return;
-    };
-    if perspective.vertical as f64 == state.crop.perspective[0].value() {
-        state.toast("The verticals are already upright");
-        return;
-    }
+fn still_framed(state: &App, generation: u64, was: Option<Framing>) -> bool {
+    state.open_generation.get() == generation && is_cropping(state) && framing_at(state) == was
+}
 
-    state.applying.set(true);
-    state.crop.perspective[0].set_value(perspective.vertical as f64);
-    state.applying.set(false);
+pub(super) fn auto_perspective(state: &App) {
+    let was = framing_at(state);
+    let generation = state.open_generation.get();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let scene = scene_now(&state, &state.crop.upright_waiting).await;
+        if !still_framed(&state, generation, was) {
+            return;
+        }
+        let Some((document, scene)) = state.open.borrow().as_ref().map(|photo| photo.document.clone()).zip(scene) else { return };
 
-    apply_perspective(state, perspective);
-    state.toast("Verticals squared up — the slider is yours to change");
+        if !document.masks().is_empty() || !document.retouch().is_identity() {
+            state.toast("Verticals not corrected — your masks or spots would move");
+            return;
+        }
+        let Some(lean) = scene.upright.filter(|lean| lean.sigma <= 0.5 && lean.vertical().abs() >= 2.0) else {
+            state.toast("No converging verticals clear enough to square up");
+            return;
+        };
+        let perspective = Perspective { vertical: lean.vertical(), ..document.perspective() };
+        if (perspective.vertical as f64 - state.crop.perspective[0].value()).abs() < 1.0 {
+            state.toast("The verticals are already upright");
+            return;
+        }
+        state.applying.set(true);
+        state.crop.perspective[0].set_value(perspective.vertical as f64);
+        state.applying.set(false);
+        apply_perspective(&state, perspective);
+        state.toast("Verticals squared up by the buildings — the slider is yours to change");
+    });
 }
 
 pub(super) fn auto_level(state: &App) {
-    let angle = {
-        let open = state.open.borrow();
-        let Some(photo) = open.as_ref() else { return };
-        let luma = framed_luma(&photo.document, &photo.working, 0.0, photo.document.perspective());
-        render::auto::level(&luma)
-    };
-    match angle {
-        None => state.toast("No horizon or upright lines clear enough to level by"),
-        Some(angle) if (angle as f64 - state.crop.straighten.value()).abs() < 0.05 => state.toast("Already level"),
-        Some(angle) => state.crop.straighten.set_value(angle as f64),
-    }
+    let was = framing_at(state);
+    let generation = state.open_generation.get();
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let scene = scene_now(&state, &state.crop.level_waiting).await;
+        if !still_framed(&state, generation, was) {
+            return;
+        }
+        let Some((document, scene)) = state.open.borrow().as_ref().map(|photo| photo.document.clone()).zip(scene) else {
+            state.toast("Not levelled: a merged photograph");
+            return;
+        };
+        let current = state.crop.straighten.value() as f32;
+        use render::auto::evidence::{decide, Verdict};
+        let (angle, by) = match decide(&scene.level, &scene.frame(document.perspective(), current)) {
+            Verdict::Level { angle, by } | Verdict::Offer { angle, by } => (angle, by),
+            Verdict::Refused(refusal) => {
+                state.toast(&render::auto::plan::Level::Leave(render::auto::plan::Leave::Refused(refusal)).says());
+                return;
+            }
+        };
+        state.crop.straighten.set_value(angle as f64);
+        state.toast(&format!("Levelled {angle:+.1}° by {} — the slider is yours to change", by.name()));
+    });
 }
 
-fn framed_luma(
-    document: &Document,
-    working: &numa::core::image::LinearImage,
-    angle: f32,
-    perspective: Perspective,
-) -> numa::core::plane::Plane {
-    let mut framing = Document::new(document.source.path.clone());
-    framing.set_rotation(document.rotation());
-    framing.set_mirrored(document.mirrored());
-    framing.set_perspective(perspective);
-    if let Some((rect, _)) = document.crop() {
-        framing.set_crop(rect, angle);
-    }
-    let framed = render::geometry_only(&framing, working);
-
-    let small = framed.downscaled(AUTO_EDGE).unwrap_or(framed);
-    numa::core::plane::Plane::new(
-        small.width as usize,
-        small.height as usize,
-        small.data.chunks_exact(3).map(|pixel| 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]).collect(),
-    )
-}
-
-pub(super) const AUTO_EDGE: u32 = 900;
-
-pub(super) fn auto_tone(state: &App) {
+pub(super) fn auto_tone_then(
+    state: &App,
+    then: impl FnOnce(&render::auto::Applied, Option<Arc<numa::core::mask::Stored>>) + 'static,
+) {
 
     let frame = mask_frame_job(state);
     let framing = state.open.borrow().as_ref().map(mask_framing).unwrap_or_default();
     let (width, height) = mask_raster_size(state);
-    let (working, found) = {
+
+    let (working, found, document, compensation) = {
         let open = state.open.borrow();
         let Some(photo) = open.as_ref() else { return };
-        (photo.working.clone(), photo.segmentation.clone())
+        let compensation = photo.summary.as_ref().and_then(|summary| summary.exposure_bias);
+        (photo.working.clone(), photo.segmentation.clone(), photo.document.clone(), compensation)
     };
+    let path = state.open.borrow().as_ref().and_then(|photo| match &photo.source {
+        Source::Photo { path, .. } => Some(path.clone()),
+        Source::Bracket { .. } => None,
+    });
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
@@ -233,67 +247,136 @@ pub(super) fn auto_tone(state: &App) {
                     Some(found) => Some(found),
                     None => segment::of(frame).map(Arc::new),
                 }?;
-                let alpha = render::auto::subject_mask(&found, frame, width, height)
-                    .and_then(|mask| mask.map.0)
-                    .map(|stored| Arc::new(stored.to_alpha()));
-                Some((found, alpha))
+                let stored = render::auto::subject_mask(&found, frame, width, height).and_then(|mask| mask.map.0);
+
+                let faces = render::auto::faces_in(frame);
+                let faces_share: f32 = faces.iter().map(|[_, _, w, h]| w * h).sum();
+                let lights = found.alpha(&render::auto::LIGHTS);
+                let lit = stored.as_ref().and_then(|stored| {
+                    let animal = found.coarse(&[126]).data.iter().any(|share| *share > 0.5);
+
+                    let focus = path
+                        .as_deref()
+                        .and_then(raw::af_point)
+                        .filter(|point| !point.zone && document.rotation() == 0.0 && !document.mirrored())
+                        .map(|point| {
+                            let (pw, ph) = (working.width as f32, working.height as f32);
+                            let (rect, angle) = document.crop().unwrap_or(([0.0, 0.0, 1.0, 1.0], 0.0));
+                            numa::core::image::into_crop(pw, ph, rect, angle, document.perspective(), [point.x, point.y])
+                        });
+                    render::auto::lit_part(&stored.to_alpha(), &faces, animal, focus)
+                });
+                Some((found, stored, lit, lights, faces_share))
             });
-            let (found, alpha) = match subject {
-                Some((found, alpha)) => (Some(found), alpha),
-                None => (None, None),
+            let (found, stored, lit, lights, faces_share) = match subject {
+                Some((found, stored, lit, lights, share)) => (Some(found), stored, lit, Some(lights), share),
+                None => (None, None, None, None, 0.0),
             };
+
+            let intent = render::auto::Intent::of(
+                compensation,
+                path.as_deref().and_then(raw::dynamic_range_mode),
+                path.as_deref().and_then(raw::colour_setting),
+            );
             let kept = frame.filter(|_| made);
-            (found, render::auto::tone(&working, alpha.as_deref()), kept)
+
+            let shown = render::auto::framed(&document, &working);
+            let told = render::auto::Told {
+                subject: lit.as_ref().map(|lit| &lit.alpha),
+                lights: lights.as_ref(),
+                faces: faces_share,
+                intent,
+            };
+            let of = lit.as_ref().map(|lit| match lit.faces {
+                0 => "the animal",
+                1 => "the face",
+                _ => "the faces",
+            });
+            (found, render::auto::tone_told(&shown, &document, &told), kept, stored, of)
         })
         .await;
 
         if state.open_generation.get() != generation {
             return;
         }
-        let Ok((found, measured, made)) = measured else { return };
+        let Ok((found, measured, made, subject, of)) = measured else { return };
         if let Some(frame) = made {
             keep_mask_frame(&state, &frame, &framing);
         }
 
         if let (Some(found), Some(photo)) = (found, state.open.borrow_mut().as_mut()) {
-            photo.segmentation = Some(found);
-        }
-        let state = &state;
-
-        let (basic, added) = {
-            let mut open = state.open.borrow_mut();
-            let Some(photo) = open.as_mut() else { return };
-            let added = measured.apply(&mut photo.document);
-            photo.view = None;
-            (photo.document.basic(), added)
-        };
-
-        match added {
-
-            Some(index) => {
-                fill_segment_masks(state);
-                ensure_segmentation(state);
-                refresh_masks(state);
-                select_mask(state, Some(index));
-            }
-
-            None => {
-                state.applying.set(true);
-                state.sliders.write(basic);
-                state.mask_overlay.sliders_hold.set(None);
-                state.applying.set(false);
-                refresh_slider_marks(state);
+            if mask_framing(photo) == framing {
+                photo.segmentation = Some(found);
             }
         }
-
-        adjustments_changed(state);
-        request_render(state);
-        schedule_history_push(state);
-        state.toast(match added {
-            Some(_) => "The subject has its own exposure — every slider is yours to change",
-            None => "Exposure and the endpoints set — every slider is yours to change",
-        });
+        let mut applied = apply_auto_tone(&state, &measured);
+        applied.of = of;
+        then(&applied, subject);
     });
+}
+
+fn apply_auto_tone(state: &App, measured: &render::auto::Auto) -> render::auto::Applied {
+    let selected = state.mask_overlay.selected_mask.get();
+    let (basic, applied, reselect) = {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else { return Default::default() };
+        let id = selected.and_then(|index| photo.document.masks().get(index).map(|mask| mask.id));
+        let applied = measured.apply(&mut photo.document);
+        let reselect = id.map(|id| photo.document.masks().iter().position(|mask| mask.id == id));
+        photo.view = None;
+        (photo.document.basic(), applied, reselect)
+    };
+
+    refresh_masks(state);
+
+    match reselect {
+
+        Some(Some(index)) if Some(index) != selected => {
+            state.mask_overlay.selected_mask.set(Some(index));
+            state.mask_overlay.sliders_hold.set(Some(index));
+            if state.mask_overlay.brush_owner.get() == selected {
+                state.mask_overlay.brush_owner.set(Some(index));
+            }
+            refresh_masks(state);
+        }
+        Some(None) => select_mask(state, None),
+        Some(_) => {}
+
+        None => {
+            state.applying.set(true);
+            state.sliders.write(basic);
+            state.mask_overlay.sliders_hold.set(None);
+            state.applying.set(false);
+            refresh_slider_marks(state);
+        }
+    }
+
+    adjustments_changed(state);
+    request_render(state);
+    schedule_history_push(state);
+    applied
+}
+
+pub(super) fn auto_tone_toast(applied: &render::auto::Applied) -> String {
+    let kept = match applied.kept.as_slice() {
+        [] => None,
+        [one] => Some(format!("{one} left as it was")),
+        [first @ .., last] => Some(format!("{} and {last} left as they were", first.join(", "))),
+    };
+    if let Some(bias) = applied.held_low.filter(|_| !applied.changed) {
+        return format!("{bias:+.1} EV dialled in — kept low-key");
+    }
+    let of = applied.of.unwrap_or("the subject");
+    let done = match (applied.subject, applied.changed) {
+
+        (Some(stops), _) if stops > 0.0 => format!("Exposure set for {of} ({stops:+.1}); the brightest parts may clip"),
+        (Some(stops), _) => format!("Exposure set for {of} ({stops:+.1}); the deepest shadows may close"),
+        (None, _) if applied.silhouette => "Silhouette kept".to_string(),
+        (None, true) => "Exposure and the endpoints set".to_string(),
+        (None, false) if kept.is_none() => return "Exposure and the endpoints already right".into(),
+        (None, false) => "Nothing changed".to_string(),
+    };
+    format!("{done} — {}", kept.unwrap_or_else(|| "every slider is yours to change".into()))
 }
 
 pub(super) fn read_perspective(state: &App) {

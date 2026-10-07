@@ -1,7 +1,7 @@
-use gtk::glib;
+use gtk::{glib, prelude::*};
 
 use super::{
-    build_editor_page, consider_update_check, downloads, integrate_appimage, open_requested,
+    build_editor_page, consider_update_check, downloads, integrate_appimage, offer_crash_report, open_requested,
     reload_libraries, report_panel, request_render, watch_cards, App,
 };
 
@@ -17,11 +17,19 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
     }
     reload_libraries(state);
 
+    if !state.grid.welcome.get_visible() {
+        state.grid.wall.grab_focus();
+    }
+
     watch_cards(state);
+
+    super::import_done::recheck_now_and_then(state);
     downloads::at_startup(state);
     integrate_appimage(state);
 
     consider_update_check(state, window);
+
+    offer_crash_report(state, window);
 
     report_panel(state);
     open_requested(state);

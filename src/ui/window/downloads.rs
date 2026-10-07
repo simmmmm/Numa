@@ -246,6 +246,41 @@ fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
     ));
 }
 
+pub(super) fn ask_for(state: &App, model: &str, heading: &str, body: &str, then: impl Fn(&App) + 'static) {
+    let files = files_of(&[model]);
+    let then = Rc::new(then);
+    let alert = adw::AlertDialog::new(Some(heading), Some(body));
+    alert.add_response("later", "Not Now");
+    alert.add_response("download", &format!("Download {} MB", megabytes(&files)));
+    alert.set_response_appearance("download", adw::ResponseAppearance::Suggested);
+
+    alert.set_close_response("later");
+    alert.connect_response(Some("download"), glib::clone!(
+        #[strong] state,
+        move |_, _| {
+            let cancel = Cancel::default();
+            let (toast, text, bar) = progress_toast(&state, &cancel);
+            let progress = move |got: u64, total: u64| {
+                text.set_text(&format!("Downloading — {} of {} MB", got / 1_000_000, total / 1_000_000));
+                bar.set_fraction(got as f64 / total.max(1) as f64);
+            };
+            let (state, files, then) = (state.clone(), files.clone(), then.clone());
+            download_model(files, progress, cancel, move |result| {
+                toast.dismiss();
+                match result {
+                    Ok(()) => then(&state),
+                    Err(err) if err == "stopped" => state.toast("Download stopped — continue any time from Preferences"),
+                    Err(err) => {
+                        log::warn!("downloading: {err}");
+                        state.toast("The download did not finish — Preferences shows what is missing")
+                    }
+                }
+            });
+        }
+    ));
+    alert.present(state.stack.root().as_ref());
+}
+
 fn download_model(
     files: Vec<ModelFile>,
     progress: impl Fn(u64, u64) + 'static,
@@ -408,6 +443,7 @@ async fn checked(path: &Path, sha256: &str) -> Result<(), String> {
 fn missing_model_files() -> Vec<ModelFile> {
     let mut missing: Vec<ModelFile> = MODELS
         .iter()
+        .filter(|(name, _, _)| *name != numa::io::words::MODEL)
         .flat_map(|(_, _, files)| files.iter().copied())
         .filter(|file| model_on_disk(file).is_none())
         .collect();
@@ -648,7 +684,7 @@ mod tests {
 
     #[test]
     fn a_download_is_the_file_its_digest_names() {
-        let path = std::env::temp_dir().join("numa-sha256-test");
+        let path = std::env::temp_dir().join(format!("numa-sha256-test-{}", std::process::id()));
         std::fs::write(&path, "abc").unwrap();
         let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         let context = gtk::glib::MainContext::default();
@@ -680,7 +716,7 @@ mod tests {
 
     #[test]
     fn a_wheel_gives_up_the_provider_and_its_notices() {
-        let dir = std::env::temp_dir().join("numa-wheel-test");
+        let dir = std::env::temp_dir().join(format!("numa-wheel-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

@@ -6,3 +6,5 @@ pub use numa_render as render;
 
 #[cfg(feature = "gpu")]
 pub use numa_gpu as gpu;
+
+pub mod tether;

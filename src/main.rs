@@ -1,3 +1,4 @@
+mod crash;
 mod ui;
 
 use adw::prelude::*;
@@ -50,7 +51,10 @@ fn main() -> glib::ExitCode {
         unsafe {
             libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
         }
+
+        crash::install();
     });
+    app.connect_shutdown(|_| crash::clean_exit());
 
     app.connect_activate(|app| {
         ui::window::build_window(app).present();

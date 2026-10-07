@@ -96,6 +96,22 @@ impl Waiting {
     }
 }
 
+pub(super) fn word_or_spinner(button: &gtk::Button, word: &str, waiting: &Waiting) {
+    let (word, spinner) = (gtk::Label::new(Some(word)), waiting.spinner.clone());
+    let content = gtk::Stack::new();
+    content.add_child(&word);
+    content.add_child(&spinner);
+    spinner.connect_visible_notify(glib::clone!(
+        #[weak] content,
+        #[weak] word,
+        move |spinner| match spinner.get_visible() {
+            true => content.set_visible_child(spinner),
+            false => content.set_visible_child(&word),
+        }
+    ));
+    button.set_child(Some(&content));
+}
+
 pub(super) fn busy_in<T: Send + 'static>(
     waiting: &Waiting,
     work: impl FnOnce() -> T + Send + 'static,

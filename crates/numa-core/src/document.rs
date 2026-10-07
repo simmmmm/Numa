@@ -36,6 +36,9 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lut: Option<crate::lut::LutChoice>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_look: Option<crate::camera_look::CameraLook>,
+
     #[serde(skip)]
     pub output_space: ColourSpace,
     pub operations: Vec<Operation>,
@@ -45,6 +48,32 @@ pub struct Document {
 
     #[serde(skip)]
     pub masks_map: Option<[f32; 6]>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moment: Option<i64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<AutoRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoRecord {
+    pub exposure: Option<f32>,
+    pub highlights: Option<f32>,
+    pub whites: Option<f32>,
+    pub blacks: Option<f32>,
+    pub hdr: Option<f32>,
+    pub vibrance: Option<f32>,
+    pub angle: Option<f32>,
+    pub vertical: Option<f32>,
+}
+
+impl AutoRecord {
+
+    pub fn may_set(now: f32, set_last: Option<f32>) -> bool {
+        now == 0.0 || set_last.is_some_and(|value| (value - now).abs() < 1e-3)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +210,8 @@ pub struct Effects {
     pub grain: f32,
     pub grain_size: f32,
     pub grain_roughness: f32,
+
+    pub mist: f32,
 }
 
 impl Default for Effects {
@@ -195,6 +226,7 @@ impl Default for Effects {
             grain: 0.0,
             grain_size: 25.0,
             grain_roughness: 50.0,
+            mist: 0.0,
         }
     }
 }
@@ -361,10 +393,13 @@ impl Document {
             ai_denoise: 0.0,
             ai_sharpen: 0.0,
             lut: None,
+            camera_look: None,
             output_space: ColourSpace::default(),
             operations: Vec::new(),
             faces: Vec::new(),
             masks_map: None,
+            moment: None,
+            auto: None,
         }
     }
 
@@ -682,6 +717,8 @@ impl Document {
             && self.ai_denoise == 0.0
             && self.ai_sharpen == 0.0
             && self.lut.is_none()
+            && self.camera_look.is_none()
+            && self.moment.is_none()
     }
 
     pub fn copy_from(&mut self, source: &Document, parts: EditParts) {
@@ -693,6 +730,14 @@ impl Document {
             self.colour_profile = source.colour_profile.clone();
 
             self.lut = source.lut.clone();
+
+            let own = self.camera_look.as_ref().and_then(|look| look.fit.clone());
+            self.camera_look = source.camera_look.clone().map(|mut look| {
+                if source.source.path != self.source.path {
+                    look.fit = own;
+                }
+                look
+            });
             self.set_mixer(source.mixer());
             self.set_point_colours(source.point_colours());
 
@@ -733,6 +778,7 @@ impl Document {
                 basic.effects.grain = from.effects.grain;
                 basic.effects.grain_size = from.effects.grain_size;
                 basic.effects.grain_roughness = from.effects.grain_roughness;
+                basic.effects.mist = from.effects.mist;
             }
             if parts.colour {
                 basic.presence.vibrance = from.presence.vibrance;
@@ -857,9 +903,9 @@ mod tests {
 
     #[test]
     fn basic_json() {
-        const DEFAULT: &str = r#"{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,"whites":0.0,"blacks":0.0,"vibrance":0.0,"saturation":0.0,"hdr":0.0,"clarity":0.0,"texture":0.0,"sharpen":25.0,"sharpen_radius":1.0,"sharpen_masking":0.0,"denoise_luma":0.0,"denoise_detail":50.0,"denoise_contrast":0.0,"denoise_colour":25.0,"moire":0.0,"defringe":0.0,"dehaze":0.0,"vignette":0.0,"vignette_midpoint":50.0,"vignette_roundness":0.0,"vignette_feather":50.0,"grain":0.0,"grain_size":25.0,"grain_roughness":50.0,"shadow_tint":0.0,"red_hue":0.0,"red_saturation":0.0,"green_hue":0.0,"green_saturation":0.0,"blue_hue":0.0,"blue_saturation":0.0,"lens_distortion":0.0,"lens_vignetting":0.0,"temperature":0.0,"tint":0.0}"#;
-        const LOCAL: &str = r#"{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,"whites":0.0,"blacks":0.0,"vibrance":0.0,"saturation":0.0,"hdr":0.0,"clarity":0.0,"texture":0.0,"sharpen":0.0,"sharpen_radius":1.0,"sharpen_masking":0.0,"denoise_luma":0.0,"denoise_detail":50.0,"denoise_contrast":0.0,"denoise_colour":0.0,"moire":0.0,"defringe":0.0,"dehaze":0.0,"vignette":0.0,"vignette_midpoint":50.0,"vignette_roundness":0.0,"vignette_feather":50.0,"grain":0.0,"grain_size":25.0,"grain_roughness":50.0,"shadow_tint":0.0,"red_hue":0.0,"red_saturation":0.0,"green_hue":0.0,"green_saturation":0.0,"blue_hue":0.0,"blue_saturation":0.0,"lens_distortion":0.0,"lens_vignetting":0.0,"temperature":0.0,"tint":0.0}"#;
-        const EVERY: &str = r#"{"exposure":1.5,"contrast":3.0,"highlights":4.5,"shadows":6.0,"whites":7.5,"blacks":9.0,"vibrance":10.5,"saturation":12.0,"hdr":13.5,"clarity":15.0,"texture":16.5,"sharpen":18.0,"sharpen_radius":19.5,"sharpen_masking":21.0,"denoise_luma":22.5,"denoise_detail":24.0,"denoise_contrast":25.5,"denoise_colour":27.0,"moire":28.5,"defringe":30.0,"dehaze":31.5,"vignette":33.0,"vignette_midpoint":34.5,"vignette_roundness":36.0,"vignette_feather":37.5,"grain":39.0,"grain_size":40.5,"grain_roughness":42.0,"shadow_tint":43.5,"red_hue":45.0,"red_saturation":46.5,"green_hue":48.0,"green_saturation":49.5,"blue_hue":51.0,"blue_saturation":52.5,"lens_distortion":54.0,"lens_vignetting":55.5,"temperature":57.0,"tint":58.5}"#;
+        const DEFAULT: &str = r#"{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,"whites":0.0,"blacks":0.0,"vibrance":0.0,"saturation":0.0,"hdr":0.0,"clarity":0.0,"texture":0.0,"sharpen":25.0,"sharpen_radius":1.0,"sharpen_masking":0.0,"denoise_luma":0.0,"denoise_detail":50.0,"denoise_contrast":0.0,"denoise_colour":25.0,"moire":0.0,"defringe":0.0,"dehaze":0.0,"vignette":0.0,"vignette_midpoint":50.0,"vignette_roundness":0.0,"vignette_feather":50.0,"grain":0.0,"grain_size":25.0,"grain_roughness":50.0,"mist":0.0,"shadow_tint":0.0,"red_hue":0.0,"red_saturation":0.0,"green_hue":0.0,"green_saturation":0.0,"blue_hue":0.0,"blue_saturation":0.0,"lens_distortion":0.0,"lens_vignetting":0.0,"temperature":0.0,"tint":0.0}"#;
+        const LOCAL: &str = r#"{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,"whites":0.0,"blacks":0.0,"vibrance":0.0,"saturation":0.0,"hdr":0.0,"clarity":0.0,"texture":0.0,"sharpen":0.0,"sharpen_radius":1.0,"sharpen_masking":0.0,"denoise_luma":0.0,"denoise_detail":50.0,"denoise_contrast":0.0,"denoise_colour":0.0,"moire":0.0,"defringe":0.0,"dehaze":0.0,"vignette":0.0,"vignette_midpoint":50.0,"vignette_roundness":0.0,"vignette_feather":50.0,"grain":0.0,"grain_size":25.0,"grain_roughness":50.0,"mist":0.0,"shadow_tint":0.0,"red_hue":0.0,"red_saturation":0.0,"green_hue":0.0,"green_saturation":0.0,"blue_hue":0.0,"blue_saturation":0.0,"lens_distortion":0.0,"lens_vignetting":0.0,"temperature":0.0,"tint":0.0}"#;
+        const EVERY: &str = r#"{"exposure":1.5,"contrast":3.0,"highlights":4.5,"shadows":6.0,"whites":7.5,"blacks":9.0,"vibrance":10.5,"saturation":12.0,"hdr":13.5,"clarity":15.0,"texture":16.5,"sharpen":18.0,"sharpen_radius":19.5,"sharpen_masking":21.0,"denoise_luma":22.5,"denoise_detail":24.0,"denoise_contrast":25.5,"denoise_colour":27.0,"moire":28.5,"defringe":30.0,"dehaze":31.5,"vignette":33.0,"vignette_midpoint":34.5,"vignette_roundness":36.0,"vignette_feather":37.5,"grain":39.0,"grain_size":40.5,"grain_roughness":42.0,"mist":-12.5,"shadow_tint":43.5,"red_hue":45.0,"red_saturation":46.5,"green_hue":48.0,"green_saturation":49.5,"blue_hue":51.0,"blue_saturation":52.5,"lens_distortion":54.0,"lens_vignetting":55.5,"temperature":57.0,"tint":58.5}"#;
         assert_eq!(serde_json::to_string(&Basic::default()).unwrap(), DEFAULT);
         assert_eq!(serde_json::to_string(&Basic::local()).unwrap(), LOCAL);
         for json in [DEFAULT, LOCAL, EVERY] {

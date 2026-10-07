@@ -294,6 +294,14 @@ the HSL mixer, colour grading, curves, white balance, detail, vignette and
 grain are translated. **LUTs** in `.cube` and `.3dl` are applied with an
 Amount.
 
+**As Shot**, under the profile, is the photograph as the camera made it: every
+raw carries the camera's own JPEG of the same moment, with its film
+simulation, picture style or creative look and the recipe it was shot with,
+and Numa fits a small colour transform from its own rendering to that JPEG,
+per photograph. It has a **Strength**, your own edits go in before it, and
+where the JPEG clipped the highlights the raw's detail stays. Pasted or in a
+preset, it follows each photograph's own JPEG.
+
 The built-in looks and Numa's own camera profiles are the photographer's own
 work: they come with the released Flatpak and AppImage, and a build from this
 source has neither.
@@ -765,13 +773,12 @@ recognition thresholds, and the bugs that were hardest to find.
 ## Roadmap
 
 [`docs/FEATURES.md`](docs/FEATURES.md) tracks every feature by ID and is the
-only place status is kept: currently **188 built**, 8 partly built, 6 planned
-and 11 withdrawn, each withdrawal with its reason.
+only place status is kept: currently **274 built**, 13 partly built, 3 planned
+and 14 withdrawn, each withdrawal with its reason.
 
-**Still open.** Numa's own camera profile for every camera, not only six ·
-settling whether a developed frame is as sharp as Lightroom's · crash reports
-and feedback, sent only when you say so · a GPU pipeline, if the processor one
-ever stops being enough.
+**Still open.** Numa's own camera profile for every camera, not only the 21
+fitted so far · settling whether a developed frame is as sharp as Lightroom's ·
+usage counts, sent only when you say so · HDR on an HDR screen.
 
 The full list, generated from the status markers, is at the end of
 [`docs/FEATURES.md`](docs/FEATURES.md). How each number in it was reached is in

@@ -173,21 +173,25 @@ pub fn release_idle(idle: std::time::Duration) -> usize {
 impl Model {
 
     pub fn load(path: &Path) -> Option<Model> {
-        Self::load_at(path, None)
+        Self::load_at(path, None, threads())
     }
 
     pub fn load_sized(path: &Path, size: (usize, usize)) -> Option<Model> {
-        Self::load_at(path, Some(size))
+        Self::load_at(path, Some(size), threads())
     }
 
     pub fn answers(&self, size: (usize, usize)) -> bool {
         self.sized.is_none_or(|sized| sized == size)
     }
 
-    fn load_at(path: &Path, size: Option<(usize, usize)>) -> Option<Model> {
+    pub fn load_quiet(path: &Path) -> Option<Model> {
+        Self::load_at(path, None, 2)
+    }
+
+    fn load_at(path: &Path, size: Option<(usize, usize)>, threads: usize) -> Option<Model> {
         let built = if on_gpu(path) && gpu_registered() {
             let _card = CARD.write().unwrap_or_else(|poisoned| poisoned.into_inner());
-            match build(path, true, size) {
+            match build(path, true, size, threads) {
                 Ok(session) => {
                     gpu_stood();
                     Ok((session, true))
@@ -196,11 +200,11 @@ impl Model {
                 Err(err) => {
                     log::warn!("{}: not on the GPU: {err}", path.display());
                     gpu_fell_back(&err.to_string());
-                    build(path, false, None).map(|session| (session, false))
+                    build(path, false, None, threads).map(|session| (session, false))
                 }
             }
         } else {
-            build(path, false, None).map(|session| (session, false))
+            build(path, false, None, threads).map(|session| (session, false))
         };
         match built {
             Ok((session, on_card)) => {
@@ -365,10 +369,10 @@ fn device_name() -> String {
         .unwrap_or_else(|| "a graphics card".to_string())
 }
 
-fn build(path: &Path, on_gpu: bool, size: Option<(usize, usize)>) -> Result<Session, ort::Error> {
+fn build(path: &Path, on_gpu: bool, size: Option<(usize, usize)>, threads: usize) -> Result<Session, ort::Error> {
     let mut builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(threads())?
+        .with_intra_threads(threads)?
 
         .with_intra_op_spinning(false)?;
     if on_gpu {
@@ -513,7 +517,7 @@ mod tests {
 
     #[test]
     fn the_shipped_plugin_comes_first() {
-        let root = std::env::temp_dir().join("numa-gpu-plugin-test");
+        let root = std::env::temp_dir().join(format!("numa-gpu-plugin-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (shipped, models) = (root.join("lib"), root.join("models"));
         std::fs::create_dir_all(&shipped).unwrap();

@@ -39,5 +39,11 @@
         ]
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "A little firmer in the midtones",
+    "Saturation": "Quieter colour",
+    "Tone curve": "Lifts the blacks and lowers the whites: the matte look"
   }
 }

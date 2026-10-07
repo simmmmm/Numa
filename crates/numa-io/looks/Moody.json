@@ -104,5 +104,17 @@
         "balance": 0
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Exposure": "A fifth of a stop darker for the mood",
+    "Contrast": "Firmer contrast",
+    "Highlights": "Keeps the bright parts dim",
+    "Shadows": "Lets the shadows sink",
+    "Blacks": "Deep blacks",
+    "Saturation": "Colour held back",
+    "Vignette": "Darkens the edges and draws the eye in",
+    "Colour mixer": "Mutes yellows, greens and blues",
+    "Colour grading": "Blue in the shadows, a little warmth in the highlights"
   }
 }

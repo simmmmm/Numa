@@ -47,7 +47,7 @@ pub fn copy_into(dropped: &[PathBuf], folder: &Path) -> Copied {
     copied
 }
 
-pub(crate) fn copy_whole(from: &Path, to: &Path) -> std::io::Result<()> {
+fn copy_whole(from: &Path, to: &Path) -> std::io::Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }

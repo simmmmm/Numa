@@ -1,30 +1,28 @@
 use crate::catalog::Photo;
 
 pub fn cull_note(photo: &Photo, scale: &numa_cull::Scale) -> String {
-    let frame = numa_cull::Frame {
-        sharpness: photo.sharpness.unwrap_or_default(),
-        blown: photo.blown.unwrap_or_default(),
-
-        brightness: photo.brightness.unwrap_or(0.5),
-        contrast: photo.contrast.unwrap_or(1.0),
-        exposure: photo.exposure.unwrap_or_default(),
-        focal35: photo.focal35.unwrap_or_default(),
-        raw_clipped: photo.raw_clipped,
-        ..Default::default()
-    };
-
     let mut parts: Vec<String> = Vec::new();
     if let Some(suggested) = photo.suggested {
         parts.push(format!("~{suggested:.1}★"));
     }
 
-    if let Some(note) = frame.blank_note() {
+    if let Some(note) = frame_of(photo).blank_note() {
         parts.push(note.to_string());
         return parts.join(" · ");
     }
     if photo.best_of_burst {
         parts.push("best of burst".to_string());
     }
+    parts.extend(issues(photo, scale));
+    parts.join(" · ")
+}
+
+pub fn issues(photo: &Photo, scale: &numa_cull::Scale) -> Vec<String> {
+    let frame = frame_of(photo);
+    if let Some(note) = frame.blank_note() {
+        return vec![note.to_string()];
+    }
+    let mut parts: Vec<String> = Vec::new();
 
     if photo.eyes_closed == Some(true) {
         parts.push("eyes closed?".to_string());
@@ -42,7 +40,21 @@ pub fn cull_note(photo: &Photo, scale: &numa_cull::Scale) -> String {
     if photo.blown.is_some() && frame.is_blown() {
         parts.push("blown".to_string());
     }
-    parts.join(" · ")
+    parts
+}
+
+fn frame_of(photo: &Photo) -> numa_cull::Frame {
+    numa_cull::Frame {
+        sharpness: photo.sharpness.unwrap_or_default(),
+        blown: photo.blown.unwrap_or_default(),
+
+        brightness: photo.brightness.unwrap_or(0.5),
+        contrast: photo.contrast.unwrap_or(1.0),
+        exposure: photo.exposure.unwrap_or_default(),
+        focal35: photo.focal35.unwrap_or_default(),
+        raw_clipped: photo.raw_clipped,
+        ..Default::default()
+    }
 }
 
 pub fn cull_detail(photo: &Photo, scale: &numa_cull::Scale) -> String {

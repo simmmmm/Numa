@@ -63,6 +63,8 @@ pub(super) struct EffectsSliders {
     pub(super) grain: gtk::Scale,
     pub(super) grain_size: gtk::Scale,
     pub(super) grain_roughness: gtk::Scale,
+
+    pub(super) mist: gtk::Scale,
 }
 
 #[derive(Clone)]
@@ -135,6 +137,7 @@ impl Sliders {
                 grain: positive(),
                 grain_size: positive(),
                 grain_roughness: positive(),
+                mist: amount(),
             },
             calibration: CalibrationSliders {
                 shadow_tint: amount(),
@@ -207,6 +210,7 @@ impl Sliders {
                 grain: at(&effects.grain),
                 grain_size: at(&effects.grain_size),
                 grain_roughness: at(&effects.grain_roughness),
+                mist: at(&effects.mist),
             },
             calibration: Calibration {
                 shadow_tint: at(&calibration.shadow_tint),
@@ -232,7 +236,7 @@ impl Sliders {
 
     pub(super) fn write(&self, basic: Basic) {
         const _: () = assert!(
-            SLIDER_COUNT == 39,
+            SLIDER_COUNT == 40,
             "a slider was added to `each`; add it to `write` and `at_rest_of` too"
         );
         let put = |scale: &gtk::Scale, value: f32| scale.set_value(value as f64);
@@ -273,6 +277,7 @@ impl Sliders {
         put(&effects.grain, set.grain);
         put(&effects.grain_size, set.grain_size);
         put(&effects.grain_roughness, set.grain_roughness);
+        put(&effects.mist, set.mist);
 
         let (calibration, set) = (&self.calibration, basic.calibration);
         put(&calibration.shadow_tint, set.shadow_tint);
@@ -330,6 +335,8 @@ impl Sliders {
             ("Blue saturation", &calibration.blue_saturation, Readout::Signed(0)),
             ("Distortion", &optics.lens_distortion, Readout::Signed(0)),
             ("Vignetting", &optics.lens_vignetting, Readout::Signed(0)),
+
+            ("Black \u{2194} White", &effects.mist, Readout::Signed(0)),
         ]
     }
 }

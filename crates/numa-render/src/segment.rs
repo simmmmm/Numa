@@ -113,6 +113,10 @@ impl Segmentation {
         &self.photo
     }
 
+    pub fn guide(&self) -> &Plane {
+        &self.guide
+    }
+
     pub fn alpha(&self, classes: &[u16]) -> Alpha {
 
         let mut coarse = self.coarse(classes);

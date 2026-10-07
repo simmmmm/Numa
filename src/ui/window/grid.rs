@@ -81,12 +81,52 @@ pub(super) fn reload_grid(state: &App) {
         let root = library.path.join(folder);
         photos.retain(|photo| photo.path.starts_with(&root));
     }
-    state.grid.empty.set_text("No photos match this filter.");
+
+    words::keep_reading(state);
+    words::narrow(state, &mut photos);
+    state.grid.empty.set_text(words::empty_text(state).unwrap_or("No photos match this filter."));
     state.grid.empty.set_visible(photos.is_empty());
 
     *state.grid.order.borrow_mut() = photos.iter().map(|photo| photo.id).collect();
 
     let edge = grid_edge(state);
+    let aspects = aspects_of(state, &photos, edge);
+    let aspects_at = timed.elapsed();
+
+    let with_bursts: std::collections::HashSet<i64> =
+        photos.iter().filter(|photo| photo.best_of_burst).map(|photo| numa::io::catalog::library_of(photo.id)).collect();
+    *state.grid.bursts.borrow_mut() = with_bursts
+        .into_iter()
+        .flat_map(|library| {
+            let sizes = state.catalog.burst_sizes(library).unwrap_or_default();
+            sizes.into_iter().map(move |(burst, size)| ((library, burst), size))
+        })
+        .collect();
+
+    *state.grid.lazy.borrow_mut() = photos
+        .iter()
+        .map(|photo| LazyThumb::new(photo.id, photo.path.clone(), photo.mtime, photo.edited, edge))
+        .collect();
+    *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
+    state.grid.wall.fill(aspects);
+    if timing() {
+        eprintln!(
+            "x-data: reload_grid {} cards: query+aspects {aspects_at:?}, cards {:?}",
+            state.grid.wall.len(),
+            timed.elapsed() - aspects_at
+        );
+    }
+
+    if let Some(show) = state.libraries.show_filter.borrow().as_ref() {
+        show();
+    }
+
+    sweep_thumbnails(state);
+
+    rapid::refresh(state);
+}
+
+fn aspects_of(state: &App, photos: &[Photo], edge: u32) -> Vec<f32> {
     let found: Vec<(f32, bool)> = {
         use rayon::prelude::*;
         photos
@@ -108,37 +148,7 @@ pub(super) fn reload_grid(state: &App) {
             log::warn!("could not keep {} photographs' shapes: {err}", learnt.len());
         }
     }
-    let aspects_at = timed.elapsed();
-
-    let with_bursts: std::collections::HashSet<i64> =
-        photos.iter().filter(|photo| photo.best_of_burst).map(|photo| numa::io::catalog::library_of(photo.id)).collect();
-    *state.grid.bursts.borrow_mut() = with_bursts
-        .into_iter()
-        .flat_map(|library| {
-            let sizes = state.catalog.burst_sizes(library).unwrap_or_default();
-            sizes.into_iter().map(move |(burst, size)| ((library, burst), size))
-        })
-        .collect();
-
-    *state.grid.lazy.borrow_mut() = photos
-        .iter()
-        .map(|photo| LazyThumb::new(photo.id, photo.path.clone(), photo.mtime, photo.edited, edge))
-        .collect();
-    *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
-    state.grid.wall.fill(found.into_iter().map(|(aspect, _)| aspect).collect());
-    if timing() {
-        eprintln!(
-            "x-data: reload_grid {} cards: query+aspects {aspects_at:?}, cards {:?}",
-            state.grid.wall.len(),
-            timed.elapsed() - aspects_at
-        );
-    }
-
-    if let Some(show) = state.libraries.show_filter.borrow().as_ref() {
-        show();
-    }
-
-    sweep_thumbnails(state);
+    found.into_iter().map(|(aspect, _)| aspect).collect()
 }
 
 thread_local! {
@@ -189,6 +199,8 @@ pub(super) struct State {
     pub(super) card_banner: adw::Banner,
     pub(super) extras_banner: adw::Banner,
     pub(super) update_banner: adw::Banner,
+
+    pub(super) clock_offer: gtk::Revealer,
 }
 
 impl State {
@@ -211,6 +223,7 @@ impl State {
             card_banner: adw::Banner::new(""),
             extras_banner: adw::Banner::new(""),
             update_banner: adw::Banner::new(""),
+            clock_offer: gtk::Revealer::new(),
         }
     }
 }

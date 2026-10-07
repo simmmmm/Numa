@@ -18,3 +18,4 @@ pub mod lens;
 pub mod paths;
 pub mod power;
 pub mod lut;
+pub mod camera_look;

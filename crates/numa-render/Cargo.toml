@@ -11,8 +11,10 @@ numa-cull = { path = "../numa-cull" }
 numa-infer = { path = "../numa-infer" }
 image.workspace = true
 log.workspace = true
+moxcms = "0.8"
 ndarray.workspace = true
 rayon.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

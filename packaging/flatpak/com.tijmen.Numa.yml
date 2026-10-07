@@ -32,8 +32,31 @@ finish-args:
   - --filesystem=host
   # RENDER-014 (A1): the screen's colour profile, from colord on the system bus.
   - --system-talk-name=org.freedesktop.ColorManager
+  # FLOW-013: a camera on its cable, which libgphoto2 opens through libusb
+  # under /dev/bus/usb — what darktable's Flatpak asks for to tether.
+  - --device=all
 
 modules:
+  # FLOW-013: tethering. The runtime has everything libgphoto2 needs (libusb,
+  # libexif, libltdl, libxml2, libcurl, libjpeg) but not libgphoto2 itself.
+  # Numa opens it when tethering starts rather than linking it.
+  - name: libgphoto2
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+      - /share/doc
+      - /share/man
+      - '*.la'
+      - /lib/libgphoto2/print-camera-list
+    config-opts:
+      - --disable-static
+      - --without-libusb  # libusb-1.0 only
+    sources:
+      - type: archive
+        url: https://github.com/gphoto/libgphoto2/releases/download/v2.5.34/libgphoto2-2.5.34.tar.xz
+        sha256: 51993f5d9bfb6b4e5925cbbe5883085791bff6f81bcacb8ffe1b783ce76d586a
+
   - name: camera-profiles
     buildsystem: simple
     build-commands:

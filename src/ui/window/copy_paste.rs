@@ -220,7 +220,7 @@ pub(super) fn apply_clipboard(state: &App) {
     apply_edit(state, &source, parts, "Pasted onto", None);
 }
 
-pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done: &str, preset: Option<&str>) {
+pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done: &str, preset: Option<(&str, numa::io::presets::Notes)>) {
     if !parts.any() {
         state.toast("Nothing selected to apply");
         return;
@@ -230,7 +230,7 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
         {
             let mut open = state.open.borrow_mut();
             let Some(photo) = open.as_mut() else { return };
-            if let Some(name) = preset {
+            if let Some((name, notes)) = preset {
 
                 let before = photo.preset_base().clone();
                 photo.document = before.clone();
@@ -241,6 +241,7 @@ pub(super) fn apply_edit(state: &App, source: &Document, parts: EditParts, done:
                     name: name.to_string(),
                     preset: numa::io::presets::Preset { parts, document: source.clone() },
                     amount: 1.0,
+                    notes,
                 });
             } else {
                 photo.document.copy_from(source, parts);
@@ -311,6 +312,7 @@ pub(super) fn reload_open_document(state: &App) {
     write_lens(state);
     ai_denoise::write(state);
     lut::write(state);
+    camera_look::write(state);
     refresh_retouch(state);
     refresh_face(state);
     refresh_found(state);

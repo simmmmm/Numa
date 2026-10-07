@@ -78,5 +78,15 @@
         ]
       }
     ]
+  },
+  "by": "Numa",
+  "notes": {
+    "Contrast": "Hard contrast",
+    "Highlights": "Keeps the highlights from burning",
+    "Blacks": "Deep, solid blacks",
+    "Vignette": "Darkens the corners",
+    "Grain": "Film grain",
+    "Grain size": "Fine grain",
+    "Colour mixer": "Black and white; skies and water go darker"
   }
 }

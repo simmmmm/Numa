@@ -170,13 +170,13 @@ fn plan(state: &App) -> Option<Job> {
     let mut open = state.open.borrow_mut();
     let photo = open.as_mut()?;
 
-    let key = colour_key(&photo.document);
+    let document = rendered_document(state, photo);
+    let key = colour_key(&document);
     let colour = (key != photo.working_key).then(|| {
 
-        photo.inputs = render_inputs(&photo.document);
+        photo.inputs = render_inputs(&document);
         ColourWork { proxy: photo.proxy.clone(), inputs: photo.inputs.clone(), source: None, edge: photo.proxy.width.max(photo.proxy.height) / 2 }
     });
-    let document = rendered_document(state, photo);
     let card = card_render::ask(state, photo);
 
     let wants_full = zoom > proxy_runs_out_at(photo);
