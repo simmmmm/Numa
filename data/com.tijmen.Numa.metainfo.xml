@@ -51,6 +51,16 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.39.0" date="2026-10-15">
+      <description>
+        <p>
+          Numa Home: Open in Numa from the photograph on the web page, an
+          Activity page that shows and pauses what the server reads in the
+          background, the timeline's scrubber naming each library, and a
+          header that fits a narrow window.
+        </p>
+      </description>
+    </release>
     <release version="0.38.0" date="2026-10-08">
       <description>
         <p>

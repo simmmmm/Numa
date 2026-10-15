@@ -1,17 +1,26 @@
-# Next release: 0.38.0
+# Next release: 0.39.0
 
 What goes into the next general build and is not in `main` or Numa-mac `mac`
 yet. Before `dev/publish.sh` each item is merged, checked, and its line struck
 here; the version bump comes after that (docs/AGENT_GUIDE.md), and after the
 bump `data/THIRD_PARTY_LICENSES.txt` is generated again and `dev/check.sh` run.
 
-0.37.0 went out on 7 October (TestFlight green 8 October). What went into it
-is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
+0.38.0 went out on 15 October (with Numa Home's first image on ghcr.io).
+What went into it is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
 
-The version is 0.38.0 in `Cargo.toml` and the metainfo — never released, so
+The version is 0.39.0 in `Cargo.toml` and the metainfo — never released, so
 no bump for what joins it.
 
 ## In
+
+- **Numa Home, round two (HOME-010, 011, 013–015)** — on `main` and Numa-mac
+  `mac` 15 October: Activity and Cameras never blank, the header under
+  900 px, the scrubber's oldest months, Open in Numa (Linux, web, Apple),
+  the Live Activity and the share sheet (Apple, uncompiled). Before the
+  first Apple build the photographer registered the App Group
+  `group.com.tijmen.Numa` (15 October).
+
+## Earlier, in 0.38.0
 
 - ~~**All EXIF (UX-010)**~~ — merged 8 October: Linux `main`, the guide on
   numa-site `main`, the Mac and the iPad's panel on Numa-mac `mac` 3d059828

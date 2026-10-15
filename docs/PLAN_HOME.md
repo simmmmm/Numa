@@ -101,6 +101,40 @@ but `setup`/`login`/`status` needs one; 401 otherwise. Errors:
 A retry of Send Home is always safe (same hash → same answer), which is what
 an iPhone sending a Photos library on and off Wi-Fi needs.
 
+## Open in Numa (HOME-013)
+
+The photographer, 15 October: "open in numa als het kan". The web's
+photograph view has an Open in Numa link, and every client that edits —
+Linux now, iPhone, iPad and Mac on Numa-mac — handles it the same way:
+
+    numa://home/open?server=<origin>&photo=<id>
+
+- `server` is the page's `location.origin`, percent-encoded
+  (`http%3A%2F%2Fnas.local%3A8283`); `photo` the photograph's id, as the API
+  writes it. The order of the two does not matter; a link with either missing,
+  a `server` that is not `http://` or `https://`, or an id with anything but
+  letters, digits, `-` and `_` is malformed.
+- Only for the server this Numa is signed in to, compared as the app compares
+  addresses (`nas.local` is `http://nas.local:8283`). Not signed in, or signed
+  in somewhere else: refused, nothing asked of any server.
+- Already here — the id is in the link table of one of that server's Numa
+  Home libraries on this computer (HOME-008), and its file is there: opened
+  in the editor, nothing fetched.
+- Otherwise: `GET /photos/<id>` for its library, that library's listing for
+  its path, and then HOME-008's import for that one photograph — the original
+  into the library's Numa Home folder (made and linked if it is the first),
+  its edits and marks, its row in the link table so edits go back up — and
+  opened in the editor. A library brought this way for the first time holds
+  that photograph only; the rest stays on the server, as months left
+  unticked do.
+- Anything else — the server refuses the photograph, cannot be reached, the
+  link cannot be read — is one plain sentence where the app says things (a
+  toast on Linux), the server's own sentence when it gave one.
+
+Linux registers the scheme in its desktop entry (`MimeType=…;x-scheme-handler/numa;`,
+`Exec=numa %U`), the AppImage's own menu entry and the Flatpak included; the
+photographs' switch in Preferences leaves the scheme alone.
+
 ## Steps
 
 1. **Server** (HOME-001–005): `crates/numa-server`, the Dockerfile and

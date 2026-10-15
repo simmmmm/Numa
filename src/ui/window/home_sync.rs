@@ -152,13 +152,13 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
 
             let since = sync::next_since(0, &all);
             dialog.close();
-            bring(&state, library, photos, since);
+            bring(&state, library, photos, since, None);
         }
     ));
     group
 }
 
-fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64) {
+fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, open: Option<String>) {
     let account = account(state);
     let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
     let root = pictures.join(NUMA_HOME).join(from.name.replace('/', "-"));
@@ -185,7 +185,61 @@ fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64) {
     state.libraries.filter.borrow_mut().in_one_library();
     reload_libraries(state);
     select_library(state, library.id);
-    round(state, library, link, photos, since, true);
+    round(state, library, link, photos, since, true, open);
+}
+
+pub(super) fn open_link(state: &App, uri: &str) {
+    let Some((server, photo)) = api::open_link(uri) else {
+        return state.toast("That Open in Numa link could not be read");
+    };
+    let account = account(state);
+    if !account.signed_in() || api::base(&server) != api::base(&account.address) {
+        return state.toast(&format!("Numa is not signed in to {NUMA_HOME} at {}", api::host(&server)));
+    }
+    let links: Vec<(Library, Link)> = state
+        .catalog
+        .libraries()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|library| Some((library.clone(), linked(state, library.id)?)))
+        .filter(|(_, link)| api::base(&link.address) == api::base(&server))
+        .collect();
+    let here = links.iter().find_map(|(library, link)| {
+        let (path, _) = link.photos.iter().find(|(_, kept)| kept.id == photo)?;
+        sync::inside(&library.path, path).filter(|file| file.exists()).map(|file| (library.clone(), file))
+    });
+    if let Some((library, file)) = here {
+        return show_opened(state, library, &file, true);
+    }
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let (from, theirs, everything) = match find(&account, &photo).await {
+            Ok(found) => found,
+            Err(failure) => return state.toast(&said(failure, &account)),
+        };
+
+        let since = match links.iter().any(|(_, link)| link.library == from.id) {
+            true => 0,
+            false => everything,
+        };
+
+        while ROUND.with(Cell::get) {
+            glib::timeout_future(std::time::Duration::from_millis(300)).await;
+        }
+        let path = theirs.path.clone();
+        bring(&state, from, vec![theirs], since, Some(path));
+    });
+}
+
+async fn find(account: &Account, photo: &str) -> Result<(sync::Library, Remote, i64), Failure> {
+    let ask = |argv| async move { curl(argv, account.header(), &Running::default()).await };
+    let library = sync::library_of(&ask(sync::get_photo(&account.address, photo)).await)?;
+    let missing = || Failure::Said(format!("{NUMA_HOME} did not list that photograph"));
+    let from = sync::libraries(&ask(sync::list_libraries(&account.address)).await)?.into_iter().find(|from| from.id == library).ok_or_else(missing)?;
+    let all = sync::photos(&ask(sync::list_photos(&account.address, &library, 0)).await)?;
+    let since = sync::next_since(0, &all);
+    let theirs = all.into_iter().find(|theirs| theirs.id == photo).ok_or_else(missing)?;
+    Ok((from, theirs, since))
 }
 
 pub(super) fn keep_in_step(state: &App) {
@@ -214,7 +268,7 @@ pub(super) fn in_step(state: &App) {
         match sync::photos(&out) {
             Ok(remote) => {
                 let since = sync::next_since(link.since, &remote);
-                round(&state, library, link, remote, since, false);
+                round(&state, library, link, remote, since, false, None);
             }
             Err(Failure::SignIn(_)) => {
                 ROUND.with(|round| round.set(false));
@@ -255,7 +309,7 @@ struct Done {
     cut: bool,
 }
 
-fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, loud: bool) {
+fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, loud: bool, open: Option<String>) {
     let local: Vec<Local> = local_photos(state, &library).into_iter().map(|(_, photo)| photo).collect();
     let steps = sync::plan(&link, &remote, &local);
     let cancel = Cancel::default();
@@ -300,6 +354,9 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
         log::info!("Numa Home: {} came down, {} changed there, {} went up", done.came, done.changed, done.went);
         if let Some(said) = said {
             state.toast(&said);
+        }
+        if let Some(file) = open.and_then(|path| sync::inside(&library.path, &path)).filter(|file| file.exists()) {
+            show_opened(&state, library, &file, true);
         }
     });
 }

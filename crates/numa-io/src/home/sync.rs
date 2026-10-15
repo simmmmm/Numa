@@ -227,6 +227,19 @@ pub fn libraries(out: &str) -> Result<Vec<Library>, Failure> {
     parsed(answer(out)?)
 }
 
+pub fn get_photo(address: &str, id: &str) -> Vec<OsString> {
+    get(address, &format!("photos/{}", escaped(id)))
+}
+
+pub fn library_of(out: &str) -> Result<String, Failure> {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(deserialize_with = "id_text")]
+        library: String,
+    }
+    Ok(parsed::<Answer>(answer(out)?)?.library)
+}
+
 pub fn list_photos(address: &str, library: &str, since: i64) -> Vec<OsString> {
     get(address, &format!("libraries/{}/photos?since={since}", escaped(library)))
 }

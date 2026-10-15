@@ -66,7 +66,12 @@ fn main() -> glib::ExitCode {
             None => ui::window::build_window(app),
         };
         window.present();
-        if let Some(path) = files.first().and_then(|file| file.path()) {
+        let Some(file) = files.first() else { return };
+
+        let uri = file.uri();
+        if uri.starts_with("numa:") {
+            gio::prelude::ActionGroupExt::activate_action(&window, "open-link", Some(&uri.to_variant()));
+        } else if let Some(path) = file.path() {
             gio::prelude::ActionGroupExt::activate_action(&window, "open-path", Some(&path.to_string_lossy().to_variant()));
         }
     });

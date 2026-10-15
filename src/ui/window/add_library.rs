@@ -78,7 +78,7 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
                 state.toast(&format!("Could not read the library: {err}"));
                 return;
             }
-            show_opened(&state, library, &path);
+            show_opened(&state, library, &path, false);
         });
     };
 
@@ -112,7 +112,7 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
     alert.present(Some(window));
 }
 
-fn show_opened(state: &App, library: Library, path: &Path) {
+pub(super) fn show_opened(state: &App, library: Library, path: &Path, editor: bool) {
     state.libraries.filter.borrow_mut().in_one_library();
     reload_libraries(state);
     select_library(state, library.id);
@@ -131,7 +131,7 @@ fn show_opened(state: &App, library: Library, path: &Path) {
         Some(id) => {
             remember_recent(path);
 
-            if !show_in_loupe(state, id) {
+            if editor || !show_in_loupe(state, id) {
                 open_photo(state, id);
             }
         }

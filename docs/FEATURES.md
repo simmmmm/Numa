@@ -6296,6 +6296,23 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   in the archive, by body serial where the file has one, with its count);
   otherwise the account its EXIF Artist names, which Cameras offers to link
   in one click ("Artist says Frederique").
+- 🟡 **HOME-013**: Open in Numa. "Open in Numa als het kan": the web's
+  photograph view links to `numa://home/open?server=<origin>&photo=<id>`, and
+  Numa opens that photograph in the editor — from the Numa Home library it
+  is already in here, or brought into that library first, the one photograph
+  the way an import brings it, and kept in step from then on. Only from the
+  server Numa is signed in to; anything else is refused in one sentence.
+  Linux built (the desktop entry claims `x-scheme-handler/numa`); iPhone,
+  iPad and Mac on Numa-mac `mac` to the same contract (`docs/PLAN_HOME.md`),
+  the Swift compiled first by TestFlight.
+- 🟡 **HOME-014**: Sending home, live. A Live Activity on the iPhone's lock
+  screen and Dynamic Island while Send Home runs: n of N, the bytes, a bar,
+  then "All home". Only started while Numa is in front. Swift uncompiled
+  until TestFlight.
+- 🟡 **HOME-015**: Send Home from the share sheet. Numa in Photos' and Files'
+  share sheet on iPhone, iPad and Mac sends the originals home through the
+  app's background session; server and token shared through the App Group
+  `group.com.tijmen.Numa`. Swift uncompiled until TestFlight.
 - ◻️ **HOME-007**: Send Home from the iPhone: the Photos library, sent on its
   own on Wi-Fi and power (Numa-mac).
 

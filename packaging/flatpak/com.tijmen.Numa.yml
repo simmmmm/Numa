@@ -1,15 +1,3 @@
-# Flatpak, which is the format this application actually wants.
-#
-# The AppImage has to carry GTK and libadwaita, and therefore carries whatever
-# versions the build base had — Ubuntu 24.04 means libadwaita 1.5, which is the
-# GNOME 46 stylesheet and visibly not what a 2026 desktop looks like. A runtime
-# solves that by construction: the platform brings its own libadwaita to every
-# machine regardless of what that machine has installed, and the host's glibc
-# stops mattering at all.
-#
-# Runtime 50 rather than 49, checked rather than assumed: 49 carries libadwaita
-# 1.8.7 and GTK 4.20, while 50 carries 1.9.3 and 4.22 — which is exactly what
-# this desktop is running, so the build looks like the build.
 id: com.tijmen.Numa
 runtime: org.gnome.Platform
 runtime-version: '50'
@@ -23,23 +11,12 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Models, camera profiles and the GPU plugin are downloaded from Preferences,
-  # and the update check asks GitHub.
   - --share=network
-  # A photo editor reads photographs from wherever the photographer keeps them,
-  # which is routinely an external drive rather than the home directory. The
-  # narrower permission would break the first library anyone adds.
   - --filesystem=host
-  # RENDER-014 (A1): the screen's colour profile, from colord on the system bus.
   - --system-talk-name=org.freedesktop.ColorManager
-  # FLOW-013: a camera on its cable, which libgphoto2 opens through libusb
-  # under /dev/bus/usb — what darktable's Flatpak asks for to tether.
   - --device=all
 
 modules:
-  # FLOW-013: tethering. The runtime has everything libgphoto2 needs (libusb,
-  # libexif, libltdl, libxml2, libcurl, libjpeg) but not libgphoto2 itself.
-  # Numa opens it when tethering starts rather than linking it.
   - name: libgphoto2
     cleanup:
       - /bin
@@ -77,21 +54,12 @@ modules:
       append-path: /usr/lib/sdk/rust-stable/bin
       env:
         CARGO_HOME: /run/build/numa/cargo
-      # Cargo fetches the crate graph during the build. That makes this build
-      # non-reproducible and is why Flathub would not take it as is; vendoring
-      # is the fix when that matters, and for a build handed to testers it is
-      # not worth the tarball.
       build-args:
         - --share=network
     build-commands:
-      # PERF-060: the shipped profile, the whole program optimised as one
-      # unit (Cargo.toml, [profile.dist]).
       - cargo build --profile dist
       - install -Dm755 target/dist/numa /app/bin/numa
-      # OPTICS-005: the LensFun database, read from beside the binary.
       - install -Dm644 -t /app/share/numa/lensfun data/lensfun/*
-      # RENDER-015: Numa's own camera profiles, GPL-3.0 like the rest since
-      # 29 September.
       - if [ -d data/private-profiles ]; then
           install -Dm644 -t /app/share/numa/profiles/numa data/private-profiles/*;
         fi
@@ -110,9 +78,6 @@ modules:
     sources:
       - type: dir
         path: ../..
-        # Everything that is not the source, and above all `presets data`:
-        # commercial presets for the importer's tests, which must never end up
-        # in anything handed to someone.
         skip:
           - target
           - dist

@@ -28,38 +28,60 @@ function ring(fraction, paused) {
 }
 
 // The header's indicator: shown while anything runs, waits or is paused.
-let activityTimer = null;
+// render() and the Activity page both ask; they share one request, the
+// badge is looked up once the answer is in (a render on the way replaces
+// the header), and the next ask is always set, whatever came back.
+let activityTimer = null, activityAsked = null;
 async function activityBadge() {
   clearTimeout(activityTimer);
+  if (!state.me) return;
+  activityAsked ??= api('activity', { wait: 15 }).then(activity => ({ activity }), error => ({ error }))
+    .finally(() => { activityAsked = null; });
+  const { activity, error } = await activityAsked;
   const badge = document.querySelector('header .activity');
-  if (!badge || !state.me) return;
-  let activity = null;
-  try { activity = await api('activity'); } catch (_) { activity = null; }
-  if (!badge.isConnected) return;
   const running = activity?.jobs.find(job => job.state === 'running');
   const show = activity && (activity.busy || activity.paused);
-  badge.hidden = !show;
-  if (show) {
-    const label = activity.paused ? 'Paused' : running ? running.name : 'Waiting';
-    badge.replaceChildren(ring(share(activity), activity.paused), h('span', { class: 'what' }, label));
-    badge.title = activity.paused ? 'Background work paused' : running ? `${running.doing}…` : 'Background work';
+  if (badge && activity) {
+    badge.hidden = !show;
+    if (show) {
+      const label = activity.paused ? 'Paused' : running ? running.name : 'Waiting';
+      badge.replaceChildren(ring(share(activity), activity.paused), h('span', { class: 'what' }, label));
+      badge.title = activity.paused ? 'Background work paused' : running ? `${running.doing}…` : 'Background work';
+    }
   }
-  if (route().path === '/activity' && activity) drawActivity(activity);
-  activityTimer = setTimeout(activityBadge, route().path === '/activity' || activity?.busy ? 2000 : 30000);
+  if (route().path === '/activity') drawActivity(activity, error);
+  clearTimeout(activityTimer);
+  activityTimer = setTimeout(activityBadge, route().path === '/activity' || activity?.busy || !activity ? 2000 : 30000);
 }
 
 function badgeButton() {
   return h('button', { class: 'chip activity', hidden: true, 'aria-label': 'Activity', onclick: () => go('/activity') });
 }
 
-async function activityPage(main) {
-  main.append(h('div', { class: 'activity-page' }));
+// The page's frame at once — heading, Pause, "Loading…" — and the jobs
+// when the answer comes. Made once and kept: redrawn every two seconds, a
+// button under the pointer would be gone before the click.
+function activityPage(main) {
+  const said = h('span', { class: 'said' });
+  const page = h('div', { class: 'activity-page' });
+  const toggle = h('button', { class: 'primary', hidden: true, onclick: async () => {
+    try { await api('activity/' + (page.paused ? 'resume' : 'pause'), { method: 'POST' }); activityBadge(); } catch (error) { said.textContent = error.message; }
+  } });
+  page.append(h('div', { class: 'head' }, h('div', {}, h('h1', {}, 'Activity'),
+    h('p', { class: 'body' }, 'What Numa Home does by itself, gently, so the NAS serves the photographs first.')), toggle),
+  said, h('span', { class: 'said late' }), h('div', { class: 'list' }, h('p', { class: 'body' }, 'Loading…')));
+  main.append(page);
   activityBadge();
 }
 
-function drawActivity(activity) {
+function drawActivity(activity, error) {
   const page = document.querySelector('.activity-page');
   if (!page) return;
+  // An answer that failed leaves the last one standing, the reason over it;
+  // with none yet, the reason stands in for "Loading…".
+  const late = page.querySelector('.late');
+  late.textContent = error && page.querySelector('.job') ? error.message : '';
+  if (!activity) return error && page.querySelector('.list').replaceChildren(h('p', { class: 'body' }, error.message));
   const row = job => {
     const fraction = job.total ? job.done / job.total : job.state === 'idle' ? 1 : 0;
     const numbers = job.total
@@ -76,17 +98,10 @@ function drawActivity(activity) {
       h('span', { class: 'caption' }, `${megabytes(item.done)} of ${megabytes(item.total)}`)),
     h('div', { class: 'meter' }, h('div', { class: 'fill', style: { width: (item.total ? item.done / item.total : 0) * 100 + '%' } })),
     h('div', { class: 'caption' }, { waiting: 'Waits its turn', fetching: 'Downloading', failed: 'Could not download; tried again at the next start' }[item.state]));
-  // The heading and Pause are made once and kept: redrawn every two
-  // seconds, a button under the pointer would be gone before the click.
-  if (!page.firstChild) {
-    const said = h('span', { class: 'said' });
-    const toggle = h('button', { class: 'primary', hidden: !state.me.admin, onclick: async () => {
-      try { await api('activity/' + (page.paused ? 'resume' : 'pause'), { method: 'POST' }); activityBadge(); } catch (error) { said.textContent = error.message; }
-    } });
-    page.append(h('div', { class: 'head' }, h('div', {}, h('h1', {}, 'Activity'), h('p', { class: 'body' })), toggle), said, h('div', { class: 'list' }));
-  }
   page.paused = activity.paused;
-  page.querySelector('.head .primary').textContent = activity.paused ? 'Resume' : 'Pause';
+  const toggle = page.querySelector('.head .primary');
+  toggle.hidden = !state.me.admin;
+  toggle.textContent = activity.paused ? 'Resume' : 'Pause';
   page.querySelector('.head .body').textContent = activity.paused
     ? 'Paused. Nothing new is started; the photographs in hand were finished. Numa Home still shows and sends everything.'
     : 'What Numa Home does by itself, gently, so the NAS serves the photographs first.';

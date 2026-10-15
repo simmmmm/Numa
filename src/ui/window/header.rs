@@ -310,6 +310,16 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
         }
     ));
     window.add_action(&open_path_action);
+    let open_link = gio::SimpleAction::new("open-link", Some(&String::static_variant_type()));
+    open_link.connect_activate(glib::clone!(
+        #[strong] state,
+        move |_, uri| {
+            if let Some(uri) = uri.and_then(|uri| uri.get::<String>()) {
+                home_sync::open_link(&state, &uri);
+            }
+        }
+    ));
+    window.add_action(&open_link);
     install_rescan_action(state, window);
     book::install(state, window);
 }

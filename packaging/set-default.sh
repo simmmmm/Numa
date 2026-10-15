@@ -9,7 +9,7 @@ if [[ $# -ge 1 ]]; then
     APPIMAGE="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
     [[ -x "$APPIMAGE" ]] || { echo "$APPIMAGE is not executable." >&2; exit 1; }
     mkdir -p "$APPS"
-    sed "s|^Exec=.*|Exec=\"$APPIMAGE\" %F|" "$ROOT/data/$ID" > "$APPS/$ID"
+    sed "s|^Exec=.*|Exec=\"$APPIMAGE\" %U|" "$ROOT/data/$ID" > "$APPS/$ID"
     echo "Registered $APPIMAGE as $APPS/$ID"
 fi
 
