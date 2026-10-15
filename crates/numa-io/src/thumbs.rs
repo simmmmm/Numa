@@ -152,6 +152,10 @@ pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Resu
     Ok(image)
 }
 
+pub fn render(path: &Path, max_edge: u32, edits: &str) -> Result<RgbImage, String> {
+    edited::render(path, max_edge, edits)
+}
+
 pub const CACHE_BUDGET: u64 = 2 << 30;
 
 const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);

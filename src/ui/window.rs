@@ -57,6 +57,8 @@ mod reference;
 mod zoom;
 mod cards;
 mod exporting;
+mod home;
+mod home_sync;
 mod startup;
 mod places;
 mod cullbar;

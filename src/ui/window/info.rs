@@ -175,9 +175,54 @@ pub(super) fn build_info(state: &App) -> gtk::Box {
     label.set_selectable(true);
     label.add_css_class("profile-note");
 
-    state.info.rendering.set_label_widget(Some(&section_header("Rendering")));
+    fold_title(&state.info.rendering, "Rendering");
     state.info.rendering.set_child(Some(label));
+
+    let everything = &state.info.everything;
+    fold_title(everything, "All EXIF");
+    let rows = &state.info.everything_rows;
+    rows.add_css_class("boxed-list");
+    rows.set_selection_mode(gtk::SelectionMode::None);
+    rows.set_margin_top(6);
+    let none = gtk::Label::new(Some("This file holds no more EXIF"));
+    none.add_css_class("dim-label");
+    none.set_margin_top(12);
+    none.set_margin_bottom(12);
+    rows.set_placeholder(Some(&none));
+    everything.set_child(Some(rows));
+    everything.set_expanded(state.catalog.setting(EVERYTHING_SETTING).as_deref() == Some("open"));
+    everything.connect_expanded_notify(glib::clone!(
+        #[strong] state,
+        move |everything| {
+            let _ = state.catalog.set_setting(EVERYTHING_SETTING, if everything.is_expanded() { "open" } else { "shut" });
+            fill_everything(&state);
+        }
+    ));
     column
+}
+
+fn fold_title(fold: &gtk::Expander, title: &str) {
+    let label = section_header(title);
+    fold.set_margin_top(label.margin_top());
+    label.set_margin_top(0);
+    label.set_margin_bottom(0);
+    label.set_margin_start(4);
+    fold.set_label_widget(Some(&label));
+}
+
+const EVERYTHING_SETTING: &str = "info-all-exif";
+
+fn fill_everything(state: &App) {
+    let rows = &state.info.everything_rows;
+    rows.remove_all();
+    if !state.info.everything.is_expanded() {
+        return;
+    }
+    let open = state.open.borrow();
+    let Some(Source::Photo { path, .. }) = open.as_ref().map(|photo| &photo.source) else { return };
+    for (name, value) in numa::io::exif::all(path) {
+        rows.append(&fact_row(&name, &value));
+    }
 }
 
 pub(super) fn fact_row(title: &str, value: &str) -> adw::ActionRow {
@@ -289,6 +334,8 @@ pub(super) fn refresh_info(state: &App) {
         let Some(photo) = open.as_ref() else { return };
         append_photo_groups(state, photo);
     }
+    state.info.page.append(&state.info.everything);
+    fill_everything(state);
     state.info.page.append(&state.info.rendering);
     refresh_render_info(state);
 }
@@ -463,6 +510,9 @@ pub(super) struct State {
     pub(super) render_info: gtk::Label,
 
     pub(super) rendering: gtk::Expander,
+
+    pub(super) everything: gtk::Expander,
+    pub(super) everything_rows: gtk::ListBox,
     pub(super) histogram_area: gtk::DrawingArea,
     pub(super) histogram: Rc<RefCell<Option<render::histogram::Histogram>>>,
 
@@ -478,6 +528,8 @@ impl State {
             page: gtk::Box::new(gtk::Orientation::Vertical, 18),
             render_info: gtk::Label::new(None),
             rendering: gtk::Expander::new(None),
+            everything: gtk::Expander::new(None),
+            everything_rows: gtk::ListBox::new(),
             histogram_area: gtk::DrawingArea::new(),
             histogram: Rc::new(RefCell::new(None)),
             scope: Rc::new(RefCell::new(None)),

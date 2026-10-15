@@ -23,6 +23,8 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
 
     watch_cards(state);
 
+    super::home_sync::keep_in_step(state);
+
     super::import_done::recheck_now_and_then(state);
     downloads::at_startup(state);
     integrate_appimage(state);

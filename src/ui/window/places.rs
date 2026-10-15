@@ -144,6 +144,13 @@ fn read_all(state: &App) {
             }
             _ => assemble(&glances),
         };
+
+        let row = match place {
+            Place::Library(library) if home_sync::is_home(state, library.id) => {
+                Row { subtitle: format!("{} \u{b7} {}", home::NUMA_HOME, row.subtitle), ..row }
+            }
+            _ => row,
+        };
         rows.insert(key(place), Rc::new(row));
     }
 

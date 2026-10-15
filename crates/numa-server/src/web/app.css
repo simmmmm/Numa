@@ -1,0 +1,261 @@
+/* HOME-004: Numa Home's pages, on the Numa design system's tokens. Dark
+   first: the photograph is the brightest thing on screen, white is the one
+   accent, spent on what is chosen. */
+:root {
+  --ground-window: #242424;
+  --ground-view: #1e1e1e;
+  --ground-raised: #303030;
+  --ground-sheet: #1b1b1b;
+  --ground-page: #141414;
+  --ground-photo: #0e0e0e;
+  --ground-chip: #2a2a2a;
+  --ground-card: rgba(20, 20, 20, 0.7);
+  --ink: #ffffff;
+  --name: #bdbdbd;
+  --label: #8d8d8d;
+  --rule: rgba(255, 255, 255, 0.1);
+  --accent: #ffffff;
+  --on-accent: #141414;
+  --edge: 16px;
+  --gap: 12px;
+  --system: -apple-system, "SF Pro Text", "Adwaita Sans", Cantarell, system-ui, sans-serif;
+  /* HOME-011: a library's quiet tint — the colour mixer's bands, the one
+     place the design system lets colour sit on a track, brought down to a
+     murmur so the photographs stay the brightest thing. */
+  --tint-0: hsl(205 42% 62%);
+  --tint-1: hsl(30 48% 62%);
+  --tint-2: hsl(150 30% 56%);
+  --tint-3: hsl(330 34% 64%);
+  --tint-4: hsl(55 40% 60%);
+  --tint-5: hsl(265 32% 68%);
+  --tint-6: hsl(180 34% 54%);
+  --tint-7: hsl(0 42% 64%);
+  --ground-hud: rgba(20, 20, 20, 0.55);
+  --quick: 120ms ease-out;
+  --standard: 200ms ease-out;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--ground-page); color: var(--ink); font: 13px/18px var(--system); }
+body { min-height: 100vh; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The small grey spaced section label. */
+.section-label { font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 1.1px; text-transform: uppercase; color: var(--label); }
+.caption { font-size: 12px; line-height: 16px; color: var(--label); font-variant-numeric: tabular-nums; }
+.body { color: var(--label); max-width: 34em; }
+
+/* Buttons: one white primary per screen; the rest grey chips. */
+.primary, .chip, .round {
+  border: 0; cursor: pointer; height: 32px; padding: 0 14px; border-radius: 16px;
+  font-weight: 600; background: var(--ground-chip); color: var(--ink); white-space: nowrap;
+  transition: background var(--quick), color var(--quick);
+}
+.primary { background: var(--accent); color: var(--on-accent); height: 40px; border-radius: 20px; padding: 0 22px; }
+.chip.chosen { background: var(--accent); color: var(--on-accent); }
+.chip:active, .primary:active, .round:active { opacity: 0.7; }
+.chip .x { margin-left: 6px; opacity: 0.7; }
+.round { width: 44px; height: 44px; padding: 0; border-radius: 22px; display: inline-grid; place-items: center; background: var(--ground-card); }
+.round svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.round.chosen { background: var(--accent); color: var(--on-accent); }
+
+input[type=text], input[type=password], input[type=search], select {
+  height: 36px; border-radius: 8px; border: 1px solid var(--rule); background: var(--ground-view); padding: 0 12px; min-width: 0;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+
+/* Signing in, and the first account. */
+.gate { min-height: 100vh; display: grid; place-items: center; padding: var(--edge); }
+.gate form { width: min(340px, 100%); display: grid; gap: 12px; }
+.gate .mark { height: 88px; width: auto; justify-self: center; margin-bottom: 8px; }
+.gate h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; text-align: center; }
+.gate .body { text-align: center; justify-self: center; margin-bottom: 8px; }
+.gate .primary { margin-top: 8px; }
+.said { color: var(--name); min-height: 18px; text-align: center; }
+
+/* The header: the mark, the places, search, the account. */
+header {
+  position: sticky; top: 0; z-index: 5; background: rgba(20, 20, 20, 0.92); backdrop-filter: blur(12px);
+  display: flex; align-items: center; gap: var(--gap); padding: 10px var(--edge); border-bottom: 1px solid var(--rule);
+}
+header .mark { height: 34px; width: auto; flex: none; cursor: pointer; }
+header nav { display: flex; gap: 8px; flex: none; }
+header .search { flex: 1; max-width: 480px; margin-left: auto; }
+header .search input { width: 100%; }
+header .who { flex: none; }
+.menu { position: absolute; right: var(--edge); top: 58px; background: var(--ground-window); border-radius: 10px; padding: 6px; display: grid; min-width: 180px; box-shadow: 0 8px 20px rgba(0,0,0,.6); z-index: 6; }
+.menu button, .menu a { background: none; border: 0; text-align: left; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-decoration: none; color: var(--ink); }
+.menu button:hover, .menu a:hover { background: var(--ground-chip); }
+.menu .section-label { padding: 6px 10px 2px; }
+
+main { padding: 0 var(--edge) 48px; }
+
+/* HOME-009: the card bar, under the header on every page. */
+.cardbar { margin: 12px var(--edge) 0; padding: 12px 16px; border-radius: 10px; background: var(--ground-window); display: grid; gap: 12px; }
+.cardbar .line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+.cardbar progress { flex: 1; min-width: 120px; accent-color: var(--accent); }
+.cardbar .plan { display: grid; gap: 10px; }
+.cardbar .shoot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cardbar .shoot .what { min-width: 220px; font-variant-numeric: tabular-nums; }
+.cardbar .problems { margin: 0; padding-left: 18px; color: var(--name); }
+.cardbar .said { text-align: left; }
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0 4px; }
+.filters .count { margin-left: auto; }
+.filters select { height: 32px; border-radius: 16px; }
+
+/* The timeline: a month at a time, rows justified to the width. */
+.month { padding-top: 22px; }
+.month > .head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; }
+.rows { position: relative; }
+.tile { position: absolute; display: block; overflow: hidden; border-radius: 4px; background: var(--ground-raised); cursor: pointer; padding: 0; border: 0; }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); }
+.tile img.in { opacity: 1; }
+.tile .stars { position: absolute; left: 6px; bottom: 4px; font-size: 11px; line-height: 14px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.85); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px; padding-top: 12px; }
+.grid .tile { position: relative; aspect-ratio: 1; }
+
+.empty { padding: 80px 0; display: grid; gap: 8px; justify-items: center; text-align: center; }
+.empty h2 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; }
+
+/* People, libraries and albums. */
+.places { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 30px 18px; padding-top: 22px; }
+.place { background: none; border: 0; padding: 0; cursor: pointer; display: grid; gap: 12px; justify-items: center; text-align: center; }
+.place .name { font-size: 15px; line-height: 20px; font-weight: 600; }
+.face { width: 120px; height: 120px; border-radius: 60px; overflow: hidden; background: var(--ground-raised); }
+.face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Stacks of prints: three, turned -8, 6 and 0 degrees, the back two darker. */
+.stack { position: relative; width: 140px; height: 124px; }
+.stack .print { position: absolute; left: 11px; top: 10px; width: 118px; height: 104px; border-radius: 6px; overflow: hidden; background: var(--ground-raised); }
+.stack .print img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stack .print:nth-child(1) { transform: rotate(-8deg); filter: brightness(0.8); box-shadow: 0 6px 16px rgba(0,0,0,.55); }
+.stack .print:nth-child(2) { transform: rotate(6deg); filter: brightness(0.9); box-shadow: 0 6px 16px rgba(0,0,0,.55); }
+.stack .print:nth-child(3) { box-shadow: 0 8px 20px rgba(0,0,0,.6); }
+
+/* Naming the faces nobody has named. */
+.unnamed-label { padding-top: 36px; }
+.unnamed { display: grid; gap: 12px; padding-top: 12px; max-width: 760px; }
+.name-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.name-row .faces { display: flex; gap: 4px; }
+.face.small { width: 48px; height: 48px; border-radius: 24px; }
+.name-row .ask { display: grid; gap: 4px; flex: 1; min-width: 180px; }
+
+/* Accounts. */
+.accounts { display: grid; gap: 30px; padding-top: 22px; max-width: 520px; }
+.accounts ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.accounts li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.accounts form { display: grid; gap: 10px; }
+.accounts label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
+.accounts .primary { justify-self: start; }
+.cameras { max-width: 680px; }
+.cameras li { align-items: center; gap: 12px; flex-wrap: wrap; }
+.cameras .link { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filters .by-label { margin-left: 8px; }
+
+/* The photograph large, on the photo ground. */
+.viewer { position: fixed; inset: 0; z-index: 10; background: var(--ground-photo); display: flex; }
+.viewer .stage { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
+.viewer .stage > img { max-width: none; flex: none; display: block; user-select: none; -webkit-user-drag: none; transform-origin: 0 0; cursor: zoom-in; }
+.viewer .stage.zoomed > img { cursor: grab; }
+.viewer .stage.zoomed > img:active { cursor: grabbing; }
+/* The floating value: one name, one number, top centre on the photograph. */
+.hud { position: absolute; top: var(--edge); left: 50%; transform: translateX(-50%); z-index: 3; display: grid; justify-items: center; gap: 2px;
+  padding: 8px 18px; border-radius: 22px; background: rgba(20, 20, 20, 0.55); backdrop-filter: blur(12px); pointer-events: none; }
+.hud .section-label { color: var(--name); font-size: 12px; line-height: 16px; }
+.hud .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.info .marks { display: flex; gap: 2px; margin-top: 10px; }
+.info .star { background: none; border: 0; padding: 2px; font-size: 20px; line-height: 24px; color: var(--ground-raised); cursor: pointer; }
+.info .star.set { color: var(--accent); }
+.info .chips { margin-top: 8px; }
+.viewer .corner { position: absolute; top: var(--edge); display: flex; gap: var(--gap); z-index: 2; }
+.viewer .corner.left { left: var(--edge); }
+.viewer .corner.right { right: var(--edge); }
+.viewer .step { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; opacity: 0; transition: opacity var(--standard); }
+.viewer .stage:hover .step { opacity: 1; }
+.viewer .step.back { left: var(--edge); }
+.viewer .step.on { right: var(--edge); }
+.viewer .menu { top: 68px; }
+.info { width: 320px; flex: none; background: var(--ground-window); overflow-y: auto; padding: var(--edge) 20px 32px; display: grid; align-content: start; gap: 4px; }
+.info .section-label { margin-top: 14px; }
+.info .title { font-size: 15px; line-height: 20px; font-weight: 600; word-break: break-all; }
+.info .meta { color: var(--name); font-variant-numeric: tabular-nums; }
+.info .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.info .rating { letter-spacing: 2px; }
+
+/* HOME-010: the header's ring, and the Activity page. */
+header .activity { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; }
+header .activity .what { color: var(--name); font-weight: 600; }
+.ring { width: 20px; height: 20px; transform: rotate(-90deg); fill: none; stroke-width: 2.2; stroke-linecap: round; }
+.ring .hair { stroke: var(--rule); }
+.ring .arc { stroke: var(--accent); transition: stroke-dasharray var(--standard); }
+.ring .pause { stroke: var(--name); transform: rotate(90deg); transform-origin: 10px 10px; }
+.activity-page { display: grid; gap: 10px; padding-top: 22px; max-width: 640px; }
+.activity-page .head { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+.activity-page h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0 0 4px; }
+.activity-page .section-label { margin-top: 18px; }
+.activity-page .said { text-align: left; }
+.activity-page .list { display: grid; gap: 10px; }
+.job { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.job .line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.job .name { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--name); }
+.job.running .name { color: var(--ink); }
+/* The slim slider's track: a 2px hairline, its fill in the accent. */
+.meter { height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.11); overflow: hidden; }
+.meter .fill { height: 100%; background: var(--accent); transition: width var(--standard); }
+.job.idle .meter .fill, .job.waits .meter .fill, .job.paused .meter .fill, .job.waiting .meter .fill { background: rgba(255, 255, 255, 0.35); }
+.numa-saw { font-style: italic; }
+.chip.numa-saw { background: none; border: 1px solid var(--name); color: var(--ink); }
+.place .name .tint, .scrub-libraries i { display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin-right: 7px; vertical-align: 1px; }
+
+/* HOME-011: the scrubber. The year labels left of a tinted track, a white
+   thumb on it, and the floating value with the month while it is held. */
+main.scrubbed { padding-right: 76px; }
+.scrubber { position: fixed; right: 0; bottom: 0; width: 72px; z-index: 4; touch-action: none; user-select: none; cursor: ns-resize; padding: 16px 0; }
+.scrubber:focus-visible { outline-offset: -2px; }
+.scrub-track, .scrub-years { position: absolute; top: 16px; bottom: 16px; }
+.scrub-track { right: 14px; width: 6px; border-radius: 3px; background: var(--ground-raised); overflow: hidden; transition: width var(--quick), right var(--quick); }
+.scrubber:hover .scrub-track, .scrubber.active .scrub-track { width: 10px; right: 12px; }
+.scrub-month { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.35); }
+.scrub-month > div { min-height: 0; background: var(--label); opacity: 0.85; }
+.scrub-years { left: 0; right: 32px; }
+.scrub-year { position: absolute; right: 0; transform: translateY(-2px); font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 1.1px; color: var(--label); font-variant-numeric: tabular-nums; }
+.scrub-thumb { position: absolute; right: 8px; width: 18px; height: 4px; margin-top: 14px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 2px var(--ground-page); pointer-events: none; }
+.scrub-hover { position: absolute; right: 8px; width: 18px; height: 1px; margin-top: 16px; background: var(--name); pointer-events: none; }
+.scrub-pill { position: absolute; right: 80px; transform: translateY(-50%); margin-top: 16px; display: grid; justify-items: end; gap: 2px; padding: 8px 16px; border-radius: 22px;
+  background: var(--ground-hud); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); pointer-events: none; white-space: nowrap; }
+.scrub-pill .section-label { color: var(--name); }
+.scrub-pill .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.scrub-libraries { display: flex; flex-direction: column; align-items: end; gap: 2px; margin-top: 4px; color: var(--name); font-size: 12px; line-height: 16px; }
+
+@media (max-width: 720px) {
+  header .activity .what { display: none; }
+  header .activity { padding: 0 6px; order: 3; }
+  main.scrubbed { padding-right: 28px; }
+  .scrubber { width: 30px; }
+  .scrub-track { right: 6px; }
+  .scrubber:hover .scrub-track, .scrubber.active .scrub-track { right: 5px; }
+  .scrub-thumb { right: 2px; }
+  /* The years only while a thumb holds the bar, over a shade. */
+  .scrub-years { display: none; right: 22px; left: auto; width: 60px; }
+  .scrubber.active .scrub-years { display: block; }
+  .scrubber.active { width: 96px; background: linear-gradient(to left, rgba(20, 20, 20, 0.85), rgba(20, 20, 20, 0)); }
+  .scrub-pill { right: 40px; }
+  header { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+  header .mark { height: 30px; }
+  header .search { order: 2; flex: 1; margin-left: 0; }
+  header .who { order: 3; }
+  header nav { order: 4; width: 100%; overflow-x: auto; }
+  .menu { top: 52px; }
+  .viewer .step { display: none; }
+  .info { width: auto; max-height: 55vh; border-radius: 18px 18px 0 0; background: var(--ground-sheet); position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; }
+  .places { grid-template-columns: repeat(2, 1fr); }
+  .face { width: 100px; height: 100px; border-radius: 50px; }
+  .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0ms !important; }
+}

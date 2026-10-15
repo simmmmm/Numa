@@ -141,6 +141,8 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     let controls = Controls::new(state, &destination);
     controls.write(&settings);
 
+    let home = home::Destination::new(state);
+
     let jobs_holder = Rc::new(RefCell::new(jobs));
     let count = jobs_holder.borrow().len();
 
@@ -172,6 +174,15 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     view.set_content(Some(&scroller));
     dialog.set_child(Some(&view));
     dialog.set_default_widget(Some(&export));
+    if let Some(home) = &home {
+        controls.page.prepend(&home.group);
+        home.connect_changed(glib::clone!(
+            #[strong] controls,
+            #[strong(rename_to = group)] home.group,
+            #[weak] export,
+            move |how| controls.show_home(how, &group, &export)
+        ));
+    }
 
     cancel.connect_clicked(glib::clone!(
         #[weak] dialog,
@@ -192,6 +203,12 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
             let jobs = std::mem::take(&mut *jobs_holder.borrow_mut());
             let directory = destination.borrow().clone();
             dialog.close();
+            if let Some(home) = &home {
+                home.remember(&state);
+                if let Some(how) = home.chosen() {
+                    return home::send(&state, jobs, how, chosen);
+                }
+            }
             exporting::run_export(&state, jobs, chosen, directory);
         }
     ));
@@ -232,6 +249,7 @@ struct Controls {
     watermark_size: adw::SpinRow,
     template: adw::EntryRow,
     destination: Rc<RefCell<PathBuf>>,
+    folder: adw::ActionRow,
 
     proof: adw::ComboRow,
     profiles: Vec<numa::io::print::Profile>,
@@ -294,8 +312,9 @@ impl Controls {
         extra.add(&details);
         extra.add(&watermark);
         let place = adw::PreferencesGroup::new();
+        let folder = folder_row(destination);
         place.add(&template);
-        place.add(&folder_row(destination));
+        place.add(&folder);
 
         let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
         for group in [&presets, &file, &extra, &place] {
@@ -321,6 +340,7 @@ impl Controls {
             watermark_size,
             template,
             destination: destination.clone(),
+            folder,
             proof,
             profiles,
             choice: state.editor_page.proof.choice.clone(),
@@ -433,6 +453,19 @@ impl Controls {
             }
             _ => chosen.note().to_string(),
         });
+    }
+
+    fn show_home(&self, how: Option<home::How>, home: &adw::PreferencesGroup, export: &gtk::Button) {
+        self.folder.set_visible(how.is_none());
+        self.format.set_sensitive(how.is_none());
+        let mut group = self.page.first_child();
+        while let Some(widget) = group {
+            if widget != *home.upcast_ref::<gtk::Widget>() {
+                widget.set_visible(how != Some(home::How::Originals));
+            }
+            group = widget.next_sibling();
+        }
+        export.set_label(if how.is_some() { home::SEND_HOME } else { "Export" });
     }
 
     fn connect_sensitivity(&self) {

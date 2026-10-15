@@ -100,6 +100,25 @@ pub fn twins<'a>(
         .collect()
 }
 
+pub fn unnamed_groups(faces: &[crate::catalog::StoredFace], names: &[Option<String>]) -> (Vec<(Vec<usize>, Vec<i64>)>, usize) {
+    let unnamed: Vec<usize> = (0..faces.len()).filter(|&at| names.get(at).is_some_and(Option::is_none)).collect();
+    let embeddings: Vec<[f32; cull::people::LENGTH]> = unnamed.iter().map(|&at| faces[at].embedding).collect();
+    let mut once = 0usize;
+    let mut groups = Vec::new();
+    for members in cull::people::groups(&embeddings) {
+        let members: Vec<usize> = members.iter().map(|index| unnamed[*index]).collect();
+        let mut photos: Vec<i64> = members.iter().map(|&at| faces[at].photo_id).collect();
+        photos.sort_unstable();
+        photos.dedup();
+        if photos.len() < 2 {
+            once += members.len();
+            continue;
+        }
+        groups.push((members, photos));
+    }
+    (groups, once)
+}
+
 pub fn regroup_bursts(catalog: &Catalog, library_id: i64) -> Result<(usize, cull::learn::Outcome), String> {
     let analysed = catalog.analysed(library_id)?;
     if analysed.is_empty() {

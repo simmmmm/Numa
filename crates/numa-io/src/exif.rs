@@ -178,6 +178,104 @@ fn from_raw(path: &Path) -> Option<(String, String)> {
     Some((metadata.exif.date_time_original.clone()?, camera_key(&metadata.make, &metadata.model, &serial)))
 }
 
+pub fn all(path: &Path) -> Vec<(String, String)> {
+    use ::exif::{Context, In, Tag, Value};
+    use std::io::Read;
+    let read = || -> Option<Vec<::exif::Exif>> {
+        let mut head = Vec::new();
+        std::fs::File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
+        let mut found = Vec::new();
+        if head.get(4..12) == Some(b"ftypcrx ") {
+
+            for name in [b"CMT1", b"CMT2", b"CMT4"] {
+                let Some(at) = head.windows(4).position(|w| w == name) else { continue };
+                let Some(size) = head.get(at.saturating_sub(4)..at).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) else { continue };
+                if let Some(exif) = head.get(at + 4..(at + size as usize).saturating_sub(4)).and_then(directories) {
+                    found.push(exif);
+                }
+            }
+        } else if matches!(head.get(..2), Some(b"II" | b"MM")) && head.len() > 4 {
+            let mut tiff = head.clone();
+            let magic: [u8; 2] = if tiff[0] == b'I' { [42, 0] } else { [0, 42] };
+            tiff[2..4].copy_from_slice(&magic);
+            found.extend(directories(&tiff));
+        }
+        if let Some(at) = head.windows(6).position(|w| w == b"Exif\0\0") {
+            found.extend(directories(&head[at + 6..]));
+        }
+        if found.is_empty() {
+            let file = std::fs::File::open(path).ok()?;
+            found.extend(::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok());
+        }
+        Some(found)
+    };
+    let found = std::panic::catch_unwind(read).ok().flatten().unwrap_or_default();
+
+    let known = |tag: Tag| {
+        [tag.context(), Context::Exif, Context::Gps, Context::Tiff]
+            .into_iter()
+            .map(|context| Tag(context, tag.number()))
+            .find(|tag| tag.description().is_some())
+            .unwrap_or(tag)
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for exif in &found {
+        for field in exif.fields().filter(|field| field.ifd_num == In::PRIMARY) {
+            let field = ::exif::Field { tag: known(field.tag), ..field.clone() };
+            if field.tag == Tag::MakerNote || !seen.insert(field.tag) {
+                continue;
+            }
+            let name = match field.tag.description() {
+                Some(_) => words(&field.tag.to_string()),
+                None => format!("Tag 0x{:04X}", field.tag.number()),
+            };
+
+            let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim_matches(|c: char| c == '\0' || c.is_whitespace()).to_string();
+            let shown = field.display_value().with_unit(exif).to_string();
+            let value = match &field.value {
+
+                Value::Ascii(parts) if shown.starts_with('"') => parts.iter().map(|part| text(part)).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(", "),
+
+                Value::Undefined(bytes, _) if field.tag == Tag::UserComment => text(bytes.get(8..).unwrap_or_default()),
+
+                Value::Undefined(bytes, _) if text(bytes).is_empty() || bytes.len() > 32 => String::new(),
+                _ => shown,
+            };
+            if value.is_empty() {
+                continue;
+            }
+
+            let value = match value.char_indices().nth(120) {
+                Some((at, _)) => format!("{}…", &value[..at]),
+                None => value,
+            };
+            rows.push((name, value));
+        }
+    }
+
+    rows.sort_by_key(|(name, _)| name.starts_with("Tag 0x"));
+    rows
+}
+
+fn words(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = String::new();
+    for (at, &c) in chars.iter().enumerate() {
+        let before = at.checked_sub(1).map(|i| chars[i]);
+        let after = chars.get(at + 1);
+        let starts = c.is_uppercase()
+            && before.is_some_and(|b| b.is_lowercase() || b.is_ascii_digit() || (b.is_uppercase() && after.is_some_and(|a| a.is_lowercase())))
+
+            || c.is_ascii_digit() && before.is_some_and(|b| b.is_alphabetic());
+        if starts {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub(crate) fn unix_seconds(text: &str) -> Option<i64> {
     let mut parts = text.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty());
     let mut next = || parts.next()?.parse::<i64>().ok();
@@ -231,6 +329,36 @@ mod tests {
         let found = from_head(&path);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(unix_seconds(&found.expect("a date").0), unix_seconds("2022:07:17 12:14:32"));
+    }
+
+    #[test]
+    fn every_tag_is_named() {
+        let mut tiff: Vec<u8> = b"IIRO".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x69, 0x87, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0]);
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x03, 0x90, 2, 0, 20, 0, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0]);
+        tiff.extend(b"2022:07:17 12:14:32\0");
+        let path = std::env::temp_dir().join(format!("numa-all-{}.orf", std::process::id()));
+        std::fs::write(&path, &tiff).unwrap();
+        let rows = all(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(rows.contains(&("Date Time Original".to_string(), "2022-07-17 12:14:32".to_string())), "{rows:?}");
+        assert_eq!(words("GPSLatitude"), "GPS Latitude");
+        assert_eq!(words("FNumber"), "F Number");
+        assert_eq!(words("FocalLengthIn35mmFilm"), "Focal Length In 35mm Film");
+    }
+
+    #[test]
+    #[ignore]
+    fn every_format_lists_its_tags() {
+        let Some(list) = std::env::var_os("NUMA_ALL_EXIF") else { return };
+        for path in std::fs::read_to_string(list).unwrap().lines() {
+            let rows = all(Path::new(path));
+            println!("{:4} {path}", rows.len());
+            assert!(rows.iter().any(|(name, _)| name == "Exposure Time"), "{path}: {rows:?}");
+        }
     }
 
     #[test]

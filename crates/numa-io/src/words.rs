@@ -1,6 +1,8 @@
+mod names;
 mod things;
 mod tokenizer;
 
+pub use names::{folded, people_in};
 pub use things::THINGS;
 
 use std::collections::HashMap;
@@ -69,6 +71,22 @@ pub fn embed_images(images: &[RgbImage]) -> Result<Vec<Vec<f32>>, String> {
 
     let mut out = model.run(vec![pixels.into_dyn().into()]).map_err(|err| err.to_string())?;
     unit_rows(out.pop().ok_or("the vision model gave nothing")?)
+}
+
+pub fn read_photos(work: Vec<(PathBuf, i64)>) -> Result<Vec<(PathBuf, i64, Vec<f32>)>, String> {
+    use rayon::prelude::*;
+    let images: Vec<(PathBuf, i64, image::RgbImage)> = work
+        .into_par_iter()
+        .filter_map(|(path, mtime)| {
+            let image = crate::thumbs::load(&path, mtime, crate::thumbs::LIBRARY_EDGE, None);
+            image.map_err(|err| log::info!("words: {}: {err}", path.display())).ok().map(|image| (path, mtime, image))
+        })
+        .collect();
+
+    images
+        .into_iter()
+        .map(|(path, mtime, image)| Ok((path, mtime, embed_images(&[image])?.remove(0))))
+        .collect::<Result<Vec<_>, String>>()
 }
 
 pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {

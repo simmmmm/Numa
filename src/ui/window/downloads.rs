@@ -23,7 +23,7 @@ fn download_dir(file: &str) -> PathBuf {
     if file.ends_with(".tar.gz") { numa::core::paths::data_dir() } else { numa::core::paths::models_dir() }
 }
 
-fn model_on_disk((file, url, _, _): &ModelFile) -> Option<PathBuf> {
+fn model_on_disk(entry @ (file, ..): &ModelFile) -> Option<PathBuf> {
     if file.ends_with(".tar.gz") {
         let unpacked = dcp::downloaded_profiles_dir();
         return unpacked.is_dir().then_some(unpacked);
@@ -31,8 +31,7 @@ fn model_on_disk((file, url, _, _): &ModelFile) -> Option<PathBuf> {
     if file.ends_with(".whl") {
         return numa::infer::gpu_plugin(&numa::core::paths::models_dir());
     }
-    let linked = url.rsplit('/').next().unwrap_or(file);
-    numa::core::paths::model_file(&[file, linked])
+    numa::io::models::on_disk(entry)
 }
 
 fn unpack_wheel(wheel: &Path, dir: &Path) -> Result<(), String> {
@@ -79,13 +78,7 @@ fn fetched_bytes(file: &ModelFile) -> u64 {
     packed(file.0).map_or(file.2, |packed| packed.2)
 }
 
-fn files_of(names: &[&str]) -> Vec<ModelFile> {
-    MODELS
-        .iter()
-        .filter(|(name, _, _)| names.contains(name))
-        .flat_map(|(_, _, files)| files.iter().copied())
-        .collect()
-}
+use numa::io::models::files_of;
 
 pub(super) fn offer_additional_files(state: &App) {
     let any = MODELS.iter().any(|(_, _, files)| files.iter().all(|file| model_on_disk(file).is_some()));
@@ -316,7 +309,7 @@ fn download_model(
     glib::spawn_future_local(async move {
         let result = async {
             let mut failed = Vec::new();
-            for entry @ (file, url, _, sha256) in &files {
+            for entry @ (file, _, _, sha256) in &files {
                 if model_on_disk(entry).is_some() {
                     continue;
                 }
@@ -324,7 +317,6 @@ fn download_model(
                 std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
                 let part = dir.join(format!("{file}.part"));
 
-                let mirror = format!("{MIRROR}/{file}");
                 let mut error = String::new();
                 let mut fetched = false;
 
@@ -357,8 +349,8 @@ fn download_model(
                         }
                     }
                 }
-                let urls = if fetched { vec![] } else if mirror == *url { vec![*url] } else { vec![mirror.as_str(), *url] };
-                for url in urls {
+                let urls = if fetched { vec![] } else { numa::io::models::links(entry) };
+                for url in &urls {
                     if cancel.stopped() {
                         return Err("stopped".to_string());
                     }

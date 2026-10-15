@@ -15,6 +15,7 @@ pub mod export;
 pub mod foreign;
 pub mod gainmap;
 pub mod history;
+pub mod home;
 pub mod icc;
 pub mod jxl;
 pub mod import;

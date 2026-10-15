@@ -425,7 +425,7 @@ fn build(path: &Path, on_gpu: bool, size: Option<(usize, usize)>, threads: usize
         log::warn!("{}: not through Core ML: {refused}", path.display());
         return Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(threads())?
+            .with_intra_threads(threads)?
             .with_intra_op_spinning(false)?
             .with_dimension_override("batch", 1)?
             .with_dimension_override("height", edge)?

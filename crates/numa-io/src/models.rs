@@ -126,6 +126,24 @@ pub const PACKED: &[Packed] = &[
     ("scunet_color_real_psnr_fp16.onnx", "scunet_color_real_psnr_fp16.onnx.zst", 31_543_155, "7c4bf59460263f8eee39bf5b070b683417e18e0012b981afdbe2b0956452ba2c", "83bd516b28c9d6a3fb733d33fc81c840407764d82d273d43b98903bd21e231cc"),
 ];
 
+pub fn files_of(names: &[&str]) -> Vec<ModelFile> {
+    MODELS
+        .iter()
+        .filter(|(name, _, _)| names.contains(name))
+        .flat_map(|(_, _, files)| files.iter().copied())
+        .collect()
+}
+
+pub fn on_disk((file, url, _, _): &ModelFile) -> Option<std::path::PathBuf> {
+    let linked = url.rsplit('/').next().unwrap_or(file);
+    numa_core::paths::model_file(&[file, linked])
+}
+
+pub fn links((file, url, _, _): &ModelFile) -> Vec<String> {
+    let mirror = format!("{MIRROR}/{file}");
+    if mirror == *url { vec![mirror] } else { vec![mirror, url.to_string()] }
+}
+
 pub fn packed(file: &str) -> Option<&'static Packed> {
     PACKED.iter().find(|(name, ..)| *name == file)
 }

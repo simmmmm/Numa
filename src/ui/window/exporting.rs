@@ -257,6 +257,7 @@ pub(super) fn run_export_then(
                 break;
             }
 
+            collect(&mut written, &mut last, &mut failures, writing.take()).await;
             let started = match result {
                 Ok(Ok((image, name, raf))) => {
                     let settings = settings.clone();
@@ -285,7 +286,6 @@ pub(super) fn run_export_then(
                 }
             };
 
-            collect(&mut written, &mut last, &mut failures, writing.take()).await;
             writing = started;
         }
         collect(&mut written, &mut last, &mut failures, writing.take()).await;

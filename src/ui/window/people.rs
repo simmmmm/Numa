@@ -219,21 +219,11 @@ fn unnamed_group(
     wanted: &mut Vec<numa::io::catalog::StoredFace>,
 ) -> adw::PreferencesGroup {
 
-    let unnamed: Vec<&numa::io::catalog::StoredFace> =
-        faces.iter().zip(names).filter(|(_, name)| name.is_none()).map(|(face, _)| face).collect();
-    let embeddings: Vec<[f32; cull::people::LENGTH]> = unnamed.iter().map(|face| face.embedding).collect();
-    let mut once = 0usize;
+    let (groups, once) = numa::io::analysis::unnamed_groups(faces, names);
     let group = adw::PreferencesGroup::new();
     group.set_title("Not Named Yet");
-    for members in cull::people::groups(&embeddings) {
-        let members: Vec<&numa::io::catalog::StoredFace> = members.iter().map(|index| unnamed[*index]).collect();
-        let mut photos: Vec<i64> = members.iter().map(|face| face.photo_id).collect();
-        photos.sort_unstable();
-        photos.dedup();
-        if photos.len() < 2 {
-            once += members.len();
-            continue;
-        }
+    for (members, photos) in groups {
+        let members: Vec<&numa::io::catalog::StoredFace> = members.iter().map(|&at| &faces[at]).collect();
 
         let row = adw::EntryRow::new();
         row.set_title(&format!("In {} photographs — who is this?", photos.len()));
