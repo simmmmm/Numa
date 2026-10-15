@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     ports:
       - "8283:8283"
+    environment:
+      TZ: Etc/UTC
     volumes:
       - ./photos:/photos
       - ./sent:/sent

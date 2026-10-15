@@ -41,10 +41,9 @@ pub async fn add_user(State(server): State<Arc<Server>>, Signed(me): Signed, Jso
 }
 
 pub async fn users(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Account>>, Fail> {
-    if !me.admin {
-        return Err(Fail(StatusCode::FORBIDDEN, "Only an admin sees the accounts.".into()));
-    }
-    server.store.accounts().map(Json).map_err(Fail::internal)
+
+    let accounts = server.store.accounts().map_err(Fail::internal)?;
+    Ok(Json(accounts.into_iter().map(|account| Account { admin: account.admin && me.admin, ..account }).collect()))
 }
 
 async fn make(server: &Arc<Server>, name: &str, password: &str, admin: bool, first: bool) -> Result<StatusCode, Fail> {

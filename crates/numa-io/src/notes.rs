@@ -43,7 +43,7 @@ pub fn issues(photo: &Photo, scale: &numa_cull::Scale) -> Vec<String> {
     parts
 }
 
-fn frame_of(photo: &Photo) -> numa_cull::Frame {
+pub fn frame_of(photo: &Photo) -> numa_cull::Frame {
     numa_cull::Frame {
         sharpness: photo.sharpness.unwrap_or_default(),
         blown: photo.blown.unwrap_or_default(),

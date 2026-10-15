@@ -6,11 +6,15 @@ mod cards;
 mod faces;
 mod home;
 mod jobs;
+mod manage;
 mod models;
+mod night;
 mod pages;
 mod photos;
+mod selection;
 mod send;
 mod store;
+mod tidy;
 mod timeline;
 
 use std::collections::HashMap;
@@ -42,6 +46,8 @@ pub struct Server {
 
     pub decodes: tokio::sync::Semaphore,
     pub renders: tokio::sync::Semaphore,
+
+    pub tidy: tidy::Tidy,
 }
 
 impl Server {
@@ -89,6 +95,12 @@ fn main() -> Result<(), String> {
     if std::env::var_os("NUMA_MODEL_THREADS").is_none() {
         std::env::set_var("NUMA_MODEL_THREADS", jobs::half_the_cores().to_string());
     }
+
+    extern "C" {
+        fn tzset();
+    }
+
+    unsafe { tzset() };
     for dir in [&photos, &sent, &data] {
         std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     }
@@ -107,6 +119,7 @@ fn main() -> Result<(), String> {
         scanned: Default::default(),
         decodes: tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get())),
         renders: tokio::sync::Semaphore::new(1),
+        tidy: tidy::Tidy::default(),
     });
     jobs::start(server.clone());
     cards::watch(server.clone(), path_from("NUMA_HOME_CARDS", "/cards"));
@@ -135,7 +148,19 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/logout", post(accounts::logout))
         .route("/api/v1/me", get(accounts::me))
         .route("/api/v1/users", get(accounts::users).post(accounts::add_user))
-        .route("/api/v1/libraries", get(timeline::libraries))
+        .route("/api/v1/libraries", get(timeline::libraries).post(manage::add))
+        .route("/api/v1/libraries/folders", get(manage::folders))
+        .route("/api/v1/libraries/{id}", put(manage::rename))
+        .route("/api/v1/trash", get(manage::list))
+        .route("/api/v1/trash/{id}/thumb", get(manage::thumb))
+        .route("/api/v1/trash/restore", post(manage::restore))
+        .route("/api/v1/photos/remove", post(selection::remove))
+        .route("/api/v1/photos/delete", post(selection::delete))
+        .route("/api/v1/photos/move", post(selection::moved))
+        .route("/api/v1/photos/album", post(selection::album))
+        .route("/api/v1/photos/marks", post(selection::marks))
+        .route("/api/v1/photos/by", post(selection::by))
+        .route("/api/v1/photos/zip", get(selection::zip))
         .route("/api/v1/timeline", get(timeline::months))
         .route("/api/v1/timeline/{month}", get(timeline::month))
         .route("/api/v1/people", get(timeline::people))
@@ -144,10 +169,14 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/activity/pause", post(activity::pause))
         .route("/api/v1/activity/resume", post(activity::resume))
         .route("/api/v1/things", get(timeline::things))
+        .route("/api/v1/tidy", get(tidy::list))
+        .route("/api/v1/tidy/keep", post(tidy::keep))
         .route("/api/v1/by", get(by::counts))
         .route("/api/v1/cameras", get(by::cameras).put(by::link))
         .route("/api/v1/card", get(cards::status))
         .route("/api/v1/card/import", post(cards::start))
+        .route("/api/v1/card/photos", get(cards::photos))
+        .route("/api/v1/card/thumb/{n}", get(cards::thumb))
         .route("/api/v1/faces", get(faces::unnamed))
         .route("/api/v1/faces/{id}/portrait", get(faces::portrait))
         .route("/api/v1/faces/name", post(faces::name))

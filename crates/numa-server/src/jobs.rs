@@ -81,11 +81,16 @@ fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
         true => log::warn!("the last start died in the graphics driver; decoding on the processor"),
         false => numa_io::raw::warm_up_gpu(Some(marker)),
     }
+
     let mut failed: HashSet<i64> = HashSet::new();
     let mut scanned: Option<Instant> = None;
     loop {
+        if !server.activity.paused() && crate::night::due(server) {
+            crate::night::run(server, &mut failed);
+            scanned = Some(Instant::now());
+        }
         if !server.activity.paused() && scanned.is_none_or(|at| at.elapsed() >= EVERY) {
-            scan(server);
+            scan(server, false);
             scanned = Some(Instant::now());
         }
         server.jobs.taken();
@@ -96,7 +101,7 @@ fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
             continue;
         }
         let done = pool.install(|| {
-            ahead(server, plan.thumbnails) && analyse(server, plan.analyse, &mut failed) && read_words(server, plan.words) && see_things(server)
+            ahead(server, plan.thumbnails, &mut failed) && analyse(server, plan.analyse, &mut failed) && read_words(server, plan.words) && see_things(server)
         });
         if done {
             let next = EVERY.saturating_sub(scanned.map_or(Duration::ZERO, |at| at.elapsed()));
@@ -105,7 +110,7 @@ fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
     }
 }
 
-fn scan(server: &Arc<Server>) {
+pub fn scan(server: &Arc<Server>, full: bool) -> usize {
     let started = Instant::now();
     server.activity.plan(Kind::Scan, 0, None);
     server.activity.start(Kind::Scan);
@@ -131,18 +136,7 @@ fn scan(server: &Arc<Server>) {
     server.activity.total(Kind::Scan, libraries.len());
     for library in libraries {
         server.activity.at(Kind::Scan, library.id, None);
-        let walked = library.clone();
-        let Some(known) = server.home.blocking(move |catalog| catalog.known_files(&walked).unwrap_or_default()) else { continue };
-        let found = numa_io::catalog::scan(&library.path, &known);
-        let home = server.clone();
-        let changes = server.home.blocking(move |catalog| {
-            let changes = catalog.apply_scan(&library, &found);
-            if changes.as_ref().is_ok_and(|changes| changes.any()) {
-                home.shelve(Some(library.id), catalog);
-            }
-            changes
-        });
-        match changes {
+        match walk(server, library, full) {
             Some(Ok(changes)) => changed += changes.added + changes.updated + changes.removed,
             Some(Err(err)) => log::warn!("{err}"),
             None => {}
@@ -150,12 +144,41 @@ fn scan(server: &Arc<Server>) {
         server.activity.add(Kind::Scan, 1);
     }
 
+    crate::manage::empty_old(server);
+
     crate::by::learn(server);
     server.activity.finish(Kind::Scan);
     server.scanned.store(true, std::sync::atomic::Ordering::Relaxed);
     server.cards.stale.store(true, std::sync::atomic::Ordering::Relaxed);
+    server.tidy.stale();
     let photos: usize = server.home.all_libraries().iter().map(|library| server.home.count(library.id)).sum();
     log::info!("scan: {photos} photographs, {changed} changed, in {:.1} s", started.elapsed().as_secs_f32());
+    changed
+}
+
+pub fn rescan(server: &Arc<Server>, library: Library) -> Option<Result<numa_io::catalog::Changes, String>> {
+    walk(server, library, false)
+}
+
+fn walk(server: &Arc<Server>, library: Library, full: bool) -> Option<Result<numa_io::catalog::Changes, String>> {
+    let walked = library.clone();
+    let known = match full {
+        true => Default::default(),
+        false => server.home.blocking(move |catalog| catalog.known_files(&walked).unwrap_or_default())?,
+    };
+    let mut found = numa_io::catalog::scan(&library.path, &known);
+    let removed = server.store.removed(library.id);
+    if !removed.is_empty() {
+        found.files.retain(|(path, ..)| !removed.contains(&crate::manage::within(&library, path)));
+    }
+    let home = server.clone();
+    server.home.blocking(move |catalog| {
+        let changes = catalog.apply_scan(&library, &found);
+        if changes.as_ref().is_ok_and(|changes| changes.any()) {
+            home.shelve(Some(library.id), catalog);
+        }
+        changes
+    })
 }
 
 fn everything(server: &Server) -> Vec<(Library, Vec<Photo>)> {
@@ -175,7 +198,10 @@ struct Plan {
 
 fn plan(server: &Arc<Server>, failed: &HashSet<i64>) -> Plan {
     let all = everything(server);
-    let thumbnails: Thumbnails = all.iter().map(|(library, photos)| (library.clone(), missing_thumbnails(server, photos.clone()))).collect();
+    let thumbnails: Thumbnails = all
+        .iter()
+        .map(|(library, photos)| (library.clone(), missing_thumbnails(server, photos.iter().filter(|photo| !failed.contains(&photo.id)).cloned().collect())))
+        .collect();
     let faces = cull::faces::is_installed() && cull::people::is_installed();
     let analyse: Vec<(Library, Vec<Photo>)> = match faces {
         false => Vec::new(),
@@ -237,7 +263,7 @@ fn stop(server: &Server) -> bool {
     server.jobs.pending() || server.activity.paused()
 }
 
-fn ahead(server: &Arc<Server>, plan: Thumbnails) -> bool {
+fn ahead(server: &Arc<Server>, plan: Thumbnails, failed: &mut HashSet<i64>) -> bool {
     let (started, mut made) = (Instant::now(), 0usize);
     server.activity.start(Kind::Thumbnails);
     for (library, missing) in plan {
@@ -252,22 +278,23 @@ fn ahead(server: &Arc<Server>, plan: Thumbnails) -> bool {
                 break;
             }
 
-            let done: Vec<Option<(i64, f32)>> = chunk
+            let done: Vec<Result<Option<(i64, f32)>, i64>> = chunk
                 .par_iter()
                 .filter(|_| !server.activity.paused())
-                .filter_map(|(photo, edits)| {
+                .map(|(photo, edits)| {
                     let (path, edits) = (&photo.path, edits.as_deref());
-                    let large = thumbs::load(path, photo.mtime, thumbs::STEPS[0], edits).map_err(|err| log::info!("{}: {err}", path.display())).ok()?;
+                    let large = thumbs::load(path, photo.mtime, thumbs::STEPS[0], edits).map_err(|err| log::info!("{}: {err}", path.display())).map_err(|()| photo.id)?;
                     if !thumbs::is_cached(path, photo.mtime, thumbs::LIBRARY_EDGE, edits) {
                         let small = image::DynamicImage::ImageRgb8(large.clone()).thumbnail(thumbs::LIBRARY_EDGE, thumbs::LIBRARY_EDGE).into_rgb8();
                         thumbs::store(path, photo.mtime, thumbs::LIBRARY_EDGE, edits, &small);
                     }
-                    Some((photo.aspect.is_none() && large.height() > 0).then(|| (photo.id, large.width() as f32 / large.height() as f32)))
+                    Ok((photo.aspect.is_none() && large.height() > 0).then(|| (photo.id, large.width() as f32 / large.height() as f32)))
                 })
                 .collect();
             made += done.len();
             server.activity.add(Kind::Thumbnails, done.len());
-            let aspects: Vec<(i64, f32)> = done.into_iter().flatten().collect();
+            failed.extend(done.iter().filter_map(|made| made.as_ref().err()));
+            let aspects: Vec<(i64, f32)> = done.into_iter().filter_map(Result::ok).flatten().collect();
             if !aspects.is_empty() {
                 shaped = true;
                 server.home.blocking(move |catalog| drop(catalog.set_aspects(&aspects)));
@@ -330,6 +357,7 @@ fn analyse(server: &Arc<Server>, plan: Vec<(Library, Vec<Photo>)>, failed: &mut 
             let _ = numa_io::analysis::regroup_bursts(catalog, id);
             home.shelve(Some(id), catalog);
         });
+        server.tidy.stale();
         log::info!("analyse: {} photographs of {} in {:.1} s", pending.len(), library.label(), started.elapsed().as_secs_f32());
     }
     server.activity.finish(Kind::Analyse);

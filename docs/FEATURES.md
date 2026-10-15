@@ -6267,15 +6267,22 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   with Home both ways: edits, ratings, flags and new photographs; deletes
   never travel. Linux: Import › Numa Home, months ticked, into
   `~/Pictures/Numa Home/<library>/`; a round on opening and every three
-  minutes, edits and marks each the way they changed.
+  minutes as HOME-018's pace allows, edits and marks each the way they
+  changed.
 - ✅ **HOME-009**: A card in the NAS. An SD card or USB drive with a `DCIM`
   puts a bar on every page — the camera, how many new photographs, over how
   many days — and Import is the desktop's: what a library has stays on the
   card, the rest in shoots, each into the library its dates fall in or a new
   `<year>/<name>` folder, copied the checked way with the camera's stars and
-  a receipt.
-- ✅ **HOME-010**: The background work, visible and pausable. A ring in the
-  header while anything runs opens Activity (also in the account's menu):
+  a receipt. The Import page is Lightroom's: the card's own previews by
+  shoot, the new ones ticked, the ones already in a library dimmed and
+  unticked, a tick per photograph (shift for a run) and per shoot, All New,
+  Only Raws, Only JPEGs. While it copies, the bar has a meter of its own
+  width and the numbers beside it.
+- ✅ **HOME-010**: The background work, visible and pausable. A ring and a
+  word in the main navigation, between Albums and search, while anything
+  runs — Scanning, Thumbnails, Faces, Words, Things, Importing, Models —
+  opens Activity (also in the account's menu):
   each job — looking for photographs, thumbnails, faces, sharpness and
   bursts, search in words, Things Numa Saw — in plain words, how many of how
   many, in which library, about how long is left, and the models on their
@@ -6295,7 +6302,39 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   account its camera is linked to on the admin's Cameras page (every camera
   in the archive, by body serial where the file has one, with its count);
   otherwise the account its EXIF Artist names, which Cameras offers to link
-  in one click ("Artist says Frederique").
+  in one click ("Artist says Frederique"). Said by hand — By in the info
+  panel, or By… for a selection — it wins over all of these.
+- ✅ **HOME-016**: New libraries from the pages. "Ik moet in Numa Home gewoon
+  nieuwe mappen toe kunnen voegen": on Libraries an admin makes a new
+  library folder (a name, in a year folder or not) or takes in a folder put
+  in the photos folder since the last look round, and renames a library's
+  folder in its place.
+- ✅ **HOME-017**: Library management. "Ik moet foto's kunnen verwijderen uit
+  de library, en van de schijf": photographs chosen on the grid as on the
+  desktop (a click once one is chosen, shift for a run, Ctrl/⌘ to start,
+  Select on a phone, Ctrl+A, Esc) and a bar for them: stars, flag, album,
+  By, Download (a zip of the originals), Move (to another library or folder,
+  with their stars, flags, edits and albums), Remove from Library (the file
+  stays and is left out from then on) and Delete from Disk (into the
+  library's trash, put back from Trash for 30 days, then gone). Removing,
+  deleting and moving are an admin's, or an account's in its own Sent Home.
+- ✅ **HOME-019**: Tidy Up. "Zoek naar dubbele foto's … laat de gebruiker
+  dan kiezen wat het beste is": a page of cards, each a small set side by
+  side, Numa's pick marked — exact copies (the same bytes, across libraries
+  too; a raw and its JPEG never), runs of three or more of the same frame
+  (kept: eyes open, best of the run, suggested rating), frames past use
+  (blank, 40 % blown, softer than the library's own softest 5 %; never a
+  rated, picked or edited one) and "Who took these?" per camera. Keep Best,
+  Keep All (never asked again) or tap to keep by hand; what goes waits in
+  the trash. Counts per kind at the top; on a phone the sets scroll sideways.
+- ✅ **HOME-020**: The night concierge. "'s Nachts als een soort conciërge
+  alles probeert op te lossen": between 01:00 and 06:00 in the server's time
+  zone, once, Home tries again what failed, rereads every library in full,
+  checks every file still reads (against its import receipt where there is
+  one), empties the trash's old photographs, prepares Tidy Up, compacts the
+  catalogs and prunes the thumbnail cache; by day only what is needed.
+  Activity's Last Night says what was done and what needs a person, each
+  with a link. Pause holds it.
 - 🟡 **HOME-013**: Open in Numa. "Open in Numa als het kan": the web's
   photograph view links to `numa://home/open?server=<origin>&photo=<id>`, and
   Numa opens that photograph in the editor — from the Numa Home library it
@@ -6313,6 +6352,17 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   share sheet on iPhone, iPad and Mac sends the originals home through the
   app's background session; server and token shared through the App Group
   `group.com.tijmen.Numa`. Swift uncompiled until TestFlight.
+- ✅ **HOME-018**: A library kept at Numa Home from the Import. "Geef bij
+  importeren aan of je hier een Numa Home library van wil maken": with Numa
+  signed in, Import's Copies has Keep This Library at Numa Home; the library
+  the import went into goes home, Original and Edits, into a new library of
+  its name on the server, and is a Numa Home library from then on (HOME-008).
+  Preferences › Numa Home: Keep in Step At Night (01:00–06:00 by the
+  computer's clock, the default) or While Open, and Only on Unmetered
+  Networks (on: never over a phone's hotspot). Linux has no background
+  service, so it happens while Numa is open, and a round cut off by the
+  morning, the network or a quit goes on in the next. The busy toast says
+  it quietly; Sync Now in a Numa Home library's menu goes at once. Linux.
 - ◻️ **HOME-007**: Send Home from the iPhone: the Photos library, sent on its
   own on Wi-Fi and power (Numa-mac).
 

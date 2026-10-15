@@ -12,7 +12,7 @@ FROM debian:trixie-slim
 LABEL org.opencontainers.image.source=https://github.com/simmmmm/numa-home
 LABEL org.opencontainers.image.licenses=GPL-3.0-or-later
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl tar libvulkan1 mesa-vulkan-drivers \
+ && apt-get install -y --no-install-recommends ca-certificates curl tar tzdata libvulkan1 mesa-vulkan-drivers \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/numa-server /usr/local/bin/numa-server
 ENV NUMA_HOME_PHOTOS=/photos NUMA_HOME_SENT=/sent NUMA_HOME_DATA=/data NUMA_HOME_CARDS=/cards NUMA_HOME_PORT=8283

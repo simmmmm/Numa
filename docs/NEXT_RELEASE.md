@@ -1,17 +1,25 @@
-# Next release: 0.39.0
+# Next release: 0.40.0
 
 What goes into the next general build and is not in `main` or Numa-mac `mac`
 yet. Before `dev/publish.sh` each item is merged, checked, and its line struck
 here; the version bump comes after that (docs/AGENT_GUIDE.md), and after the
 bump `data/THIRD_PARTY_LICENSES.txt` is generated again and `dev/check.sh` run.
 
-0.38.0 went out on 15 October (with Numa Home's first image on ghcr.io).
+0.39.0 went out on 15 October.
 What went into it is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
 
-The version is 0.39.0 in `Cargo.toml` and the metainfo — never released, so
+The version is 0.40.0 in `Cargo.toml` and the metainfo — never released, so
 no bump for what joins it.
 
 ## In
+
+- **Numa Home, round three (HOME-009/010/012/013, 016–020)** — on `main`
+  15 October: new folders, selection and library management with a 30-day
+  trash, the card's import by thumbnails, By per photograph, the activity in
+  the nav, Tidy Up, the night concierge (`TZ`), Open in Numa's click fixed
+  on the web page, and on Linux an import kept at Numa Home with night,
+  unmetered sync. Apple: nothing new this round (HOME-018 there after a
+  green TestFlight of 0.39.0's Swift).
 
 - **Numa Home, round two (HOME-010, 011, 013–015)** — on `main` and Numa-mac
   `mac` 15 October: Activity and Cameras never blank, the header under

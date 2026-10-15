@@ -362,7 +362,7 @@ pub(super) fn select_library_index(state: &App, index: u32) {
 
     rescan_in_background(state, false);
 
-    home_sync::in_step(state);
+    home_sync::opened(state);
 }
 
 pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<PathBuf>) {

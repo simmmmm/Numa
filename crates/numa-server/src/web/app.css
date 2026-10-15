@@ -96,10 +96,11 @@ main { padding: 0 var(--edge) 48px; }
 /* HOME-009: the card bar, under the header on every page. */
 .cardbar { margin: 12px var(--edge) 0; padding: 12px 16px; border-radius: 10px; background: var(--ground-window); display: grid; gap: 12px; }
 .cardbar .line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
-.cardbar progress { flex: 1; min-width: 120px; accent-color: var(--accent); }
-.cardbar .plan { display: grid; gap: 10px; }
-.cardbar .shoot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.cardbar .shoot .what { min-width: 220px; font-variant-numeric: tabular-nums; }
+.cardbar .line.progress { justify-content: flex-start; }
+/* The import's meter: its own width, filled as far as it is; the numbers
+   beside it in tabular figures, so neither moves while the other changes. */
+.cardbar .meter { flex: none; width: 200px; height: 4px; border-radius: 2px; }
+.cardbar .numbers { font-variant-numeric: tabular-nums; color: var(--name); min-width: 13ch; }
 .cardbar .problems { margin: 0; padding-left: 18px; color: var(--name); }
 .cardbar .said { text-align: left; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0 4px; }
@@ -187,8 +188,8 @@ main { padding: 0 var(--edge) 48px; }
 .info .rating { letter-spacing: 2px; }
 
 /* HOME-010: the header's ring, and the Activity page. */
-header .activity { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; }
-header .activity .what { color: var(--name); font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .activity { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; max-width: 180px; }
+header .activity .what { color: var(--name); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ring { width: 20px; height: 20px; transform: rotate(-90deg); fill: none; stroke-width: 2.2; stroke-linecap: round; }
 .ring .hair { stroke: var(--rule); }
 .ring .arc { stroke: var(--accent); transition: stroke-dasharray var(--standard); }
@@ -264,8 +265,106 @@ main.scrubbed { padding-right: 76px; }
   .places { grid-template-columns: repeat(2, 1fr); }
   .face { width: 100px; height: 100px; border-radius: 50px; }
   .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; }
+  .cardbar .meter { width: 120px; }
+}
+
+/* HOME-017: choosing on the grid. A ring in the corner on hover, while
+   choosing, and filled white on what is chosen. */
+.tile .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); opacity: 0; transition: opacity var(--quick); }
+.tile:hover .check, body.picking .tile .check, .tile.picked .check, .tile.ticked .check { opacity: 1; }
+.tile.picked .check, .tile.ticked .check { background: var(--accent) no-repeat center / 12px
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2l2.6 2.6L10 3.4' fill='none' stroke='%23141414' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); border-color: var(--accent); }
+.tile.picked img { transform: scale(0.9); border-radius: 4px; }
+.tile.picked { background: var(--ground-chip); }
+.tile img { transition: opacity var(--standard), transform var(--quick); }
+.selection { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 8px;
+  padding: 8px 8px 8px 18px; border-radius: 26px; background: var(--ground-window); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); max-width: calc(100vw - 32px); overflow-x: auto; }
+.selection .count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; margin-right: 6px; }
+.selection a.chip { display: inline-flex; align-items: center; text-decoration: none; }
+.selection .menu { position: fixed; top: auto; bottom: 76px; right: auto; left: 50%; transform: translateX(-50%); }
+.round.small { width: 32px; height: 32px; border-radius: 16px; background: var(--ground-chip); }
+.round.small svg { width: 16px; height: 16px; }
+.chip.small { height: 28px; padding: 0 12px; font-size: 12px; }
+.toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 8; padding: 10px 18px; border-radius: 20px; background: var(--ground-raised); color: var(--ink); }
+dialog.ask { border: 0; border-radius: 14px; padding: 22px; width: min(420px, calc(100vw - 32px)); background: var(--ground-window); color: var(--ink); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7); }
+dialog.ask::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog.ask form { display: grid; gap: 12px; }
+dialog.ask h2 { font-size: 17px; line-height: 22px; margin: 0; }
+dialog.ask .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
+dialog.ask input[type=checkbox] { accent-color: var(--accent); }
+dialog.ask .year { width: 80px; margin-left: auto; }
+.primary.destructive { background: #e35d5b; color: #fff; }
+.primary:disabled { opacity: 0.4; cursor: default; }
+.shelf { display: grid; justify-items: center; gap: 4px; align-content: start; }
+/* Rename stays out of the way until the pointer is on its library. */
+.shelf .chip.small { background: none; color: var(--label); opacity: 0; transition: opacity var(--quick); }
+.shelf:hover .chip.small, .shelf .chip.small:focus-visible { opacity: 1; }
+@media (hover: none) { .shelf .chip.small { opacity: 1; } }
+.info .by-pick { margin-top: 4px; height: 32px; }
+
+/* HOME-009: the Import page, and the Trash, which looks the same. */
+.import-page { display: grid; gap: 4px; padding-top: 22px; padding-bottom: 60px; }
+.import-page .top { display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap; }
+.import-page h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0 0 4px; }
+.import-page .act { display: flex; align-items: center; gap: 14px; }
+.import-page .said { text-align: left; }
+.import-page .shoot { padding-top: 22px; }
+.import-page .shoot .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 4px; }
+.import-page .shoot .to { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.import-page .tick { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.import-page .tick input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.import-page .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.import-page .tile img.in { opacity: 0.4; }
+.import-page .tile.ticked img.in { opacity: 1; }
+.import-page .tile.already img.in { opacity: 0.25; }
+.import-page .tile.already.ticked img.in { opacity: 0.8; }
+.import-page .tile .badge { position: absolute; right: 6px; bottom: 4px; font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--name); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); font-variant-numeric: tabular-nums; }
+.import-page .tile .check { opacity: 1; }
+
+@media (max-width: 720px) {
+  .import-page .grid { grid-template-columns: repeat(3, 1fr); }
+  .import-page .shoot .to { margin-left: 0; }
+  .selection { left: 16px; right: 16px; transform: none; max-width: none; padding-left: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0ms !important; }
 }
+
+/* HOME-019: Tidy Up. Each set side by side, tall enough to judge; on a
+   phone the row scrolls. What is kept carries the white ring. */
+.tidy-page .filters .n { margin-left: 6px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.tidy-page, .tidy-page .sets { grid-template-columns: minmax(0, 1fr); }
+.tidy-page .sets { display: grid; gap: 34px; padding-top: 18px; }
+.set .head { display: grid; gap: 2px; padding-bottom: 10px; }
+.set .frames { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scroll-snap-type: x proximity; }
+.frame { --h: 260px; position: relative; margin: 0; flex: none; max-width: 86vw; display: grid; gap: 6px; scroll-snap-align: start; }
+.frame .pick { position: relative; height: var(--h); padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--ground-raised); cursor: pointer; }
+.frame .pick img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); }
+.frame .pick img.in { opacity: 0.35; }
+.set.who .frame .pick img.in, .frame.kept .pick img.in { opacity: 1; }
+.frame.kept .pick { box-shadow: inset 0 0 0 2px var(--accent); }
+.frame .check { position: absolute; left: 8px; top: 8px; width: 22px; height: 22px; border-radius: 11px; border: 2px solid rgba(255, 255, 255, 0.9); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+.frame.kept .check { background: var(--accent) no-repeat center / 12px
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2l2.6 2.6L10 3.4' fill='none' stroke='%23141414' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); border-color: var(--accent); }
+.frame .best { position: absolute; left: 8px; bottom: 8px; padding: 2px 9px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 11px; line-height: 16px; font-weight: 600; }
+.frame .look { position: absolute; right: 8px; top: 8px; background: rgba(20, 20, 20, 0.6); }
+.frame figcaption { display: grid; text-align: left; color: var(--name); min-height: 32px; }
+.frame figcaption .where { color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set .foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; }
+.set .act { display: flex; gap: 8px; flex-wrap: wrap; }
+.set .said { text-align: left; }
+.set.who .frame { --h: 150px; }
+.chip.go { background: none; box-shadow: inset 0 0 0 1px var(--ink); color: var(--ink); font-weight: 600; }
+.chip:disabled { opacity: 0.4; cursor: default; }
+@media (max-width: 720px) {
+  .frame { --h: 200px; }
+  .set.who .frame { --h: 110px; }
+}
+
+/* HOME-020: the night's report on Activity. */
+.night { display: grid; gap: 6px; }
+.night ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--name); }
+.night .needs a { color: var(--ink); }

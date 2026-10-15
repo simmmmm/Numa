@@ -42,5 +42,13 @@ The Intel graphics can be handed to it by uncommenting `devices` in
 `compose.yaml`; everything works without it, on the processor.
 
 The background work (scanning, thumbnails, faces, words) takes at most half
-the processor at a low priority. Outside the house, use the NAS's own reverse
+the processor at a low priority. By night, from 01:00 to 06:00 in the
+container's time zone, it tidies up: it tries again what failed, reads every
+library again, checks that every file still reads (against its import
+receipt where there is one), empties the trash's photographs older than 30
+days, prepares Tidy Up, compacts the catalogs and keeps the thumbnail cache
+within 8 GB. Set `TZ` in `compose.yaml` to your time zone
+(`Europe/Amsterdam`, `America/New_York`); without it the night is UTC's.
+`NUMA_HOME_NIGHT=2-5` moves the hours, `NUMA_HOME_CACHE_GB` the cache's
+size. The Activity page says each morning what was done and what needs you. Outside the house, use the NAS's own reverse
 proxy or Tailscale; Numa Home speaks plain HTTP.

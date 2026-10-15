@@ -27,7 +27,14 @@ impl Store {
                  PRIMARY KEY (name, sha256, library));
              CREATE TABLE IF NOT EXISTS updated (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS cameras (camera TEXT PRIMARY KEY, account TEXT NOT NULL COLLATE NOCASE);",
+             CREATE TABLE IF NOT EXISTS cameras (camera TEXT PRIMARY KEY, account TEXT NOT NULL COLLATE NOCASE);
+             CREATE TABLE IF NOT EXISTS removed (library INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (library, path));
+             CREATE TABLE IF NOT EXISTS trash (
+                 id INTEGER PRIMARY KEY, library INTEGER NOT NULL, path TEXT NOT NULL, kept TEXT NOT NULL, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS authors (
+                 library INTEGER NOT NULL, path TEXT NOT NULL, account TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (library, path));
+             CREATE TABLE IF NOT EXISTS settled (key TEXT PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS hashes (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL);",
         )
         .map_err(|err| err.to_string())?;
         Ok(Self(Mutex::new(conn)))
@@ -164,6 +171,106 @@ impl Store {
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
         self.with(|conn| conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", params![key, value])).map(drop)
+    }
+}
+
+pub struct Trashed {
+    pub id: i64,
+    pub library: i64,
+    pub path: String,
+    pub kept: String,
+    pub at: i64,
+}
+
+impl Store {
+    pub fn removed(&self, library: i64) -> std::collections::HashSet<String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT path FROM removed WHERE library = ?1")?;
+            let rows = statement.query_map([library], |row| row.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn remove(&self, library: i64, path: &str) -> Result<(), String> {
+        self.with(|conn| conn.execute("INSERT OR IGNORE INTO removed (library, path) VALUES (?1, ?2)", params![library, path])).map(drop)
+    }
+
+    pub fn trash(&self, library: i64, path: &str, kept: &str) -> Result<i64, String> {
+        let now = now();
+        self.with(|conn| {
+            conn.execute("INSERT INTO trash (library, path, kept, at) VALUES (?1, ?2, ?3, ?4)", params![library, path, kept, now])?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    pub fn trashed(&self) -> Vec<Trashed> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT id, library, path, kept, at FROM trash ORDER BY at DESC, id DESC")?;
+            let rows = statement.query_map([], |row| Ok(Trashed { id: row.get(0)?, library: row.get(1)?, path: row.get(2)?, kept: row.get(3)?, at: row.get(4)? }))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn untrash(&self, id: i64) {
+        let _ = self.with(|conn| conn.execute("DELETE FROM trash WHERE id = ?1", [id]));
+    }
+
+    pub fn authors(&self) -> HashMap<(i64, String), String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT library, path, account FROM authors")?;
+            let rows = statement.query_map([], |row| Ok(((row.get(0)?, row.get(1)?), row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn set_author(&self, library: i64, path: &str, account: Option<&str>) -> Result<(), String> {
+        self.with(|conn| match account {
+            Some(account) => conn.execute("INSERT OR REPLACE INTO authors (library, path, account) VALUES (?1, ?2, ?3)", params![library, path, account]),
+            None => conn.execute("DELETE FROM authors WHERE library = ?1 AND path = ?2", params![library, path]),
+        })
+        .map(drop)
+    }
+}
+
+impl Store {
+    pub fn settled(&self) -> std::collections::HashSet<String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT key FROM settled")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn settle(&self, keys: &[String]) {
+        let _ = self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            for key in keys {
+                tx.execute("INSERT OR IGNORE INTO settled (key) VALUES (?1)", [key])?;
+            }
+            tx.commit()
+        });
+    }
+
+    pub fn hashes(&self) -> HashMap<String, (i64, u64, String)> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT path, mtime, size, hash FROM hashes")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get::<_, i64>(2)? as u64, row.get(3)?))))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn note_hash(&self, path: &str, mtime: i64, size: u64, hash: &str) {
+        let sql = "INSERT OR REPLACE INTO hashes (path, mtime, size, hash) VALUES (?1, ?2, ?3, ?4)";
+        let _ = self.with(|conn| conn.execute(sql, params![path, mtime, size as i64, hash]));
+    }
+
+    pub fn vacuum(&self) -> Result<(), String> {
+        self.with(|conn| conn.execute_batch("VACUUM"))
     }
 }
 

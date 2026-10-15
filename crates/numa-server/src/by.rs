@@ -72,6 +72,8 @@ pub async fn owners(server: &Arc<Server>, libraries: &[Library]) -> Result<HashM
     let accounts: Vec<String> = server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect();
     let spelled = |name: &str| accounts.iter().find(|account| account.eq_ignore_ascii_case(name)).cloned();
     let links = server.store.cameras();
+
+    let chosen = server.store.authors();
     let artists = server.artists.all();
     let sent: HashMap<(i64, String), String> = server.store.sendings().into_iter().map(|(name, library, path)| ((library, path), name)).collect();
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
@@ -85,8 +87,10 @@ pub async fn owners(server: &Arc<Server>, libraries: &[Library]) -> Result<HashM
         for photo in server.home.files(library.id) {
             let within = photo.path.strip_prefix(&library.path).unwrap_or(&photo.path).to_string_lossy().into_owned();
             let camera = bodies.get(&photo.id).filter(|camera| !camera.is_empty());
-            let owner = own
-                .clone()
+            let owner = chosen
+                .get(&(library.id, within.clone()))
+                .and_then(|name| spelled(name))
+                .or_else(|| own.clone())
                 .or_else(|| sent.get(&(library.id, within)).and_then(|name| spelled(name)))
                 .or_else(|| camera.and_then(|camera| links.get(camera)).and_then(|name| spelled(name)))
                 .or_else(|| camera.and_then(|camera| artists.get(camera)).and_then(|artist| named(artist, &accounts)));

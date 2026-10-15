@@ -320,6 +320,7 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
         }
     ));
     window.add_action(&open_link);
+    home_sync::install(state, window);
     install_rescan_action(state, window);
     book::install(state, window);
 }
@@ -369,6 +370,10 @@ fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
     let menu = gio::Menu::new();
     let library = gio::Menu::new();
     library.append(Some("Rescan Library"), Some("win.rescan"));
+
+    let sync_now = gio::MenuItem::new(Some("Sync Now"), Some("win.home-sync"));
+    sync_now.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    library.append_item(&sync_now);
     library.append(Some("Camera Clocks…"), Some("win.clocks"));
     library.append(Some("Add Places from a Track…"), Some("win.places-from-track"));
 

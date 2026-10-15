@@ -30,6 +30,7 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
 
     let library = server.home.libraries(&me.name).into_iter().filter(|library| library.id == library_of(id)).collect::<Vec<_>>();
     let by = crate::by::owners(&server, &library).await?.remove(&id);
+    let chosen = library.first().is_some_and(|library| server.store.authors().contains_key(&(library.id, crate::manage::within(library, &photo.path))));
     let summary = summary.as_ref();
 
     let exposure: Vec<String> = [
@@ -57,6 +58,7 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         "edited": photo.edited,
         "library": library_of(id),
         "by": by,
+        "chosen": chosen,
     })))
 }
 
@@ -148,7 +150,7 @@ fn kind(path: &FilePath) -> &'static str {
     }
 }
 
-fn attachment(name: &str) -> HeaderValue {
+pub fn attachment(name: &str) -> HeaderValue {
     let plain: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || "._- ".contains(c) { c } else { '_' }).collect();
     let encoded: String = name
         .bytes()
@@ -216,19 +218,14 @@ pub struct Marks {
 
 pub async fn marks(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(marks): Json<Marks>) -> Result<Json<Value>, Fail> {
     server.home.photo(&me.name, id)?;
-    let flag = match marks.flag.as_str() {
-        "none" => Flag::None,
-        "pick" => Flag::Picked,
-        "reject" => Flag::Rejected,
-        _ => return Err(Fail::bad("A flag is none, pick or reject.")),
-    };
+    let flag = flag_from(&marks.flag)?;
     if marks.rating > 5 {
         return Err(Fail::bad("A rating is 0 to 5 stars."));
     }
     changed(&server, id, move |catalog| catalog.set_rating(id, marks.rating).and_then(|()| catalog.set_flag(id, flag))).await
 }
 
-async fn changed(
+pub async fn changed(
     server: &Arc<Server>,
     id: i64,
     change: impl FnOnce(&numa_io::catalog::Catalog) -> Result<(), String> + Send + 'static,
@@ -249,6 +246,15 @@ async fn changed(
 
 pub fn updated(server: &Server, photo: &Photo) -> i64 {
     server.store.updated().get(&photo.id).copied().unwrap_or(0).max(photo.mtime)
+}
+
+pub fn flag_from(name: &str) -> Result<Flag, Fail> {
+    match name {
+        "none" => Ok(Flag::None),
+        "pick" => Ok(Flag::Picked),
+        "reject" => Ok(Flag::Rejected),
+        _ => Err(Fail::bad("A flag is none, pick or reject.")),
+    }
 }
 
 pub fn flag_name(flag: Flag) -> &'static str {

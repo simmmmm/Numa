@@ -27,6 +27,8 @@ struct Shelf {
     order: HashMap<i64, Vec<i64>>,
 
     files: HashMap<i64, Vec<i64>>,
+
+    twins: HashMap<i64, Vec<i64>>,
 }
 
 pub fn found_under(root: &Path) -> Vec<PathBuf> {
@@ -155,6 +157,19 @@ impl Home {
         shelf.files.get(&library).into_iter().flatten().filter_map(|id| shelf.photos.get(id)).cloned().collect()
     }
 
+    pub fn with_twins(&self, ids: &[i64]) -> Vec<i64> {
+        let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut all = ids.to_vec();
+        all.extend(ids.iter().filter_map(|id| shelf.twins.get(id)).flatten());
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+
+    pub fn library(&self, id: i64) -> Option<Library> {
+        self.all_libraries().into_iter().find(|library| library.id == id)
+    }
+
     pub fn at(&self, path: &Path) -> Option<i64> {
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         shelf.photos.values().find(|photo| photo.path == path).map(|photo| photo.id)
@@ -180,6 +195,10 @@ impl Home {
 
             let twins = numa_io::analysis::twins(photos.iter().map(|photo| (photo.id, photo.path.as_path(), photo.taken)), numa_io::raw::is_raw);
             shelf.order.insert(library, photos.iter().map(|photo| photo.id).filter(|id| !twins.contains_key(id)).collect());
+            shelf.twins.retain(|raw, _| library_of(*raw) != library);
+            for (twin, raw) in twins {
+                shelf.twins.entry(raw).or_default().push(twin);
+            }
             shelf.files.insert(library, photos.iter().map(|photo| photo.id).collect());
             ids.extend(photos.iter().map(|photo| photo.id));
             shelf.photos.extend(photos.into_iter().map(|photo| (photo.id, photo)));
