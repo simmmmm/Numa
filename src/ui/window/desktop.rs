@@ -30,7 +30,7 @@ pub(super) fn menu_entry_for(path: &std::path::Path, icon: &std::path::Path) -> 
     include_str!("../../../data/com.tijmen.Numa.desktop")
         .lines()
         .map(|line| match line {
-            "Exec=numa %F" => format!("TryExec={}\nExec=\"{quoted}\" %F", path.display()),
+            "Exec=numa %U" => format!("TryExec={}\nExec=\"{quoted}\" %U", path.display()),
 
             "Icon=com.tijmen.Numa" => format!("Icon={}", icon.display()),
             line => line.to_string(),
@@ -66,7 +66,7 @@ pub(super) fn opened_types() -> Vec<String> {
     include_str!("../../../data/com.tijmen.Numa.desktop")
         .lines()
         .find_map(|line| line.strip_prefix("MimeType="))
-        .map(|types| types.split(';').filter(|t| !t.is_empty()).map(str::to_string).collect())
+        .map(|types| types.split(';').filter(|t| !t.is_empty() && !t.starts_with("x-scheme-handler/")).map(str::to_string).collect())
         .unwrap_or_default()
 }
 

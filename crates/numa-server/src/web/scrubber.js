@@ -25,13 +25,19 @@ function scrubber(months, sections) {
   const pill = h('div', { class: 'scrub-pill', hidden: true });
   const bar = h('div', { class: 'scrubber', role: 'slider', 'aria-label': 'Timeline', tabindex: '0' }, labels, track, hover, thumb, pill);
 
-  // Where each month starts and ends, 0..1 down the bar.
+  // Where each month starts and ends, 0..1 down the bar: as long as its
+  // photographs, but never thinner than FLOOR, so a month of a few — often
+  // the oldest — can still be seen, hovered and dragged to.
+  const FLOOR = 0.006;
+  const shares = months.map(month => Math.max(FLOOR, month.count / total));
+  const sum = shares.reduce((a, b) => a + b, 0);
   let at = 0;
-  const spans = months.map(month => {
-    const span = { month, top: at, bottom: at + month.count / total };
+  const spans = months.map((month, index) => {
+    const span = { month, top: at, bottom: at + shares[index] / sum };
     at = span.bottom;
     return span;
   });
+  libraries().catch(() => null);
   for (const span of spans) {
     const libraries = span.month.libraries?.length ? span.month.libraries : [{ id: null, count: span.month.count }];
     track.append(h('div', { class: 'scrub-month', style: { top: span.top * 100 + '%', height: (span.bottom - span.top) * 100 + '%' } },
@@ -59,13 +65,20 @@ function scrubber(months, sections) {
   };
   const headerHeight = () => document.querySelector('header')?.offsetHeight || 0;
 
+  // The library under the pointer: the month's tints stand in its order,
+  // each as long as its photographs.
+  function libraryAt(span, fraction) {
+    const libraries = span.month.libraries || [];
+    let into = (fraction - span.top) / Math.max(1e-9, span.bottom - span.top) * span.month.count;
+    return libraries.find(library => (into -= library.count) < 0) || libraries[libraries.length - 1];
+  }
+
   function say(fraction) {
     const span = spanAt(fraction);
-    const parts = (span.month.libraries || []).length > 1 || state.tints.size > 1
-      ? h('div', { class: 'scrub-libraries' }, (span.month.libraries || []).slice(0, 4).map(library => {
-        const known = state.libraries?.find(one => one.id === library.id);
-        return h('span', {}, h('i', { style: { background: tint(library.id) } }), known ? libraryName(known) : 'Library');
-      }))
+    const library = libraryAt(span, fraction);
+    const known = library && state.libraries?.find(one => one.id === library.id);
+    const parts = known
+      ? h('div', { class: 'scrub-libraries' }, h('span', {}, h('i', { style: { background: tint(library.id) } }), libraryName(known)))
       : null;
     pill.replaceChildren(h('span', { class: 'section-label' }, counted(span.month.count)), h('span', { class: 'value' }, monthName(span.month.month)), parts);
     pill.hidden = false;

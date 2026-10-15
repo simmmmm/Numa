@@ -6,7 +6,7 @@ fn a_menu_entry_starts_the_appimage_it_was_written_for() {
         std::path::Path::new("/home/a b/Apps/Numa $1.AppImage"),
         std::path::Path::new("/home/a b/.local/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png"),
     );
-    assert!(entry.contains("Exec=\"/home/a b/Apps/Numa \\$1.AppImage\" %F\n"), "{entry}");
+    assert!(entry.contains("Exec=\"/home/a b/Apps/Numa \\$1.AppImage\" %U\n"), "{entry}");
     assert!(entry.contains("TryExec=/home/a b/Apps/Numa $1.AppImage\n"));
     assert!(entry.contains("Icon=/home/a b/.local/share/icons/hicolor/256x256/apps/com.tijmen.Numa.png\n"));
     assert!(entry.contains("X-Numa-AppImage=true"));

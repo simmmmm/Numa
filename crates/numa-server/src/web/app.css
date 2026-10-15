@@ -173,6 +173,7 @@ main { padding: 0 var(--edge) 48px; }
 .viewer .corner { position: absolute; top: var(--edge); display: flex; gap: var(--gap); z-index: 2; }
 .viewer .corner.left { left: var(--edge); }
 .viewer .corner.right { right: var(--edge); }
+.viewer .open-in-numa { display: inline-flex; align-items: center; text-decoration: none; color: var(--ink); align-self: center; }
 .viewer .step { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; opacity: 0; transition: opacity var(--standard); }
 .viewer .stage:hover .step { opacity: 1; }
 .viewer .step.back { left: var(--edge); }
@@ -187,7 +188,7 @@ main { padding: 0 var(--edge) 48px; }
 
 /* HOME-010: the header's ring, and the Activity page. */
 header .activity { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; }
-header .activity .what { color: var(--name); font-weight: 600; }
+header .activity .what { color: var(--name); font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ring { width: 20px; height: 20px; transform: rotate(-90deg); fill: none; stroke-width: 2.2; stroke-linecap: round; }
 .ring .hair { stroke: var(--rule); }
 .ring .arc { stroke: var(--accent); transition: stroke-dasharray var(--standard); }
@@ -197,6 +198,7 @@ header .activity .what { color: var(--name); font-weight: 600; }
 .activity-page h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0 0 4px; }
 .activity-page .section-label { margin-top: 18px; }
 .activity-page .said { text-align: left; }
+.activity-page .said:empty { display: none; }
 .activity-page .list { display: grid; gap: 10px; }
 .job { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
 .job .line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
@@ -215,7 +217,9 @@ header .activity .what { color: var(--name); font-weight: 600; }
 main.scrubbed { padding-right: 76px; }
 .scrubber { position: fixed; right: 0; bottom: 0; width: 72px; z-index: 4; touch-action: none; user-select: none; cursor: ns-resize; padding: 16px 0; }
 .scrubber:focus-visible { outline-offset: -2px; }
-.scrub-track, .scrub-years { position: absolute; top: 16px; bottom: 16px; }
+/* Room at the foot too, above a phone's home bar or a browser's own, so
+   the oldest month is in sight and in reach. */
+.scrub-track, .scrub-years { position: absolute; top: 16px; bottom: max(24px, calc(env(safe-area-inset-bottom) + 16px)); }
 .scrub-track { right: 14px; width: 6px; border-radius: 3px; background: var(--ground-raised); overflow: hidden; transition: width var(--quick), right var(--quick); }
 .scrubber:hover .scrub-track, .scrubber.active .scrub-track { width: 10px; right: 12px; }
 .scrub-month { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.35); }
@@ -230,9 +234,21 @@ main.scrubbed { padding-right: 76px; }
 .scrub-pill .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
 .scrub-libraries { display: flex; flex-direction: column; align-items: end; gap: 2px; margin-top: 4px; color: var(--name); font-size: 12px; line-height: 16px; }
 
-@media (max-width: 720px) {
-  header .activity .what { display: none; }
+/* The header in two rows wherever one would not hold the mark, four
+   places, search, the ring and the account: the places under the rest,
+   the ring a ring alone, always in sight while work runs. */
+@media (max-width: 900px) {
+  header { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+  header .mark { height: 30px; }
+  header .search { order: 2; flex: 1; min-width: 0; margin-left: 0; }
   header .activity { padding: 0 6px; order: 3; }
+  header .activity .what { display: none; }
+  header .who { order: 3; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header nav { order: 4; width: 100%; overflow-x: auto; }
+  .menu { top: 52px; }
+}
+
+@media (max-width: 720px) {
   main.scrubbed { padding-right: 28px; }
   .scrubber { width: 30px; }
   .scrub-track { right: 6px; }
@@ -243,12 +259,6 @@ main.scrubbed { padding-right: 76px; }
   .scrubber.active .scrub-years { display: block; }
   .scrubber.active { width: 96px; background: linear-gradient(to left, rgba(20, 20, 20, 0.85), rgba(20, 20, 20, 0)); }
   .scrub-pill { right: 40px; }
-  header { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
-  header .mark { height: 30px; }
-  header .search { order: 2; flex: 1; margin-left: 0; }
-  header .who { order: 3; }
-  header nav { order: 4; width: 100%; overflow-x: auto; }
-  .menu { top: 52px; }
   .viewer .step { display: none; }
   .info { width: auto; max-height: 55vh; border-radius: 18px 18px 0 0; background: var(--ground-sheet); position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; }
   .places { grid-template-columns: repeat(2, 1fr); }

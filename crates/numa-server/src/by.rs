@@ -18,11 +18,15 @@ pub const UNKNOWN: &str = "Unknown";
 const SAMPLE: usize = 3;
 
 #[derive(Default)]
-pub struct Artists(Mutex<HashMap<String, String>>);
+pub struct Artists(Mutex<HashMap<String, String>>, Mutex<Vec<(String, i64)>>);
 
 impl Artists {
     fn all(&self) -> HashMap<String, String> {
         self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
+    fn counts(&self) -> Vec<(String, i64)> {
+        self.1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
     }
 }
 
@@ -32,9 +36,13 @@ fn artist_of(path: &Path) -> Option<String> {
 
 pub fn learn(server: &Server) {
     let known: HashSet<String> = server.artists.all().into_keys().collect();
+    let mut counts: HashMap<String, i64> = HashMap::new();
     for library in server.home.all_libraries() {
         let id = library.id;
         let Some(Ok(bodies)) = server.home.blocking(move |catalog| catalog.bodies(id)) else { continue };
+        for camera in bodies.values().filter(|camera| !camera.is_empty()) {
+            *counts.entry(camera.clone()).or_default() += 1;
+        }
         let paths: HashMap<i64, std::path::PathBuf> = server.home.files(id).into_iter().map(|photo| (photo.id, photo.path)).collect();
         let mut of: HashMap<String, Vec<i64>> = HashMap::new();
         for (photo, camera) in bodies.into_iter().filter(|(_, camera)| !camera.is_empty() && !known.contains(camera)) {
@@ -47,6 +55,9 @@ pub fn learn(server: &Server) {
             server.artists.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(camera).or_insert(most);
         }
     }
+    let mut counts: Vec<(String, i64)> = counts.into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    *server.artists.1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = counts;
 }
 
 fn named(artist: &str, accounts: &[String]) -> Option<String> {
@@ -111,16 +122,7 @@ fn admin(me: &crate::store::Account) -> Result<(), Fail> {
 
 pub async fn cameras(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
     admin(&me)?;
-    let ids: Vec<i64> = server.home.all_libraries().iter().map(|library| library.id).collect();
-    let found = server.home.ask(move |catalog| ids.into_iter().flat_map(|id| catalog.cameras(id).unwrap_or_default()).collect::<Vec<_>>()).await?;
-    let mut counts: Vec<(String, i64)> = Vec::new();
-    for camera in found {
-        match counts.iter_mut().find(|(key, _)| *key == camera.key) {
-            Some((_, count)) => *count += camera.photos,
-            None => counts.push((camera.key, camera.photos)),
-        }
-    }
-    counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    let counts = server.artists.counts();
     let accounts: Vec<String> = server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect();
     let (links, artists) = (server.store.cameras(), server.artists.all());
     let rows = counts.into_iter().map(|(key, count)| {

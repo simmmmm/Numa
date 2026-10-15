@@ -45,6 +45,38 @@ pub fn host(address: &str) -> String {
     address.split('/').next().unwrap_or_default().to_string()
 }
 
+pub fn open_link(uri: &str) -> Option<(String, String)> {
+    let query = uri.strip_prefix("numa://home/open?")?;
+    let (mut server, mut photo) = (None, None);
+    for pair in query.split('&') {
+        match pair.split_once('=')? {
+            ("server", value) => server = Some(unescaped(value)?),
+            ("photo", value) => photo = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    let (server, photo) = (server?, photo?);
+    let web = server.starts_with("http://") || server.starts_with("https://");
+    let id = !photo.is_empty() && photo.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    (web && id).then_some((server, photo))
+}
+
+fn unescaped(text: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut rest = text.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        rest = after;
+        if byte != b'%' {
+            bytes.push(byte);
+            continue;
+        }
+        let hex = std::str::from_utf8(rest.get(..2)?).ok()?;
+        bytes.push(u8::from_str_radix(hex, 16).ok()?);
+        rest = &rest[2..];
+    }
+    String::from_utf8(bytes).ok()
+}
+
 fn curl(rest: impl IntoIterator<Item = OsString>, url: String) -> Vec<OsString> {
     let start = ["curl", "--silent", "--show-error", "--connect-timeout", "10"].map(OsString::from);
     start.into_iter().chain(rest).chain(["--write-out".into(), "\n%{http_code}".into(), url.into()]).collect()
@@ -185,6 +217,21 @@ mod tests {
         assert_eq!(base("[::1]"), "http://[::1]:8283");
         assert_eq!(host("http://nas.local:8283/"), "nas.local:8283");
         assert_eq!(host("nas.local"), "nas.local");
+    }
+
+    #[test]
+    fn an_open_in_numa_link_is_read_or_refused() {
+        let link = |uri| open_link(uri);
+        assert_eq!(
+            link("numa://home/open?server=http%3A%2F%2Flocalhost%3A8297&photo=4294967301"),
+            Some(("http://localhost:8297".into(), "4294967301".into()))
+        );
+        assert_eq!(link("numa://home/open?photo=7&server=https%3A%2F%2Fphotos.example.org"), Some(("https://photos.example.org".into(), "7".into())));
+        assert_eq!(link("numa://home/open?server=http%3A%2F%2Fnas&photo=../7"), None);
+        assert_eq!(link("numa://home/open?server=file%3A%2F%2F%2Fetc&photo=7"), None);
+        assert_eq!(link("numa://home/open?server=http%3A%2F%2Fnas%2&photo=7"), None);
+        assert_eq!(link("numa://home/open?photo=7"), None);
+        assert_eq!(link("numa://elsewhere?server=http%3A%2F%2Fnas&photo=7"), None);
     }
 
     #[test]

@@ -1,4 +1,3 @@
-# START-011/015: a problem, with what a report needs asked for up front.
 name: Report a Problem
 description: Something in Numa does not work as it should.
 labels: [bug]

@@ -35,9 +35,16 @@ function icon(name) {
   return svg;
 }
 
+// `wait`: seconds before giving up with a sentence, for a page that would
+// otherwise stay empty while a busy NAS takes its time.
 async function api(path, options = {}) {
   const headers = options.body ? { 'Content-Type': 'application/json' } : {};
-  const response = await fetch('/api/v1/' + path, { credentials: 'same-origin', ...options, headers });
+  const signal = options.wait ? AbortSignal.timeout(options.wait * 1000) : undefined;
+  let response;
+  try { response = await fetch('/api/v1/' + path, { credentials: 'same-origin', signal, ...options, headers }); } catch (error) {
+    if (error.name === 'TimeoutError') throw new Error('Numa Home is taking too long to answer; it may be busy. Try again in a moment.');
+    throw new Error('Numa Home could not be reached. Is the NAS on and on this network?');
+  }
   const text = await response.text();
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
@@ -533,7 +540,13 @@ function openViewer(section, at) {
   const info = h('aside', { class: 'info', hidden: true });
   const hud = h('div', { class: 'hud', hidden: true });
   const infoButton = h('button', { class: 'round', 'aria-label': 'Info', title: 'Info (I)', onclick: () => toggleInfo() }, icon('info'));
-  const corner = h('div', { class: 'corner right' }, infoButton,
+  // HOME-013: the photograph in Numa on this computer or device, through
+  // the link both clients take (docs/PLAN_HOME.md). No Numa on Android.
+  const inNuma = !/Android/i.test(navigator.userAgent) && h('a', {
+    class: 'chip open-in-numa', title: 'Open this photograph in Numa, signed in to this Numa Home',
+    onclick: event => { event.currentTarget.href = `numa://home/open?server=${encodeURIComponent(location.origin)}&photo=${current().id}`; },
+  }, 'Open in Numa');
+  const corner = h('div', { class: 'corner right' }, inNuma, infoButton,
     h('button', { class: 'round', 'aria-label': 'Download', onclick: event => {
       event.stopPropagation();
       const id = current().id;
@@ -869,8 +882,13 @@ document.addEventListener('keydown', event => {
 // HOME-012: whose camera is whose — every camera in the archive, its count,
 // the account it is linked to, and what its EXIF Artist says.
 async function cameras(main) {
-  const [list, users] = await Promise.all([api('cameras'), api('users')]).catch(error => (main.append(empty('Cameras', error.message)), [null, null]));
+  // The frame at once, the cameras when they come.
+  const waiting = h('div', { class: 'accounts cameras' }, h('div', {}, h('div', { class: 'section-label' }, 'Cameras'), h('p', { class: 'body' }, 'Loading…')));
+  main.append(waiting);
+  const [list, users] = await Promise.all([api('cameras', { wait: 15 }), api('users', { wait: 15 })])
+    .catch(error => (waiting.replaceWith(empty('Cameras', error.message)), [null, null]));
   if (!list) return;
+  waiting.remove();
   const said = h('p', { class: 'said', role: 'status', style: { textAlign: 'left' } });
   const link = async (camera, account) => {
     try { await api('cameras', { method: 'PUT', body: JSON.stringify({ camera, account }) }); render(); } catch (error) { said.textContent = error.message; }

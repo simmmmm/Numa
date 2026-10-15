@@ -1,14 +1,3 @@
-# WRITTEN WITH AI (Claude), 22 September 2026, as a reference for a Flathub
-# manifest. Flathub does not accept manifests that are AI-generated or
-# AI-assisted, disclosed or not; see README.md beside this file.
-#
-# What makes it different from packaging/flatpak/: it builds with no network,
-# which is how Flathub builds.
-# - The crates come from cargo-sources.json, which flatpak-cargo-generator
-#   writes from Cargo.lock.
-# - ONNX Runtime is Microsoft's own release for 1.28.0, the version ort
-#   2.0.0-rc.13 is built against. ort links it as a shared library through
-#   ORT_LIB_PATH instead of downloading its own.
 id: com.tijmen.Numa
 runtime: org.gnome.Platform
 runtime-version: '50'
@@ -22,12 +11,8 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Downloading models, and the update check.
   - --share=network
-  # Libraries on external drives, and the host's ~/.local/share/numa, which
-  # Numa shares with an AppImage or a build of its own.
   - --filesystem=host
-  # The screen's colour profile (A1).
   - --system-talk-name=org.freedesktop.ColorManager
 
 modules:
@@ -36,7 +21,6 @@ modules:
     build-commands:
       - install -d /app/lib
       - cp -a lib/libonnxruntime.so* /app/lib/
-      # flatpak-builder collects LICENSE by itself; the notices it does not.
       - install -Dm644 ThirdPartyNotices.txt
         /app/share/licenses/com.tijmen.Numa/onnxruntime/ThirdPartyNotices.txt
     sources:
@@ -90,11 +74,6 @@ modules:
       - install -Dm644 -t /app/share/icons/hicolor/scalable/actions
         data/icons/hicolor/scalable/actions/*.svg
     sources:
-      # For Flathub, the public repository at the published commit instead:
-      #   - type: git
-      #     url: https://github.com/simmmmm/Numa.git
-      #     commit: <what dev/publish.sh pushed>
-      # and cargo-sources.json regenerated from that commit's Cargo.lock.
       - type: dir
         path: ../..
         skip:
