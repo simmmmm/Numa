@@ -134,14 +134,19 @@ pub(super) fn dismiss(toast: adw::Toast, up: std::time::Instant) {
 }
 
 fn loader_toast(state: &App, label: &str) -> adw::Toast {
+    quiet_toast(state, label).0
+}
+
+pub(super) fn quiet_toast(state: &App, label: &str) -> (adw::Toast, gtk::Label) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.append(&spinner(label));
-    row.append(&gtk::Label::new(Some(label)));
+    let text = gtk::Label::new(Some(label));
+    row.append(&text);
     let toast = adw::Toast::new("");
     toast.set_custom_title(Some(&row));
     toast.set_timeout(0);
     state.toasts.add_toast(toast.clone());
-    toast
+    (toast, text)
 }
 
 #[derive(Clone, Default)]

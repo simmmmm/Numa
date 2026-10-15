@@ -395,6 +395,7 @@ fn begin(
             false => HashMap::new(),
         }),
         positions: Rc::new(positions),
+        home: copies.home.as_ref().is_some_and(adw::SwitchRow::is_active),
     };
     import_done::run_checked(state, items, run);
 }
@@ -406,13 +407,28 @@ struct Copies {
     rows: Rc<RefCell<Vec<adw::PreferencesRow>>>,
 
     bytes: Rc<Cell<u64>>,
+
+    home: Option<adw::SwitchRow>,
 }
 
 impl Copies {
     fn new(state: &App) -> Self {
         let group = adw::PreferencesGroup::new();
         group.set_title("Copies");
-        let copies = Self { group, state: state.clone(), rows: Rc::default(), bytes: Rc::default() };
+        let home = home::account(state).signed_in().then(|| {
+            let row = adw::SwitchRow::new();
+            row.set_title(&format!("Keep This Library at {}", home::NUMA_HOME));
+            let pace = match home_sync::pace(state).night {
+                true => "at night",
+                false => "while Numa is open",
+            };
+            row.set_subtitle(&format!(
+                "The library it goes into, Original and Edits, to a new one of the same name on {}, then kept in step {pace} (Preferences)",
+                home::NUMA_HOME
+            ));
+            row
+        });
+        let copies = Self { group, state: state.clone(), rows: Rc::default(), bytes: Rc::default(), home };
         copies.build();
         copies
     }
@@ -500,6 +516,7 @@ impl Copies {
             }
         ));
         rows.push(check.upcast());
+        rows.extend(self.home.clone().map(Cast::upcast));
         for row in &rows {
             self.group.add(row);
         }

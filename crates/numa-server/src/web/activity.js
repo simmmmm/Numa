@@ -1,5 +1,6 @@
-// HOME-010: the background work — a small ring in the header while
-// anything runs, and the Activity page it opens: every job in plain words,
+// HOME-010: the background work — a small ring and a word in the main
+// navigation while anything runs (an import from a card and the models'
+// downloads too), and the Activity page it opens: every job in plain words,
 // how far, where, how long is left, the models on their way, and Pause.
 'use strict';
 
@@ -14,7 +15,20 @@ function duration(seconds) {
 function share(activity) {
   const busy = activity.jobs.filter(job => ['running', 'waiting', 'paused'].includes(job.state) && job.total > 0);
   const total = busy.reduce((sum, job) => sum + job.total, 0);
-  return total ? busy.reduce((sum, job) => sum + job.done, 0) / total : null;
+  if (total) return busy.reduce((sum, job) => sum + job.done, 0) / total;
+  const fetching = activity.downloads.filter(item => item.state === 'fetching' && item.total > 0);
+  const bytes = fetching.reduce((sum, item) => sum + item.total, 0);
+  return bytes ? fetching.reduce((sum, item) => sum + item.done, 0) / bytes : null;
+}
+
+// The ring's word: what runs, short enough for the navigation.
+const SHORT = { scan: 'Scanning', thumbnails: 'Thumbnails', analyse: 'Faces', words: 'Words', things: 'Things', night: 'Night', import: 'Importing' };
+function badgeWord(activity) {
+  if (activity.paused) return 'Paused';
+  const running = activity.jobs.find(job => job.state === 'running');
+  if (running) return SHORT[running.job] || running.name;
+  if (activity.downloads.some(item => item.state === 'fetching')) return 'Models';
+  return 'Waiting';
 }
 
 function ring(fraction, paused) {
@@ -44,9 +58,9 @@ async function activityBadge() {
   if (badge && activity) {
     badge.hidden = !show;
     if (show) {
-      const label = activity.paused ? 'Paused' : running ? running.name : 'Waiting';
-      badge.replaceChildren(ring(share(activity), activity.paused), h('span', { class: 'what' }, label));
-      badge.title = activity.paused ? 'Background work paused' : running ? `${running.doing}…` : 'Background work';
+      badge.replaceChildren(ring(share(activity), activity.paused), h('span', { class: 'what' }, badgeWord(activity)));
+      const numbers = running?.total ? ` · ${grouped(running.done)} of ${grouped(running.total)}` : '';
+      badge.title = activity.paused ? 'Background work paused' : running ? `${running.doing}${numbers}` : 'Background work';
     }
   }
   if (route().path === '/activity') drawActivity(activity, error);
@@ -106,9 +120,28 @@ function drawActivity(activity, error) {
     ? 'Paused. Nothing new is started; the photographs in hand were finished. Numa Home still shows and sends everything.'
     : 'What Numa Home does by itself, gently, so the NAS serves the photographs first.';
   page.querySelector('.list').replaceChildren(...[
+    ...lastNight(activity.night),
     h('div', { class: 'section-label' }, 'Background'),
-    ...activity.jobs.map(row),
+    ...activity.jobs.filter(job => job.job !== 'night' || job.state !== 'idle').map(row),
     fetching.length > 0 && h('div', { class: 'section-label' }, 'Models'),
     ...fetching.map(download),
   ].filter(Boolean));
+}
+
+// HOME-020: what the night's round did, and what needs a person, each
+// linking to where to act.
+function lastNight(night) {
+  if (!night) return [];
+  const at = seconds => new Date(seconds * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const today = new Date().toLocaleDateString('sv-SE');
+  const span = night.finished ? `${at(night.started)}–${at(night.finished)}` : `since ${at(night.started)}`;
+  return [
+    h('div', { class: 'section-label' }, night.date === today ? 'Last Night' : `The Night of ${night.date}`),
+    h('div', { class: 'night' },
+      h('p', { class: 'caption' }, span),
+      night.stopped && h('p', { class: 'body' }, night.stopped),
+      h('ul', { class: 'done' }, night.done.map(line => h('li', {}, line))),
+      night.needs.length > 0 && h('div', { class: 'section-label' }, 'Needs a Person'),
+      night.needs.length > 0 && h('ul', { class: 'needs' }, night.needs.map(need => h('li', {}, h('a', { href: need.link }, need.text))))),
+  ];
 }

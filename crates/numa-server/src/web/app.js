@@ -27,6 +27,7 @@ const ICONS = {
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   back: '<path d="M15 5l-7 7 7 7"/>',
   on: '<path d="M9 5l7 7-7 7"/>',
+  expand: '<path d="M14 5h5v5M10 19H5v-5M19 5l-6 6M5 19l6-6"/>',
 };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -69,7 +70,8 @@ const when = seconds => new Date(seconds * 1000).toLocaleString('en-GB', {
 });
 
 // Routes live in the hash: #/ (photos, narrowed by ?library=&person=&album=&q=),
-// #/libraries, #/people, #/albums, #/accounts, #/activity, #/cameras.
+// #/libraries, #/people, #/albums, #/accounts, #/activity, #/cameras,
+// #/trash, #/import, #/tidy (?kind=).
 function route() {
   const [path, query] = (location.hash.slice(1) || '/').split('?');
   return { path, params: new URLSearchParams(query || '') };
@@ -145,6 +147,9 @@ function render() {
   cardBar();
   activityBadge();
   if (path === '/activity') return activityPage(main);
+  if (path === '/import') return importPage(main);
+  if (path === '/trash') return trashPage(main);
+  if (path === '/tidy') return tidyPage(main, params);
   if (path === '/people') return people(main);
   if (path === '/albums') return albums(main);
   if (path === '/libraries') return shelves(main);
@@ -165,6 +170,7 @@ function header(path, params) {
       h('div', { class: 'section-label' }, state.me.name),
       state.me.admin && h('button', { onclick: () => go('/accounts') }, 'Accounts'),
       state.me.admin && h('button', { onclick: () => go('/cameras') }, 'Cameras'),
+      h('button', { onclick: () => go('/tidy') }, 'Tidy Up'),
       h('button', { onclick: () => go('/activity') }, 'Activity'),
       h('button', { onclick: async () => { await api('logout', { method: 'POST' }).catch(() => {}); signIn(); } }, 'Sign Out'),
     ]);
@@ -172,7 +178,7 @@ function header(path, params) {
   bar.append(
     h('img', { class: 'mark', src: '/mark.png', alt: 'Numa Home', onclick: () => go('/') }),
     h('nav', {}, tab('Photos', '/'), tab('Libraries', '/libraries'), tab('People', '/people'), tab('Albums', '/albums')),
-    search, badgeButton(), who);
+    badgeButton(), search, who);
   return bar;
 }
 
@@ -182,89 +188,6 @@ function menu(parent, items) {
   const box = h('div', { class: 'menu', role: 'menu' }, items);
   parent.append(box);
   setTimeout(() => document.addEventListener('click', () => box.remove(), { once: true }));
-}
-
-// HOME-009: a card in the NAS, on every page — what is new on it, where
-// each shoot goes, and the import's progress and verdict.
-let cardTimer = null;
-async function cardBar() {
-  clearTimeout(cardTimer);
-  const bar = document.querySelector('.cardbar');
-  if (!bar || !state.me) return;
-  let card = null;
-  try { card = await api('card'); } catch (_) { card = null; }
-  if (!(state.cardOpen && card && !card.importing && !card.done)) drawCard(bar, card);
-  cardTimer = setTimeout(cardBar, card?.importing ? 1000 : 10000);
-}
-
-const shortDate = seconds => new Date(seconds * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-function days(first, last) {
-  const [a, b] = [shortDate(first), shortDate(last)];
-  return a === b ? a : `${a.replace(/ \d{4}$/, '')} – ${b}`;
-}
-
-function drawCard(bar, card) {
-  const said = card?.done?.said;
-  if (!card || (said && state.cardDismissed === said) || (!card.importing && !said && !card.new)) {
-    bar.hidden = true;
-    state.cardOpen = false;
-    return;
-  }
-  bar.hidden = false;
-  const from = card.camera ? `A card from the ${card.camera}` : 'A card';
-  if (card.importing) {
-    const { done, total } = card.importing;
-    bar.replaceChildren(h('div', { class: 'line' }, h('span', {}, `Importing from the card · ${grouped(done)} of ${grouped(total)}`),
-      h('progress', { max: total || 1, value: done })));
-    return;
-  }
-  if (said) {
-    bar.replaceChildren(...[h('div', { class: 'line' }, h('span', {}, said),
-      h('button', { class: 'chip', onclick: () => { state.cardDismissed = said; bar.hidden = true; render(); } }, 'Done')),
-    card.done.problems.length > 0 && h('ul', { class: 'problems' }, card.done.problems.map(problem => h('li', {}, problem)))].filter(Boolean));
-    return;
-  }
-  const plan = h('div', { class: 'plan', hidden: !state.cardOpen });
-  bar.replaceChildren(h('div', { class: 'line' },
-    h('span', {}, `${from} · ${grouped(card.new)} new photograph${card.new === 1 ? '' : 's'} · ${days(card.first, card.last)}`),
-    h('button', { class: state.cardOpen ? 'chip' : 'primary', onclick: event => { state.cardOpen = !state.cardOpen; plan.hidden = !state.cardOpen; event.currentTarget.className = state.cardOpen ? 'chip' : 'primary'; if (state.cardOpen) fillPlan(plan, card); } }, 'Import…')),
-  plan);
-  if (state.cardOpen) fillPlan(plan, card);
-}
-
-async function fillPlan(plan, card) {
-  const archive = (await libraries().catch(() => [])).filter(library => !library.mine);
-  const rows = card.shoots.map(shoot => {
-    const suggested = shoot.folder.split('/').pop();
-    const name = h('input', { type: 'text', value: suggested, 'aria-label': 'Name of the new folder' });
-    const where = h('span', { class: 'caption' });
-    const select = h('select', { 'aria-label': 'Where this shoot goes' },
-      h('option', { value: '' }, 'A new folder'),
-      archive.map(library => h('option', { value: library.id, selected: library.id === shoot.library }, library.name)));
-    const update = () => {
-      name.hidden = select.value !== '';
-      const parent = shoot.folder.split('/').slice(0, -1).join('/');
-      where.textContent = select.value ? '' : `into ${parent ? parent + '/' : ''}${name.value.trim() || suggested}`;
-    };
-    select.addEventListener('change', update);
-    name.addEventListener('input', update);
-    update();
-    return { shoot, select, name, el: h('div', { class: 'shoot' },
-      h('span', { class: 'what' }, `${counted(shoot.count)} · ${days(shoot.first, shoot.last)}`), select, name, where) };
-  });
-  const said = h('span', { class: 'said' });
-  plan.replaceChildren(h('div', { class: 'section-label' }, 'Shoots on the card'), ...rows.map(row => row.el),
-    h('div', { class: 'line' },
-      h('span', { class: 'caption' }, 'Copied, read back and checked against the card. Numa never changes the card.'),
-      h('button', { class: 'primary', onclick: async () => {
-        const shoots = rows.map(row => row.select.value ? { library: Number(row.select.value) } : { name: row.name.value.trim() });
-        try {
-          await api('card/import', { method: 'POST', body: JSON.stringify({ shoots }) });
-          state.cardOpen = false;
-          cardBar();
-        } catch (error) { said.textContent = error.message; }
-      } }, 'Import')),
-    said);
 }
 
 function empty(title, text) {
@@ -349,7 +272,7 @@ async function filterRow(params, narrowed) {
     }
   }
   const count = h('span', { class: 'caption count' });
-  row.append(count);
+  row.append(selectToggle(), count);
   return { row, count };
 }
 
@@ -406,8 +329,10 @@ function tile(section, photo, style, height) {
   const edge = height * (devicePixelRatio || 1) > 330 ? 512 : 256;
   const image = h('img', { src: thumb(photo.id, edge), loading: 'lazy', decoding: 'async', alt: '' });
   image.addEventListener('load', () => image.classList.add('in'));
-  return h('button', { class: 'tile', style, 'data-id': photo.id, 'aria-label': 'Photograph', onclick: () => openViewer(section, section.photos.indexOf(photo)) },
-    image, photo.rating > 0 && h('span', { class: 'stars' }, '★'.repeat(photo.rating)));
+  // HOME-017: a click chooses once something is chosen (`pick`).
+  return h('button', { class: 'tile' + (picked.ids.has(photo.id) ? ' picked' : ''), style, 'data-id': photo.id, 'aria-label': 'Photograph',
+    onclick: event => pick(event, photo.id) || openViewer(section, section.photos.indexOf(photo)) },
+  image, h('span', { class: 'check', 'aria-hidden': 'true' }), photo.rating > 0 && h('span', { class: 'stars' }, '★'.repeat(photo.rating)));
 }
 
 let resizing;
@@ -420,7 +345,7 @@ window.addEventListener('resize', () => {
 async function search(main, q) {
   const count = h('span', { class: 'caption count' });
   main.append(h('div', { class: 'filters' },
-    h('button', { class: 'chip chosen', onclick: () => go('/') }, q, h('span', { class: 'x', 'aria-label': 'Remove' }, '×')), count));
+    h('button', { class: 'chip chosen', onclick: () => go('/') }, q, h('span', { class: 'x', 'aria-label': 'Remove' }, '×')), selectToggle(), count));
   let found;
   try { found = await api('search?q=' + encodeURIComponent(q)); } catch (error) {
     main.append(empty('Search Waits', error.message));
@@ -434,7 +359,8 @@ async function search(main, q) {
   main.append(h('div', { class: 'grid' }, section.photos.map((photo, at) => {
     const image = h('img', { src: thumb(photo.id, 256), loading: 'lazy', decoding: 'async', alt: '' });
     image.addEventListener('load', () => image.classList.add('in'));
-    return h('button', { class: 'tile', 'aria-label': 'Photograph', onclick: () => openViewer(section, at) }, image);
+    return h('button', { class: 'tile', 'data-id': photo.id, 'aria-label': 'Photograph', onclick: event => pick(event, photo.id) || openViewer(section, at) },
+      image, h('span', { class: 'check', 'aria-hidden': 'true' }));
   })));
 }
 
@@ -498,8 +424,9 @@ async function shelves(main) {
   if (!list.length) return main.append(empty('No Libraries Yet', 'Every folder in the photos folder is a library; so is what each person sends home.'));
   // HOME-011: each library's tint, as the scrubber has it.
   state.tints = tintsOf(await api('timeline').catch(() => []));
-  main.append(h('div', { class: 'places' }, list.map(library =>
-    collection([h('i', { class: 'tint', style: { background: tint(library.id) } }), libraryName(library)], counted(library.count), 'library=' + library.id, () => go('/', { library: library.id })))));
+  main.append(libraryCommands(list), h('div', { class: 'places' }, list.map(library => h('div', { class: 'shelf' },
+    collection([h('i', { class: 'tint', style: { background: tint(library.id) } }), libraryName(library)], counted(library.count), 'library=' + library.id, () => go('/', { library: library.id })),
+    renameButton(library)))));
 }
 
 async function albums(main) {
@@ -688,7 +615,7 @@ function handle(stage, image) {
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
   };
   stage.addEventListener('pointerdown', event => {
-    if (event.target.closest('button, .menu, .info') || event.button > 0) return;
+    if (event.target.closest('button, a, .menu, .info') || event.button > 0) return;
     if (event.pointerType !== 'mouse') touched = Date.now();
     try { stage.setPointerCapture(event.pointerId); } catch (_) { /* a synthetic pointer */ }
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -817,6 +744,7 @@ async function fillInfo() {
   if (!photo) return;
   const library = (await libraries().catch(() => [])).find(one => one.id === photo.library);
   const albums = photo.albums.length ? await api('albums').catch(() => []) : [];
+  const by = await byPicker(photo);
   if (state.viewer !== viewer || viewer.detail !== photo) return;
   const label = text => h('div', { class: 'section-label' }, text);
   const chips = (names, open) => h('div', { class: 'chips' }, names.map(name => h('button', { class: 'chip', onclick: () => open(name) }, name)));
@@ -843,8 +771,7 @@ async function fillInfo() {
     photo.people.length > 0 && chips(photo.people, person => go('/', { person })),
     photo.albums.length > 0 && label('Albums'),
     photo.albums.length > 0 && chips(photo.albums, name => go('/', { album: albums.find(album => album.name === name)?.key })),
-    photo.by && label('By'),
-    photo.by && h('div', {}, photo.by),
+    label('By'), by,
     library && label('Library'),
     library && h('div', {}, libraryName(library)),
     photo.edited && h('div', { class: 'caption', style: { marginTop: '14px' } }, 'Shown with its edits in Numa.'),

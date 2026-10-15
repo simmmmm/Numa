@@ -20,14 +20,17 @@ pub enum Kind {
     Analyse,
     Words,
     Things,
+
+    Night,
 }
 
-const TEXTS: [(&str, &str, &str, &str); 5] = [
+const TEXTS: [(&str, &str, &str, &str); 6] = [
     ("scan", "Looking for Photographs", "Looking for new and changed photographs", "Every library looked through"),
     ("thumbnails", "Thumbnails", "Making thumbnails, edits applied", "Every photograph has its thumbnails"),
     ("analyse", "Faces, Sharpness and Bursts", "Finding faces and measuring sharpness", "Every photograph analysed"),
     ("words", "Search in Words", "Reading what is in each photograph", "Every photograph read for words"),
     ("things", "Things Numa Saw", "Seeing which everyday things each photograph has", "Every photograph looked at"),
+    ("night", "The Night's Round", "Tidying up while the house sleeps", "Done for tonight"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -62,7 +65,7 @@ pub struct Download {
 #[derive(Default)]
 pub struct Activity {
     paused: AtomicBool,
-    jobs: Mutex<[Job; 5]>,
+    jobs: Mutex<[Job; 6]>,
     downloads: Mutex<Vec<Download>>,
 }
 
@@ -100,7 +103,7 @@ impl Activity {
 
     pub fn start(&self, kind: Kind) {
         self.job(kind, |job| {
-            if job.is != Is::Idle || matches!(kind, Kind::Scan) {
+            if job.is != Is::Idle || matches!(kind, Kind::Scan | Kind::Night) {
                 (job.is, job.started) = (Is::Running, Some(Instant::now()));
             }
         })
@@ -108,6 +111,10 @@ impl Activity {
 
     pub fn at(&self, kind: Kind, library: i64, stage: Option<&'static str>) {
         self.job(kind, |job| (job.library, job.stage) = (Some(library), stage))
+    }
+
+    pub fn stage(&self, kind: Kind, stage: &'static str) {
+        self.job(kind, |job| (job.library, job.stage) = (None, Some(stage)))
     }
 
     pub fn add(&self, kind: Kind, done: usize) {
@@ -138,7 +145,7 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
     let seen = server.home.libraries(&me.name);
     let paused = server.activity.paused();
     let jobs = server.activity.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let rows: Vec<Value> = jobs
+    let mut rows: Vec<Value> = jobs
         .iter()
         .zip(TEXTS)
         .map(|(job, (key, name, running, idle))| {
@@ -159,6 +166,13 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
         })
         .collect();
     drop(jobs);
+
+    if let Some((done, total)) = crate::cards::progress(&server) {
+        rows.push(json!({
+            "job": "import", "name": "Importing from the Card", "state": "running", "doing": "Copying each photograph and reading it back",
+            "library": null, "done": done, "total": total, "left": null, "ago": null,
+        }));
+    }
     let downloads: Vec<Value> = server
         .activity
         .downloads()
@@ -171,7 +185,14 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
         .collect();
     let busy = rows.iter().any(|row| matches!(row["state"].as_str(), Some("running" | "waiting")))
         || downloads.iter().any(|row| matches!(row["state"].as_str(), Some("fetching" | "waiting")));
-    Json(json!({ "paused": paused, "busy": busy, "jobs": rows, "downloads": downloads }))
+
+    let night = crate::night::last(&server).map(|mut report| {
+        if !me.admin {
+            report.needs.clear();
+        }
+        report
+    });
+    Json(json!({ "paused": paused, "busy": busy, "jobs": rows, "downloads": downloads, "night": night }))
 }
 
 async fn set(server: Arc<Server>, me: crate::store::Account, paused: bool) -> Result<Json<Value>, Fail> {

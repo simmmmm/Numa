@@ -34,6 +34,8 @@ pub(super) struct Run {
     pub(super) stand_ins: Rc<HashMap<PathBuf, PathBuf>>,
 
     pub(super) positions: Rc<HashMap<PathBuf, (f64, f64)>>,
+
+    pub(super) home: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -275,6 +277,9 @@ fn catalogue(state: &App, run: &Run, report: &Report, scans: &[(PathBuf, Scan)])
     match state.catalog.set_positions(&placed) {
         Ok(()) => kept.placed = placed.len(),
         Err(err) => state.toast(&format!("Copied, but the places were not kept: {err}")),
+    }
+    if run.home {
+        home_sync::keep_at_home(state, &touched);
     }
     state.libraries.filter.borrow_mut().in_one_library();
     reload_libraries(state);

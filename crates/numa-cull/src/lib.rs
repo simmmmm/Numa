@@ -41,6 +41,8 @@ const SOFT_FRACTION: f32 = 1.0 / 12.0;
 
 pub const BLOWN: f32 = 0.10;
 
+pub const BLOWN_FULL: f32 = 0.40;
+
 pub const HANDHELD: f32 = 32.0;
 
 pub const BLANK: f32 = 0.01;
@@ -237,7 +239,7 @@ impl Scale {
         let mut score = 5.0 * ((sharpness - self.dull) / (self.crisp - self.dull)).clamp(0.0, 1.0);
 
         if frame.is_blown() {
-            let past = ((frame.blown_fraction() - BLOWN) / (0.40 - BLOWN)).clamp(0.0, 1.0);
+            let past = ((frame.blown_fraction() - BLOWN) / (BLOWN_FULL - BLOWN)).clamp(0.0, 1.0);
             score -= 2.0 * past;
         }
 

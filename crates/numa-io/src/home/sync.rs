@@ -227,6 +227,38 @@ pub fn libraries(out: &str) -> Result<Vec<Library>, Failure> {
     parsed(answer(out)?)
 }
 
+pub fn new_library(address: &str, name: &str) -> Vec<OsString> {
+    let body = serde_json::json!({ "name": name }).to_string();
+    let rest = ["--max-time", "30", "--request", "POST", "--header", "@-", "--header", "Content-Type: application/json", "--data-binary", &body];
+    curl(words(&rest), format!("{}/api/v1/libraries", base(address)))
+}
+
+pub fn made_library(out: &str) -> Result<Library, Failure> {
+    parsed(answer(out)?)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Pace {
+
+    pub night: bool,
+
+    pub unmetered: bool,
+}
+
+impl Default for Pace {
+    fn default() -> Self {
+        Self { night: true, unmetered: true }
+    }
+}
+
+impl Pace {
+    pub const NIGHT: std::ops::Range<i32> = 1..6;
+
+    pub fn allows(self, hour: i32, metered: bool) -> bool {
+        (!self.night || Self::NIGHT.contains(&hour)) && !(self.unmetered && metered)
+    }
+}
+
 pub fn get_photo(address: &str, id: &str) -> Vec<OsString> {
     get(address, &format!("photos/{}", escaped(id)))
 }

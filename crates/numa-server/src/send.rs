@@ -32,7 +32,7 @@ fn file_name(asked: &str) -> Result<String, Fail> {
     }
 }
 
-fn folder_in(dir: &str) -> Result<PathBuf, Fail> {
+pub fn folder_in(dir: &str) -> Result<PathBuf, Fail> {
     let path = FilePath::new(dir.trim_end_matches('/'));
     let mut inside = PathBuf::new();
     for part in path.components() {

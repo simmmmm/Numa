@@ -487,6 +487,30 @@ they are for, to download one by one or all at once. **Storage** shows Numa's
 own folders and how much each takes, clears the thumbnail cache, and says what
 to delete to remove Numa again.
 
+## Numa Home
+
+[Numa Home](https://github.com/simmmmm/numa-home) is the household's own
+photo server: one Docker container on a NAS or any computer that runs Docker,
+with SQLite inside and no database server beside it. Every folder of
+photographs on it becomes a library the whole household sees in a browser,
+raws shown as Numa develops them, edits included, with faces, search in
+words and a timeline you scrub by month. A login for each person, and By to
+say who took what.
+
+- **Send Home** from Export, as a JPEG or as the original with its edits,
+  which the server renders and you can change later.
+- **Numa Home libraries**: a library on Home imported into Numa, edited here
+  like any other and kept in step both ways. An import can be kept at Home,
+  sent up at night or only on networks that are not metered.
+- **Open in Numa** from a photograph's page in the browser.
+- **A card in the NAS** is imported the way Numa imports one. **Tidy Up**
+  offers copies, runs of the same frame and frames past use, and Numa's
+  pick; what goes waits in a trash for 30 days. At night Home tries again
+  what failed, checks every file and tidies its catalogs; Activity shows
+  what it is doing and can pause it.
+
+Send Home and Open in Numa are coming to iPhone, iPad and Mac too.
+
 ---
 
 ## Cameras

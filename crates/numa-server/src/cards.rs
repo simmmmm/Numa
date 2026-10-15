@@ -20,6 +20,9 @@ pub struct Card {
     root: PathBuf,
     camera: Option<String>,
     found: Vec<Found>,
+
+    new: Vec<bool>,
+
     shoots: Vec<Shoot>,
     places: Vec<Place>,
 }
@@ -78,8 +81,9 @@ fn read(server: &Server, root: PathBuf) -> Card {
     let libraries = archive(server);
     let held: Vec<PathBuf> = libraries.iter().flat_map(|library| server.home.files(library.id)).map(|photo| photo.path).collect();
     let already = import::already(&found, &import::by_name(held));
-    let new: Vec<usize> = (0..found.len()).filter(|&at| already[at].is_none()).collect();
-    let shoots = import::shoots(&found, &new);
+    let new: Vec<bool> = already.iter().map(Option::is_none).collect();
+    let all: Vec<usize> = (0..found.len()).collect();
+    let shoots = import::shoots(&found, &all);
     let spans: Vec<import::Span> = libraries
         .iter()
         .map(|library| {
@@ -89,9 +93,9 @@ fn read(server: &Server, root: PathBuf) -> Card {
         .collect();
 
     let places = shoots.iter().map(|shoot| inside_archive(server, import::suggest(shoot, &spans, 0), shoot)).collect();
-    let camera = new.first().and_then(|&at| numa_io::raw::summary(&found[at].path)).and_then(|summary| summary.camera);
-    log::info!("card at {}: {} photographs, {} new, {} shoots", root.display(), found.len(), new.len(), shoots.len());
-    Card { root, camera, found, shoots, places }
+    let camera = found.last().and_then(|photo| numa_io::raw::summary(&photo.path)).and_then(|summary| summary.camera);
+    log::info!("card at {}: {} photographs, {} new, {} shoots", root.display(), found.len(), new.iter().filter(|new| **new).count(), shoots.len());
+    Card { root, camera, found, new, shoots, places }
 }
 
 fn inside_archive(server: &Server, place: Place, shoot: &Shoot) -> Place {
@@ -118,19 +122,21 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(_): Signed) -> Jso
                 Place::New(path) => (None, path.clone()),
             };
             let folder = folder.strip_prefix(&server.home.photos).unwrap_or(&folder).to_string_lossy().into_owned();
-            json!({ "first": shoot.first, "last": shoot.last, "count": shoot.photos.len(), "library": library, "folder": folder })
+            let new = shoot.photos.iter().filter(|&&at| card.new[at]).count();
+            json!({ "first": shoot.first, "last": shoot.last, "count": new, "photos": shoot.photos.len(), "library": library, "folder": folder })
         })
         .collect();
     let importing = cards.importing.load(Ordering::Relaxed).then(|| json!({ "done": cards.done.load(Ordering::Relaxed), "total": cards.total.load(Ordering::Relaxed) }));
     let said = cards.said.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone().map(|(said, problems)| json!({ "said": said, "problems": problems }));
-    let new: usize = card.shoots.iter().map(|shoot| shoot.photos.len()).sum();
+    let new = card.new.iter().filter(|new| **new).count();
+    let new_ones = || card.shoots.iter().filter(|shoot| shoot.photos.iter().any(|&at| card.new[at]));
     Json(json!({
         "card": card.root.file_name().map(|name| name.to_string_lossy()),
         "camera": card.camera,
         "photos": card.found.len(),
         "new": new,
-        "first": card.shoots.first().map(|shoot| shoot.first),
-        "last": card.shoots.last().map(|shoot| shoot.last),
+        "first": new_ones().next().map(|shoot| shoot.first),
+        "last": new_ones().next_back().map(|shoot| shoot.last),
         "shoots": shoots,
         "importing": importing,
         "done": said,
@@ -141,6 +147,8 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(_): Signed) -> Jso
 pub struct Destination {
     library: Option<i64>,
     name: Option<String>,
+
+    photos: Option<Vec<usize>>,
 }
 
 #[derive(Deserialize)]
@@ -163,7 +171,20 @@ pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(as
                 None => Place::New(new_folder(&server, suggested, shoot, destination.name.as_deref())?),
             });
         }
-        (plan(card, &places), places)
+        let ticked: Vec<Vec<usize>> = asked
+            .shoots
+            .iter()
+            .zip(&card.shoots)
+            .map(|(destination, shoot)| match &destination.photos {
+                Some(ticked) => shoot.photos.iter().copied().filter(|at| ticked.contains(at)).collect(),
+                None => shoot.photos.iter().copied().filter(|&at| card.new[at]).collect(),
+            })
+            .collect();
+        let items = plan(card, &places, &ticked);
+        if items.is_empty() {
+            return Err(Fail::bad("Tick a photograph to import."));
+        }
+        (items, places)
     };
     if server.cards.importing.swap(true, Ordering::SeqCst) {
         return Err(Fail(StatusCode::CONFLICT, "An import is already under way.".into()));
@@ -188,6 +209,41 @@ pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(as
     Ok(StatusCode::ACCEPTED)
 }
 
+pub async fn photos(State(server): State<Arc<Server>>, Signed(_): Signed) -> Json<Value> {
+    let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(card) = card.as_ref() else { return Json(Value::Null) };
+    let shoots: Vec<Vec<Value>> = card
+        .shoots
+        .iter()
+        .map(|shoot| {
+            shoot
+                .photos
+                .iter()
+                .map(|&at| {
+                    let photo = &card.found[at];
+                    let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned());
+                    json!({ "n": at, "name": name, "taken": photo.when, "new": card.new[at], "raw": numa_io::raw::is_raw(&photo.path) })
+                })
+                .collect()
+        })
+        .collect();
+    Json(json!({ "card": card.root.file_name().map(|name| name.to_string_lossy()), "shoots": shoots }))
+}
+
+pub async fn thumb(State(server): State<Arc<Server>>, Signed(_): Signed, axum::extract::Path(at): axum::extract::Path<usize>) -> Result<axum::response::Response, Fail> {
+    let path = {
+        let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        card.as_ref().and_then(|card| card.found.get(at)).map(|photo| photo.path.clone())
+    };
+    let path = path.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such photograph on the card.".into()))?;
+    crate::manage::embedded(&server, path, 320).await
+}
+
+pub fn progress(server: &Server) -> Option<(usize, usize)> {
+    let cards = &server.cards;
+    cards.importing.load(Ordering::Relaxed).then(|| (cards.done.load(Ordering::Relaxed), cards.total.load(Ordering::Relaxed)))
+}
+
 fn new_folder(server: &Server, suggested: &Place, shoot: &Shoot, name: Option<&str>) -> Result<PathBuf, Fail> {
     let base = match suggested {
         Place::New(path) => path.clone(),
@@ -197,21 +253,20 @@ fn new_folder(server: &Server, suggested: &Place, shoot: &Shoot, name: Option<&s
         }
     };
     let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else { return Ok(base) };
-    let plain = !name.starts_with('.') && !name.contains(['/', '\\']) && !name.chars().any(char::is_control) && name.len() <= 120;
-    if !plain {
+    if !crate::manage::plain(name) {
         return Err(Fail::bad("A folder's name is one plain name."));
     }
     Ok(base.parent().unwrap_or(&server.home.photos).join(name))
 }
 
-fn plan(card: &Card, places: &[Place]) -> Vec<Item> {
+fn plan(card: &Card, places: &[Place], ticked: &[Vec<usize>]) -> Vec<Item> {
     let mut items = Vec::new();
-    for (shoot, place) in card.shoots.iter().zip(places) {
+    for (shoot, place) in ticked.iter().zip(places) {
         let folder = match place {
             Place::Library(library) => library.path.clone(),
             Place::New(path) => path.clone(),
         };
-        for &at in &shoot.photos {
+        for &at in shoot {
             let photo = &card.found[at];
             items.push(Item { card: photo.path.clone(), size: photo.size, to: Target::Free(folder.clone(), import::named("", photo, 0, 0)), second: None });
         }
@@ -234,6 +289,10 @@ fn import_now(server: &Arc<Server>, items: Vec<Item>, places: &[Place]) -> (Stri
 
     let roots: Vec<PathBuf> = places
         .iter()
+        .filter(|place| match place {
+            Place::Library(_) => true,
+            Place::New(path) => path.is_dir(),
+        })
         .map(|place| match place {
             Place::Library(library) => library.path.clone(),
             Place::New(path) => path.clone(),

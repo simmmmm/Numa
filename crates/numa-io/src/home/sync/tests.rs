@@ -139,3 +139,14 @@ fn the_command_lines_keep_the_token_off_them() {
     assert_eq!(all[1].last().unwrap(), "http://nas:8283/api/v1/libraries/1/photos?since=5");
     assert_eq!(all[5].last().unwrap(), "http://nas:8283/api/v1/send/a.raf?library=1&dir=2026%2F03%20Rome");
 }
+
+#[test]
+fn the_night_and_the_hotspot_hold_a_round_back() {
+    let night = Pace::default();
+    assert!(night.allows(1, false) && night.allows(5, false));
+    assert!(!night.allows(0, false) && !night.allows(6, false) && !night.allows(14, false));
+    assert!(!night.allows(3, true));
+    let always = Pace { night: false, unmetered: false };
+    assert!(always.allows(14, true));
+    assert!(!Pace { night: false, unmetered: true }.allows(14, true));
+}

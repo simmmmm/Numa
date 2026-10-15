@@ -1,5 +1,5 @@
 use super::*;
-use numa::io::home::{self as api, Account, Failure};
+use numa::io::home::{self as api, sync::Pace, Account, Failure};
 use std::ffi::OsString;
 
 pub(super) const NUMA_HOME: &str = "Numa Home";
@@ -62,7 +62,8 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     let group = adw::PreferencesGroup::new();
     group.set_title(NUMA_HOME);
     group.set_description(Some(&format!(
-        "The household's own photo server. Signed in, Export can send photographs there with {SEND_HOME}. \
+        "The household's own photo server. Signed in, Export can send photographs there with {SEND_HOME}, \
+         and Import can keep a library there. \
          The address is the server's, as nas.local or 192.168.1.20."
     )));
     let address = adw::EntryRow::new();
@@ -81,6 +82,9 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
         group.add(row);
     }
     group.set_header_suffix(Some(&sign_in));
+    for row in pace_rows(state) {
+        group.add(&row);
+    }
 
     let show = Rc::new(glib::clone!(
         #[weak] address,
@@ -158,6 +162,37 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
         }
     ));
     group
+}
+
+fn pace_rows(state: &App) -> [adw::PreferencesRow; 2] {
+    let pace = home_sync::pace(state);
+    let keep = adw::ComboRow::new();
+    keep.set_title("Keep in Step");
+    keep.set_model(Some(&gtk::StringList::new(&["At Night", "While Open"])));
+    keep.set_selected(if pace.night { 0 } else { 1 });
+    let said = |keep: &adw::ComboRow| {
+        keep.set_subtitle(match keep.selected() {
+            0 => "01:00 to 06:00, with Numa open: Linux has no background service",
+            _ => "Every few minutes, with Numa open",
+        });
+    };
+    said(&keep);
+    keep.connect_selected_notify(glib::clone!(
+        #[strong] state,
+        move |keep| {
+            said(keep);
+            home_sync::set_pace(&state, Pace { night: keep.selected() == 0, ..home_sync::pace(&state) });
+        }
+    ));
+    let unmetered = adw::SwitchRow::new();
+    unmetered.set_title("Only on Unmetered Networks");
+    unmetered.set_subtitle("Not over a phone's hotspot or another connection the system calls metered");
+    unmetered.set_active(pace.unmetered);
+    unmetered.connect_active_notify(glib::clone!(
+        #[strong] state,
+        move |row| home_sync::set_pace(&state, Pace { unmetered: row.is_active(), ..home_sync::pace(&state) })
+    ));
+    [keep.upcast(), unmetered.upcast()]
 }
 
 #[derive(Clone, Copy, PartialEq)]
