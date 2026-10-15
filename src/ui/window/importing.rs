@@ -126,7 +126,8 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
     view.add_bottom_bar(&go);
     dialog.set_child(Some(&view));
 
-    let (sources, source) = sources_row(from);
+    let home = home::account(state).signed_in();
+    let (sources, source) = sources_row(from, home);
     let from_group = adw::PreferencesGroup::new();
     from_group.set_title("From");
     from_group.add(&source);
@@ -170,8 +171,13 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
         #[strong] placed,
         #[weak] go,
         #[weak] dialog,
+        #[weak] raws,
         move |path: PathBuf| {
             go.set_sensitive(false);
+
+            for widget in [copies.group.upcast_ref::<gtk::Widget>(), names_group.upcast_ref(), raws.upcast_ref()] {
+                widget.set_visible(true);
+            }
             marks.borrow_mut().clear();
             jpegs_on.set(true);
             placed.borrow_mut().clear();
@@ -209,24 +215,9 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
     );
     let choose = Rc::new(choose);
     read_again_for_raws(&raws, state, &read, &choose);
-    source.connect_selected_notify(glib::clone!(
-        #[strong] sources,
-        #[strong] choose,
-        #[weak] window,
-        move |row| match sources.get(row.selected() as usize) {
-            Some((_, path)) => choose(path.clone()),
-            None => {
-                let chooser = gtk::FileDialog::new();
-                chooser.set_title("Import from this folder");
-                let choose = choose.clone();
-                glib::spawn_future_local(async move {
-                    if let Some(path) = chooser.select_folder_future(Some(&window)).await.ok().and_then(|file| file.path()) {
-                        choose(path);
-                    }
-                });
-            }
-        }
-    ));
+
+    let pick_home = home.then(|| home_source(state, (&dialog, &go, &page), (&shown, &read), [copies.group.clone(), names_group.clone()], &raws));
+    follow_source(&source, sources.clone(), choose.clone(), pick_home, window);
 
     go.connect_clicked(glib::clone!(
         #[strong] state,
@@ -251,18 +242,78 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
     dialog.present(Some(window));
     match sources.first() {
         Some((_, path)) => choose(path.clone()),
+
+        None if home => source.notify("selected"),
         None => source.set_selected(0),
     }
 }
 
-fn sources_row(from: Option<PathBuf>) -> (Vec<(String, PathBuf)>, adw::ComboRow) {
+fn follow_source<F: Fn(PathBuf) + 'static>(
+    source: &adw::ComboRow,
+    sources: Rc<Vec<(String, PathBuf)>>,
+    choose: Rc<F>,
+    home: Option<impl Fn() + 'static>,
+    window: &adw::ApplicationWindow,
+) {
+    source.connect_selected_notify(glib::clone!(
+        #[weak] window,
+        move |row| match (sources.get(row.selected() as usize), &home) {
+            (Some((_, path)), _) => choose(path.clone()),
+            (None, Some(home)) if row.selected() as usize == sources.len() => home(),
+            (None, _) => {
+                let chooser = gtk::FileDialog::new();
+                chooser.set_title("Import from this folder");
+                let choose = choose.clone();
+                glib::spawn_future_local(async move {
+                    if let Some(path) = chooser.select_folder_future(Some(&window)).await.ok().and_then(|file| file.path()) {
+                        choose(path);
+                    }
+                });
+            }
+        }
+    ));
+}
+
+fn home_source(
+    state: &App,
+    (dialog, go, page): (&adw::Dialog, &gtk::Button, &adw::PreferencesPage),
+    (shown, read): (&Rc<RefCell<Vec<adw::PreferencesGroup>>>, &Rc<RefCell<Option<(Card, Rc<RefCell<Vec<Place>>>, PathBuf)>>>),
+    after: [adw::PreferencesGroup; 2],
+    raws: &adw::SwitchRow,
+) -> impl Fn() + 'static {
+    glib::clone!(
+        #[strong] state,
+        #[strong] shown,
+        #[strong] read,
+        #[weak] dialog,
+        #[weak] go,
+        #[weak] page,
+        #[weak] raws,
+        move || {
+            read.borrow_mut().take();
+            for group in shown.borrow().iter() {
+                page.remove(group);
+            }
+            for widget in [after[0].upcast_ref::<gtk::Widget>(), after[1].upcast_ref(), raws.upcast_ref()] {
+                widget.set_visible(false);
+            }
+            let group = home_sync::import_group(&state, &dialog, &go);
+            add_above(&page, &[&group], &[&after[0], &after[1]]);
+            *shown.borrow_mut() = vec![group];
+        }
+    )
+}
+
+fn sources_row(from: Option<PathBuf>, home: bool) -> (Vec<(String, PathBuf)>, adw::ComboRow) {
     let mut sources = cards();
     if let Some(from) = from {
         if !sources.iter().any(|(_, path)| *path == from) {
             sources.insert(0, (from.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(), from));
         }
     }
-    let names: Vec<String> = sources.iter().map(|(name, _)| name.clone()).chain(["Another folder…".to_string()]).collect();
+
+    let home = home.then(|| home::NUMA_HOME.to_string());
+    let names: Vec<String> = sources.iter().map(|(name, _)| name.clone()).chain(home).chain(["Another folder…".to_string()]).collect();
     let source = adw::ComboRow::new();
     source.set_title("Card or camera");
     source.set_model(Some(&gtk::StringList::new(&names.iter().map(String::as_str).collect::<Vec<_>>())));

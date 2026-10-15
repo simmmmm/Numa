@@ -1,39 +1,39 @@
-# Next release: 0.37.0
+# Next release: 0.38.0
 
 What goes into the next general build and is not in `main` or Numa-mac `mac`
 yet. Before `dev/publish.sh` each item is merged, checked, and its line struck
 here; the version bump comes after that (docs/AGENT_GUIDE.md), and after the
 bump `data/THIRD_PARTY_LICENSES.txt` is generated again and `dev/check.sh` run.
 
-0.36.0 went out on 7 October. What went into it is in this file's history
-(`git log -p docs/NEXT_RELEASE.md`).
+0.37.0 went out on 7 October (TestFlight green 8 October). What went into it
+is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
 
-The version is 0.37.0 in `Cargo.toml` and the metainfo — never released, so
+The version is 0.38.0 in `Cargo.toml` and the metainfo — never released, so
 no bump for what joins it.
 
 ## In
 
-- ~~**Photo info as a panel (UX-010)**~~ — merged 7 October: Linux `main`,
-  the guide on numa-site `main`. The
-  photographer: the info that `I` opened as a popover is a panel at the
-  editor's left, folded open and shut by `I` or the info button, and once
-  open it stays open — across photographs, the library and a restart — until
-  it is shut.
-  - Release note: "The photo info is a panel at the left of the editor: press
-    I or the info button beside the photograph's name to fold it open or
-    shut. Once open, it stays open until you shut it."
-  - The Mac and the iPad's Classic editor follow (Numa-mac `mac` cf1c6ab6,
-    the photographer: "Ik wil dat overal natuurlijk"); the iPhone keeps its
-    sheet. Swift uncompiled until TestFlight.
-- ~~**AgX tone mapping (RENDER-026)**~~ — merged 7 October: Linux `main`,
-  the guide on numa-site `main`. The photographer: "Kun je ook AGX tone
-  mapping toevoegen", "ook voor 0.37.0". Looks › Tone mapping, Camera | AgX,
-  per photograph, for raws.
-  - Release note: "Tone mapping on Looks: next to the camera's own curve,
-    AgX, which takes very bright colours to white as film does, so lamps,
-    neon and sunsets keep their colour."
-  - On iPhone, iPad and Mac too, under the camera profile (Numa-mac `mac`
-    918c39ea). Swift uncompiled until TestFlight.
+- ~~**All EXIF (UX-010)**~~ — merged 8 October: Linux `main`, the guide on
+  numa-site `main`, the Mac and the iPad's panel on Numa-mac `mac` 3d059828
+  (numa-ffi `all_exif`; the iPhone's sheet keeps to the facts). The photographer: "meer
+  advanced exif die we niet standaard hoeven te tonen maar wel allemaal uit
+  kunnen lezen". A fold at the foot of the info panel lists every tag the
+  file holds; read only while open, open until shut. Checked on 4 files each
+  of RAF, ARW, CR3, CR2, NEF, DNG, ORF, RW2 and PEF, and on HIF and JPEG
+  (`NUMA_ALL_EXIF=<list> cargo test -p numa-io --release --lib
+  every_format_lists -- --ignored`).
+  - Release note: "All EXIF, at the foot of the photo info panel: every tag
+    the file holds, from the camera's settings to the lens serial and the
+    GPS, folded away until you open it."
+  - The Swift is compiled first by the TestFlight build.
+
+- ~~**Numa Home (HOME-001–012)**~~ — merged 15 October: the server
+  (`crates/numa-server`, image on ghcr.io/simmmmm/numa-home through
+  `dev/publish.sh`, built on this PC), Send Home and Numa Home libraries in
+  Linux Numa; the Apple side (HOME-007, Send Home) on Numa-mac `home`, merged
+  into `mac`, Swift compiled first by TestFlight. Running on the
+  photographer's UGREEN since 15 October. The page: github.com/simmmmm/numa-home.
+  - Release note: in the metainfo.
 
 ## Guide
 

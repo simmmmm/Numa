@@ -6229,3 +6229,70 @@ linearly in mireds — halfway from 6 000 K to 3 000 K is 4 000 K, which is
 how far apart the two lights look. Nothing per frame is written, so a key
 moved is the whole ramp moved. It replaces Light follows the moment, which
 wrote every frame.
+
+## Numa Home — 15 October
+
+HOME-001–005: `crates/numa-server`, one binary in one container
+(`packaging/docker`), the server side of `docs/PLAN_HOME.md`. axum and tokio
+for the API and the pages (plain HTML, CSS and JavaScript inside the binary);
+everything about photographs is Numa's own: the catalog, `thumbs` (edits
+applied), the renderer, Analyse, LIB-028's words.
+
+**One thread owns the catalog.** `Catalog` keeps each library's connection in
+an `Rc`, so it is not `Send`; a thread of its own holds it and requests hand it
+closures (`home.rs`). What the pages ask most — which photographs, newest
+first — is a shelf in memory, read again when a scan, an edit or a Send Home
+changed a library, so a thumbnail is a hash lookup and a stat, not a query.
+`server.db` beside it holds only the household: accounts (Argon2id), sessions
+(the token's SHA-256), what each account sent, and HOME-008's `updated` time
+per photograph.
+
+**The background** is one thread and a rayon pool of half the cores at nice
+10, which ONNX Runtime's threads inherit (`NUMA_MODEL_THREADS` is set to the
+same half): scan, thumbnails ahead (the cache's 640, and the library's own 320
+made from it), Analyse once the face models are there, words once SigLIP is.
+A Send Home or an edit nudges it and its library goes first.
+
+**The base is Debian 13.** ONNX Runtime's prebuilt library is linked against
+glibc 2.38 and GCC 13's libstdc++; on Debian 12 the link fails
+(`__isoc23_strtoll`, `_M_replace_cold`). Image 551 MB, 136 MB as `docker save`
+writes it.
+
+Measured in the container on this machine (Ryzen 7 9800X3D) held to 8 CPUs
+and 6 GB (`--cpus 8 --memory 6g`), release build, against 42 files copied from
+the Japan trip — 24 X-T5 RAFs (40 MP, 84 MB each), 2 HEIC, 6 HIF, 10 JPEG —
+with the library's `.numa/catalog.db` (names, edits) brought along:
+
+| | |
+|---|---|
+| first scan, catalog brought along (6 531 rows of absent files pruned) | 0.2 s |
+| scan of the same files as a library new to Numa (dates and cameras read) | < 0.1 s, warm page cache |
+| thumbnails ahead, both sizes, edits applied, 4 threads | 38 in 2.8 s (73 ms each, ~0.3 thread-s) |
+| a 640 on demand: RAF / edited RAF / HIF or JPEG | 0.11–0.19 / 0.10–0.12 / 0.03 s |
+| preview (2048): RAF / edited RAF | 0.19 / 0.20–0.24 s |
+| full-size JPEG with edits, 7728 × 5152, ICC and EXIF | 1.6–1.7 s |
+| Analyse (faces, measures), 4 threads | 42 in 2.7 s |
+| words (SigLIP 2), 4 threads | 38 in 2.5 s |
+| models and camera profiles on the first start | 518 MB in about 25 s |
+| container memory: idle / after Analyse and words / peak (full-size JPEG) | 0.44 / 0.89 / 1.57 GiB |
+
+HOME-009, a fake card bound to `/cards` (16 X-T5 RAFs, one already in the
+archive): read in well under a second once the archive was scanned (15 new,
+two shoots — one into Japan by its dates, one a new `2026/<name>`), and
+imported with offload's checked copy in 1.2 s (1.3 GB, warm page cache: a
+real card reader is the limit there), receipts written, the card read again
+as nothing new.
+
+Without `/dev/dri` numa-gpu finds no card ("GPU: no suitable card; decoding
+on the processor") and nothing panics; Mesa's lavapipe is in the image but is
+a CPU device, which numa-gpu does not take.
+
+### Left
+
+- The same on the DXP4800 Pro itself: its i3-1315U and its disks, and the
+  scan of a real archive over spinning disks, where reading 256 KB of every
+  new file is what a first scan costs.
+- `/dev/dri` with the UHD iGPU, not tried here; nor a card really mounted
+  by UGOS, so the `/cards` host path in `compose.yaml` is a guess.
+- A mask a stack names that needs a model the server does not fetch (the
+  subject, BiRefNet) renders without it.

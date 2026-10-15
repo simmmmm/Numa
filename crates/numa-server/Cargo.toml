@@ -1,0 +1,27 @@
+[package]
+name = "numa-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+numa-core = { path = "../numa-core" }
+numa-cull = { path = "../numa-cull" }
+numa-infer = { path = "../numa-infer" }
+numa-io = { path = "../numa-io", features = ["gpu"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "sync", "signal", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = { version = "0.3", default-features = false }
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+image.workspace = true
+log.workspace = true
+env_logger.workspace = true
+libc.workspace = true
+rayon.workspace = true

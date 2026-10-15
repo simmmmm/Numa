@@ -1,0 +1,11 @@
+# What the image is not built from (BuildKit reads this beside the Dockerfile).
+target
+dist
+.git
+.github
+.claude
+docs
+tests
+examples
+fable-tickets*
+**/*.AppImage

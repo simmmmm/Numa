@@ -1,0 +1,29 @@
+# HOME-001: Numa Home on a UGREEN NAS. In UGOS Pro: Docker → Project →
+# Create, paste this, change the three folders on the left to your own.
+services:
+  numa-home:
+    image: ghcr.io/simmmmm/numa-home:latest
+    container_name: numa-home
+    restart: unless-stopped
+    ports:
+      - "8283:8283"
+    volumes:
+      # The archive: every folder in it is a library everyone in the house
+      # sees. Writable, for the .numa catalog Numa keeps inside each one.
+      - /volume1/Photos:/photos
+      # What each person sends home, under their own name.
+      - /volume1/docker/numa-home/sent:/sent
+      # The accounts, Numa's catalog and thumbnails, the models.
+      - /volume1/docker/numa-home/data:/data
+      # HOME-009: SD cards and USB drives. The host path is where UGOS
+      # mounts external devices — /mnt/@usb is the guess, to be confirmed on
+      # the NAS itself. rslave, so a card put in after the start shows up.
+      - type: bind
+        source: /mnt/@usb
+        target: /cards
+        read_only: true
+        bind:
+          propagation: rslave
+    # The Intel iGPU, for faster decoding; everything works without it.
+    # devices:
+    #   - /dev/dri:/dev/dri

@@ -51,6 +51,21 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.38.0" date="2026-10-08">
+      <description>
+        <p>
+          All EXIF, at the foot of the photo info panel: every tag the file
+          holds, from the camera's settings to the lens serial and the GPS,
+          folded away until you open it.
+        </p>
+        <p>
+          Numa Home: your household's photographs on your own NAS, in a
+          browser and from Numa. Send Home from the export dialog, as JPEG or
+          as the original with its edits, and bring a library from Home back
+          into Numa to edit, kept in step both ways.
+        </p>
+      </description>
+    </release>
     <release version="0.37.0" date="2026-10-07">
       <description>
         <p>

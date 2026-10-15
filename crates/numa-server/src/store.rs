@@ -1,0 +1,172 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Mutex;
+
+use rusqlite::{params, Connection, OptionalExtension};
+
+pub struct Store(Mutex<Connection>);
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Account {
+    pub name: String,
+    pub admin: bool,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(path).map_err(|err| err.to_string())?;
+
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE IF NOT EXISTS accounts (
+                 name TEXT PRIMARY KEY COLLATE NOCASE, hash TEXT NOT NULL, admin INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS sessions (
+                 token TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE, device TEXT, made INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS sent (
+                 name TEXT NOT NULL COLLATE NOCASE, sha256 TEXT NOT NULL, library INTEGER NOT NULL, path TEXT NOT NULL,
+                 PRIMARY KEY (name, sha256, library));
+             CREATE TABLE IF NOT EXISTS updated (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS cameras (camera TEXT PRIMARY KEY, account TEXT NOT NULL COLLATE NOCASE);",
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(Self(Mutex::new(conn)))
+    }
+
+    fn with<R>(&self, work: impl FnOnce(&Connection) -> rusqlite::Result<R>) -> Result<R, String> {
+        let conn = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        work(&conn).map_err(|err| err.to_string())
+    }
+
+    pub fn has_accounts(&self) -> bool {
+        self.with(|conn| conn.query_row("SELECT EXISTS (SELECT 1 FROM accounts)", [], |row| row.get(0))).unwrap_or(true)
+    }
+
+    pub fn accounts(&self) -> Result<Vec<Account>, String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT name, admin FROM accounts ORDER BY name COLLATE NOCASE")?;
+            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)? }))?;
+            rows.collect()
+        })
+    }
+
+    pub fn add_account(&self, name: &str, hash: &str, admin: bool, only_if_first: bool) -> Result<bool, String> {
+        let sql = match only_if_first {
+            true => "INSERT INTO accounts (name, hash, admin) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM accounts)",
+            false => "INSERT OR IGNORE INTO accounts (name, hash, admin) VALUES (?1, ?2, ?3)",
+        };
+        self.with(|conn| conn.execute(sql, params![name, hash, admin])).map(|changed| changed == 1)
+    }
+
+    pub fn account(&self, name: &str) -> Option<(String, String, bool)> {
+        self.with(|conn| {
+            conn.query_row("SELECT name, hash, admin FROM accounts WHERE name = ?1", [name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .optional()
+        })
+        .ok()
+        .flatten()
+    }
+
+    pub fn add_session(&self, digest: &str, name: &str, device: Option<&str>) -> Result<(), String> {
+        let now = now();
+        self.with(|conn| conn.execute("INSERT INTO sessions (token, name, device, made) VALUES (?1, ?2, ?3, ?4)", params![digest, name, device, now]))
+            .map(drop)
+    }
+
+    pub fn session(&self, digest: &str) -> Option<Account> {
+        self.with(|conn| {
+            conn.query_row(
+                "SELECT a.name, a.admin FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1",
+                [digest],
+                |row| Ok(Account { name: row.get(0)?, admin: row.get(1)? }),
+            )
+            .optional()
+        })
+        .ok()
+        .flatten()
+    }
+
+    pub fn end_session(&self, digest: &str) {
+        let _ = self.with(|conn| conn.execute("DELETE FROM sessions WHERE token = ?1", [digest]));
+    }
+
+    pub fn sent(&self, name: &str, sha256: &str, library: i64) -> Option<String> {
+        let sql = "SELECT path FROM sent WHERE name = ?1 AND sha256 = ?2 AND library = ?3";
+        self.with(|conn| conn.query_row(sql, params![name, sha256, library], |row| row.get(0)).optional()).ok().flatten()
+    }
+
+    pub fn note_sent(&self, name: &str, sha256: &str, library: i64, path: &str) -> Result<(), String> {
+        let sql = "INSERT OR REPLACE INTO sent (name, sha256, library, path) VALUES (?1, ?2, ?3, ?4)";
+        self.with(|conn| conn.execute(sql, params![name, sha256, library, path])).map(drop)
+    }
+
+    pub fn seen(&self, ids: &[i64]) {
+        let now = now();
+        let _ = self.with(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO updated (photo, at) VALUES (?1, ?2)")?;
+                for id in ids {
+                    insert.execute(params![id, now])?;
+                }
+            }
+            tx.commit()
+        });
+    }
+
+    pub fn touch(&self, id: i64) -> i64 {
+        let now = now();
+        let _ = self.with(|conn| conn.execute("INSERT OR REPLACE INTO updated (photo, at) VALUES (?1, ?2)", params![id, now]));
+        now
+    }
+
+    pub fn updated(&self) -> std::collections::HashMap<i64, i64> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT photo, at FROM updated")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+}
+
+impl Store {
+
+    pub fn setting(&self, key: &str) -> Option<String> {
+        self.with(|conn| conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).optional()).ok().flatten()
+    }
+
+    pub fn cameras(&self) -> HashMap<String, String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT camera, account FROM cameras")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn link_camera(&self, camera: &str, account: Option<&str>) -> Result<(), String> {
+        self.with(|conn| match account {
+            Some(account) => conn.execute("INSERT OR REPLACE INTO cameras (camera, account) VALUES (?1, ?2)", params![camera, account]),
+            None => conn.execute("DELETE FROM cameras WHERE camera = ?1", [camera]),
+        })
+        .map(drop)
+    }
+
+    pub fn sendings(&self) -> Vec<(String, i64, String)> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT name, library, path FROM sent")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.with(|conn| conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", params![key, value])).map(drop)
+    }
+}
+
+pub fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64)
+}

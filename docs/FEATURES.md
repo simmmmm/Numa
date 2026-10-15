@@ -40,6 +40,7 @@ list.
 | `UX` | User experience and accessibility |
 | `START` | Onboarding: from receiving the AppImage to a first edited photograph |
 | `FLOW` | Workflows: Rapid, a library by its moments with a kind of shoot's few controls |
+| `HOME` | Numa Home: the household's photographs on a server of their own, in a browser and from the apps |
 
 ---
 
@@ -5498,7 +5499,12 @@ and it fills 2 % of the frame (a cyclist of a few pixels took a blue-hour
   Since 0.37.0 (7 October) the page is a panel at the editor's left rather
   than a popover: `I` and the info icon fold it open and shut, and it stays
   open across photographs and restarts until it is shut (the catalogue's
-  `info-panel` setting). The Mac and the iPad's Classic editor the same
+  `info-panel` setting).
+  Since 0.38.0 (8 October) a fold at its foot, All EXIF, lists every tag the
+  file holds (`numa::io::exif::all`: kamadak-exif's names and units, read
+  from the raw's first 256 KB — TIFF raws, CR3's boxes, the Exif block in a
+  RAF, RW2, JPEG or HEIF), read only while it is open and open until shut
+  (`info-all-exif`). The MakerNote is left out: no reader here for it. The Mac and the iPad's Classic editor the same
   (`showsInfo`); the iPhone keeps its sheet.
 - ✅ **UX-008**: Panel sections. Tabs rather than collapsible sections, which
   answers the same question — one thing on screen at a time — without a
@@ -6224,6 +6230,74 @@ benaderen'"). On Linux, on the `workflows` branch, on hold (3 October).
   and offers only those who have none yet (or everyone again once all have).
 - ◻️ **FLOW-015**: One's own kinds of shoot and their controls, from the six
   questions (round 3).
+
+### HOME — Numa Home
+
+The household's photographs on a NAS of its own — Immich's idea with Numa's
+eyes: raws shown as Numa develops them, edits included, faces and words from
+the same models, one container and no database server. `docs/PLAN_HOME.md`
+has the plan and the API. "Numa Home" and "Send Home" are the names (14 October).
+
+- ✅ **HOME-001**: One container. `numa-server`, one binary with the web pages
+  inside it, SQLite, a Docker image and a compose file for a UGREEN NAS
+  (`/photos`, `/sent`, `/data`).
+- ✅ **HOME-002**: The household's accounts. The first visit makes the first
+  account, which can make the others; a login per person, a session per
+  device.
+- ✅ **HOME-003**: The archive. Every folder under `/photos` is a library
+  everyone in the house sees, read as Numa reads one (its `.numa` catalog
+  included, so ratings, edits and names come along), scanned on start and
+  every quarter of an hour, thumbnails made ahead, faces and words read in
+  the background, gently.
+- ✅ **HOME-004**: The pages. A timeline by month, the photograph large,
+  People, Albums, search in words or names, on a phone as on a desktop. The
+  photograph handled: double-click or double-tap for 1:1 where it was, the
+  full-size JPEG swapped in; wheel and pinch zoom, drag to pan, arrows and
+  swipes, 0–5, P, X, U, I, Escape; the original or a JPEG to take away. The
+  eclipse mark as the tab's icon and a phone's home-screen icon.
+- ✅ **HOME-005**: Send Home, the server's side: a file in, kept once
+  (the same bytes twice are one photograph), in that person's own library
+  under `/sent/<name>/<year>/<date>/`, with Numa's edits beside a raw.
+- ✅ **HOME-006**: Send Home from Linux Numa. The export dialog's destination,
+  chosen per export: As JPEG (finished, small) or Original and Edits (the raw
+  and its edit stack, rendered by the server, editable later). The server and
+  the account in Preferences.
+- ✅ **HOME-008**: Numa Home libraries. A library on Home imported into Numa
+  — the originals on this computer, edited like any other — and kept in step
+  with Home both ways: edits, ratings, flags and new photographs; deletes
+  never travel. Linux: Import › Numa Home, months ticked, into
+  `~/Pictures/Numa Home/<library>/`; a round on opening and every three
+  minutes, edits and marks each the way they changed.
+- ✅ **HOME-009**: A card in the NAS. An SD card or USB drive with a `DCIM`
+  puts a bar on every page — the camera, how many new photographs, over how
+  many days — and Import is the desktop's: what a library has stays on the
+  card, the rest in shoots, each into the library its dates fall in or a new
+  `<year>/<name>` folder, copied the checked way with the camera's stars and
+  a receipt.
+- ✅ **HOME-010**: The background work, visible and pausable. A ring in the
+  header while anything runs opens Activity (also in the account's menu):
+  each job — looking for photographs, thumbnails, faces, sharpness and
+  bursts, search in words, Things Numa Saw — in plain words, how many of how
+  many, in which library, about how long is left, and the models on their
+  way. Pause and Resume for an admin, kept across restarts; paused, nothing
+  new is started and what is in hand finishes. Things Numa Saw is worked out
+  on the server too, a filter beside the others.
+- ✅ **HOME-011**: The timeline's scrubber. A bar on the right, the years down
+  it and every month as long as the photographs it holds, each library's
+  part in its own quiet tint (the Libraries page shows each library's), so a
+  trip is found at a glance. Hover or drag for the month, its count and its
+  libraries in the floating value; let go and the page is there, the month
+  loaded. On a phone a thin bar at the edge, the years shown while it is
+  held.
+- ✅ **HOME-012**: By whom. "We maken beide graag foto's": a By row in the
+  timeline's filters, a chip per account and Unknown, and By in the info
+  panel. A photograph is the account's that sent it home; otherwise the
+  account its camera is linked to on the admin's Cameras page (every camera
+  in the archive, by body serial where the file has one, with its count);
+  otherwise the account its EXIF Artist names, which Cameras offers to link
+  in one click ("Artist says Frederique").
+- ◻️ **HOME-007**: Send Home from the iPhone: the Photos library, sent on its
+  own on Wi-Fi and power (Numa-mac).
 
 ---
 
