@@ -51,6 +51,17 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.41.0" date="2026-10-16">
+      <description>
+        <p>
+          Numa Home: libraries chosen like photographs, to combine, remove or
+          delete them (a trash for 30 days); For a Book, a trip's picks as a
+          photo book's chapter folders in one zip; every place in one list,
+          with a library, album or person as a page. In Numa, Send Home shows
+          in the export dialog when signed out, with Sign In.
+        </p>
+      </description>
+    </release>
     <release version="0.40.0" date="2026-10-15">
       <description>
         <p>

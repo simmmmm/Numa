@@ -43,8 +43,23 @@ fn admin(me: &Account) -> Result<(), Fail> {
     }
 }
 
+fn relative(server: &Server, folder: &FilePath) -> String {
+    folder.strip_prefix(&server.home.photos).unwrap_or(folder).to_string_lossy().into_owned()
+}
+
+pub fn found(server: &Server) -> Vec<PathBuf> {
+    let out = server.store.left_out();
+    crate::home::found_under(&server.home.photos).into_iter().filter(|folder| !out.contains(&relative(server, folder))).collect()
+}
+
+fn reshelve(server: &Arc<Server>) {
+    server.home.set_found(found(server));
+    let home = server.clone();
+    server.home.blocking(move |catalog| home.shelve(None, catalog));
+}
+
 fn take_in(server: &Arc<Server>, folder: PathBuf) -> Result<Library, Fail> {
-    server.home.set_found(crate::home::found_under(&server.home.photos));
+    server.home.set_found(found(server));
     let home = server.clone();
     let library = server
         .home
@@ -87,6 +102,7 @@ pub async fn add(State(server): State<Arc<Server>>, Signed(me): Signed, Json(mad
             if !new_folders(&server).contains(&folder) {
                 return Err(Fail::bad("That folder is not one to take in: it is a library already, or inside one."));
             }
+            server.store.leave_out(&relative(&server, &folder), false).map_err(Fail::internal)?;
             folder
         }
         (None, Some(name)) if plain(name) => {
@@ -130,12 +146,11 @@ pub async fn rename(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         return Err(Fail::bad("A library's name is one plain name."));
     }
     let home = server.clone();
-    let photos = server.home.photos.clone();
     server
         .home
         .ask(move |catalog| {
             let renamed = catalog.rename_library_folder(id, &name);
-            home.home.set_found(crate::home::found_under(&photos));
+            home.home.set_found(found(&home));
             home.shelve(None, catalog);
             renamed
         })
@@ -256,6 +271,15 @@ pub fn empty_old(server: &Server) -> usize {
         server.store.untrash(row.id);
         emptied += 1;
     }
+    for (id, folder, _) in server.store.dropped().into_iter().filter(|(_, _, at)| now() - at > KEEP_DAYS * 86_400) {
+        let place = library_trash(server, id, &folder);
+        if place.exists() && std::fs::remove_dir_all(&place).is_err() {
+            continue;
+        }
+        let _ = place.parent().map(std::fs::remove_dir);
+        server.store.undrop(id);
+        emptied += 1;
+    }
     emptied
 }
 
@@ -326,6 +350,194 @@ pub async fn restore(State(server): State<Arc<Server>>, Signed(me): Signed, Json
     Ok(Json(json!({ "restored": restored })))
 }
 
+pub fn move_photos(server: &Arc<Server>, photos: Vec<(Library, Photo)>, target: &Library, to: impl Fn(&Library, &Photo) -> PathBuf) -> usize {
+    let authors = server.store.authors();
+    let mut landed = Vec::new();
+    let mut left = HashSet::new();
+    for (library, photo) in photos {
+        let Some(name) = photo.path.file_name() else { continue };
+        let folder = to(&library, &photo);
+        if photo.path.parent() == Some(folder.as_path()) {
+            continue;
+        }
+        let to = free(folder.join(name));
+        let path = within(&library, &photo.path);
+        let author = authors.get(&(library.id, path.clone())).cloned();
+        let held = photo.clone();
+        let Some(kept) = server.home.blocking(move |catalog| keep(catalog, &held, author)) else { continue };
+        if let Err(err) = move_file(&photo.path, &to) {
+            log::warn!("{}: {err}", photo.path.display());
+            continue;
+        }
+        let _ = server.store.set_author(library.id, &path, None);
+
+        if library.id != target.id {
+            let id = photo.id;
+            server.home.blocking(move |catalog| catalog.remove_photo(id));
+            left.insert(library.id);
+        }
+        landed.push((target.clone(), to, kept));
+    }
+    shelve(server, left);
+    land(server, landed)
+}
+
+fn archive(server: &Server, me: &Account, ids: &[i64]) -> Result<Vec<Library>, Fail> {
+    admin(me)?;
+    if ids.is_empty() {
+        return Err(Fail::bad("Choose a library first."));
+    }
+    let libraries = server.home.libraries(&me.name);
+    ids.iter()
+        .map(|id| {
+            let library = libraries.iter().find(|library| library.id == *id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
+            match library.path.starts_with(&server.home.photos) {
+                true => Ok(library),
+                false => Err(Fail::bad("A Sent Home library belongs to its account; it is not left out, deleted or combined.")),
+            }
+        })
+        .collect()
+}
+
+pub async fn remove_libraries(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
+    let libraries = archive(&server, &me, &asked.ids)?;
+    for library in &libraries {
+        server.store.leave_out(&relative(&server, &library.path), true).map_err(Fail::internal)?;
+    }
+    let working = server.clone();
+    tokio::task::spawn_blocking(move || reshelve(&working)).await.map_err(Fail::internal)?;
+    Ok(Json(json!({ "removed": libraries.len() })))
+}
+
+fn library_trash(server: &Server, id: i64, folder: &str) -> PathBuf {
+    let name = FilePath::new(folder).file_name().map(|name| name.to_os_string()).unwrap_or_default();
+    server.home.photos.join(".trash").join(id.to_string()).join(name)
+}
+
+fn drop_folder(server: &Server, library: &Library) -> Result<(), String> {
+    let folder = relative(server, &library.path);
+    let id = server.store.drop_library(&folder)?;
+    let to = library_trash(server, id, &folder);
+    if let Err(err) = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(&library.path, &to)) {
+        server.store.undrop(id);
+        return Err(format!("{}: {err}", library.path.display()));
+    }
+    if let Some(year) = library.path.parent().filter(|parent| *parent != server.home.photos) {
+        let _ = std::fs::remove_dir(year);
+    }
+    Ok(())
+}
+
+pub async fn delete_libraries(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
+    let libraries = archive(&server, &me, &asked.ids)?;
+    let working = server.clone();
+    let trashed = tokio::task::spawn_blocking(move || {
+        let done = libraries.iter().filter(|library| drop_folder(&working, library).map_err(|err| log::warn!("{err}")).is_ok()).count();
+        reshelve(&working);
+        done
+    })
+    .await
+    .map_err(Fail::internal)?;
+    Ok(Json(json!({ "trashed": trashed })))
+}
+
+fn files_under(dir: &FilePath) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path()) {
+        if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
+            continue;
+        }
+        match path.is_dir() {
+            true => files.extend(files_under(&path)),
+            false => files.push(path),
+        }
+    }
+    files
+}
+
+#[derive(Deserialize)]
+pub struct Combined {
+    ids: Vec<i64>,
+    into: i64,
+}
+
+pub async fn combine(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Combined>) -> Result<Json<Value>, Fail> {
+    let target = archive(&server, &me, &[asked.into])?.remove(0);
+    let ids: Vec<i64> = asked.ids.into_iter().filter(|id| *id != target.id).collect();
+    let from = archive(&server, &me, &ids)?;
+    let working = server.clone();
+    let moved = tokio::task::spawn_blocking(move || {
+        let server = working;
+        let mut moved = 0;
+        for library in from {
+            let photos = server.home.files(library.id).into_iter().map(|photo| (library.clone(), photo)).collect();
+            moved += move_photos(&server, photos, &target, |library, photo| {
+                target.path.join(photo.path.parent().and_then(|dir| dir.strip_prefix(&library.path).ok()).unwrap_or(FilePath::new("")))
+            });
+            let removed = server.store.removed(library.id);
+            for file in files_under(&library.path) {
+                let path = within(&library, &file);
+                let to = free(target.path.join(&path));
+                match move_file(&file, &to) {
+                    Ok(()) if removed.contains(&path) => drop(server.store.remove(target.id, &within(&target, &to))),
+                    Ok(()) => {}
+                    Err(err) => log::warn!("{}: {err}", file.display()),
+                }
+            }
+            if let Err(err) = drop_folder(&server, &library) {
+                log::warn!("{err}");
+            }
+        }
+        reshelve(&server);
+        crate::jobs::rescan(&server, target.clone());
+        shelve(&server, HashSet::from([target.id]));
+        server.jobs.nudge();
+        moved
+    })
+    .await
+    .map_err(Fail::internal)?;
+    Ok(Json(json!({ "moved": moved })))
+}
+
+pub async fn dropped(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
+    admin(&me)?;
+    let rows = server.store.dropped().into_iter().map(|(id, folder, at)| {
+        let name = FilePath::new(&folder).file_name().map(|name| name.to_string_lossy().into_owned());
+        json!({ "id": id, "name": name, "folder": folder, "at": at, "left": (KEEP_DAYS - (now() - at) / 86_400).max(0) })
+    });
+    Ok(Json(rows.collect()))
+}
+
+pub async fn undrop(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
+    admin(&me)?;
+    let rows: Vec<(i64, String, i64)> = server.store.dropped().into_iter().filter(|(id, ..)| asked.ids.contains(id)).collect();
+    let working = server.clone();
+    let restored = tokio::task::spawn_blocking(move || {
+        let server = working;
+        let mut back = 0;
+        for (id, folder, _) in rows {
+            let to = server.home.photos.join(&folder);
+            let from = library_trash(&server, id, &folder);
+            if to.exists() {
+                log::warn!("{}: a folder of that name is there again", to.display());
+                continue;
+            }
+            if let Err(err) = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(&from, &to)) {
+                log::warn!("{}: {err}", from.display());
+                continue;
+            }
+            let _ = from.parent().map(std::fs::remove_dir);
+            server.store.undrop(id);
+            let _ = server.store.leave_out(&folder, false);
+            back += usize::from(take_in(&server, to).is_ok());
+        }
+        back
+    })
+    .await
+    .map_err(Fail::internal)?;
+    Ok(Json(json!({ "restored": restored })))
+}
+
 pub fn land(server: &Arc<Server>, landed: Vec<(Library, PathBuf, Kept)>) -> usize {
     let mut libraries: Vec<Library> = landed.iter().map(|(library, ..)| library.clone()).collect();
     libraries.sort_by_key(|library| library.id);
@@ -365,6 +577,12 @@ mod tests {
         assert_eq!(std::fs::read(root.join("deeper/a.jpg")).unwrap(), b"one");
         assert!(!root.join("a.jpg").exists());
         assert!(plain("Holiday") && !plain(".numa") && !plain("a/b") && !plain(""));
+
+        std::fs::create_dir_all(root.join(".numa")).unwrap();
+        std::fs::write(root.join(".numa/catalog.db"), b"").unwrap();
+        let mut files = files_under(&root);
+        files.sort();
+        assert_eq!(files, [root.join("b 2.jpg").with_file_name("b.jpg"), root.join("deeper/a.jpg")]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

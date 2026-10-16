@@ -91,7 +91,7 @@ pub async fn month(
     Ok(Json(rows))
 }
 
-async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted) -> Result<Vec<Photo>, Fail> {
+pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted) -> Result<Vec<Photo>, Fail> {
     let mut libraries = server.home.libraries(account);
     if let Some(only) = wanted.library {
         libraries.retain(|library| library.id == only);

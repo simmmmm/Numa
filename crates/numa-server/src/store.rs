@@ -34,7 +34,9 @@ impl Store {
              CREATE TABLE IF NOT EXISTS authors (
                  library INTEGER NOT NULL, path TEXT NOT NULL, account TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (library, path));
              CREATE TABLE IF NOT EXISTS settled (key TEXT PRIMARY KEY);
-             CREATE TABLE IF NOT EXISTS hashes (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS hashes (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS left_out (folder TEXT PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, folder TEXT NOT NULL, at INTEGER NOT NULL);",
         )
         .map_err(|err| err.to_string())?;
         Ok(Self(Mutex::new(conn)))
@@ -215,6 +217,41 @@ impl Store {
 
     pub fn untrash(&self, id: i64) {
         let _ = self.with(|conn| conn.execute("DELETE FROM trash WHERE id = ?1", [id]));
+    }
+
+    pub fn left_out(&self) -> std::collections::HashSet<String> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT folder FROM left_out")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn leave_out(&self, folder: &str, out: bool) -> Result<(), String> {
+        let sql = if out { "INSERT OR IGNORE INTO left_out (folder) VALUES (?1)" } else { "DELETE FROM left_out WHERE folder = ?1" };
+        self.with(|conn| conn.execute(sql, [folder])).map(drop)
+    }
+
+    pub fn drop_library(&self, folder: &str) -> Result<i64, String> {
+        let now = now();
+        self.with(|conn| {
+            conn.execute("INSERT INTO dropped (folder, at) VALUES (?1, ?2)", params![folder, now])?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    pub fn dropped(&self) -> Vec<(i64, String, i64)> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT id, folder, at FROM dropped ORDER BY at DESC, id DESC")?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn undrop(&self, id: i64) {
+        let _ = self.with(|conn| conn.execute("DELETE FROM dropped WHERE id = ?1", [id]));
     }
 
     pub fn authors(&self) -> HashMap<(i64, String), String> {

@@ -211,10 +211,7 @@ pub(super) struct Destination {
 }
 
 impl Destination {
-    pub(super) fn new(state: &App) -> Option<Self> {
-        if !account(state).signed_in() {
-            return None;
-        }
+    pub(super) fn new(state: &App) -> Self {
         let combo = |title: &str, names: &[&str]| {
             let row = adw::ComboRow::new();
             row.set_title(title);
@@ -224,12 +221,29 @@ impl Destination {
         let to = combo("Destination", &["Folder", NUMA_HOME]);
         let how = combo("Send", &["As JPEG", "Original and Edits"]);
         let (at, way): (u32, u32) = state.catalog.recall(CHOICE).unwrap_or_default();
-        to.set_selected(at);
         how.set_selected(way);
         let group = adw::PreferencesGroup::new();
         group.add(&to);
         group.add(&how);
-        Some(Self { group, to, how })
+        if account(state).signed_in() {
+            to.set_selected(at);
+        } else {
+            to.set_sensitive(false);
+            to.set_subtitle(&format!("Sign in to {NUMA_HOME}, the household's own photo server, to send photographs there"));
+            let sign_in = gtk::Button::with_label("Sign In…");
+            sign_in.set_valign(gtk::Align::Center);
+            sign_in.connect_clicked(|button| {
+                let window = button.root().and_downcast::<gtk::Window>();
+                if let Some(dialog) = button.ancestor(adw::Dialog::static_type()).and_downcast::<adw::Dialog>() {
+                    dialog.close();
+                }
+                if let Some(window) = window {
+                    let _ = window.activate_action("win.preferences", None);
+                }
+            });
+            group.set_header_suffix(Some(&sign_in));
+        }
+        Self { group, to, how }
     }
 
     pub(super) fn chosen(&self) -> Option<How> {
@@ -241,6 +255,10 @@ impl Destination {
     }
 
     pub(super) fn remember(&self, state: &App) {
+
+        if !self.to.is_sensitive() {
+            return;
+        }
         state.catalog.remember(CHOICE, &(self.to.selected(), self.how.selected()));
     }
 

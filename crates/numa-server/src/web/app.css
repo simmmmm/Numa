@@ -82,7 +82,6 @@ header {
   display: flex; align-items: center; gap: var(--gap); padding: 10px var(--edge); border-bottom: 1px solid var(--rule);
 }
 header .mark { height: 34px; width: auto; flex: none; cursor: pointer; }
-header nav { display: flex; gap: 8px; flex: none; }
 header .search { flex: 1; max-width: 480px; margin-left: auto; }
 header .search input { width: 100%; }
 header .who { flex: none; }
@@ -111,7 +110,7 @@ main { padding: 0 var(--edge) 48px; }
 .month { padding-top: 22px; }
 .month > .head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; }
 .rows { position: relative; }
-.tile { position: absolute; display: block; overflow: hidden; border-radius: 4px; background: var(--ground-raised); cursor: pointer; padding: 0; border: 0; }
+.tile { -webkit-touch-callout: none; user-select: none; position: absolute; display: block; overflow: hidden; border-radius: 4px; background: var(--ground-raised); cursor: pointer; padding: 0; border: 0; }
 .tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); }
 .tile img.in { opacity: 1; }
 .tile .stars { position: absolute; left: 6px; bottom: 4px; font-size: 11px; line-height: 14px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.85); }
@@ -168,8 +167,9 @@ main { padding: 0 var(--edge) 48px; }
 .hud .section-label { color: var(--name); font-size: 12px; line-height: 16px; }
 .hud .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
 .info .marks { display: flex; gap: 2px; margin-top: 10px; }
-.info .star { background: none; border: 0; padding: 2px; font-size: 20px; line-height: 24px; color: var(--ground-raised); cursor: pointer; }
-.info .star.set { color: var(--accent); }
+.info .star { background: none; border: 0; padding: 2px; font-size: 20px; line-height: 24px; color: var(--label); opacity: 0.45; cursor: pointer; transition: opacity var(--quick), color var(--quick); }
+.info .star:hover { opacity: 0.8; }
+.info .star.set { color: var(--accent); opacity: 1; }
 .info .chips { margin-top: 8px; }
 .viewer .corner { position: absolute; top: var(--edge); display: flex; gap: var(--gap); z-index: 2; }
 .viewer .corner.left { left: var(--edge); }
@@ -235,18 +235,43 @@ main.scrubbed { padding-right: 76px; }
 .scrub-pill .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
 .scrub-libraries { display: flex; flex-direction: column; align-items: end; gap: 2px; margin-top: 4px; color: var(--name); font-size: 12px; line-height: 16px; }
 
-/* The header in two rows wherever one would not hold the mark, four
-   places, search, the ring and the account: the places under the rest,
-   the ring a ring alone, always in sight while work runs. */
-@media (max-width: 900px) {
-  header { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+/* The places, in one list. Wide: down the side, under the header, the page
+   beside it. Narrow: four tabs and More along the foot, gone while choosing
+   so the selection bar has the foot to itself. */
+:root { --head: 57px; --side: 200px; --foot: calc(56px + env(safe-area-inset-bottom)); }
+header { height: var(--head); }
+.places-nav { z-index: 5; display: grid; align-content: start; gap: 2px; }
+.place-link { border: 0; background: none; color: var(--name); font-weight: 600; text-align: left; height: 36px; padding: 0 14px; border-radius: 18px; cursor: pointer; white-space: nowrap;
+  transition: background var(--quick), color var(--quick); }
+.place-link:hover { background: var(--ground-chip); color: var(--ink); }
+.place-link.chosen { background: var(--accent); color: var(--on-accent); }
+.places-nav .section-label { padding: 18px 14px 6px; }
+.places-nav .more { display: none; }
+.menu .chosen { background: var(--ground-chip); }
+
+@media (min-width: 900px) {
+  .places-nav { position: fixed; top: var(--head); left: 0; bottom: 0; width: var(--side); overflow-y: auto; padding: 14px 10px 24px var(--edge); }
+  main { padding-left: calc(var(--side) + var(--edge)); }
+  .cardbar { margin-left: calc(var(--side) + var(--edge)); }
+  body .selection { left: calc(50% + var(--side) / 2); }
+}
+
+@media (max-width: 899px) {
   header .mark { height: 30px; }
-  header .search { order: 2; flex: 1; min-width: 0; margin-left: 0; }
-  header .activity { padding: 0 6px; order: 3; }
+  header .search { margin-left: 0; min-width: 0; }
+  header .activity { padding: 0 6px; }
   header .activity .what { display: none; }
-  header .who { order: 3; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  header nav { order: 4; width: 100%; overflow-x: auto; }
-  .menu { top: 52px; }
+  header .who { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; }
+  .places-nav { position: fixed; left: 0; right: 0; bottom: 0; height: var(--foot); padding: 6px 8px env(safe-area-inset-bottom);
+    grid-template-columns: repeat(5, 1fr); gap: 4px; background: rgba(20, 20, 20, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--rule); }
+  .places-nav .extra { display: none; }
+  .places-nav .more { display: block; }
+  .place-link { text-align: center; padding: 0 4px; height: 44px; border-radius: 22px; font-size: 12px; }
+  .places-nav .menu { top: auto; bottom: calc(100% + 8px); right: 8px; }
+  body.picking .places-nav { display: none; }
+  main { padding-bottom: calc(var(--foot) + 48px); }
+  .scrubber { bottom: var(--foot); }
+  body .toast { bottom: calc(var(--foot) + 16px); }
 }
 
 @media (max-width: 720px) {
@@ -270,19 +295,26 @@ main.scrubbed { padding-right: 76px; }
 
 /* HOME-017: choosing on the grid. A ring in the corner on hover, while
    choosing, and filled white on what is chosen. */
-.tile .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.9);
+.tile .check, .place .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); opacity: 0; transition: opacity var(--quick); }
-.tile:hover .check, body.picking .tile .check, .tile.picked .check, .tile.ticked .check { opacity: 1; }
-.tile.picked .check, .tile.ticked .check { background: var(--accent) no-repeat center / 12px
+.tile:hover .check, body.picking .tile .check, .tile.picked .check, .tile.ticked .check,
+.place:hover .check, body.picking .place .check, .place.picked .check { opacity: 1; }
+.tile.picked .check, .tile.ticked .check, .place.picked .check { background: var(--accent) no-repeat center / 12px
   url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2l2.6 2.6L10 3.4' fill='none' stroke='%23141414' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); border-color: var(--accent); }
 .tile.picked img { transform: scale(0.9); border-radius: 4px; }
 .tile.picked { background: var(--ground-chip); }
+/* HOME-021: a library chosen on its page, as a photograph is. */
+.place .check { z-index: 1; left: 0; top: 0; }
+.place .stack { transition: transform var(--quick); }
+.place.picked .stack { transform: scale(0.92); }
+.place.picked .name { color: var(--accent); }
 .tile img { transition: opacity var(--standard), transform var(--quick); }
 .selection { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 8px;
-  padding: 8px 8px 8px 18px; border-radius: 26px; background: var(--ground-window); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); max-width: calc(100vw - 32px); overflow-x: auto; }
-.selection .count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; margin-right: 6px; }
-.selection a.chip { display: inline-flex; align-items: center; text-decoration: none; }
-.selection .menu { position: fixed; top: auto; bottom: 76px; right: auto; left: 50%; transform: translateX(-50%); }
+  padding: 8px; border-radius: 26px; background: var(--ground-window); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); max-width: calc(100vw - 32px); overflow-x: auto; }
+.selection .count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 0 6px 0 2px; }
+.selection a { text-decoration: none; color: var(--ink); }
+.menu .rule { height: 1px; background: var(--rule); margin: 4px 6px; }
+.selection .menu { max-height: 60vh; overflow-y: auto; position: fixed; top: auto; bottom: 76px; right: auto; left: 50%; transform: translateX(-50%); }
 .round.small { width: 32px; height: 32px; border-radius: 16px; background: var(--ground-chip); }
 .round.small svg { width: 16px; height: 16px; }
 .chip.small { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -294,14 +326,12 @@ dialog.ask h2 { font-size: 17px; line-height: 22px; margin: 0; }
 dialog.ask .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 dialog.ask input[type=checkbox] { accent-color: var(--accent); }
+dialog.ask .chapters { display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
+dialog.ask .chapters .caption { margin-left: auto; }
 dialog.ask .year { width: 80px; margin-left: auto; }
 .primary.destructive { background: #e35d5b; color: #fff; }
 .primary:disabled { opacity: 0.4; cursor: default; }
 .shelf { display: grid; justify-items: center; gap: 4px; align-content: start; }
-/* Rename stays out of the way until the pointer is on its library. */
-.shelf .chip.small { background: none; color: var(--label); opacity: 0; transition: opacity var(--quick); }
-.shelf:hover .chip.small, .shelf .chip.small:focus-visible { opacity: 1; }
-@media (hover: none) { .shelf .chip.small { opacity: 1; } }
 .info .by-pick { margin-top: 4px; height: 32px; }
 
 /* HOME-009: the Import page, and the Trash, which looks the same. */
@@ -310,6 +340,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .import-page h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0 0 4px; }
 .import-page .act { display: flex; align-items: center; gap: 14px; }
 .import-page .said { text-align: left; }
+.dropped { padding-bottom: 12px; }
 .import-page .shoot { padding-top: 22px; }
 .import-page .shoot .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 4px; }
 .import-page .shoot .to { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
@@ -326,7 +357,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 @media (max-width: 720px) {
   .import-page .grid { grid-template-columns: repeat(3, 1fr); }
   .import-page .shoot .to { margin-left: 0; }
-  .selection { left: 16px; right: 16px; transform: none; max-width: none; padding-left: 14px; }
+  .selection { left: 16px; right: 16px; transform: none; max-width: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -368,3 +399,10 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .night { display: grid; gap: 6px; }
 .night ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--name); }
 .night .needs a { color: var(--ink); }
+
+/* A library, an album or a person as a page: back, the title, how many and
+   when, and what can be done with it. */
+.collection-head { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; padding-top: 18px; }
+.collection-head .titles { display: grid; gap: 2px; flex: 1 1 180px; min-width: 0; }
+.collection-head h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-head .act { display: flex; gap: 8px; flex-wrap: wrap; }

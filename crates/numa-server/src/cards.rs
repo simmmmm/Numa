@@ -305,7 +305,6 @@ fn import_now(server: &Arc<Server>, items: Vec<Item>, places: &[Place]) -> (Stri
         });
     let ratings: Vec<(PathBuf, u8)> = report.landed.iter().filter_map(|landed| Some((landed.to.clone(), landed.rating?))).collect();
     let home = server.clone();
-    let photos = server.home.photos.clone();
     let catalogued = server.home.blocking(move |catalog| {
         let mut rated = 0;
         for root in roots.iter().filter(|root| root.is_dir()) {
@@ -320,7 +319,7 @@ fn import_now(server: &Arc<Server>, items: Vec<Item>, places: &[Place]) -> (Stri
                 }
             }
         }
-        home.home.set_found(crate::home::found_under(&photos));
+        home.home.set_found(crate::manage::found(&home));
         home.shelve(None, catalog);
         rated
     });

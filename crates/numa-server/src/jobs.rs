@@ -114,7 +114,7 @@ pub fn scan(server: &Arc<Server>, full: bool) -> usize {
     let started = Instant::now();
     server.activity.plan(Kind::Scan, 0, None);
     server.activity.start(Kind::Scan);
-    let mut folders = crate::home::found_under(&server.home.photos);
+    let mut folders = crate::manage::found(server);
     server.home.set_found(folders.clone());
     for account in server.store.accounts().unwrap_or_default() {
         let folder = server.home.sent_folder(&account.name);

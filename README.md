@@ -14,12 +14,13 @@
 </p>
 
 <p align="center">
-  Numa is also coming to iPhone, iPad and Mac, as a separate app: <a href="https://numa.photo">numa.photo</a>
+  Numa is also coming to <a href="https://numa.photo/iphone-ipad">iPhone, iPad</a> and <a href="https://numa.photo/mac">Mac</a>, as a separate app,
+  and <a href="https://numa.photo/numa-home">Numa Home</a> keeps the household's photographs on your own NAS.
 </p>
 
 <p align="center">
   <a href="https://github.com/simmmmm/Numa/releases"><b>Download</b></a> ·
-  <a href="https://numa.photo">numa.photo</a> ·
+  <a href="https://numa.photo/linux">numa.photo</a> ·
   <a href="#features">Features</a> ·
   <a href="#installing">Installing</a> ·
   <a href="#building-from-source">Building</a> ·
@@ -35,7 +36,7 @@
   <img alt="GPL-3.0 or later" src="https://img.shields.io/badge/licence-GPL--3.0-555">
 </p>
 
-![The library: justified rows, ratings, flags, suggested ratings from Analyse and a mark on edited photographs](docs/screenshots/library.webp)
+![The grid on Linux: rows of landscape photographs at their own shapes with small star pills, the header with Analyse, Filter and Export, and under it the chips All, Picks and ★ 3+](docs/screenshots/library.webp)
 
 Numa is a native GTK 4 and libadwaita application written in Rust. It was built
 around a Fujifilm workflow, but it opens and develops every RAW format its
@@ -137,12 +138,18 @@ libraries and switch between them from the header bar, or from the
 **Libraries** page, where each one is a stack of its best photographs. Albums
 are independent of folders and can hold photographs from any library.
 
-![The Libraries page: each library as a stack of its best photographs](docs/screenshots/libraries.webp)
+![The Libraries page: All Libraries, Mountains and Sea, Garden and Cities, each a stack of three prints with its count and dates, and under Albums a stack called Coast](docs/screenshots/libraries.webp)
 
 **Import from a card or a camera.** Put in a card or plug in a camera and Numa
 offers to import it. Photographs a library already has are skipped, the rest
 are split into shoots by date, and each shoot is offered the library it
 belongs to, or a new folder beside the others, with a name pattern you choose.
+
+**Shoot tethered.** With the camera on its cable (a Fujifilm on USB Tether
+Shooting, a Sony on PC Remote), each photograph comes straight into a library
+and opens in the loupe, where one key picks or rejects it. Same Edit as the
+Last gives every new frame the edit of the one before, and after a second or
+two Numa says what it noticed, such as Soft. The files stay on the card too.
 
 **Open with Numa.** Numa can be the default application for RAW files, HEIF,
 JPEG, PNG, TIFF, WebP and BMP. A photograph opened from the file manager lands
@@ -153,7 +160,7 @@ says first that its rating and edits go with it.
 
 ## Culling
 
-![The loupe: one photograph large, the neighbours beside it, stars, pick, reject and Edit underneath](docs/screenshots/loupe.webp)
+![The loupe: a mountain lake large, the neighbouring photographs dimmed at either side, four stars, pick and reject at the top left, and the bar with the pick counter and Edit underneath](docs/screenshots/loupe.webp)
 
 **The loupe.** `Space` shows the selected photograph large, with its
 neighbours on either side. `Left` and `Right` step through the shoot, `Up`
@@ -190,7 +197,7 @@ given in the loupe is kept in the library's catalog with its time.
 panned together, and rate or reject them from there. The keys act on the
 photograph under the pointer.
 
-![Compare: two photographs side by side with their ratings](docs/screenshots/compare.webp)
+![Two photographs of red rocks side by side in Compare](docs/screenshots/compare.webp)
 
 ## People
 
@@ -211,7 +218,7 @@ YuNet's landmarks.
 
 ## Developing
 
-![The editor: one bar at the top, the Light panel with adjusted sliders highlighted, the histogram and the filmstrip](docs/screenshots/editor.webp)
+![The editor: the bar with the stars at the left, the path in the middle and Undo, Redo, History, Before and Export at the right; the photograph with the histogram at its top right; the panel with its rail of tabs; the filmstrip below](docs/screenshots/editor.webp)
 
 Everything is non-destructive. Edits are stored as a list of operations and
 parameters, and the original file is only ever read. Preview and export run
@@ -238,8 +245,8 @@ mixer into the black-and-white mix: how light each colour's grey comes out.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/colour.webp" alt="The Colour panel: white balance, vibrance and the eight-colour mixer"></td>
-<td width="50%"><img src="docs/screenshots/grade.webp" alt="Colour grading on the colour wheel: warm highlights and cooler shadows"></td>
+<td width="50%"><img src="docs/screenshots/colour.webp" alt="The Colour tab: White balance with Temperature and Tint, Black and white, Vibrance and Saturation, and the Mixer with eight coloured dots"></td>
+<td width="50%"><img src="docs/screenshots/grade.webp" alt="The Grade tab: Shadow, Mid, High and All, a colour wheel with a warm highlight chosen, and Hue, Saturation, Luminance, Blending and Balance"></td>
 </tr>
 <tr>
 <td><sub>White balance, vibrance and the HSL mixer.</sub></td>
@@ -281,7 +288,7 @@ own space, so colours the sensor saw beyond sRGB reach the file. On screen,
 photographs are converted to your display's own colour profile, so a
 wide-gamut screen does not oversaturate them.
 
-![A tone curve drawn over the photograph's histogram](docs/screenshots/curve.webp)
+![A tone curve with three points over the histogram, on a photograph of a hillside tea plantation](docs/screenshots/curve.webp)
 
 **Looks and presets.** The Looks tab has the camera profile on top, then
 Presets and LUTs. Twelve looks are built in, each with a **Strength** slider
@@ -306,11 +313,11 @@ The built-in looks and Numa's own camera profiles are the photographer's own
 work: they come with the released Flatpak and AppImage, and a build from this
 source has neither.
 
-![The Looks tab: the camera profile Automatic · Numa EOS R5 on top, the Cool Fade look at two thirds strength, and the presets as thumbnails of the photograph](docs/screenshots/looks.webp)
+![The Looks tab: the camera profile at the top, Presets and LUTs, and presets as small versions of the open photograph](docs/screenshots/looks.webp)
 
 ## Detail
 
-![Sharpening, noise reduction, AI sharpen and AI denoise, at 100 %](docs/screenshots/detail.webp)
+![The Detail tab at 1:1 on a kingfisher: Sharpening, Noise with AI denoise, and Lens](docs/screenshots/detail.webp)
 
 **Sharpening** is an unsharp mask on log luminance, applied as a gain so edges
 do not grow colour fringes. It has amount, radius and masking, where masking
@@ -354,7 +361,7 @@ overlay. Quarter turns, mirroring and EXIF orientation are handled.
 which finds the photograph's own lines and puts converging verticals back
 upright. **Guided** lets you draw the lines that should be straight.
 
-![Crop at 5:4 with the rule-of-thirds overlay, straighten and perspective](docs/screenshots/crop.webp)
+![The Crop tab on a mountain lake: the frame at 5:4 with a grid of thirds, the ratios, turn and flip, Straighten and Perspective](docs/screenshots/crop.webp)
 
 ## Masks
 
@@ -396,8 +403,8 @@ A mask can be shown as a coloured wash, an outline, or both.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/masks-found.webp" alt="Found in a mountain lake: Subject, Background, Water, Sky, Mountains, Ground and Greenery"></td>
-<td width="50%"><img src="docs/screenshots/mask-subject.webp" alt="The subject mask on a kingfisher, with its own exposure and shadows and the mask bar underneath"></td>
+<td width="50%"><img src="docs/screenshots/masks-found.webp" alt="The Masks tab on a mountain lake: Linear, Radial, Brush and Click, then Subject, Background, Water, Sky, Mountains, Ground and Greenery found in this photograph"></td>
+<td width="50%"><img src="docs/screenshots/mask-subject.webp" alt="A kingfisher with its Subject mask chosen and washed red, the mask bar at the top and the panel reading These tabs edit Subject"></td>
 </tr>
 <tr>
 <td><sub>Masks found in the photograph, only for what is in it.</sub></td>
@@ -422,7 +429,7 @@ removal, skin smoothing, evenness, red-eye and teeth whitening.
 
 ## Export
 
-![The export dialog: format, colour space, quality, size, HDR, metadata, watermark, file name and folder](docs/screenshots/export.webp)
+![The export dialog: Preset, Format, Colour space, Quality, Size, Sharpen after resizing, HDR, Metadata, Watermark, File name and Folder](docs/screenshots/export.webp)
 
 - **JPEG, PNG, 16-bit TIFF, AVIF, JPEG XL or DNG**, with the quality you
   choose and the ICC profile of the colour space you export in. JPEG XL uses
@@ -489,7 +496,9 @@ to delete to remove Numa again.
 
 ## Numa Home
 
-[Numa Home](https://github.com/simmmmm/numa-home) is the household's own
+![Numa Home in a browser: the photographs by month, a bar for a card in the NAS, the filters by who took them, and the scrubber with the years on the right](docs/screenshots/home.webp)
+
+[Numa Home](https://numa.photo/numa-home) ([install](https://github.com/simmmmm/numa-home)) is the household's own
 photo server: one Docker container on a NAS or any computer that runs Docker,
 with SQLite inside and no database server beside it. Every folder of
 photographs on it becomes a library the whole household sees in a browser,

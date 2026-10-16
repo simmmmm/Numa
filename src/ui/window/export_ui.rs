@@ -174,15 +174,13 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     view.set_content(Some(&scroller));
     dialog.set_child(Some(&view));
     dialog.set_default_widget(Some(&export));
-    if let Some(home) = &home {
-        controls.page.prepend(&home.group);
-        home.connect_changed(glib::clone!(
-            #[strong] controls,
-            #[strong(rename_to = group)] home.group,
-            #[weak] export,
-            move |how| controls.show_home(how, &group, &export)
-        ));
-    }
+    controls.page.prepend(&home.group);
+    home.connect_changed(glib::clone!(
+        #[strong] controls,
+        #[strong(rename_to = group)] home.group,
+        #[weak] export,
+        move |how| controls.show_home(how, &group, &export)
+    ));
 
     cancel.connect_clicked(glib::clone!(
         #[weak] dialog,
@@ -203,11 +201,9 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
             let jobs = std::mem::take(&mut *jobs_holder.borrow_mut());
             let directory = destination.borrow().clone();
             dialog.close();
-            if let Some(home) = &home {
-                home.remember(&state);
-                if let Some(how) = home.chosen() {
-                    return home::send(&state, jobs, how, chosen);
-                }
+            home.remember(&state);
+            if let Some(how) = home.chosen() {
+                return home::send(&state, jobs, how, chosen);
             }
             exporting::run_export(&state, jobs, chosen, directory);
         }
