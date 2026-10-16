@@ -6318,6 +6318,45 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   stays and is left out from then on) and Delete from Disk (into the
   library's trash, put back from Trash for 30 days, then gone). Removing,
   deleting and moving are an admin's, or an account's in its own Sent Home.
+- ✅ **HOME-024**: Numa Home's pages put in order. "We hebben een hoop
+  gebouwd maar het werkt allemaal net niet helemaal lekker" (the
+  photographer, 16 October). Every place in one list: down the side on a
+  wide screen, four tabs and More along the foot on a phone (Tidy Up,
+  Trash, Activity, Accounts, Cameras were in the account menu or on
+  Libraries); the account menu only signs out. A library, album or person
+  opens as a page of its own: back, its name, how many and when, For a
+  Book…, Rename… (a library, an admin) and Select. The selection bar holds
+  on a phone: ✕, the count, Album…, stars and flag, Download, and ⋯ for
+  Taken By…, For a Book…, Move…, Remove and Delete (also the Delete key);
+  the libraries' bar the same way. After Move, Remove or Delete the months
+  touched are asked again in place, so the page stays where it was. A
+  finger held on a photograph chooses it. The timeline is asked beside the
+  filters, not after them; errors are toasts, not the browser's alert; the
+  info panel's empty stars can be seen; an empty Sent Home is not shown;
+  Esc closes a menu.
+- ✅ **HOME-023**: For a Book at Numa Home. "In de desktop app hebben we
+  voorbereidingen getroffen voor het maken van online boeken van je
+  reisverhalen … kun je het daar extra makkelijk maken om gekozen foto's zo
+  snel mogelijk daar in te krijgen?" (the photographer, 16 October): IO-035
+  on the NAS. With the timeline narrowed to a library or an album — a
+  trip — the filter row has For a Book…, made of its Picks; the selection
+  bar has it for the photographs chosen. The dialog shows the chapters
+  (by album where there are albums, else by day, both offered) to leave
+  out, and the photo book (the desktop's list, the last one remembered);
+  Make the Book downloads `<library> Book.zip` at once, filled as the NAS
+  develops each photograph at the page's size with its edits: unzipped,
+  the numbered folders go straight into CEWE, Albelli or Popsa.
+- ✅ **HOME-021**: Libraries chosen like photographs. "Kun je bij de
+  libraries ook die toolbalk die je bij de foto's ook hebt tonen … ik kan nu
+  geen library verwijderen", "of combineren met een andere": on Libraries
+  an admin chooses libraries as photographs are chosen (Select, Ctrl/⌘ to
+  start, Shift for a run, Esc) and a bar gives Open and Rename… (one),
+  Combine… (the photographs into the library chosen, each in its own
+  folder, with stars, flags, edits and albums; other files along; the
+  emptied folders to the trash), Remove… (left out of Numa Home, the folder
+  untouched; Add Folder brings it back) and Delete… (the folder into the
+  trash; Put Back on the Trash page for 30 days). A Sent Home library is
+  its account's and is not chosen.
 - ✅ **HOME-019**: Tidy Up. "Zoek naar dubbele foto's … laat de gebruiker
   dan kiezen wat het beste is": a page of cards, each a small set side by
   side, Numa's pick marked — exact copies (the same bytes, across libraries

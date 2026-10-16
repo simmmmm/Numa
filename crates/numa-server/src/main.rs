@@ -1,5 +1,6 @@
 mod accounts;
 mod activity;
+mod book;
 mod auth;
 mod by;
 mod cards;
@@ -151,6 +152,11 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/libraries", get(timeline::libraries).post(manage::add))
         .route("/api/v1/libraries/folders", get(manage::folders))
         .route("/api/v1/libraries/{id}", put(manage::rename))
+        .route("/api/v1/libraries/remove", post(manage::remove_libraries))
+        .route("/api/v1/libraries/delete", post(manage::delete_libraries))
+        .route("/api/v1/libraries/combine", post(manage::combine))
+        .route("/api/v1/trash/libraries", get(manage::dropped))
+        .route("/api/v1/trash/libraries/restore", post(manage::undrop))
         .route("/api/v1/trash", get(manage::list))
         .route("/api/v1/trash/{id}/thumb", get(manage::thumb))
         .route("/api/v1/trash/restore", post(manage::restore))
@@ -161,6 +167,8 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/marks", post(selection::marks))
         .route("/api/v1/photos/by", post(selection::by))
         .route("/api/v1/photos/zip", get(selection::zip))
+        .route("/api/v1/book", get(book::show))
+        .route("/api/v1/book/zip", get(book::zip))
         .route("/api/v1/timeline", get(timeline::months))
         .route("/api/v1/timeline/{month}", get(timeline::month))
         .route("/api/v1/people", get(timeline::people))

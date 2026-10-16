@@ -15,7 +15,7 @@ use crate::manage::{self, within, Ids};
 use crate::store::Account;
 use crate::{Fail, Server};
 
-fn chosen(server: &Server, me: &Account, ids: &[i64], twins: bool, manage: bool) -> Result<Vec<(Library, Photo)>, Fail> {
+pub(crate) fn chosen(server: &Server, me: &Account, ids: &[i64], twins: bool, manage: bool) -> Result<Vec<(Library, Photo)>, Fail> {
     if ids.is_empty() {
         return Err(Fail::bad("Choose a photograph first."));
     }
@@ -77,37 +77,7 @@ pub async fn moved(State(server): State<Arc<Server>>, Signed(me): Signed, Json(a
         return Err(manage::refused());
     }
     let folder = target.path.join(crate::send::folder_in(asked.dir.as_deref().unwrap_or(""))?);
-    let moved = blocking(&server, move |server| {
-        let authors = server.store.authors();
-        let mut landed = Vec::new();
-        let mut left = HashSet::new();
-        for (library, photo) in photos {
-            let Some(name) = photo.path.file_name() else { continue };
-            if photo.path.parent() == Some(folder.as_path()) {
-                continue;
-            }
-            let to = manage::free(folder.join(name));
-            let path = within(&library, &photo.path);
-            let author = authors.get(&(library.id, path.clone())).cloned();
-            let held = photo.clone();
-            let Some(kept) = server.home.blocking(move |catalog| manage::keep(catalog, &held, author)) else { continue };
-            if let Err(err) = manage::move_file(&photo.path, &to) {
-                log::warn!("{}: {err}", photo.path.display());
-                continue;
-            }
-            let _ = server.store.set_author(library.id, &path, None);
-
-            if library.id != target.id {
-                let id = photo.id;
-                server.home.blocking(move |catalog| catalog.remove_photo(id));
-                left.insert(library.id);
-            }
-            landed.push((target.clone(), to, kept));
-        }
-        manage::shelve(server, left);
-        manage::land(server, landed)
-    })
-    .await?;
+    let moved = blocking(&server, move |server| manage::move_photos(server, photos, &target, |_, _| folder.clone())).await?;
     Ok(Json(json!({ "moved": moved })))
 }
 

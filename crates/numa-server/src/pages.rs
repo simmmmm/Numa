@@ -26,4 +26,5 @@ pub fn routes() -> Router<Arc<Server>> {
         .route("/icon-512.png", get(|| async { file("image/png", include_bytes!("web/icon-512.png")) }))
         .route("/manifest.webmanifest", get(|| async { file("application/manifest+json", include_bytes!("web/manifest.webmanifest")) }))
         .route("/mark.png", get(|| async { file("image/png", include_bytes!("../../../data/branding/mark.png")) }))
+        .route("/licences", get(|| async { file("text/plain; charset=utf-8", include_bytes!("../../../data/THIRD_PARTY_LICENSES-server.txt")) }))
 }

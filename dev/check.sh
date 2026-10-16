@@ -7,7 +7,10 @@ python3 dev/shape.py
 python3 dev/style.py
 python3 dev/tokens.py --check
 
-if ! python3 dev/third-party-licences.py --target x86_64-unknown-linux-gnu -p numa | cmp -s - data/THIRD_PARTY_LICENSES.txt; then
-    echo "data/THIRD_PARTY_LICENSES.txt is out of date: dev/third-party-licences.py --target x86_64-unknown-linux-gnu -p numa > data/THIRD_PARTY_LICENSES.txt" >&2
-    exit 1
-fi
+for pair in numa:THIRD_PARTY_LICENSES numa-server:THIRD_PARTY_LICENSES-server; do
+    crate=${pair%%:*} file=data/${pair#*:}.txt
+    if ! python3 dev/third-party-licences.py --target x86_64-unknown-linux-gnu -p "$crate" | cmp -s - "$file"; then
+        echo "$file is out of date: dev/third-party-licences.py --target x86_64-unknown-linux-gnu -p $crate > $file" >&2
+        exit 1
+    fi
+done

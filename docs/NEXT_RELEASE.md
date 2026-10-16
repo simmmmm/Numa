@@ -1,32 +1,29 @@
-# Next release: 0.40.0
+# Next release: 0.41.0
 
 What goes into the next general build and is not in `main` or Numa-mac `mac`
 yet. Before `dev/publish.sh` each item is merged, checked, and its line struck
 here; the version bump comes after that (docs/AGENT_GUIDE.md), and after the
 bump `data/THIRD_PARTY_LICENSES.txt` is generated again and `dev/check.sh` run.
 
-0.39.0 went out on 15 October.
+0.40.0 went out on 15 October.
 What went into it is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
 
-The version is 0.40.0 in `Cargo.toml` and the metainfo — never released, so
-no bump for what joins it.
+The version is 0.41.0 in `Cargo.toml` and the metainfo (16 October): Linux
+(HOME-006) and Apple (HOME-022) changed since 0.40.0 as well as Numa Home, so
+this is a train, not Home alone. Licences generated again, `dev/check.sh` green.
 
 ## In
 
-- **Numa Home, round three (HOME-009/010/012/013, 016–020)** — on `main`
-  15 October: new folders, selection and library management with a 30-day
-  trash, the card's import by thumbnails, By per photograph, the activity in
-  the nav, Tidy Up, the night concierge (`TZ`), Open in Numa's click fixed
-  on the web page, and on Linux an import kept at Numa Home with night,
-  unmetered sync. Apple: nothing new this round (HOME-018 there after a
-  green TestFlight of 0.39.0's Swift).
-
-- **Numa Home, round two (HOME-010, 011, 013–015)** — on `main` and Numa-mac
-  `mac` 15 October: Activity and Cameras never blank, the header under
-  900 px, the scrubber's oldest months, Open in Numa (Linux, web, Apple),
-  the Live Activity and the share sheet (Apple, uncompiled). Before the
-  first Apple build the photographer registered the App Group
-  `group.com.tijmen.Numa` (15 October).
+- ~~**Numa Home, round four (HOME-021, 023, 024)**~~ — on `main` 16 October:
+  libraries chosen like photographs with a bar to combine, remove and delete
+  them (the archive's own trash, 30 days); For a Book; every place in one
+  list, a library, album or person as a page, a selection bar that holds on
+  a phone. The server's own third-party licences (HOME-001) merged too.
+- ~~**Send Home signed out (HOME-006)**~~ — on `main`: Numa Home in Linux's
+  export dialog when signed out, greyed, with Sign In.
+- ~~**Numa Home on Apple (HOME-022)**~~ — on Numa-mac `mac`: albums and
+  thumbnails on the iPhone, iPad and Mac, Connected after signing in. Swift
+  compiled first by TestFlight.
 
 ## Earlier, in 0.38.0
 

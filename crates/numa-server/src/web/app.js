@@ -28,6 +28,8 @@ const ICONS = {
   back: '<path d="M15 5l-7 7 7 7"/>',
   on: '<path d="M9 5l7 7-7 7"/>',
   expand: '<path d="M14 5h5v5M10 19H5v-5M19 5l-6 6M5 19l6-6"/>',
+  star: '<path d="M12 3.8l2.5 5.1 5.6.8-4 4 .9 5.6-5-2.6-5 2.6.9-5.6-4-4 5.6-.8z"/>',
+  more: '<path d="M5.5 12h.01M12 12h.01M18.5 12h.01" stroke-width="3"/>',
 };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -143,7 +145,7 @@ function render() {
   const { path, params } = route();
   closeViewer();
   const main = h('main');
-  app.replaceChildren(header(path, params), h('div', { class: 'cardbar', hidden: true }), main);
+  app.replaceChildren(header(path, params), placesNav(path, params), h('div', { class: 'cardbar', hidden: true }), main);
   cardBar();
   activityBadge();
   if (path === '/activity') return activityPage(main);
@@ -160,7 +162,6 @@ function render() {
 }
 
 function header(path, params) {
-  const tab = (label, to) => h('button', { class: 'chip' + (path === to ? ' chosen' : ''), onclick: () => go(to) }, label);
   const field = h('input', { type: 'search', placeholder: 'Search by names or words', value: params.get('q') || '', enterkeyhint: 'search', 'aria-label': 'Search' });
   const search = h('form', { class: 'search', role: 'search', onsubmit: event => { event.preventDefault(); go('/', { q: field.value.trim() }); } }, field);
   const bar = h('header', {});
@@ -168,18 +169,37 @@ function header(path, params) {
     event.stopPropagation();
     menu(bar, [
       h('div', { class: 'section-label' }, state.me.name),
-      state.me.admin && h('button', { onclick: () => go('/accounts') }, 'Accounts'),
-      state.me.admin && h('button', { onclick: () => go('/cameras') }, 'Cameras'),
-      h('button', { onclick: () => go('/tidy') }, 'Tidy Up'),
-      h('button', { onclick: () => go('/activity') }, 'Activity'),
       h('button', { onclick: async () => { await api('logout', { method: 'POST' }).catch(() => {}); signIn(); } }, 'Sign Out'),
     ]);
   } }, state.me.name);
-  bar.append(
-    h('img', { class: 'mark', src: '/mark.png', alt: 'Numa Home', onclick: () => go('/') }),
-    h('nav', {}, tab('Photos', '/'), tab('Libraries', '/libraries'), tab('People', '/people'), tab('Albums', '/albums')),
-    badgeButton(), search, who);
+  bar.append(h('img', { class: 'mark', src: '/mark.png', alt: 'Numa Home', onclick: () => go('/') }), badgeButton(), search, who);
   return bar;
+}
+
+// Every place in one list: down the side on a wide screen, along the foot
+// on a phone, where the four first are tabs and the rest are under More.
+const OWNERS = { library: '/libraries', album: '/albums', person: '/people' };
+function placesNav(path, params) {
+  const owner = path === '/' && Object.keys(OWNERS).find(key => params.get(key));
+  const here = owner ? OWNERS[owner] : path;
+  const place = (label, to, extra) => h('button', { class: 'place-link' + (here === to ? ' chosen' : '') + (extra ? ' extra' : ''),
+    'aria-current': here === to ? 'page' : null, onclick: () => go(to) }, label);
+  const rest = [
+    h('div', { class: 'section-label extra' }, 'Archive'),
+    place('Tidy Up', '/tidy', true), place('Trash', '/trash', true), place('Activity', '/activity', true),
+    state.me.admin && h('div', { class: 'section-label extra' }, 'Household'),
+    state.me.admin && place('Accounts', '/accounts', true), state.me.admin && place('Cameras', '/cameras', true),
+  ];
+  const nav = h('nav', { class: 'places-nav', 'aria-label': 'Places' },
+    place('Photos', '/'), place('Libraries', '/libraries'), place('People', '/people'), place('Albums', '/albums'), rest);
+  const extras = ['/tidy', '/trash', '/activity', '/accounts', '/cameras'];
+  nav.append(h('button', { class: 'place-link more' + (extras.includes(here) ? ' chosen' : ''), 'aria-haspopup': 'menu', onclick: event => {
+    event.stopPropagation();
+    menu(nav, rest.filter(Boolean).map(one => one.tagName === 'BUTTON'
+      ? h('button', { class: one.classList.contains('chosen') ? 'chosen' : null, onclick: () => one.click() }, one.textContent)
+      : h('div', { class: 'section-label' }, one.textContent)));
+  } }, 'More'));
+  return nav;
 }
 
 // A menu under its place, gone at the next click anywhere.
@@ -202,15 +222,18 @@ const GAP = 3;
 async function timeline(main, params) {
   const narrowed = ['library', 'person', 'album', 'thing', 'by'].filter(key => params.get(key)).map(key => [key, params.get(key)]);
   const query = new URLSearchParams(narrowed).toString();
+  // The months asked at once, beside the filters, not after them.
+  const asked = api('timeline' + (query ? '?' + query : '')).then(months => ({ months }), error => ({ error }));
   const filters = await filterRow(params, narrowed);
-  main.append(filters.row);
-  let months;
-  try { months = await api('timeline' + (query ? '?' + query : '')); } catch (error) {
+  main.append(...[filters.head, filters.row.childElementCount > 0 && filters.row].filter(Boolean));
+  const { months, error } = await asked;
+  if (error) {
     main.append(empty('Nothing to Show', error.message));
     return;
   }
   if (!main.isConnected) return;
   filters.count.textContent = counted(months.reduce((sum, month) => sum + month.count, 0));
+  if (months.length) filters.dates.textContent = ' · ' + spanOf(months);
   if (!months.length) {
     main.append(narrowed.length
       ? empty('Nothing Here', 'No photographs answer these filters.')
@@ -235,23 +258,32 @@ async function timeline(main, params) {
   state.sections.forEach(section => near.observe(section.el));
 }
 
+// A library, an album or a person is a page of its own: its name as the
+// title, how many and when, what can be done with it, and the way back. The
+// filters under it narrow what it holds.
 async function filterRow(params, narrowed) {
   const row = h('div', { class: 'filters' });
   const without = key => Object.fromEntries(narrowed.filter(([other]) => other !== key));
-  const select = h('select', { 'aria-label': 'Libraries', onchange: () => go('/', { ...without('library'), library: select.value }) },
-    h('option', { value: '' }, 'All Libraries'));
+  const owner = Object.keys(OWNERS).find(key => params.get(key));
   // Asked at once; the row waits for the slowest, not for their sum.
-  const asked = { libraries: libraries().catch(() => []), by: api('by').catch(() => []), things: api('things').catch(() => []) };
-  for (const library of await asked.libraries) {
-    select.append(h('option', { value: library.id, selected: String(library.id) === params.get('library') }, libraryName(library)));
+  const asked = {
+    libraries: libraries().catch(() => []), by: api('by').catch(() => []), things: api('things').catch(() => []),
+    albums: params.get('album') ? api('albums').catch(() => []) : [],
+  };
+  const list = await asked.libraries;
+  const library = list.find(one => String(one.id) === params.get('library'));
+  const names = {
+    library: library ? libraryName(library) : 'Library',
+    album: (await asked.albums).find(album => album.key === params.get('album'))?.name || 'Album',
+    person: params.get('person'),
+  };
+  if (!owner) {
+    const select = h('select', { 'aria-label': 'Libraries', onchange: () => go('/', { ...without('library'), library: select.value }) },
+      h('option', { value: '' }, 'All Libraries'), list.map(one => h('option', { value: one.id }, libraryName(one))));
+    row.append(select);
   }
-  row.append(select);
   const chip = (text, key) => h('button', { class: 'chip chosen', onclick: () => go('/', without(key)) }, text, h('span', { class: 'x', 'aria-label': 'Remove' }, '×'));
-  if (params.get('person')) row.append(chip(params.get('person'), 'person'));
-  if (params.get('album')) {
-    const albums = await api('albums').catch(() => []);
-    row.append(chip(albums.find(album => album.key === params.get('album'))?.name || 'Album', 'album'));
-  }
+  for (const key of ['library', 'person', 'album']) if (key !== owner && params.get(key)) row.append(chip(names[key], key));
   // HOME-012: whose photographs — a chip per account, and Unknown.
   const by = await asked.by;
   if (by.some(row => row.account) && by.length > 1) {
@@ -271,9 +303,38 @@ async function filterRow(params, narrowed) {
       row.append(seen);
     }
   }
-  const count = h('span', { class: 'caption count' });
-  row.append(selectToggle(), count);
-  return { row, count };
+  const count = h('span', { class: 'count' });
+  const dates = h('span', { class: 'dates' });
+  // HOME-023: a trip is a library or an album; its picks make the book.
+  const book = (params.get('library') || params.get('album')) &&
+    h('button', { class: 'chip', title: 'The picks here, as a photo book\'s chapter folders', onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, 'For a Book…');
+  if (!owner) {
+    count.className = 'caption count';
+    row.append(...[book, selectToggle(), count].filter(Boolean));
+    return { row, count, dates };
+  }
+  const back = { library: 'Libraries', album: 'Albums', person: 'People' }[owner];
+  const head = h('div', { class: 'collection-head' },
+    h('button', { class: 'round small', 'aria-label': back, title: back, onclick: () => go(OWNERS[owner]) }, icon('back')),
+    h('div', { class: 'titles' }, h('h1', {}, names[owner]),
+      h('div', { class: 'caption' }, count, dates)),
+    h('div', { class: 'act' }, ...[book,
+      owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'chip', onclick: () => renameLibrary(library) }, 'Rename…'),
+      selectToggle()].filter(Boolean)));
+  return { head, row, count, dates };
+}
+
+// When a page's photographs were taken: "Aug 2026", "Mar – Aug 2026",
+// "Dec 2025 – Jan 2026".
+function spanOf(months) {
+  const sorted = months.map(month => month.month).sort();
+  const name = (month, year) => {
+    const [y, m] = month.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-GB', { month: 'short', ...(year && { year: 'numeric' }), timeZone: 'UTC' });
+  };
+  const [first, last] = [sorted[0], sorted[sorted.length - 1]];
+  if (first === last) return name(last, true);
+  return `${name(first, first.slice(0, 4) !== last.slice(0, 4))} – ${name(last, true)}`;
 }
 
 function estimate(count, width) {
@@ -283,13 +344,18 @@ function estimate(count, width) {
 
 function monthSection(month, query) {
   const rows = h('div', { class: 'rows' });
+  const caption = h('span', { class: 'caption' }, counted(month.count));
   const el = h('section', { class: 'month' },
-    h('div', { class: 'head' }, h('span', { class: 'section-label' }, monthName(month.month)), h('span', { class: 'caption' }, counted(month.count))),
+    h('div', { class: 'head' }, h('span', { class: 'section-label' }, monthName(month.month)), caption),
     rows);
   const section = { el, rows, count: month.count, photos: null, loading: null };
   requestAnimationFrame(() => { if (!section.photos) rows.style.height = estimate(month.count, rows.clientWidth || innerWidth) + 'px'; });
   section.load = () => section.loading = section.loading || api(`timeline/${month.month}` + (query ? '?' + query : '')).then(list => {
     section.photos = list;
+    // Asked again after a change (`refreshAround`), the month may have shrunk.
+    section.count = list.length;
+    caption.textContent = counted(list.length);
+    el.hidden = !list.length;
     layout(section);
     return list;
   }, error => { section.loading = null; throw error; });
@@ -330,9 +396,9 @@ function tile(section, photo, style, height) {
   const image = h('img', { src: thumb(photo.id, edge), loading: 'lazy', decoding: 'async', alt: '' });
   image.addEventListener('load', () => image.classList.add('in'));
   // HOME-017: a click chooses once something is chosen (`pick`).
-  return h('button', { class: 'tile' + (picked.ids.has(photo.id) ? ' picked' : ''), style, 'data-id': photo.id, 'aria-label': 'Photograph',
+  return holdToChoose(h('button', { class: 'tile' + (picked.ids.has(photo.id) ? ' picked' : ''), style, 'data-id': photo.id, 'aria-label': 'Photograph',
     onclick: event => pick(event, photo.id) || openViewer(section, section.photos.indexOf(photo)) },
-  image, h('span', { class: 'check', 'aria-hidden': 'true' }), photo.rating > 0 && h('span', { class: 'stars' }, '★'.repeat(photo.rating)));
+  image, h('span', { class: 'check', 'aria-hidden': 'true' }), photo.rating > 0 && h('span', { class: 'stars' }, '★'.repeat(photo.rating))), photo.id);
 }
 
 let resizing;
@@ -359,8 +425,8 @@ async function search(main, q) {
   main.append(h('div', { class: 'grid' }, section.photos.map((photo, at) => {
     const image = h('img', { src: thumb(photo.id, 256), loading: 'lazy', decoding: 'async', alt: '' });
     image.addEventListener('load', () => image.classList.add('in'));
-    return h('button', { class: 'tile', 'data-id': photo.id, 'aria-label': 'Photograph', onclick: event => pick(event, photo.id) || openViewer(section, at) },
-      image, h('span', { class: 'check', 'aria-hidden': 'true' }));
+    return holdToChoose(h('button', { class: 'tile', 'data-id': photo.id, 'aria-label': 'Photograph', onclick: event => pick(event, photo.id) || openViewer(section, at) },
+      image, h('span', { class: 'check', 'aria-hidden': 'true' })), photo.id);
   })));
 }
 
@@ -424,15 +490,15 @@ async function shelves(main) {
   if (!list.length) return main.append(empty('No Libraries Yet', 'Every folder in the photos folder is a library; so is what each person sends home.'));
   // HOME-011: each library's tint, as the scrubber has it.
   state.tints = tintsOf(await api('timeline').catch(() => []));
-  main.append(libraryCommands(list), h('div', { class: 'places' }, list.map(library => h('div', { class: 'shelf' },
-    collection([h('i', { class: 'tint', style: { background: tint(library.id) } }), libraryName(library)], counted(library.count), 'library=' + library.id, () => go('/', { library: library.id })),
-    renameButton(library)))));
+  // An empty Sent Home is only a grey stack; it shows once something is sent.
+  const shown = list.filter(library => library.count || !library.mine);
+  main.append(libraryCommands(list), h('div', { class: 'places' }, shown.map(library => libraryShelf(library, list))));
 }
 
 async function albums(main) {
   let list;
   try { list = await api('albums'); } catch (error) { return main.append(empty('No Albums', error.message)); }
-  if (!list.length) return main.append(empty('No Albums Yet', 'Albums made in Numa show here.'));
+  if (!list.length) return main.append(empty('No Albums Yet', 'Choose photographs and Album… to start one. Albums made in Numa show here too.'));
   main.append(h('div', { class: 'places' }, list.map(album =>
     collection(album.name, counted(album.count), 'album=' + encodeURIComponent(album.key), () => go('/', { album: album.key })))));
 }
