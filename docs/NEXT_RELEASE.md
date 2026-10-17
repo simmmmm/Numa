@@ -1,28 +1,42 @@
-# Next release: 0.41.0
+# Next release: 0.42.0
 
 What goes into the next general build and is not in `main` or Numa-mac `mac`
 yet. Before `dev/publish.sh` each item is merged, checked, and its line struck
 here; the version bump comes after that (docs/AGENT_GUIDE.md), and after the
 bump `data/THIRD_PARTY_LICENSES.txt` is generated again and `dev/check.sh` run.
 
-0.40.0 went out on 15 October.
+0.41.0 went out on 16 October.
 What went into it is in this file's history (`git log -p docs/NEXT_RELEASE.md`).
 
-The version is 0.41.0 in `Cargo.toml` and the metainfo (16 October): Linux
-(HOME-006) and Apple (HOME-022) changed since 0.40.0 as well as Numa Home, so
-this is a train, not Home alone. Licences generated again, `dev/check.sh` green.
+The version is 0.42.0 in `Cargo.toml` and the metainfo (17 October): Linux
+(HOME-030) and Apple (HOME-027, 028, 030) changed since 0.41.0 as well as Numa
+Home, so this is a train, not Home alone. Licences generated again,
+`dev/check.sh` green. `main`, Numa-mac `mac` and numa-site `main` pushed.
 
 ## In
 
-- ~~**Numa Home, round four (HOME-021, 023, 024)**~~ — on `main` 16 October:
-  libraries chosen like photographs with a bar to combine, remove and delete
-  them (the archive's own trash, 30 days); For a Book; every place in one
-  list, a library, album or person as a page, a selection bar that holds on
-  a phone. The server's own third-party licences (HOME-001) merged too.
-- ~~**Send Home signed out (HOME-006)**~~ — on `main`: Numa Home in Linux's
-  export dialog when signed out, greyed, with Sign In.
-- ~~**Numa Home on Apple (HOME-022)**~~ — on Numa-mac `mac`: albums and
-  thumbnails on the iPhone, iPad and Mac, Connected after signing in. Swift
+- ~~**Numa Home, round five (HOME-025, 026, 029)**~~ — on `main` 17 October:
+  a drag with the mouse chooses, a right-click opens Numa's menu, the
+  selection bar's star and ⋯ menus open; By names only the people with
+  photographs where you are; a trip named after where it was from its GPS
+  in Import and Rename (GeoNames in the binary), and a trip without GPS
+  borrows the household's places from the same hours.
+- ~~**Libraries on Apple, round two (HOME-027, HOME-028)**~~ — on Numa-mac
+  `mac` e9de0d28 (17 October), the mark no button any more with it; the
+  guide on numa-site `main` 359fc22 (live). The photographer: "ik zou graag
+  alle libraries willen zien niet alleen alle fotos … albums willen kunnen
+  syncen of sturen naar numa home vanaf mijn ipad of telefoon als ik on the
+  go ben". Numa Home's libraries on the Libraries page; every shelf one row
+  that scrolls sideways with See All (iPhone, iPad; the Mac keeps the grid);
+  Keep at Numa Home on a library's or a Photos album's stack, up only.
+  Swift compiled first by TestFlight.
+- ~~**Numa Home offered once (HOME-030)**~~ — merged 17 October: Linux on
+  `main`, Apple on Numa-mac `mac` 06181cd3, guide on numa-site `main`. The
+  photographer, 17 October: "als een gebruiker nog geen home gebruikt wil ik
+  dit wel als een kleine upsell laten zien in alle apps". A card where Numa
+  Home's row would be, no taller than a row: three prints with the house,
+  NUMA HOME, "Keep them at home", Set Up… (Preferences on Linux, Settings on
+  Apple) and ×. Closed, or once signed in, it never comes back. Swift
   compiled first by TestFlight.
 
 ## Earlier, in 0.38.0

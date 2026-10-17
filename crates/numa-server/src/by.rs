@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use numa_io::catalog::Library;
@@ -102,12 +102,16 @@ pub async fn owners(server: &Arc<Server>, libraries: &[Library]) -> Result<HashM
     Ok(owners)
 }
 
-pub async fn counts(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
+pub async fn counts(
+    State(server): State<Arc<Server>>,
+    Signed(me): Signed,
+    Query(mut wanted): Query<crate::timeline::Wanted>,
+) -> Result<Json<Vec<Value>>, Fail> {
+    wanted.by = None;
     let libraries = server.home.libraries(&me.name);
     let owners = owners(&server, &libraries).await?;
-    let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
     let mut counts: HashMap<Option<&str>, usize> = HashMap::new();
-    let photos = server.home.photos(&ids);
+    let photos = crate::timeline::chosen(&server, &me.name, &wanted).await?;
     for photo in &photos {
         *counts.entry(owners.get(&photo.id).map(String::as_str)).or_default() += 1;
     }

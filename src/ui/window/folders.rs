@@ -41,6 +41,13 @@ pub(super) fn show_folders(state: &App) {
     places::in_order(state, &mut loose);
     grouped.iter_mut().for_each(|(_, shelf)| places::in_order(state, shelf));
 
+    if !state.catalog.recall::<bool>(INVITED_HOME).unwrap_or(false) {
+        if home::account(state).signed_in() {
+            state.catalog.remember(INVITED_HOME, &true);
+        } else if !libraries.is_empty() {
+            column.append(&home_invite(state));
+        }
+    }
     let mut first: Vec<Place> = Vec::new();
     if libraries.len() > 1 {
         first.push(Place::Everywhere);
@@ -70,6 +77,67 @@ pub(super) fn show_folders(state: &App) {
         column.append(&empty);
     }
     state.stack.set_visible_child_name("folders");
+}
+
+const INVITED_HOME: &str = "invited-home";
+
+fn home_invite(state: &App) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    card.add_css_class("card");
+    card.add_css_class("home-invite");
+    card.set_margin_bottom(24);
+    card.set_halign(gtk::Align::Start);
+
+    let stack = gtk::Overlay::new();
+    stack.set_child(Some(&places::fan(64.0)));
+    let house = gtk::Image::from_icon_name("go-home-symbolic");
+    house.add_css_class("home-badge");
+    house.set_halign(gtk::Align::End);
+    house.set_valign(gtk::Align::End);
+    stack.add_overlay(&house);
+    card.append(&stack);
+
+    let words = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    words.set_valign(gtk::Align::Center);
+    words.set_hexpand(true);
+    let label = section_header(home::NUMA_HOME);
+    label.set_margin_top(0);
+    words.append(&label);
+    let title = gtk::Label::new(Some("Keep them at home"));
+    title.set_xalign(0.0);
+    title.add_css_class("heading");
+    words.append(&title);
+    let line = gtk::Label::new(Some("Every photograph in the house on your own NAS. Nothing goes to the cloud."));
+    line.set_xalign(0.0);
+    line.set_wrap(true);
+    line.add_css_class("dim-label");
+    words.append(&line);
+    card.append(&words);
+
+    let set_up = primary_button("Set Up…");
+    set_up.set_valign(gtk::Align::Center);
+    set_up.connect_clicked(|button| {
+        let _ = button.activate_action("win.preferences", None);
+    });
+    card.append(&set_up);
+
+    let close = gtk::Button::from_icon_name("window-close-symbolic");
+    close.add_css_class("flat");
+    close.add_css_class("circular");
+    close.set_valign(gtk::Align::Start);
+    close.set_tooltip_text(Some("Not Now"));
+    close.connect_clicked(glib::clone!(
+        #[strong] state,
+        #[weak] card,
+        move |_| {
+            state.catalog.remember(INVITED_HOME, &true);
+            if let Some(column) = card.parent().and_downcast::<gtk::Box>() {
+                column.remove(&card);
+            }
+        }
+    ));
+    card.append(&close);
+    card
 }
 
 pub(super) fn libraries_crumb(state: &App) -> gtk::Button {

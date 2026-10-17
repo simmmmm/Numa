@@ -314,7 +314,12 @@ header { height: var(--head); }
 .selection .count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 0 6px 0 2px; }
 .selection a { text-decoration: none; color: var(--ink); }
 .menu .rule { height: 1px; background: var(--rule); margin: 4px 6px; }
-.selection .menu { max-height: 60vh; overflow-y: auto; position: fixed; top: auto; bottom: 76px; right: auto; left: 50%; transform: translateX(-50%); }
+.menu.floating { position: fixed; right: auto; max-height: calc(100vh - 16px); overflow-y: auto; z-index: 9; }
+.menu .star-row { display: flex; gap: 2px; padding: 0 4px; }
+.menu .star-row button { padding: 6px 6px; font-size: 12px; letter-spacing: -1px; }
+/* A drag across the photographs: the box it draws, and no text chosen meanwhile. */
+.marquee { position: fixed; z-index: 7; border: 1px solid var(--accent); background: rgba(255, 255, 255, 0.08); border-radius: 2px; pointer-events: none; }
+body.dragging { user-select: none; cursor: crosshair; }
 .round.small { width: 32px; height: 32px; border-radius: 16px; background: var(--ground-chip); }
 .round.small svg { width: 16px; height: 16px; }
 .chip.small { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -406,3 +411,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .collection-head .titles { display: grid; gap: 2px; flex: 1 1 180px; min-width: 0; }
 .collection-head h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-head .act { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* HOME-029: names from where the photographs were taken. */
+.ideas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.import-page .shoot .ideas { justify-content: flex-end; padding-bottom: 6px; }

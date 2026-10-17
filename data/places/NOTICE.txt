@@ -1,0 +1,8 @@
+places.tsv.gz
+  Place names, positions, regions, countries and populations from GeoNames
+  (https://www.geonames.org): cities1000.txt, countryInfo.txt and
+  admin1CodesASCII.txt from https://download.geonames.org/export/dump/,
+  downloaded 17 October 2026 and reduced by dev/places.py to the columns
+  Numa Home uses.
+  Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+  https://creativecommons.org/licenses/by/4.0/

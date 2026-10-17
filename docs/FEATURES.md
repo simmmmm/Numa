@@ -6318,6 +6318,31 @@ has the plan and the API. "Numa Home" and "Send Home" are the names (14 October)
   stays and is left out from then on) and Delete from Disk (into the
   library's trash, put back from Trash for 30 days, then gone). Removing,
   deleting and moving are an admin's, or an account's in its own Sent Home.
+- ✅ **HOME-029**: A trip named after where it was. "Kun je aan de foto's
+  zien waar ze waren en eventueel een suggestie doen voor de naam van het
+  album ipv datums?" (the photographer, 17 October). Where photographs carry
+  GPS, the places nearest them (GeoNames, every place of 1 000 people or
+  more, in the binary) name the trip: the town or the two or three it was
+  spent in, the region where one holds nearly all, the country or
+  countries ("Tokyo & Kyōtango", "Japan"; "Naples", "Italy"). Import fills
+  a shoot's new folder with the first while the date still stands and
+  offers the others; Rename… offers them all. A trip without GPS of its
+  own borrows the household's: the places of other photographs (a phone's,
+  Sent Home) taken within an hour of its own ("ja als gps wel aanwezig is
+  natuurlijk dat gewoon gebruiken als basis"). Without any GPS nothing is
+  offered: SigLIP 2's guess from the pictures was measured on his eight
+  trips and had the country right in four, the others far off (the Eifel
+  as Sierra Leone), with no score that told them apart.
+- ✅ **HOME-025**: Choosing with the mouse at Numa Home. "Ster en puntjes
+  doen niets … als ik begin te slepen met mijn cursor zou ik graag willen
+  selecteren en rechtermuis context menu zou ik ook graag custom willen met
+  de numa opties" (the photographer, 17 October). The selection bar's star
+  and ⋯ menus open above the bar (its own box clipped them); a drag across
+  the photographs chooses what its box covers (Ctrl, ⌘ or Shift adds), the
+  page scrolling along near the window's edges; a right-click on a
+  photograph opens Numa's menu for what is chosen (Open, Album…, Download,
+  stars, flag, Taken By…, For a Book…, Move…, Remove, Delete), choosing it
+  alone if it was not chosen yet.
 - ✅ **HOME-024**: Numa Home's pages put in order. "We hebben een hoop
   gebouwd maar het werkt allemaal net niet helemaal lekker" (the
   photographer, 16 October). Every place in one list: down the side on a

@@ -26,3 +26,4 @@ env_logger.workspace = true
 libc.workspace = true
 rayon.workspace = true
 zip.workspace = true
+flate2 = "1"

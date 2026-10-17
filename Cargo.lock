@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "numa"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "byteorder",
  "dirs",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "numa-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "dirs",
  "image",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "numa-cull"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "image",
  "log",
@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "numa-gpu"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "bytemuck",
  "env_logger",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "numa-infer"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "image",
  "log",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "numa-io"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "avif-serialize",
  "byteorder",
@@ -2387,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "numa-render"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "image",
  "log",
@@ -2404,11 +2404,12 @@ dependencies = [
 
 [[package]]
 name = "numa-server"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "argon2",
  "axum",
  "env_logger",
+ "flate2",
  "futures-util",
  "image",
  "libc",

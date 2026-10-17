@@ -12,6 +12,8 @@ const libraryOf = id => Math.floor(id / 2 ** 32);
 function pick(event, id) {
   // The click a long press leaves behind: the press chose already.
   if (event.currentTarget?.dataset.held) { delete event.currentTarget.dataset.held; return true; }
+  // The click that ends a drag across the photographs chose already.
+  if (picked.swallow) return true;
   const choosing = picked.mode || picked.ids.size > 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.target.closest?.('.check');
   if (!choosing) return false;
   const order = state.sections.flatMap(section => section.photos || []).map(photo => photo.id);
@@ -27,7 +29,8 @@ function pick(event, id) {
 }
 
 // On a touch screen, a finger held on a photograph chooses it, as in the
-// phones' own Photos; a finger that moves is scrolling and lets go.
+// phones' own Photos; a finger that moves is scrolling and lets go. With a
+// mouse, the right button opens Numa's menu for it (`chosenMenu`).
 function holdToChoose(el, id) {
   let timer = null, from = null, touch = false;
   const cancel = () => { clearTimeout(timer); timer = null; };
@@ -47,9 +50,63 @@ function holdToChoose(el, id) {
   el.addEventListener('pointermove', event => { if (timer && Math.hypot(event.clientX - from.x, event.clientY - from.y) > 10) cancel(); });
   el.addEventListener('pointerup', cancel);
   el.addEventListener('pointercancel', cancel);
-  el.addEventListener('contextmenu', event => { if (touch) event.preventDefault(); });
+  el.addEventListener('contextmenu', event => touch ? event.preventDefault() : chosenMenu(event, el, id));
   return el;
 }
+
+// A drag with the mouse across the photographs chooses what it covers, as
+// in Numa; with Ctrl, ⌘ or Shift held it adds to what was chosen. Near the
+// top or the foot of the window the page scrolls along.
+document.addEventListener('pointerdown', down => {
+  if (down.pointerType !== 'mouse' || down.button !== 0 || state.viewer || !down.target.closest?.('main .month, main > .grid')) return;
+  const page = event => ({ x: event.clientX + scrollX, y: event.clientY + scrollY });
+  const from = page(down);
+  const kept = down.ctrlKey || down.metaKey || down.shiftKey ? new Set(picked.ids) : new Set();
+  let box = null, last = down, frame = 0;
+  const cover = () => {
+    const to = page(last);
+    const [left, right, top, bottom] = [Math.min(from.x, to.x), Math.max(from.x, to.x), Math.min(from.y, to.y), Math.max(from.y, to.y)];
+    Object.assign(box.style, { left: left - scrollX + 'px', top: top - scrollY + 'px', width: right - left + 'px', height: bottom - top + 'px' });
+    picked.ids = new Set(kept);
+    for (const tile of document.querySelectorAll('main .tile[data-id]')) {
+      const r = tile.getBoundingClientRect();
+      const inside = r.right + scrollX > left && r.left + scrollX < right && r.bottom + scrollY > top && r.top + scrollY < bottom;
+      if (inside) picked.ids.add(Number(tile.dataset.id));
+      tile.classList.toggle('picked', picked.ids.has(Number(tile.dataset.id)));
+    }
+  };
+  const along = () => {
+    const edge = last.clientY < 100 ? -1 : last.clientY > innerHeight - 60 ? 1 : 0;
+    if (edge) { scrollBy(0, edge * 16); cover(); }
+    frame = requestAnimationFrame(along);
+  };
+  const move = event => {
+    last = event;
+    if (!box) {
+      if (Math.hypot(event.clientX - down.clientX, event.clientY - down.clientY) < 6) return;
+      box = h('div', { class: 'marquee' });
+      document.body.append(box);
+      document.body.classList.add('dragging', 'picking');
+      frame = requestAnimationFrame(along);
+    }
+    cover();
+  };
+  const up = () => {
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+    if (!box) return;
+    cancelAnimationFrame(frame);
+    box.remove();
+    document.body.classList.remove('dragging');
+    picked.swallow = true;
+    setTimeout(() => { picked.swallow = false; });
+    paintPicked();
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+});
+// A photograph is not dragged out of the page as a picture: the drag chooses.
+document.addEventListener('dragstart', event => { if (event.target.closest?.('main .tile')) event.preventDefault(); });
 
 function unpick() {
   picked.ids.clear();
@@ -78,20 +135,16 @@ async function mayManage(ids) {
   return [...ids].every(id => mine.includes(libraryOf(id)));
 }
 
-async function selectionBar() {
-  document.querySelector('.selection')?.remove();
-  picked.erase = null;
-  if (!picked.ids.size && !picked.mode) return;
-  const ids = [...picked.ids];
+// What can be done to these photographs, as menu items: the bar's star and
+// ⋯ menus, and the right-click menu, are made of the same ones.
+function chosenActions(ids, manage) {
   const n = ids.length;
-  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': 'Chosen photographs' });
-  document.body.append(bar);
   const send = async (path, body, after) => {
     try { const answer = await api(path, { method: 'POST', body: JSON.stringify({ ids, ...body }) }); after?.(answer); } catch (error) { toast(error.message); }
   };
   const refresh = () => { unpick(); state.libraries = null; refreshAround(ids); };
   const marks = (body, label) => send('photos/marks', body, () => {
-    for (const section of state.sections) section.photos?.filter(photo => picked.ids.has(photo.id)).forEach(photo => { if ('rating' in body) photo.rating = body.rating; });
+    for (const section of state.sections) section.photos?.filter(photo => ids.includes(photo.id)).forEach(photo => { if ('rating' in body) photo.rating = body.rating; });
     for (const id of ids) {
       const tile = document.querySelector(`.tile[data-id="${id}"]`);
       if (!tile || !('rating' in body)) continue;
@@ -100,34 +153,23 @@ async function selectionBar() {
     }
     toast(`${label} · ${counted(n)}`);
   });
-  // The few that are done most in sight; the rest under More, so the bar
-  // holds on a phone's width too.
-  const close = h('button', { class: 'round small', 'aria-label': 'Clear the choice', title: 'Clear (Esc)', onclick: unpick }, icon('close'));
-  const round = (name, label, onclick) => h('button', { class: 'round small', 'aria-label': label, title: label, onclick }, icon(name));
-  const opens = items => event => { event.stopPropagation(); menu(bar, items); };
   const item = (label, onclick, title) => h('button', { onclick, title }, label);
-  if (!n) {
-    bar.append(close, h('span', { class: 'count' }, 'Choose photographs'));
-    return;
-  }
-  const manage = await mayManage(ids);
-  if (!bar.isConnected) return;
   const erase = async () => {
     if (await ask(`Delete ${counted(n)} from the disk?`, "They go to their library's trash, where they can be put back for 30 days; after that they are gone for good.", 'Delete from Disk', true))
       send('photos/delete', {}, answer => { toast(`${counted(answer.trashed)} in the trash`); refresh(); });
   };
-  picked.erase = manage ? erase : null;
-  bar.append(close, h('span', { class: 'count' }, `${grouped(n)} chosen`),
-    h('button', { class: 'chip', onclick: () => albumDialog(ids) }, 'Album…'),
-    round('star', 'Stars and Flag', opens([
+  return {
+    erase: manage ? erase : null,
+    album: () => item('Album…', () => albumDialog(ids)),
+    download: () => h('a', { href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', title: 'The originals, as one zip' }, 'Download'),
+    marks: () => [
       h('div', { class: 'section-label' }, 'Stars'),
-      [1, 2, 3, 4, 5].map(stars => item('★'.repeat(stars), () => marks({ rating: stars }, '★'.repeat(stars)))),
-      item('No Rating', () => marks({ rating: 0 }, 'No Rating')),
+      h('div', { class: 'star-row' }, [1, 2, 3, 4, 5].map(stars => h('button', { title: `${stars} (${stars})`, 'aria-label': `${stars} star${stars > 1 ? 's' : ''}`, onclick: () => marks({ rating: stars }, '★'.repeat(stars)) }, '★'.repeat(stars)))),
+      item('No Rating', () => marks({ rating: 0 }, 'No Rating'), '0'),
       h('div', { class: 'section-label' }, 'Flag'),
-      Object.entries(FLAGS).map(([flag, label]) => item(label, () => marks({ flag }, label))),
-    ])),
-    h('a', { class: 'round small', href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', 'aria-label': 'Download', title: 'Download the originals, as one zip' }, icon('download')),
-    round('more', 'More', opens([
+      Object.entries(FLAGS).map(([flag, label]) => item(label, () => marks({ flag }, label), { pick: 'P', reject: 'X', none: 'U' }[flag])),
+    ],
+    more: () => [
       item('Taken By…', () => byDialog(ids)),
       item('For a Book…', () => bookDialog(`ids=${ids.join(',')}`)),
       manage && h('div', { class: 'rule' }),
@@ -137,7 +179,58 @@ async function selectionBar() {
           send('photos/remove', {}, refresh);
       }),
       manage && item('Delete from Disk…', erase, 'Delete (Del)'),
-    ])));
+    ].filter(Boolean),
+  };
+}
+
+async function selectionBar() {
+  document.querySelector('.selection')?.remove();
+  picked.erase = null;
+  if (!picked.ids.size && !picked.mode) return;
+  const ids = [...picked.ids];
+  const n = ids.length;
+  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': 'Chosen photographs' });
+  document.body.append(bar);
+  // The few that are done most in sight; the rest under More, so the bar
+  // holds on a phone's width too.
+  const close = h('button', { class: 'round small', 'aria-label': 'Clear the choice', title: 'Clear (Esc)', onclick: unpick }, icon('close'));
+  const round = (name, label, items) => h('button', { class: 'round small', 'aria-label': label, title: label, onclick: event => {
+    event.stopPropagation();
+    menuOver(event.currentTarget, items());
+  } }, icon(name));
+  if (!n) {
+    bar.append(close, h('span', { class: 'count' }, 'Choose photographs'));
+    return;
+  }
+  const manage = await mayManage(ids);
+  if (!bar.isConnected) return;
+  const actions = chosenActions(ids, manage);
+  picked.erase = actions.erase;
+  bar.append(close, h('span', { class: 'count' }, `${grouped(n)} chosen`),
+    h('button', { class: 'chip', onclick: () => albumDialog(ids) }, 'Album…'),
+    round('star', 'Stars and Flag', actions.marks),
+    h('a', { class: 'round small', href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', 'aria-label': 'Download', title: 'Download the originals, as one zip' }, icon('download')),
+    round('more', 'More', actions.more));
+}
+
+// Right-click on a photograph: it is chosen (alone, unless it already was),
+// and Numa's own menu opens where the pointer is.
+async function chosenMenu(event, tile, id) {
+  event.preventDefault();
+  if (!picked.ids.has(id)) {
+    picked.ids.clear();
+    picked.ids.add(id);
+    picked.anchor = id;
+    paintPicked();
+  }
+  const ids = [...picked.ids];
+  const actions = chosenActions(ids, await mayManage(ids));
+  menuAt(event.clientX, event.clientY, [
+    ids.length === 1 ? h('button', { onclick: () => { unpick(); tile.click(); } }, 'Open') : h('div', { class: 'section-label' }, `${grouped(ids.length)} chosen`),
+    actions.album(), actions.download(),
+    h('div', { class: 'rule' }), actions.marks(),
+    h('div', { class: 'rule' }), actions.more(),
+  ]);
 }
 
 // After a change to these photographs, the months that held them asked
@@ -391,7 +484,7 @@ async function libraryBar(list) {
     h('span', { class: 'count' }, `${librariesCounted(n)} chosen`),
     n === 1 && button('Open', () => go('/', { library: ids[0] })),
     n === 1 && button('Rename…', () => renameLibrary(chosen[0])),
-    h('button', { class: 'round small', 'aria-label': 'More', title: 'More', onclick: event => { event.stopPropagation(); menu(bar, [
+    h('button', { class: 'round small', 'aria-label': 'More', title: 'More', onclick: event => { event.stopPropagation(); menuOver(event.currentTarget, [
       item('Combine…', () => combineDialog(chosen, list.filter(library => !library.mine), send)),
       h('div', { class: 'rule' }),
       item('Remove from Numa Home…', async () => {
@@ -405,8 +498,26 @@ async function libraryBar(list) {
     ]); } }, icon('more'))].filter(Boolean));
 }
 
+// HOME-029: names from where the photographs were taken, by their GPS or
+// that of the household's photos of the same hours, as chips that fill
+// `field`. Gone again when there is nothing to offer.
+function nameIdeas(asked, field) {
+  const box = h('div', { class: 'ideas' }, h('span', { class: 'caption' }, 'Looking where these were taken…'));
+  asked.then(answer => {
+    if (!answer?.names?.length) return box.remove();
+    box.replaceChildren(h('span', { class: 'caption' }, answer.from === 'borrowed' ? 'From photos taken in the same hours' : 'Where they were taken'),
+      ...answer.names.map(name => h('button', { type: 'button', class: 'chip small', onclick: () => {
+        field.value = name;
+        field.dispatchEvent(new Event('input'));
+      } }, name)));
+  }, () => box.remove());
+  return box;
+}
+
 async function renameLibrary(library) {
-  const asked = await dialog('Rename Library', 'The folder itself is renamed, in its place.', [h('input', { type: 'text', name: 'name', value: library.name, required: true, autocomplete: 'off' })], 'Rename');
+  const field = h('input', { type: 'text', name: 'name', value: library.name, required: true, autocomplete: 'off' });
+  const ideas = nameIdeas(api(`libraries/${library.id}/names`, { wait: 120 }), field);
+  const asked = await dialog('Rename Library', 'The folder itself is renamed, in its place.', [field, ideas], 'Rename');
   if (!asked) return;
   try { await api('libraries/' + library.id, { method: 'PUT', body: JSON.stringify({ name: asked.name.trim() }) }); unshelve(); state.libraries = null; render(); } catch (error) { toast(error.message); }
 }

@@ -106,6 +106,9 @@ async function importPage(main) {
     tiles.set(photo.n, el);
     return el;
   };
+  // Asked once for every shoot: reading the card's GPS takes a moment, and
+  // the page does not wait for it.
+  const named = api('card/names', { wait: 180 }).catch(() => null);
   const rows = card.shoots.map((shoot, at) => {
     const own = list.shoots[at] || [];
     const suggested = shoot.folder.split('/').pop();
@@ -120,8 +123,19 @@ async function importPage(main) {
       where.textContent = select.value ? '' : `into ${parent ? parent + '/' : ''}${name.value.trim() || suggested}`;
     };
     select.addEventListener('change', update);
-    name.addEventListener('input', update);
+    // A name chosen (typed, or one of the ideas below) is a new folder's.
+    name.addEventListener('input', () => { select.value = ''; update(); });
     update();
+    // HOME-029: a name from where it was taken, by its GPS: the first is
+    // filled in while the date still stands, the others offered.
+    const ideas = nameIdeas(named.then(all => {
+      const answer = all?.[at];
+      if (answer?.names?.length && name.value === suggested) {
+        name.value = answer.names[0];
+        update();
+      }
+      return answer;
+    }), name);
     const box = h('input', { type: 'checkbox', 'aria-label': 'Every photograph of this shoot', onchange: () => {
       own.forEach(photo => box.checked ? ticked.add(photo.n) : ticked.delete(photo.n));
       paint();
@@ -131,6 +145,7 @@ async function importPage(main) {
     return { shoot: own, select, name, el: h('section', { class: 'shoot' },
       h('div', { class: 'head' }, h('label', { class: 'tick' }, box, h('span', { class: 'section-label' }, days(shoot.first, shoot.last))),
         h('span', { class: 'caption' }, caption), h('span', { class: 'to' }, select, name, where)),
+      ideas,
       h('div', { class: 'grid' }, own.map(tile))) };
   });
   const from = card.camera ? `From the ${card.camera}` : 'From the card';

@@ -22,7 +22,7 @@ pub struct Wanted {
 
     thing: Option<String>,
 
-    by: Option<String>,
+    pub(crate) by: Option<String>,
 }
 
 fn given(text: &Option<String>) -> Option<String> {
