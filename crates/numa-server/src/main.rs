@@ -12,6 +12,7 @@ mod models;
 mod night;
 mod pages;
 mod photos;
+mod places;
 mod selection;
 mod send;
 mod store;
@@ -185,6 +186,8 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/card/import", post(cards::start))
         .route("/api/v1/card/photos", get(cards::photos))
         .route("/api/v1/card/thumb/{n}", get(cards::thumb))
+        .route("/api/v1/card/names", get(cards::names))
+        .route("/api/v1/libraries/{id}/names", get(places::library))
         .route("/api/v1/faces", get(faces::unnamed))
         .route("/api/v1/faces/{id}/portrait", get(faces::portrait))
         .route("/api/v1/faces/name", post(faces::name))

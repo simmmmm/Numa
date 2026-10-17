@@ -16,7 +16,7 @@ function h(tag, props, ...children) {
     else if (typeof value === 'boolean') el[key] = value;
     else el.setAttribute(key, value);
   }
-  for (const child of children.flat()) if (child != null && child !== false) el.append(child instanceof Node ? child : String(child));
+  for (const child of children.flat(Infinity)) if (child != null && child !== false) el.append(child instanceof Node ? child : String(child));
   return el;
 }
 
@@ -210,6 +210,23 @@ function menu(parent, items) {
   setTimeout(() => document.addEventListener('click', () => box.remove(), { once: true }));
 }
 
+// A menu at a point of the screen, kept inside it: where the pointer is for a
+// right-click, or above its button in a selection bar, whose own box would
+// clip it.
+function menuAt(x, y, items, above) {
+  document.querySelector('body > .menu')?.remove();
+  const box = h('div', { class: 'menu floating', role: 'menu' }, items);
+  document.body.append(box);
+  const { width, height } = box.getBoundingClientRect();
+  box.style.left = Math.max(8, Math.min(above ? x - width / 2 : x, innerWidth - width - 8)) + 'px';
+  box.style.top = Math.max(8, Math.min(above ? y - height - 8 : y, innerHeight - height - 8)) + 'px';
+  setTimeout(() => document.addEventListener('click', () => box.remove(), { once: true }));
+}
+const menuOver = (button, items) => {
+  const box = button.getBoundingClientRect();
+  menuAt(box.left + box.width / 2, box.top, items, true);
+};
+
 function empty(title, text) {
   return h('div', { class: 'empty' }, h('h2', {}, title), h('p', { class: 'body' }, text));
 }
@@ -267,7 +284,7 @@ async function filterRow(params, narrowed) {
   const owner = Object.keys(OWNERS).find(key => params.get(key));
   // Asked at once; the row waits for the slowest, not for their sum.
   const asked = {
-    libraries: libraries().catch(() => []), by: api('by').catch(() => []), things: api('things').catch(() => []),
+    libraries: libraries().catch(() => []), by: api('by' + byQuery(narrowed)).catch(() => []), things: api('things').catch(() => []),
     albums: params.get('album') ? api('albums').catch(() => []) : [],
   };
   const list = await asked.libraries;
@@ -322,6 +339,13 @@ async function filterRow(params, narrowed) {
       owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'chip', onclick: () => renameLibrary(library) }, 'Rename…'),
       selectToggle()].filter(Boolean)));
   return { head, row, count, dates };
+}
+
+// The By chips count within the page's other filters, so a library names
+// only the people with photographs in it.
+function byQuery(narrowed) {
+  const query = new URLSearchParams(narrowed.filter(([key]) => key !== 'by')).toString();
+  return query ? '?' + query : '';
 }
 
 // When a page's photographs were taken: "Aug 2026", "Mar – Aug 2026",

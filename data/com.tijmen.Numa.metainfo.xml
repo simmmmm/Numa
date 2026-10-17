@@ -51,6 +51,19 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.42.0" date="2026-10-17">
+      <description>
+        <p>
+          Numa Home is offered once, as a small card on the Libraries page.
+          At Numa Home a trip is named after where it was taken, from its
+          GPS, in Import and Rename, and a trip without GPS borrows the
+          places of the household's photographs from the same hours; a drag
+          with the mouse chooses photographs, a right-click opens Numa's
+          menu, and By names shows only the people with photographs where
+          you are.
+        </p>
+      </description>
+    </release>
     <release version="0.41.0" date="2026-10-16">
       <description>
         <p>

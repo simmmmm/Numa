@@ -975,6 +975,23 @@ listview.filmstrip-frames > row {
     box-shadow: 0 8px 20px alpha(black, 0.6);
 }
 
+/* HOME-030: Numa Home offered once at the head of the Libraries page; the
+   house in a white disc, as under a stack kept at Numa Home. */
+.home-invite {
+    padding: 16px 12px 16px 16px;
+}
+
+.home-invite .print {
+    background: mix(@card_bg_color, @window_fg_color, 0.22);
+}
+
+.home-badge {
+    background: @numa_accent;
+    color: @numa_on_accent;
+    border-radius: 999px;
+    padding: 4px;
+}
+
 /* LIB-014: a face beside its name. */
 .face-portrait {
   border-radius: 6px;

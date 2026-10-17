@@ -239,6 +239,27 @@ pub async fn thumb(State(server): State<Arc<Server>>, Signed(_): Signed, axum::e
     crate::manage::embedded(&server, path, 320).await
 }
 
+pub async fn names(State(server): State<Arc<Server>>, Signed(_): Signed) -> Result<Json<Vec<Value>>, Fail> {
+    let shoots: Vec<Vec<PathBuf>> = {
+        let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(card) = card.as_ref() else { return Ok(Json(Vec::new())) };
+        card.shoots.iter().map(|shoot| shoot.photos.iter().map(|&at| card.found[at].path.clone()).collect()).collect()
+    };
+
+    let answer = tokio::task::spawn_blocking(move || {
+        shoots
+            .iter()
+            .map(|paths| {
+                let times: Vec<i64> = paths.iter().step_by((paths.len() / 120).max(1)).filter_map(|path| numa_io::exif::taken(path)).collect();
+                crate::places::names_for(&server, paths, &times)
+            })
+            .collect()
+    })
+        .await
+        .map_err(|err| Fail(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    Ok(Json(answer))
+}
+
 pub fn progress(server: &Server) -> Option<(usize, usize)> {
     let cards = &server.cards;
     cards.importing.load(Ordering::Relaxed).then(|| (cards.done.load(Ordering::Relaxed), cards.total.load(Ordering::Relaxed)))

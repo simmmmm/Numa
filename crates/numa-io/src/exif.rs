@@ -180,36 +180,7 @@ fn from_raw(path: &Path) -> Option<(String, String)> {
 
 pub fn all(path: &Path) -> Vec<(String, String)> {
     use ::exif::{Context, In, Tag, Value};
-    use std::io::Read;
-    let read = || -> Option<Vec<::exif::Exif>> {
-        let mut head = Vec::new();
-        std::fs::File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
-        let mut found = Vec::new();
-        if head.get(4..12) == Some(b"ftypcrx ") {
-
-            for name in [b"CMT1", b"CMT2", b"CMT4"] {
-                let Some(at) = head.windows(4).position(|w| w == name) else { continue };
-                let Some(size) = head.get(at.saturating_sub(4)..at).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) else { continue };
-                if let Some(exif) = head.get(at + 4..(at + size as usize).saturating_sub(4)).and_then(directories) {
-                    found.push(exif);
-                }
-            }
-        } else if matches!(head.get(..2), Some(b"II" | b"MM")) && head.len() > 4 {
-            let mut tiff = head.clone();
-            let magic: [u8; 2] = if tiff[0] == b'I' { [42, 0] } else { [0, 42] };
-            tiff[2..4].copy_from_slice(&magic);
-            found.extend(directories(&tiff));
-        }
-        if let Some(at) = head.windows(6).position(|w| w == b"Exif\0\0") {
-            found.extend(directories(&head[at + 6..]));
-        }
-        if found.is_empty() {
-            let file = std::fs::File::open(path).ok()?;
-            found.extend(::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok());
-        }
-        Some(found)
-    };
-    let found = std::panic::catch_unwind(read).ok().flatten().unwrap_or_default();
+    let found = exifs(path);
 
     let known = |tag: Tag| {
         [tag.context(), Context::Exif, Context::Gps, Context::Tiff]
@@ -256,6 +227,56 @@ pub fn all(path: &Path) -> Vec<(String, String)> {
 
     rows.sort_by_key(|(name, _)| name.starts_with("Tag 0x"));
     rows
+}
+
+fn exifs(path: &Path) -> Vec<::exif::Exif> {
+    use std::io::Read;
+    let read = || -> Option<Vec<::exif::Exif>> {
+        let mut head = Vec::new();
+        std::fs::File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
+        let mut found = Vec::new();
+        if head.get(4..12) == Some(b"ftypcrx ") {
+
+            for name in [b"CMT1", b"CMT2", b"CMT4"] {
+                let Some(at) = head.windows(4).position(|w| w == name) else { continue };
+                let Some(size) = head.get(at.saturating_sub(4)..at).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) else { continue };
+                if let Some(exif) = head.get(at + 4..(at + size as usize).saturating_sub(4)).and_then(directories) {
+                    found.push(exif);
+                }
+            }
+        } else if matches!(head.get(..2), Some(b"II" | b"MM")) && head.len() > 4 {
+            let mut tiff = head.clone();
+            let magic: [u8; 2] = if tiff[0] == b'I' { [42, 0] } else { [0, 42] };
+            tiff[2..4].copy_from_slice(&magic);
+            found.extend(directories(&tiff));
+        }
+        if let Some(at) = head.windows(6).position(|w| w == b"Exif\0\0") {
+            found.extend(directories(&head[at + 6..]));
+        }
+        if found.is_empty() {
+            let file = std::fs::File::open(path).ok()?;
+            found.extend(::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok());
+        }
+        Some(found)
+    };
+    std::panic::catch_unwind(read).ok().flatten().unwrap_or_default()
+}
+
+pub fn position(path: &Path) -> Option<(f64, f64)> {
+    let found = exifs(path);
+    let field = |number: u16| found.iter().flat_map(|exif| exif.fields()).find(|field| field.tag.number() == number && field.ifd_num == ::exif::In::PRIMARY
+        && matches!(field.tag.context(), ::exif::Context::Gps | ::exif::Context::Tiff));
+    let degrees = |number: u16| match &field(number)?.value {
+        ::exif::Value::Rational(parts) if parts.len() >= 3 => Some(parts[0].to_f64() + parts[1].to_f64() / 60.0 + parts[2].to_f64() / 3600.0),
+        _ => None,
+    };
+    let south = |number: u16| field(number).is_some_and(|field| field.display_value().to_string().contains(['S', 'W']));
+    let (latitude, longitude) = (degrees(2)?, degrees(4)?);
+    let latitude = if south(1) { -latitude } else { latitude };
+    let longitude = if south(3) { -longitude } else { longitude };
+
+    (latitude.is_finite() && longitude.is_finite() && (latitude, longitude) != (0.0, 0.0) && latitude.abs() <= 90.0 && longitude.abs() <= 180.0)
+        .then_some((latitude, longitude))
 }
 
 fn words(name: &str) -> String {
