@@ -21,6 +21,12 @@ Requires:       libvulkan1
 %else
 Requires:       vulkan-loader
 %endif
+# GTK may draw with GLES, and libepoxy opens libGLESv2 by itself, so nothing
+# finds that dependency; without it a minimal Fedora stops Numa at its first
+# window (the smoke test of 0.43.0).
+%if 0%{?fedora}
+Requires:       libglvnd-gles
+%endif
 # FLOW-013: tethering opens libgphoto2 when it is asked for, and goes without
 # it; not linked, so nothing finds the dependency by itself.
 %if 0%{?suse_version}

@@ -51,6 +51,11 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.43.1" date="2026-10-19">
+      <description>
+        <p>On Fedora, Numa brings the library GTK needs to draw its window, so it also starts on a minimal installation.</p>
+      </description>
+    </release>
     <release version="0.43.0" date="2026-10-18">
       <description>
         <p>
