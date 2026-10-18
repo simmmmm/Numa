@@ -1,8 +1,10 @@
-use super::home::{account, curl, forget_token, said, scratch, sha256, Running, NUMA_HOME};
+use super::home::{account, curl, forget_token, said, scratch, sha256, sign_in_first, signed_out, Running, NUMA_HOME};
+use super::rapid::photos;
 use super::*;
 use numa::io::home::sync::{self, Kept, Link, Local, Pace, Remote, Step};
 use numa::io::home::{self as api, Account, Failure};
 use std::collections::HashSet;
+use std::time::Duration;
 
 const EVERY: u32 = 180;
 
@@ -17,7 +19,7 @@ thread_local! {
 
 const PACE: &str = "numa-home-pace";
 
-fn linked(state: &App, library: i64) -> Option<Link> {
+pub(super) fn linked(state: &App, library: i64) -> Option<Link> {
     serde_json::from_str(&state.catalog.library_setting(library, sync::LINK)?).ok()
 }
 
@@ -32,7 +34,7 @@ fn keep(state: &App, library: i64, link: &Link) {
     }
 }
 
-fn photographs(count: usize) -> String {
+pub(super) fn photographs(count: usize) -> String {
     match count {
         1 => "1 photograph".to_string(),
         n => format!("{} photographs", places::grouped(n as i64)),
@@ -53,14 +55,15 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
 
     let count = Rc::new(glib::clone!(
         #[weak] go,
+        #[weak] group,
         #[strong] months,
         move || {
-            let ticked: usize = months.borrow().iter().filter(|(_, check, _)| check.is_active()).map(|(month, ..)| month.count).sum();
-            go.set_label(&match ticked {
-                0 => "Tick the months to bring".to_string(),
-                n => format!("Import {}", photographs(n)),
-            });
+            let months = months.borrow();
+            let ticked: usize = months.iter().filter(|(_, check, _)| check.is_active()).map(|(month, ..)| month.count).sum();
+            go.set_label(&import_label(ticked));
             go.set_sensitive(ticked > 0);
+
+            group.set_description(Some("Tick the months to bring").filter(|_| ticked == 0 && !months.is_empty()));
         }
     ));
     count();
@@ -91,15 +94,15 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
                 }
                 listed.borrow_mut().clear();
                 count();
-                let photos = match sync::photos(&out) {
-                    Ok(photos) => photos,
+                let everything = match sync::photos(&out) {
+                    Ok(listed) => listed,
                     Err(failure) => return group.set_description(Some(&said(failure, &account))),
                 };
                 group.set_description(None);
-                for month in sync::months(&photos) {
+                for month in sync::months(&everything) {
                     let row = adw::ActionRow::new();
                     row.set_title(&month.name);
-                    row.set_subtitle(&format!("{} \u{b7} {}", photographs(month.count), glib::format_size(month.bytes)));
+                    row.set_subtitle(&format!("{} \u{b7} {}", photos(month.count), glib::format_size(month.bytes)));
                     let check = gtk::CheckButton::new();
                     row.add_prefix(&check);
                     row.set_activatable_widget(Some(&check));
@@ -110,7 +113,7 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
                     group.add(&row);
                     months.borrow_mut().push((month, check, row));
                 }
-                *listed.borrow_mut() = photos;
+                *listed.borrow_mut() = everything;
                 count();
             });
         }
@@ -131,7 +134,7 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
             match sync::libraries(&out) {
                 Ok(list) if list.is_empty() => group.set_description(Some("No libraries on Numa Home yet")),
                 Ok(list) => {
-                    let names: Vec<String> = list.iter().map(|library| format!("{} \u{b7} {}", library.name, photographs(library.count as usize))).collect();
+                    let names: Vec<String> = list.iter().map(|library| format!("{} \u{b7} {}", library.name, photos(library.count as usize))).collect();
                     *libraries.borrow_mut() = list;
                     library_row.set_model(Some(&gtk::StringList::new(&names.iter().map(String::as_str).collect::<Vec<_>>())));
                     show(library_row.selected() as usize);
@@ -153,37 +156,41 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
             }
             let Some(library) = libraries.borrow().get(library_row.selected() as usize).cloned() else { return };
             let keys: HashSet<String> = months.borrow().iter().filter(|(_, check, _)| check.is_active()).map(|(month, ..)| month.key.clone()).collect();
-            let all = listed.borrow();
-            let photos = all.iter().filter(|photo| keys.contains(&sync::month_of(photo))).cloned().collect();
+            let all = listed.borrow().clone();
 
+            let ticked = all.iter().filter(|photo| keys.contains(&sync::month_of(photo))).map(|photo| photo.path.clone()).collect();
             let since = sync::next_since(0, &all);
             dialog.close();
-            bring(&state, library, photos, since, None);
+            bring(&state, library, all, since, (ticked, None));
         }
     ));
     group
 }
 
-fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, open: Option<String>) {
-    let account = account(state);
+fn home_folder(state: &App, from: &sync::Library, account: &Account) -> Result<Library, String> {
     let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
     let root = pictures.join(NUMA_HOME).join(from.name.replace('/', "-"));
-    let here = std::fs::create_dir_all(&root).map_err(|err| format!("{}: {err}", root.display())).and_then(|()| {
-        let known = state.catalog.libraries()?.into_iter().find(|library| library.path == root);
-        known.map_or_else(|| state.catalog.add_library(&root), Ok)
-    });
-    let library = match here {
-        Ok(library) => library,
-        Err(err) => return state.toast(&err),
-    };
+    std::fs::create_dir_all(&root).map_err(|err| format!("{}: {err}", root.display()))?;
+    let known = state.catalog.libraries()?.into_iter().find(|library| library.path == root);
+    let library = known.map_or_else(|| state.catalog.add_library(&root), Ok)?;
     let link = linked(state, library.id)
         .unwrap_or_else(|| Link { address: account.address.clone(), library: from.id.clone(), name: from.name.clone(), ..Link::default() });
 
     if link.library != from.id || api::base(&link.address) != api::base(&account.address) {
-        return state.toast(&format!("{} is kept in step with another {NUMA_HOME} library", root.display()));
+        return Err(format!("{} is kept at {NUMA_HOME} as another library", root.display()));
     }
-    let since = since.max(link.since);
     keep(state, library.id, &link);
+    Ok(library)
+}
+
+fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, then: (Vec<String>, Option<String>)) {
+    let account = account(state);
+    let library = match home_folder(state, &from, &account) {
+        Ok(library) => library,
+        Err(err) => return state.toast(&err),
+    };
+    let Some(link) = linked(state, library.id) else { return };
+    let since = since.max(link.since);
 
     if ROUND.with(|round| round.replace(true)) {
         return state.toast(&format!("{NUMA_HOME} is busy with this library; import again in a moment"));
@@ -191,7 +198,50 @@ fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, open
     state.libraries.filter.borrow_mut().in_one_library();
     reload_libraries(state);
     select_library(state, library.id);
-    round(state, library, link, photos, since, How::Import, open);
+    round(state, library, link, photos, since, How::Import, then);
+}
+
+pub(super) fn adopt(state: &App) {
+    let account = account(state);
+    if !account.signed_in() {
+        return;
+    }
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let listed = match sync::libraries(&curl(sync::list_libraries(&account.address), account.header(), &Running::default()).await) {
+            Ok(listed) => listed,
+            Err(failure) => return log::info!("Numa Home: {}", said(failure, &account)),
+        };
+        let links: Vec<Link> = state
+            .catalog
+            .libraries()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|library| linked(&state, library.id))
+            .filter(|link| api::base(&link.address) == api::base(&account.address))
+            .collect();
+
+        let new = listed.into_iter().filter(|from| !links.iter().any(|link| link.library == from.id || (link.library.is_empty() && link.name == from.name)));
+        let made: Vec<Library> = new.filter_map(|from| home_folder(&state, &from, &account).map_err(|err| log::info!("Numa Home: {err}")).ok()).collect();
+        if made.is_empty() {
+            return;
+        }
+        reload_libraries(&state);
+        for library in made {
+            round_over().await;
+            in_step(&state, library, How::Look);
+            round_over().await;
+        }
+        if state.stack.visible_child_name().as_deref() == Some("folders") {
+            show_folders(&state);
+        }
+    });
+}
+
+async fn round_over() {
+    while ROUND.with(Cell::get) {
+        glib::timeout_future(Duration::from_millis(300)).await;
+    }
 }
 
 pub(super) fn open_link(state: &App, uri: &str) {
@@ -200,7 +250,7 @@ pub(super) fn open_link(state: &App, uri: &str) {
     };
     let account = account(state);
     if !account.signed_in() || api::base(&server) != api::base(&account.address) {
-        return state.toast(&format!("Numa is not signed in to {NUMA_HOME} at {}", api::host(&server)));
+        return state.toast(&sign_in_first(&account, &api::host(&server)));
     }
     let links: Vec<(Library, Link)> = state
         .catalog
@@ -212,50 +262,49 @@ pub(super) fn open_link(state: &App, uri: &str) {
         .collect();
     let here = links.iter().find_map(|(library, link)| {
         let (path, _) = link.photos.iter().find(|(_, kept)| kept.id == photo)?;
-        sync::inside(&library.path, path).filter(|file| file.exists()).map(|file| (library.clone(), file))
+        Some((library.clone(), path.clone()))
     });
-    if let Some((library, file)) = here {
-        return show_opened(state, library, &file, true);
+
+    if let Some((library, path)) = here {
+        return match sync::inside(&library.path, &path).filter(|file| file.exists()) {
+            Some(file) => show_opened(state, library, &file, true),
+            None => home_fetch::fetch_paths(state, library, vec![path.clone()], Some(path)),
+        };
     }
     let state = state.clone();
     glib::spawn_future_local(async move {
-        let (from, theirs, everything) = match find(&account, &photo).await {
+        let (from, path, all) = match find(&account, &photo).await {
             Ok(found) => found,
             Err(failure) => return state.toast(&said(failure, &account)),
         };
+        let since = sync::next_since(0, &all);
 
-        let since = match links.iter().any(|(_, link)| link.library == from.id) {
-            true => 0,
-            false => everything,
-        };
-
-        while ROUND.with(Cell::get) {
-            glib::timeout_future(std::time::Duration::from_millis(300)).await;
-        }
-        let path = theirs.path.clone();
-        bring(&state, from, vec![theirs], since, Some(path));
+        round_over().await;
+        bring(&state, from, all, since, (vec![path.clone()], Some(path)));
     });
 }
 
-async fn find(account: &Account, photo: &str) -> Result<(sync::Library, Remote, i64), Failure> {
+async fn find(account: &Account, photo: &str) -> Result<(sync::Library, String, Vec<Remote>), Failure> {
     let ask = |argv| async move { curl(argv, account.header(), &Running::default()).await };
     let library = sync::library_of(&ask(sync::get_photo(&account.address, photo)).await)?;
     let missing = || Failure::Said(format!("{NUMA_HOME} did not list that photograph"));
     let from = sync::libraries(&ask(sync::list_libraries(&account.address)).await)?.into_iter().find(|from| from.id == library).ok_or_else(missing)?;
     let all = sync::photos(&ask(sync::list_photos(&account.address, &library, 0)).await)?;
-    let since = sync::next_since(0, &all);
-    let theirs = all.into_iter().find(|theirs| theirs.id == photo).ok_or_else(missing)?;
-    Ok((from, theirs, since))
+    let path = all.iter().find(|theirs| theirs.id == photo).ok_or_else(missing)?.path.clone();
+    Ok((from, path, all))
 }
 
 pub(super) fn keep_in_step(state: &App) {
 
     offer(state);
+    adopt(state);
     glib::timeout_add_seconds_local(
         EVERY,
         glib::clone!(
             #[strong] state,
             move || {
+
+                adopt(&state);
                 if !allowed(&state) {
                     QUIET.with(|quiet| quiet.borrow().as_ref().map(Cancel::stop));
                     return glib::ControlFlow::Continue;
@@ -285,18 +334,59 @@ fn allowed(state: &App) -> bool {
 }
 
 pub(super) fn opened(state: &App) {
-    if let Some(library) = offer(state).filter(|_| allowed(state)) {
-        in_step(state, library, How::Quiet);
+    if let Some(library) = offer(state) {
+        let how = if allowed(state) { How::Quiet } else { How::Look };
+        in_step(state, library, how);
     }
 }
 
 fn offer(state: &App) -> Option<Library> {
     let library = state.libraries.current.borrow().clone();
     let kept = library.filter(|library| is_home(state, library.id));
-    if let Some(action) = state.stack.root().and_downcast::<adw::ApplicationWindow>().and_then(|window| window.lookup_action("home-sync")).and_downcast::<gio::SimpleAction>() {
+    let window = state.stack.root().and_downcast::<adw::ApplicationWindow>();
+    let action = |name: &str| window.as_ref().and_then(|window| window.lookup_action(name)).and_downcast::<gio::SimpleAction>();
+    if let Some(action) = action("home-sync") {
         action.set_enabled(kept.is_some());
     }
+
+    if let Some(action) = action("home-keep") {
+        action.set_enabled(kept.is_some());
+        action.set_state(&kept.as_ref().is_some_and(|library| keeps_here(state, library.id)).to_variant());
+    }
     kept
+}
+
+pub(super) fn keeps_here(state: &App, library: i64) -> bool {
+    linked(state, library).is_some_and(|link| link.keep_here)
+}
+
+pub(super) fn keep_here(state: &App, library: &Library, on: bool) {
+    let Some(link) = linked(state, library.id) else { return };
+    if link.keep_here == on {
+        return;
+    }
+    keep(state, library.id, &Link { keep_here: on, ..link });
+    offer(state);
+    if state.stack.visible_child_name().as_deref() == Some("folders") {
+        show_folders(state);
+    }
+    if !on || state.catalog.at_home(library.id).map_or(true, |at_home| at_home.is_empty()) {
+        return;
+    }
+    match allowed(state) {
+        true => in_step(state, library.clone(), How::Quiet),
+        false => state.toast(&format!("{} comes to this computer {}", library.label(), when(pace(state)))),
+    }
+}
+
+pub(super) fn kept_here_line(state: &App, library: i64) -> Option<String> {
+    if !keeps_here(state, library) {
+        return None;
+    }
+    Some(match state.catalog.at_home(library).map_or(0, |at_home| at_home.len()) {
+        0 => "Kept on this computer".to_string(),
+        left => format!("Kept on this computer \u{b7} {} to bring", places::grouped(left as i64)),
+    })
 }
 
 pub(super) fn install(state: &App, window: &adw::ApplicationWindow) {
@@ -311,6 +401,20 @@ pub(super) fn install(state: &App, window: &adw::ApplicationWindow) {
         }
     ));
     window.add_action(&sync_now);
+
+    let keep_action = gio::SimpleAction::new_stateful("home-keep", None, &false.to_variant());
+    keep_action.set_enabled(false);
+    keep_action.connect_change_state(glib::clone!(
+        #[strong] state,
+        move |action, value| {
+            let Some(on) = value.and_then(|value| value.get::<bool>()) else { return };
+            action.set_state(&on.to_variant());
+            if let Some(library) = state.libraries.current.borrow().clone() {
+                keep_here(&state, &library, on);
+            }
+        }
+    ));
+    window.add_action(&keep_action);
 }
 
 pub(super) fn keep_at_home(state: &App, libraries: &[Library]) {
@@ -338,6 +442,7 @@ enum How {
     Import,
     ByHand,
     Quiet,
+    Look,
 }
 
 fn in_step(state: &App, library: Library, how: How) {
@@ -345,7 +450,7 @@ fn in_step(state: &App, library: Library, how: How) {
     let account = account(state);
     if !account.signed_in() || api::base(&link.address) != api::base(&account.address) {
         if how == How::ByHand {
-            state.toast(&format!("Numa is not signed in to {NUMA_HOME} at {}", api::host(&link.address)));
+            state.toast(&sign_in_first(&account, &api::host(&link.address)));
         }
         return;
     }
@@ -366,11 +471,11 @@ fn in_step(state: &App, library: Library, how: How) {
                 Err(failure) => return let_go(&state, failure, &account, Some(&library)),
             }
         }
-        let out = curl(sync::list_photos(&account.address, &link.library, link.since), account.header(), &Running::default()).await;
+        let out = curl(sync::list_photos(&account.address, &link.library, sync::listed_after(&link)), account.header(), &Running::default()).await;
         match sync::photos(&out) {
             Ok(remote) => {
                 let since = sync::next_since(link.since, &remote);
-                round(&state, library, link, remote, since, how, None);
+                round(&state, library, link, remote, since, how, (Vec::new(), None));
             }
             Err(failure) => let_go(&state, failure, &account, (how == How::ByHand).then_some(&library)),
         }
@@ -382,7 +487,7 @@ fn let_go(state: &App, failure: Failure, account: &Account, making: Option<&Libr
     match failure {
         Failure::SignIn(_) => {
             forget_token(state);
-            state.toast("Sign in again in Preferences");
+            state.toast(&signed_out());
         }
         Failure::Said(sentence) if making.is_some_and(|library| linked(state, library.id).is_some_and(|link| link.library.is_empty())) => {
             let library = making.expect("checked above");
@@ -418,18 +523,29 @@ struct Done {
     came: usize,
     changed: usize,
     went: usize,
+
+    pictures: usize,
+    brought: usize,
     failures: Vec<String>,
 
     cut: bool,
 }
 
-fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, how: How, open: Option<String>) {
+fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, how: How, then: (Vec<String>, Option<String>)) {
     let local: Vec<Local> = local_photos(state, &library).into_iter().map(|(_, photo)| photo).collect();
-    let steps = sync::plan(&link, &remote, &local);
+    let mut steps = sync::plan(&link, &remote, &local);
+
+    let whole = how != How::Look || steps.iter().all(|step| matches!(step, Step::Arrive(_)));
+    steps.retain(|step| how != How::Look || matches!(step, Step::Arrive(_)));
+
+    let to_send = steps.iter().filter(|step| matches!(step, Step::Send(_)) || matches!(step, Step::Both { up, .. } if up.any())).count();
+
+    let keep_here = link.keep_here && how != How::Look;
+    let to_bring = if keep_here { state.catalog.at_home(library.id).map_or(0, |at_home| at_home.len()) } else { 0 };
     let cancel = Cancel::default();
     let running = Running::default();
-    let progress = (!steps.is_empty()).then(|| match how {
-        How::Quiet => {
+    let progress = (!steps.is_empty() || to_bring > 0).then(|| match how {
+        How::Quiet | How::Look => {
             QUIET.with(|quiet| quiet.replace(Some(cancel.clone())));
             quiet(state, &library)
         }
@@ -449,8 +565,26 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
     let state = state.clone();
     glib::spawn_future_local(async move {
         let shown = progress.as_ref().map(|(_, text, bar)| (text.clone(), bar.clone()));
-        let done = carry_out(&state, &library, &mut link, steps, shown, &cancel, &running).await;
-        if how == How::Import || (!done.cut && done.failures.is_empty()) {
+        let mut done = carry_out(&state, &library, &mut link, steps, shown, &cancel, &running).await;
+        if keep_here && !done.cut {
+            let say = |at: usize, of: usize| {
+                if let Some((_, text, bar)) = &progress {
+                    text.set_text(&format!("Bringing {} of {of} from {NUMA_HOME}", at + 1));
+                    if let Some(bar) = bar {
+                        bar.set_fraction(at as f64 / of.max(1) as f64);
+                    }
+                }
+            };
+            match home_fetch::bring_all(&state, &library, &cancel, say).await {
+                Ok(brought) => done.brought = brought,
+                Err(failure) => {
+                    stop(&state, failure, &account(&state), &cancel, &mut done);
+                }
+            }
+        }
+        let finished = !done.cut && done.failures.is_empty();
+        link.everything |= finished;
+        if how == How::Import || (whole && finished) {
             link.since = since;
         }
         keep(&state, library.id, &link);
@@ -459,39 +593,57 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
         if let Some((toast, _, _)) = progress {
             toast.dismiss();
         }
-        if done.came + done.changed > 0 && state.libraries.current.borrow().as_ref().is_some_and(|open| open.id == library.id) {
+        if done.came + done.changed + done.pictures + done.brought > 0 && state.libraries.current.borrow().as_ref().is_some_and(|open| open.id == library.id) {
             reload_grid(&state);
         }
         for failure in &done.failures {
             log::warn!("Numa Home: {failure}");
         }
-        let loud = how != How::Quiet;
-        let said = match (&done, loud) {
-            (Done { cut: true, came, went, .. }, true) if cancel.stopped() => Some(format!("Stopped after {}; those are in step", came + went)),
-            (Done { failures, came, went, .. }, true) if !failures.is_empty() => {
-                Some(format!("{} in step, {} failed: {}", came + went, failures.len(), failures[0]))
-            }
-            (Done { came, .. }, true) if how == How::Import => Some(format!("Brought {} from {NUMA_HOME}", photographs(*came))),
-            (Done { came: 0, went: 0, changed: 0, .. }, true) => Some(format!("{} is in step with {NUMA_HOME}", library.label())),
-            (Done { came, changed, went, .. }, true) => {
-                let moved: Vec<String> = [(*came, "brought"), (*changed, "changed there"), (*went, "sent")]
-                    .into_iter()
-                    .filter(|(n, _)| *n > 0)
-                    .map(|(n, said)| format!("{n} {said}"))
-                    .collect();
-                Some(format!("{} is in step with {NUMA_HOME}: {}", library.label(), moved.join(", ")))
-            }
-            (Done { came: 0, .. }, false) => None,
-            (Done { came, .. }, false) => Some(format!("{} new from {NUMA_HOME} in {}", photographs(*came), library.label())),
-        };
-        log::info!("Numa Home: {} came down, {} changed there, {} went up", done.came, done.changed, done.went);
-        if let Some(said) = said {
+        log::info!(
+            "Numa Home: {} new there, {} changed there, {} went up, {} thumbnails, {} brought",
+            done.came,
+            done.changed,
+            done.went,
+            done.pictures,
+            done.brought
+        );
+        if let Some(said) = round_said(&done, how, &cancel, to_send, &library) {
             state.toast(&said);
         }
-        if let Some(file) = open.and_then(|path| sync::inside(&library.path, &path)).filter(|file| file.exists()) {
-            show_opened(&state, library, &file, true);
+        let (fetch, open) = then;
+        if !fetch.is_empty() || open.is_some() {
+            home_fetch::fetch_paths(&state, library, fetch, open);
         }
     });
+}
+
+fn round_said(done: &Done, how: How, cancel: &Cancel, to_send: usize, library: &Library) -> Option<String> {
+    let loud = matches!(how, How::Import | How::ByHand);
+    let to_go = match to_send.saturating_sub(done.went) {
+        0 => String::new(),
+        left => format!("; {left} to send home"),
+    };
+    match (done, loud) {
+        (Done { cut: true, came, went, .. }, true) if cancel.stopped() => Some(format!("Stopped after {}{to_go}", came + went)),
+        (Done { failures, came, went, .. }, true) if !failures.is_empty() => {
+            Some(format!("{} kept at {NUMA_HOME}, {} failed: {}{to_go}", came + went, failures.len(), failures[0]))
+        }
+
+        _ if how == How::Import => None,
+        (Done { came: 0, went: 0, changed: 0, brought: 0, .. }, true) => Some(format!("Kept at {NUMA_HOME} \u{b7} just now")),
+        (Done { came, changed, went, brought, .. }, true) => {
+            let moved: Vec<String> = [(*came, "new"), (*changed, "changed there"), (*went, "sent home"), (*brought, "brought")]
+                .into_iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, said)| format!("{n} {said}"))
+                .collect();
+            Some(format!("Kept at {NUMA_HOME} \u{b7} just now \u{b7} {}", moved.join(" \u{b7} ")))
+        }
+
+        (Done { came: 0, .. }, false) => None,
+        _ if how == How::Look => None,
+        (Done { came, .. }, false) => Some(format!("{} new from {NUMA_HOME} in {}", photographs(*came), library.label())),
+    }
 }
 
 fn quiet(state: &App, library: &Library) -> (adw::Toast, gtk::Label, Option<gtk::ProgressBar>) {
@@ -515,45 +667,26 @@ async fn carry_out(
         if let Some((label, bar)) = &shown {
             label.set_text(&text);
             if let Some(bar) = bar {
-                bar.set_fraction(at as f64 / total as f64);
+                bar.set_fraction(at as f64 / total.max(1) as f64);
             }
         }
     };
-    let (downloads, rest): (Vec<Step>, Vec<Step>) = steps.into_iter().partition(|step| matches!(step, Step::Download(_)));
-    let brought = downloads.len();
-    let mut later = Vec::new();
-    for (at, step) in downloads.into_iter().enumerate() {
-        let Step::Download(theirs) = step else { continue };
-        say(at, format!("Bringing {} of {brought} from {NUMA_HOME}", at + 1));
-        match download(&account, &library.path, &theirs, running).await {
-            Ok(()) => {
-                done.came += 1;
-                later.push(Step::Both { path: theirs.path.clone(), id: theirs.id.clone(), theirs: Some(theirs), down: sync::Parts::ALL, up: sync::Parts::default() });
-            }
-            Err(failure) => {
-                if stop(state, failure, &account, cancel, &mut done) {
-                    return done;
-                }
-            }
-        }
-    }
-    if !later.is_empty() {
-        if let Err(err) = sync_library_beside(state, library, "Reading what came from Numa Home…").await {
-            done.failures.push(err);
-        }
-    }
+    let (arrivals, rest): (Vec<Step>, Vec<Step>) = steps.into_iter().partition(|step| matches!(step, Step::Arrive(_)));
+    let arrived: Vec<Remote> = arrivals.into_iter().filter_map(|step| if let Step::Arrive(theirs) = step { Some(theirs) } else { None }).collect();
+    let later = arrive(state, library, link, &arrived, &mut done);
     let here: HashMap<String, (i64, Local)> = local_photos(state, library).into_iter().map(|(id, photo)| (photo.path.clone(), (id, photo))).collect();
     let folder = scratch();
-    let pulled = later.len();
+    let (brought, pulled) = (arrived.len(), later.len());
+    let mut moved: HashSet<String> = HashSet::new();
     for (at, step) in later.into_iter().chain(rest).enumerate() {
         say(brought + at.saturating_sub(pulled), match &step {
-            Step::Send(_) => format!("Sending {} of {total} to {NUMA_HOME}", brought + at.saturating_sub(pulled) + 1),
+            Step::Send(_) => format!("Sending {} of {total} home", brought + at.saturating_sub(pulled) + 1),
             _ => format!("Edits and marks with {NUMA_HOME}"),
         });
-        let (path, ways) = match &step {
-            Step::Both { path, down, up, .. } => (path, (down.any(), up.any())),
-            Step::Send(path) => (path, (false, true)),
-            Step::Download(_) => continue,
+        let (path, ways, edits) = match &step {
+            Step::Both { path, down, up, .. } => (path, (down.any(), up.any()), down.edits || up.edits),
+            Step::Send(path) => (path, (false, true), true),
+            Step::Arrive(_) => continue,
         };
 
         let Some((photo, ours)) = here.get(path) else { continue };
@@ -566,6 +699,9 @@ async fn carry_out(
                 done.changed += ways.0 as usize;
                 done.went += ways.1 as usize;
                 link.photos.insert(path.clone(), kept);
+                if edits {
+                    moved.insert(path.clone());
+                }
             }
             Err(failure) => {
                 if stop(state, failure, &account, cancel, &mut done) {
@@ -575,7 +711,61 @@ async fn carry_out(
         }
     }
     let _ = std::fs::remove_dir_all(&folder);
+    if !done.cut {
+        let saying = |at: usize, of: usize| say(total, format!("{} of {} photos from {NUMA_HOME}", places::grouped(at as i64), places::grouped(of as i64)));
+        match pictures(state, &account, library, &here, &moved, running, saying).await {
+            Ok(came) => done.pictures = came,
+            Err(failure) => {
+                stop(state, failure, &account, cancel, &mut done);
+            }
+        }
+    }
     done
+}
+
+fn arrive(state: &App, library: &Library, link: &mut Link, arrived: &[Remote], done: &mut Done) -> Vec<Step> {
+    if arrived.is_empty() {
+        return Vec::new();
+    }
+    if let Err(err) = state.catalog.add_at_home(library.id, &arrived.iter().map(Remote::at_home).collect::<Vec<_>>()) {
+        done.failures.push(err);
+        return Vec::new();
+    }
+    done.came += arrived.len();
+    let edits = sync::Parts { edits: true, marks: false };
+    arrived
+        .iter()
+        .filter_map(|theirs| {
+            let flag = sync::flag_name(sync::flag(&theirs.flag)).to_string();
+            let kept = Kept { id: theirs.id.clone(), edits: sync::digest(None), rating: theirs.rating.min(5), flag, updated: theirs.updated };
+            link.photos.insert(theirs.path.clone(), kept);
+            let down = Step::Both { path: theirs.path.clone(), id: theirs.id.clone(), theirs: Some(theirs.clone()), down: edits, up: sync::Parts::default() };
+            theirs.edited.then_some(down)
+        })
+        .collect()
+}
+
+async fn pictures(
+    state: &App,
+    account: &Account,
+    library: &Library,
+    here: &HashMap<String, (i64, Local)>,
+    moved: &HashSet<String>,
+    running: &Running,
+    say: impl Fn(usize, usize),
+) -> Result<usize, Failure> {
+    let at_home = state.catalog.at_home(library.id).unwrap_or_default();
+    let ids: Vec<String> = here
+        .values()
+        .filter_map(|(id, ours)| {
+            let (server, _) = at_home.get(id)?;
+            (moved.contains(&ours.path) || !numa::io::catalog::home_thumb(&library.path, server).exists()).then(|| server.clone())
+        })
+        .collect();
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    home_fetch::thumbnails(account, &library.path, ids, running, say).await
 }
 
 fn stop(state: &App, failure: Failure, account: &Account, cancel: &Cancel, done: &mut Done) -> bool {
@@ -592,7 +782,7 @@ fn stop(state: &App, failure: Failure, account: &Account, cancel: &Cancel, done:
     last
 }
 
-async fn download(account: &Account, root: &Path, theirs: &Remote, running: &Running) -> Result<(), Failure> {
+pub(super) async fn download(account: &Account, root: &Path, theirs: &Remote, running: &Running) -> Result<(), Failure> {
     let to = sync::inside(root, &theirs.path).ok_or_else(|| Failure::Said(format!("{} is not a path inside the library", theirs.path)))?;
     if to.exists() {
         return Ok(());

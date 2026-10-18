@@ -1,4 +1,7 @@
-pkgname=numa
+# Arch's own [extra] has had a DNS resolver called numa since 6 October 2026,
+# and comes first in pacman.conf, so a package named numa here would neither
+# install nor update. Both ship /usr/bin/numa.
+pkgname=numa-photo
 pkgver=@VERSION@
 pkgrel=1
 pkgdesc="RAW photo editor and library"
@@ -7,6 +10,7 @@ url="https://github.com/simmmmm/Numa"
 license=(GPL-3.0-or-later)
 depends=(gtk4 libadwaita vulkan-icd-loader hicolor-icon-theme)
 makedepends=(rust openssl)
+conflicts=(numa)
 optdepends=('libgphoto2: tethered shooting (Shoot Tethered…)')
 options=(!debug !lto)
 source=("numa-$pkgver.tar.xz")

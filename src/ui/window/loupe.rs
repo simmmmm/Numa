@@ -118,6 +118,8 @@ fn build_stage(state: &App) -> gtk::Overlay {
 
     stage.add_overlay(&review::build_pill(state));
 
+    stage.add_overlay(&home_fetch::loupe_pill(state));
+
     stage.connect_get_child_position(glib::clone!(
         #[strong] state,
         move |stage, child| place(&state, stage, child)
@@ -534,6 +536,8 @@ pub(super) fn show_loupe(state: &App, at: usize) {
 
     let centre = loupe_zoom::centre(state);
     state.loupe.at.set(Some(at));
+
+    home_fetch::paint_loupe(state);
     if !state.loupe.reveal.reveals_child() {
         tape::rebuild(state);
     }
@@ -578,6 +582,15 @@ fn hold(state: &App, index: usize) {
     }
 
     let near = move |state: &App| wanted(state).contains(&index);
+
+    let shown = move |state: &App, texture: gtk::gdk::Texture| {
+        state.loupe.asked.borrow_mut().remove(&id);
+        state.loupe.textures.borrow_mut().insert(id, texture);
+        paint(state);
+    };
+    if home_fetch::preview(state, id, near, shown) {
+        return;
+    }
     thumbnail::load_thumbnail_first(
         &path,
         mtime,
@@ -603,6 +616,14 @@ fn hold(state: &App, index: usize) {
             }
         ),
     );
+}
+
+pub(super) fn reload_frame(state: &App, id: i64) {
+    state.loupe.textures.borrow_mut().remove(&id);
+    let index = state.grid.lazy.borrow().iter().position(|card| card.id == id);
+    if let Some(index) = index.filter(|index| wanted(state).contains(index)) {
+        hold(state, index);
+    }
 }
 
 pub(super) fn paint(state: &App) {
@@ -731,6 +752,11 @@ pub(super) fn close_loupe(state: &App) {
 
 fn cull(state: &App, flag: Flag) {
     let Some(at) = state.loupe.at.get() else { return };
+    if flag_at(state, at) == flag {
+        apply_to_selection(state, Action::Flag(Flag::None));
+        refresh_loupe_bar(state);
+        return;
+    }
     apply_to_selection(state, Action::Flag(flag));
     refresh_loupe_bar(state);
 

@@ -37,7 +37,9 @@ pub(super) fn show_folders(state: &App) {
         column.remove(&child);
     }
     let libraries = state.libraries.all.borrow().clone();
-    let (mut loose, mut grouped) = shelve_libraries(&libraries);
+
+    let (at_home, here): (Vec<Library>, Vec<Library>) = libraries.iter().cloned().partition(|library| home_sync::is_home(state, library.id));
+    let (mut loose, mut grouped) = shelve_libraries(&here);
     places::in_order(state, &mut loose);
     grouped.iter_mut().for_each(|(_, shelf)| places::in_order(state, shelf));
 
@@ -59,6 +61,12 @@ pub(super) fn show_folders(state: &App) {
     for (parent, libraries) in grouped {
         let places: Vec<Place> = libraries.into_iter().map(|library| Place::Library(library.clone())).collect();
         column.append(&shelf(state, &parent, &places));
+    }
+    let mut at_home: Vec<&Library> = at_home.iter().collect();
+    places::in_order(state, &mut at_home);
+    if !at_home.is_empty() {
+        let places: Vec<Place> = at_home.into_iter().map(|library| Place::Library(library.clone())).collect();
+        column.append(&shelf(state, home::NUMA_HOME, &places));
     }
 
     if !libraries.is_empty() {
@@ -143,6 +151,7 @@ fn home_invite(state: &App) -> gtk::Box {
 pub(super) fn libraries_crumb(state: &App) -> gtk::Button {
     let crumb = gtk::Button::with_label("Libraries");
     crumb.add_css_class("flat");
+    crumb.add_css_class("crumb-quiet");
     crumb.set_tooltip_text(Some("All libraries, as folders"));
     crumb.set_valign(gtk::Align::Center);
     crumb.connect_clicked(glib::clone!(
@@ -180,6 +189,14 @@ fn shelf(state: &App, heading: &str, places: &[Place]) -> gtk::Box {
     shelf
 }
 
+fn two_lines(caption: &str) -> String {
+    const LINE: usize = 32;
+    match caption.rsplit_once(" \u{b7} ") {
+        Some((facts, last)) if caption.chars().count() > LINE => format!("{facts}\n{last}"),
+        _ => caption.to_string(),
+    }
+}
+
 fn folder(state: &App, place: &Place) -> gtk::Button {
     let read = places::row(state, place);
     let fan = places::fan(TILE);
@@ -201,18 +218,45 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     name.add_css_class("heading");
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name.set_max_width_chars(22);
-    let under = gtk::Label::new(Some(&read.subtitle));
+
+    let at_home = matches!(place, Place::Library(library) if home_sync::is_home(state, library.id));
+    let prefix = format!("{} \u{b7} ", home::NUMA_HOME);
+    let caption = read.subtitle.strip_prefix(prefix.as_str()).filter(|_| at_home).unwrap_or(&read.subtitle).to_string();
+
+    let bringing = match place {
+        Place::Library(library) if at_home => home_sync::kept_here_line(state, library.id).filter(|line| line.contains(" to bring")),
+        _ => None,
+    };
+    let caption = bringing.as_deref().unwrap_or(&caption);
+
+    let under = gtk::Label::new(Some(&two_lines(caption)));
     under.add_css_class("caption");
     under.add_css_class("dim-label");
-    under.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    under.set_max_width_chars(26);
+    under.set_wrap(true);
+    under.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    under.set_justify(gtk::Justification::Center);
+    under.set_max_width_chars(30);
 
     let inside = gtk::Box::new(gtk::Orientation::Vertical, 6);
     inside.set_margin_top(12);
     inside.set_margin_bottom(12);
     inside.append(&fan);
     inside.append(&name);
-    inside.append(&under);
+    match at_home {
+        true => {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            line.set_halign(gtk::Align::Center);
+            let house = gtk::Image::from_icon_name("go-home-symbolic");
+            house.set_pixel_size(12);
+            house.add_css_class("dim-label");
+            house.set_valign(gtk::Align::Start);
+            house.set_tooltip_text(Some(home::NUMA_HOME));
+            line.append(&house);
+            line.append(&under);
+            inside.append(&line);
+        }
+        false => inside.append(&under),
+    }
 
     let button = gtk::Button::new();
     button.add_css_class("flat");

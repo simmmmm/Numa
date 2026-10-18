@@ -10,6 +10,7 @@ numa-core = { path = "../numa-core" }
 numa-cull = { path = "../numa-cull" }
 numa-infer = { path = "../numa-infer" }
 numa-io = { path = "../numa-io", features = ["gpu"] }
+numa-render = { path = "../numa-render" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "sync", "signal", "io-util"] }
 tokio-util = { version = "0.7", features = ["io"] }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -43,7 +43,22 @@ pub async fn add_user(State(server): State<Arc<Server>>, Signed(me): Signed, Jso
 pub async fn users(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Account>>, Fail> {
 
     let accounts = server.store.accounts().map_err(Fail::internal)?;
-    Ok(Json(accounts.into_iter().map(|account| Account { admin: account.admin && me.admin, ..account }).collect()))
+    Ok(Json(accounts.into_iter().map(|account| Account { admin: account.admin && me.admin, manage: account.manage && me.admin, ..account }).collect()))
+}
+
+#[derive(Deserialize)]
+pub struct Rights {
+    manage: bool,
+}
+
+pub async fn set_user(State(server): State<Arc<Server>>, Signed(me): Signed, Path(name): Path<String>, Json(rights): Json<Rights>) -> Result<StatusCode, Fail> {
+    if !me.admin {
+        return Err(Fail(StatusCode::FORBIDDEN, "Only an admin gives an account its rights.".into()));
+    }
+    match server.store.set_manage(&name, rights.manage).map_err(Fail::internal)? {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(Fail(StatusCode::NOT_FOUND, "There is no account with that name.".into())),
+    }
 }
 
 async fn make(server: &Arc<Server>, name: &str, password: &str, admin: bool, first: bool) -> Result<StatusCode, Fail> {
@@ -98,6 +113,22 @@ pub async fn logout(State(server): State<Arc<Server>>, headers: HeaderMap) -> Re
     Ok(([(header::SET_COOKIE, cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
-pub async fn me(Signed(me): Signed) -> Json<Account> {
-    Json(me)
+pub async fn me(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<serde_json::Value> {
+    let start = server.store.setting(&format!("start:{}", me.name)).unwrap_or_else(|| "today".into());
+    let mut answer = serde_json::to_value(&me).unwrap_or_default();
+    answer["start"] = start.into();
+    Json(answer)
+}
+
+#[derive(Deserialize)]
+pub struct Start {
+    start: String,
+}
+
+pub async fn set_start(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Start>) -> Result<StatusCode, Fail> {
+    if !matches!(asked.start.as_str(), "today" | "photos") {
+        return Err(Fail::bad("Numa Home starts on today or photos."));
+    }
+    server.store.set_setting(&format!("start:{}", me.name), &asked.start).map_err(Fail::internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }

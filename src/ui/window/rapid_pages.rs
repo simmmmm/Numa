@@ -314,7 +314,6 @@ fn deliver_checked(state: &App, checked: bool) {
     alert.set_response_enabled("teaser", !teaser.is_empty());
     alert.set_response_enabled("picks", !picks.is_empty());
     let way_on = if checked { "picks" } else { "check" };
-    alert.set_response_appearance(way_on, adw::ResponseAppearance::Suggested);
     alert.set_default_response(Some(if picks.is_empty() { "cancel" } else { way_on }));
     let parent = of(state).views.clone();
     let state = state.clone();

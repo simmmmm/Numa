@@ -41,7 +41,7 @@ impl State {
 
 pub(super) fn build_grading(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let (wheel, caption) = build_grading_wheel(state);
+    let wheel = build_grading_wheel(state);
 
     let ranges = chip_row();
     ranges.set_margin_bottom(6);
@@ -57,7 +57,6 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
         tab.connect_toggled(glib::clone!(
             #[strong] state,
             #[weak] wheel,
-            #[weak] caption,
             move |tab| {
                 if !tab.is_active() {
                     return;
@@ -67,7 +66,6 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
                 write_grading(&state);
 
                 wheel.queue_draw();
-                caption.set_label(&wheel_caption(&state));
         refresh_retouch(&state);
         refresh_face(&state);
         refresh_found(&state);
@@ -76,8 +74,9 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
         ranges.append(&tab);
     }
     column.append(&ranges);
+
+    wheel.set_margin_bottom(6);
     column.append(&wheel);
-    column.append(&caption);
 
     let names = [("Hue", Readout::Degrees), ("Saturation", Readout::Positive(0)), ("Luminance", Readout::Signed(0))];
     for (index, (name, readout)) in names.into_iter().enumerate() {
@@ -89,7 +88,6 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
         scale.connect_value_changed(glib::clone!(
             #[strong] state,
             #[weak] wheel,
-            #[weak] caption,
             move |_| {
                 if !state.applying.get() {
                     read_grading(&state);
@@ -97,11 +95,15 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
                 tint_grading_hue(&state);
                 if index < 2 {
                     wheel.queue_draw();
-                    caption.set_label(&wheel_caption(&state));
                 }
             }
         ));
-        column.append(&slider_row(state, name, scale, readout));
+        let row = slider_row(state, name, scale, readout);
+
+        if index == 1 {
+            row.add_css_class("lead");
+        }
+        column.append(&row);
     }
 
     let shaping = [
@@ -128,7 +130,7 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
 const WHEEL_RADIUS: f64 = 90.0;
 const WHEEL_DOT: f64 = 22.0;
 
-fn build_grading_wheel(state: &App) -> (gtk::DrawingArea, gtk::Label) {
+fn build_grading_wheel(state: &App) -> gtk::DrawingArea {
     let side = (WHEEL_RADIUS + WHEEL_DOT / 2.0 + 1.0).ceil() as i32 * 2;
     let wheel = gtk::DrawingArea::new();
     wheel.set_content_width(side);
@@ -216,12 +218,7 @@ fn build_grading_wheel(state: &App) -> (gtk::DrawingArea, gtk::Label) {
     ));
     wheel.add_controller(click);
 
-    let caption = gtk::Label::new(Some(&wheel_caption(state)));
-    caption.add_css_class("caption");
-    caption.add_css_class("dim-label");
-    caption.set_margin_top(4);
-    caption.set_margin_bottom(6);
-    (wheel, caption)
+    wheel
 }
 
 fn wheel_value(state: &App) -> (f64, f64) {
@@ -232,10 +229,4 @@ fn wheel_offset(hue: f64, saturation: f64) -> (f64, f64) {
     let distance = saturation / 100.0 * WHEEL_RADIUS;
     let angle = hue.to_radians();
     (distance * angle.cos(), distance * angle.sin())
-}
-
-fn wheel_caption(state: &App) -> String {
-    let name = ["Shadows", "Midtones", "Highlights", "Global"][state.grade.grading_range.get().min(3)];
-    let (hue, saturation) = wheel_value(state);
-    format!("{name} · {}° · {}", hue.round(), saturation.round())
 }

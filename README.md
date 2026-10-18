@@ -597,11 +597,17 @@ sudo apt install numa
 printf '\n[home_Numa_Arch]\nServer = https://download.opensuse.org/repositories/home:/Numa/Arch/$arch\n' | sudo tee -a /etc/pacman.conf
 curl -fsSL https://download.opensuse.org/repositories/home:/Numa/Arch/x86_64/home_Numa_Arch.key | sudo pacman-key --add -
 sudo pacman-key --lsign-key 5ADD29F2614AC31A0BD16A75AACA2C3967ED9794
-sudo pacman -Syu numa
+sudo pacman -Syu numa-photo
 ```
 
 The third line trusts the repository's signing key; the number is its
 fingerprint. After this, Numa is also in Octopi.
+
+On Arch the package is called `numa-photo`, because Arch's own repository has
+a DNS resolver called `numa`. If these lines once installed `numa` for you —
+Numa under its old name, or the DNS resolver — the last line moves you over:
+answer `y` when pacman asks to remove `numa`. From then on `pacman -Syu`
+updates Numa.
 
 **Debian 13, Ubuntu 24.04 and older releases** have no package yet, because
 their Rust is too old to build Numa. Use the Flatpak or the AppImage.

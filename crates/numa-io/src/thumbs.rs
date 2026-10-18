@@ -83,6 +83,12 @@ pub(crate) fn stand_in(path: PathBuf, file: PathBuf) {
     STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get_or_insert_with(HashMap::new).insert(path, file);
 }
 
+pub(crate) fn forget_stand_in(path: &Path) {
+    if let Some(map) = STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+        map.remove(path);
+    }
+}
+
 pub(crate) fn forget_stand_ins(root: &Path) {
     if let Some(map) = STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
         map.retain(|path, _| !path.starts_with(root));

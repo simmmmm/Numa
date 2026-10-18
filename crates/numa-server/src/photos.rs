@@ -59,7 +59,38 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         "library": library_of(id),
         "by": by,
         "chosen": chosen,
+        "sharpness": sharpness(&server, &photo),
+        "measured": photo.sharpness.is_some(),
     })))
+}
+
+fn sharpness(server: &Server, photo: &Photo) -> Option<String> {
+    let scale = crate::tidy::scale(server, library_of(photo.id));
+    numa_io::notes::issues(photo, &scale).into_iter().find(|said| said.starts_with("soft"))
+}
+
+pub async fn sharpness_now(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
+    let mut photo = server.home.photo(&me.name, id)?;
+    if photo.sharpness.is_none() {
+        let _turn = server.decodes.acquire().await.map_err(Fail::internal)?;
+        let path = photo.path.clone();
+        let (frame, faces, face_sharpness, _) = tokio::task::spawn_blocking(move || numa_io::analysis::measure_photo(&path))
+            .await
+            .map_err(Fail::internal)?
+            .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not read this photograph: {err}")))?;
+
+        photo.sharpness = Some(frame.sharpness);
+        photo.blown = Some(frame.blown);
+        photo.brightness = Some(frame.brightness);
+        photo.contrast = Some(frame.contrast);
+        photo.exposure = (frame.exposure > 0.0).then_some(frame.exposure);
+        photo.focal35 = (frame.focal35 > 0.0).then_some(frame.focal35);
+        photo.raw_clipped = frame.raw_clipped;
+        photo.eyes_closed = frame.eyes_closed;
+        photo.faces = faces;
+        photo.face_sharpness = face_sharpness;
+    }
+    Ok(Json(json!({ "sharpness": sharpness(&server, &photo) })))
 }
 
 #[derive(Deserialize)]
@@ -94,6 +125,7 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
     if headers.get(header::IF_NONE_MATCH).is_some_and(|asked| asked.as_bytes() == tag.as_bytes()) {
         return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag)]).into_response());
     }
+    let (kept, id) = (photo.aspect, photo.id);
     let bytes = match thumbs::cached(&photo.path, photo.mtime, edge, edits.as_deref()) {
         Some(file) => tokio::fs::read(file).await.ok(),
         None => None,
@@ -117,8 +149,26 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
             .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not read this photograph: {err}")))?
         }
     };
+    reshape(&server, id, kept, &bytes).await;
     let headers = [(header::CONTENT_TYPE, "image/jpeg".to_string()), (header::CACHE_CONTROL, "private, no-cache".to_string()), (header::ETAG, tag)];
     Ok((headers, bytes).into_response())
+}
+
+pub fn reshaped(kept: Option<f32>, shape: f32) -> bool {
+    kept.is_none_or(|kept| (kept - shape).abs() > 0.01 * shape)
+}
+
+async fn reshape(server: &Arc<Server>, id: i64, kept: Option<f32>, picture: &[u8]) {
+    let size = image::ImageReader::new(std::io::Cursor::new(picture)).with_guessed_format().ok().and_then(|reader| reader.into_dimensions().ok());
+    let Some(shape) = size.map(|(width, height)| width as f32 / height.max(1) as f32) else { return };
+    if !reshaped(kept, shape) {
+        return;
+    }
+    let home = server.clone();
+    let saved = server.home.ask(move |catalog| catalog.set_aspects(&[(id, shape)]).map(|()| home.shelve(Some(library_of(id)), catalog))).await;
+    if let Ok(Err(err)) | Err(Fail(_, err)) = saved.map(|saved| saved.map(drop)) {
+        log::warn!("the shape of photograph {id} was not kept: {err}");
+    }
 }
 
 fn fnv(text: &str) -> u64 {
@@ -191,6 +241,7 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
 
 pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, body: Bytes) -> Result<Json<Value>, Fail> {
     let photo = server.home.photo(&me.name, id)?;
+    let _one = server.editing.lock(id).await;
     let mut document = match body.iter().all(u8::is_ascii_whitespace) {
         true => numa_core::document::Document::new(String::new()),
         false => serde_json::from_slice::<numa_core::document::Document>(&body)
@@ -262,5 +313,19 @@ pub fn flag_name(flag: Flag) -> &'static str {
         Flag::None => "none",
         Flag::Picked => "pick",
         Flag::Rejected => "reject",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_shape_is_kept_again_only_when_it_has_changed_by_more_than_rounding() {
+
+        assert!(super::reshaped(Some(1.5), 1.0 / 1.5));
+
+        assert!(!super::reshaped(Some(1.5006), 320.0 / 213.0));
+        assert!(!super::reshaped(Some(0.6667), 213.0 / 320.0));
+
+        assert!(super::reshaped(None, 1.5));
     }
 }

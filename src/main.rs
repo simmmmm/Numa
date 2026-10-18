@@ -35,7 +35,16 @@ fn main() -> glib::ExitCode {
         }
     });
 
-    let beside = ["NUMA_OPEN", "NUMA_COMPARE", "NUMA_IMPORT"].iter().any(|name| std::env::var_os(name).is_some());
+    let args: Vec<_> = std::env::args_os().collect();
+    let self_test = args.get(1).is_some_and(|arg| arg == "--self-test");
+    if self_test {
+        if args.len() < 4 {
+            eprintln!("usage: numa --self-test <folder for the JPEGs> <raw>…");
+            return glib::ExitCode::from(2);
+        }
+        ui::window::request_self_test(args[2].clone().into(), args[3..].iter().map(Into::into).collect());
+    }
+    let beside = self_test || ["NUMA_OPEN", "NUMA_COMPARE", "NUMA_IMPORT"].iter().any(|name| std::env::var_os(name).is_some());
     let flags = match beside {
         true => gio::ApplicationFlags::NON_UNIQUE | gio::ApplicationFlags::HANDLES_OPEN,
         false => gio::ApplicationFlags::HANDLES_OPEN,
@@ -76,7 +85,11 @@ fn main() -> glib::ExitCode {
         }
     });
 
-    app.run()
+    if !self_test {
+        return app.run();
+    }
+    let code = app.run_with_args(&args[..1].iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>());
+    if ui::window::self_test_failed() { glib::ExitCode::FAILURE } else { code }
 }
 
 fn setup_actions(app: &adw::Application) {

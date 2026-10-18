@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use numa_io::catalog::Library;
@@ -100,25 +100,6 @@ pub async fn owners(server: &Arc<Server>, libraries: &[Library]) -> Result<HashM
         }
     }
     Ok(owners)
-}
-
-pub async fn counts(
-    State(server): State<Arc<Server>>,
-    Signed(me): Signed,
-    Query(mut wanted): Query<crate::timeline::Wanted>,
-) -> Result<Json<Vec<Value>>, Fail> {
-    wanted.by = None;
-    let libraries = server.home.libraries(&me.name);
-    let owners = owners(&server, &libraries).await?;
-    let mut counts: HashMap<Option<&str>, usize> = HashMap::new();
-    let photos = crate::timeline::chosen(&server, &me.name, &wanted).await?;
-    for photo in &photos {
-        *counts.entry(owners.get(&photo.id).map(String::as_str)).or_default() += 1;
-    }
-    let mut rows: Vec<(Option<&str>, usize)> = counts.into_iter().collect();
-
-    rows.sort_by_key(|(account, count)| (account.is_none(), std::cmp::Reverse(*count)));
-    Ok(Json(rows.into_iter().map(|(account, count)| json!({ "account": account, "count": count })).collect()))
 }
 
 fn admin(me: &crate::store::Account) -> Result<(), Fail> {

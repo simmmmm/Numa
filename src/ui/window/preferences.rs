@@ -59,6 +59,10 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
 
     page.add(&home::preferences_group(state, dialog));
 
+    if let Some(kept) = home::kept_group(state) {
+        page.add(&kept);
+    }
+
     if let Some(path) = appimage() {
         let menu = adw::PreferencesGroup::new();
         menu.set_title("Applications Menu");
@@ -252,8 +256,8 @@ fn show_previews(state: &App, row: &adw::ActionRow) {
             row.set_subtitle(&match count {
                 0 if numa::io::previews::budget() == 0 => "Per library · off, so none are kept".to_string(),
                 0 => "Per library · none kept in this one yet".to_string(),
-                1 => format!("Per library · {} used here · one photograph", glib::format_size(bytes)),
-                _ => format!("Per library · {} used here · {count} photographs", glib::format_size(bytes)),
+                1 => format!("Per library · {} used here · one photo", glib::format_size(bytes)),
+                _ => format!("Per library · {} used here · {count} photos", glib::format_size(bytes)),
             });
         }
     ));
@@ -408,30 +412,29 @@ pub(super) fn folder_size(dir: &std::path::Path, skip: &[PathBuf]) -> u64 {
     total
 }
 
-pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
-    let dialog = adw::Dialog::new();
+pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, gio::MenuModel)]) {
+    let dialog = adw::PreferencesDialog::new();
     dialog.set_title("Keyboard Shortcuts");
+    dialog.set_search_enabled(true);
 
     dialog.set_content_width(600);
     dialog.set_content_height(560);
 
     let page = adw::PreferencesPage::new();
+    let row = key_row;
 
-    let row = |title: &str, keys: &str| {
-        let row = adw::ActionRow::new();
-        row.set_title(title);
-        let label = gtk::Label::new(Some(keys));
-        label.add_css_class("dim-label");
-        row.add_suffix(&label);
-        row
-    };
-
+    let app = window.application();
+    let mut seen = std::collections::HashSet::new();
+    for (place, menu) in menus {
+        let group = adw::PreferencesGroup::new();
+        group.set_title(place);
+        if menu_rows(menu, app.as_ref(), &mut seen, &group) > 0 {
+            page.add(&group);
+        }
+    }
     let app_group = adw::PreferencesGroup::new();
     app_group.set_title("Application");
     app_group.add(&row("Quit", "Ctrl+Q"));
-    app_group.add(&row("Keyboard shortcuts", "Ctrl+? / Ctrl+/"));
-    app_group.add(&row("Preferences", "Ctrl+,"));
-    app_group.add(&row("Open a photograph", "Ctrl+O"));
     page.add(&app_group);
 
     let library_group = adw::PreferencesGroup::new();
@@ -487,6 +490,8 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     editor_group.add(&row("Hold to compare against the photograph before Auto, while its card is up", "Shift+Space"));
     editor_group.add(&row("Show what the camera recorded", "I"));
     editor_group.add(&row("Guides: none, thirds, grid", "G"));
+
+    editor_group.add(&row("Tone curve: drag to shape, right-click a point to remove it", "Drag / Right-click"));
     editor_group.add(&row("Panel tabs, in order", "Alt+1 – Alt+9"));
     editor_group.add(&row("Copy this photograph's edits", "Ctrl+C"));
     editor_group.add(&row("Copy the edited picture", "Ctrl+Shift+C"));
@@ -496,9 +501,47 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow) {
     editor_group.add(&row("Redo", "Ctrl+Shift+Z"));
     page.add(&editor_group);
 
-    let bar = adw::ToolbarView::new();
-    bar.add_top_bar(&adw::HeaderBar::new());
-    bar.set_content(Some(&page));
-    dialog.set_child(Some(&bar));
+    dialog.add(&page);
     dialog.present(Some(window));
+}
+
+fn key_row(title: &str, keys: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(title);
+    let label = gtk::Label::new(Some(keys));
+    label.add_css_class("dim-label");
+    row.add_suffix(&label);
+    row
+}
+
+fn menu_rows(menu: &gio::MenuModel, app: Option<&gtk::Application>, seen: &mut std::collections::HashSet<String>, group: &adw::PreferencesGroup) -> usize {
+    let text = |at, name| menu.item_attribute_value(at, name, Some(glib::VariantTy::STRING)).and_then(|value| value.get::<String>());
+    let mut added = 0;
+    for at in 0..menu.n_items() {
+        if let Some(section) = menu.item_link(at, gio::MENU_LINK_SECTION) {
+            added += menu_rows(&section, app, seen, group);
+            continue;
+        }
+        let Some(label) = text(at, gio::MENU_ATTRIBUTE_LABEL) else { continue };
+        let detailed = match text(at, gio::MENU_ATTRIBUTE_ACTION) {
+            Some(action) => gio::Action::print_detailed_name(&action, menu.item_attribute_value(at, gio::MENU_ATTRIBUTE_TARGET, None).as_ref()).to_string(),
+            None => String::new(),
+        };
+        if !seen.insert(format!("{label}\n{detailed}")) {
+            continue;
+        }
+        let accels = match (text(at, "accel"), app) {
+            (Some(accel), _) => vec![accel],
+            (None, Some(app)) if !detailed.is_empty() => app.accels_for_action(&detailed).iter().map(|accel| accel.to_string()).collect(),
+            _ => Vec::new(),
+        };
+        let keys: Vec<String> = accels
+            .iter()
+            .filter_map(|accel| gtk::accelerator_parse(accel.as_str()))
+            .map(|(key, mods)| gtk::accelerator_get_label(key, mods).to_string())
+            .collect();
+        group.add(&key_row(&label, &keys.join(" / ")));
+        added += 1;
+    }
+    added
 }

@@ -198,6 +198,7 @@ struct Plan {
 
 fn plan(server: &Arc<Server>, failed: &HashSet<i64>) -> Plan {
     let all = everything(server);
+    let photos = all.iter().map(|(_, photos)| photos.len()).sum();
     let thumbnails: Thumbnails = all
         .iter()
         .map(|(library, photos)| (library.clone(), missing_thumbnails(server, photos.iter().filter(|photo| !failed.contains(&photo.id)).cloned().collect())))
@@ -229,6 +230,9 @@ fn plan(server: &Arc<Server>, failed: &HashSet<i64>) -> Plan {
         }
     };
     let activity = &server.activity;
+    for kind in [Kind::Thumbnails, Kind::Analyse, Kind::Words, Kind::Things] {
+        activity.all(kind, photos);
+    }
     activity.plan(Kind::Thumbnails, thumbnails.iter().map(|(_, list)| list.len()).sum(), None);
     let waits = |installed: bool, why| (!installed).then_some(why);
     activity.plan(Kind::Analyse, analyse.iter().map(|(_, list)| list.len()).sum(), waits(faces, "Waits for the face models to download"));
@@ -288,7 +292,8 @@ fn ahead(server: &Arc<Server>, plan: Thumbnails, failed: &mut HashSet<i64>) -> b
                         let small = image::DynamicImage::ImageRgb8(large.clone()).thumbnail(thumbs::LIBRARY_EDGE, thumbs::LIBRARY_EDGE).into_rgb8();
                         thumbs::store(path, photo.mtime, thumbs::LIBRARY_EDGE, edits, &small);
                     }
-                    Ok((photo.aspect.is_none() && large.height() > 0).then(|| (photo.id, large.width() as f32 / large.height() as f32)))
+                    let shape = large.width() as f32 / large.height().max(1) as f32;
+                    Ok((large.height() > 0 && crate::photos::reshaped(photo.aspect, shape)).then_some((photo.id, shape)))
                 })
                 .collect();
             made += done.len();

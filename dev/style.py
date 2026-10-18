@@ -13,9 +13,10 @@ left out):
     colour     a hex or rgb()/rgba() colour, a cairo set_source_rgb(a) or a
                gdk::RGBA::new with numbers in it — anywhere but tokens.css,
                which is where the design system's colours live
-    suggested  `suggested-action` in Rust: Numa's primary is white
-               (`primary_button`); blue stays on the platform's own surfaces,
-               which set it themselves (AdwAlertDialog's responses)
+    suggested  `suggested-action` in Rust, and an AdwAlertDialog's
+               `ResponseAppearance::Suggested`: Numa's primary is white
+               (`primary_button`); blue stays on the platform's own surfaces
+               (the file chooser), and Numa's alerts use none (UX-075)
     scale      a gtk::Scale made outside slider.rs, the slider's home
     size       a CSS font-size, border-radius, padding or margin off the scale:
                spacing 0 4 8 12 16 24 32, radius 3 6 8 14 22 999 (and 50 %),
@@ -24,6 +25,11 @@ left out):
     busy       a spinner or progress bar made outside busy.rs, whose three
                forms are the only ones: the loader toast, the progress toast
                with Stop, and Waiting in place (UX-015, UX-025)
+    layout     a number off the spacing scale in a Rust layout call:
+               set_margin_*, set_spacing, set_row_spacing, set_column_spacing,
+               a Box::new spacing, set_width_request, set_height_request,
+               set_size_request (and their builder forms) — a variable or a
+               constant is not counted; -1 and 0 are on the scale (UX-078)
 
 A count per file and check is a debt. The check fails when a file has a
 debt the baseline does not name, or more of one than the baseline says.
@@ -31,7 +37,7 @@ debt the baseline does not name, or more of one than the baseline says.
 import pathlib, re, sys
 
 BASELINE = pathlib.Path(__file__).with_name("style-baseline.txt")
-CHECKS = ("colour", "suggested", "scale", "size", "sans", "busy")
+CHECKS = ("colour", "suggested", "scale", "size", "sans", "busy", "layout")
 
 SPACING = {0, 4, 8, 12, 16, 24, 32}
 RADIUS = {0, 3, 6, 8, 14, 22, 999}
@@ -43,6 +49,11 @@ cairo_colour = re.compile(r'\b(?:set_source_rgba?|RGBA::new)\(\s*-?[0-9.]')
 css_size = re.compile(r'^\s*(font-size|border-radius|padding(?:-\w+)?|margin(?:-\w+)?)\s*:\s*([^;]+);', re.M)
 busy_widget = re.compile(r'\b(?:gtk|adw)::(?:Spinner|ProgressBar)::(?:new|builder)\b')
 number = re.compile(r'(-?[0-9.]+)(px|em|rem|%)?')
+# UX-078: Rust layout calls with a numeric literal. The scale is the CSS one.
+layout_one = re.compile(
+    r'\b(?:set_)?(?:margin_(?:top|bottom|start|end)|spacing|row_spacing|column_spacing|width_request|height_request)\(\s*(-?\d+)\s*\)'
+    r'|\bBox::new\(\s*(?:gtk::)?Orientation::\w+\s*,\s*(-?\d+)\s*\)')
+layout_both = re.compile(r'\bset_size_request\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)')
 
 
 def off_scale(prop, value):
@@ -55,6 +66,13 @@ def off_scale(prop, value):
         if unit in ("em", "rem", "%") or float(amount) not in allowed:
             off += 1
     return off
+
+
+def off_layout(text):
+    """How many numeric literals in Rust layout calls are off the spacing scale."""
+    numbers = [n for match in layout_one.findall(text) for n in match if n]
+    numbers += [n for match in layout_both.findall(text) for n in match]
+    return sum(1 for n in numbers if int(n) not in SPACING and int(n) != -1)
 
 
 def strip_comments(text, css):
@@ -74,11 +92,12 @@ def measure(root):
         key = str(f.relative_to(root))
         found = {
             "colour": len(hex_colour.findall(text)) + len(rgb_colour.findall(text)) + (0 if css else len(cairo_colour.findall(text))),
-            "suggested": 0 if css else text.count("suggested-action"),
+            "suggested": 0 if css else text.count("suggested-action") + text.count("ResponseAppearance::Suggested"),
             "scale": 0 if css or f.name == "slider.rs" else text.count("gtk::Scale::"),
             "size": sum(off_scale(prop, value) for prop, value in css_size.findall(text)) if css else 0,
             "sans": 0 if css else text.count('"Sans"'),
             "busy": 0 if css or f.name == "busy.rs" else len(busy_widget.findall(text)),
+            "layout": 0 if css else off_layout(text),
         }
         for check, count in found.items():
             if count:

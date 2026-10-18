@@ -10,6 +10,8 @@ pub struct Store(Mutex<Connection>);
 pub struct Account {
     pub name: String,
     pub admin: bool,
+
+    pub manage: bool,
 }
 
 impl Store {
@@ -36,9 +38,14 @@ impl Store {
              CREATE TABLE IF NOT EXISTS settled (key TEXT PRIMARY KEY);
              CREATE TABLE IF NOT EXISTS hashes (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS left_out (folder TEXT PRIMARY KEY);
-             CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, folder TEXT NOT NULL, at INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, folder TEXT NOT NULL, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS arrived (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);",
         )
         .map_err(|err| err.to_string())?;
+
+        let _ = conn.execute("ALTER TABLE accounts ADD COLUMN manage INTEGER NOT NULL DEFAULT 0", []);
+
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN sent INTEGER", []);
         Ok(Self(Mutex::new(conn)))
     }
 
@@ -47,14 +54,18 @@ impl Store {
         work(&conn).map_err(|err| err.to_string())
     }
 
+    pub fn set_manage(&self, name: &str, manage: bool) -> Result<bool, String> {
+        self.with(|conn| conn.execute("UPDATE accounts SET manage = ?2 WHERE name = ?1", params![name, manage])).map(|changed| changed == 1)
+    }
+
     pub fn has_accounts(&self) -> bool {
         self.with(|conn| conn.query_row("SELECT EXISTS (SELECT 1 FROM accounts)", [], |row| row.get(0))).unwrap_or(true)
     }
 
     pub fn accounts(&self) -> Result<Vec<Account>, String> {
         self.with(|conn| {
-            let mut statement = conn.prepare("SELECT name, admin FROM accounts ORDER BY name COLLATE NOCASE")?;
-            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)? }))?;
+            let mut statement = conn.prepare("SELECT name, admin, manage FROM accounts ORDER BY name COLLATE NOCASE")?;
+            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)? }))?;
             rows.collect()
         })
     }
@@ -85,14 +96,34 @@ impl Store {
     pub fn session(&self, digest: &str) -> Option<Account> {
         self.with(|conn| {
             conn.query_row(
-                "SELECT a.name, a.admin FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1",
+                "SELECT a.name, a.admin, a.manage FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1",
                 [digest],
-                |row| Ok(Account { name: row.get(0)?, admin: row.get(1)? }),
+                |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)? }),
             )
             .optional()
         })
         .ok()
         .flatten()
+    }
+
+    pub fn note_arrival(&self, digest: &str) {
+        let _ = self.with(|conn| conn.execute("UPDATE sessions SET sent = ?2 WHERE token = ?1", params![digest, now()]));
+    }
+
+    pub fn session_device(&self, digest: &str) -> Option<String> {
+        self.with(|conn| conn.query_row("SELECT COALESCE(device, '') FROM sessions WHERE token = ?1", [digest], |row| row.get(0)).optional())
+            .ok()
+            .flatten()
+    }
+
+    pub fn devices(&self) -> Vec<(String, String, i64)> {
+        self.with(|conn| {
+            let sql = "SELECT name, COALESCE(device, ''), MAX(sent) FROM sessions WHERE sent IS NOT NULL GROUP BY name COLLATE NOCASE, device ORDER BY 3 DESC";
+            let mut statement = conn.prepare(sql)?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
     }
 
     pub fn end_session(&self, digest: &str) {
@@ -115,12 +146,25 @@ impl Store {
             let tx = conn.unchecked_transaction()?;
             {
                 let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO updated (photo, at) VALUES (?1, ?2)")?;
+                let mut arrived = tx.prepare_cached("INSERT OR REPLACE INTO arrived (photo, at) VALUES (?1, ?2)")?;
                 for id in ids {
-                    insert.execute(params![id, now])?;
+                    if insert.execute(params![id, now])? == 1 {
+                        arrived.execute(params![id, now])?;
+                    }
                 }
             }
+            tx.execute("DELETE FROM arrived WHERE at < ?1", [now - crate::today::NEWS])?;
             tx.commit()
         });
+    }
+
+    pub fn arrived(&self, since: i64) -> HashMap<i64, i64> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT photo, at FROM arrived WHERE at >= ?1")?;
+            let rows = statement.query_map([since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
     }
 
     pub fn touch(&self, id: i64) -> i64 {
@@ -166,6 +210,15 @@ impl Store {
         self.with(|conn| {
             let mut statement = conn.prepare("SELECT name, library, path FROM sent")?;
             let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn settings_under(&self, prefix: &str) -> Vec<(String, String)> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT substr(key, length(?1) + 1), value FROM settings WHERE substr(key, 1, length(?1)) = ?1")?;
+            let rows = statement.query_map([prefix], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect()
         })
         .unwrap_or_default()

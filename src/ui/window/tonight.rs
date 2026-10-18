@@ -140,7 +140,6 @@ fn tonight_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.set_title("Tonight");
     dialog.set_content_width(520);
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
     let page = adw::PreferencesPage::new();
     view.set_content(Some(&page));
 
@@ -218,20 +217,8 @@ fn tonight_dialog(state: &App, window: &adw::ApplicationWindow) {
     rows.add(&daily);
     page.add(&rows);
 
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    buttons.set_halign(gtk::Align::Center);
-    buttons.set_margin_top(12);
-    buttons.set_margin_bottom(16);
-    let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("pill");
-    cancel.connect_clicked(glib::clone!(
-        #[weak] dialog,
-        move |_| {
-            dialog.close();
-        }
-    ));
     let go = primary_button(&format!("Make {count}"));
-    go.add_css_class("pill");
+    view.add_top_bar(&dialog_header(&dialog, &go));
     let pack = Rc::new(pack);
     go.connect_clicked(glib::clone!(
         #[strong] state,
@@ -249,9 +236,6 @@ fn tonight_dialog(state: &App, window: &adw::ApplicationWindow) {
             make(&state, &pack.photos, pack_settings(&state, SIZES[chosen].1, folder.borrow().clone()), false, |_| {});
         }
     ));
-    buttons.append(&cancel);
-    buttons.append(&go);
-    view.add_bottom_bar(&buttons);
     dialog.set_child(Some(&view));
     dialog.present(Some(window));
 }

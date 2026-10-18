@@ -307,9 +307,14 @@ fn develop_next(state: &App) {
         return;
     }
     let Some(at) = state.loupe.at.get() else { return };
+
+    if let Some(id) = id_at(state, at) {
+        home_fetch::fetch_first(state, id, develop_next);
+    }
+    let at_home = |id: &i64| state.grid.at_home.borrow().contains_key(id);
     let wanted = [at, at + 1].into_iter().find_map(|index| {
         let card = state.grid.lazy.borrow().get(index).map(|card| card.path.clone())?;
-        let id = id_at(state, index)?;
+        let id = id_at(state, index).filter(|id| !at_home(id))?;
         (!state.loupe.zoom.full.borrow().contains_key(&id)).then_some((id, card))
     });
     let Some((id, path)) = wanted else { return };

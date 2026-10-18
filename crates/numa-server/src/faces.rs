@@ -1,5 +1,6 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
@@ -25,8 +26,27 @@ fn recognised(catalog: &Catalog, library: i64) -> (Vec<StoredFace>, Vec<Option<S
     (faces, names)
 }
 
+static COUNTED: Mutex<Vec<(String, Instant, usize)>> = Mutex::new(Vec::new());
+
+const FRESH: Duration = Duration::from_secs(10 * 60);
+
+pub async fn waiting(server: &Arc<Server>, account: &str) -> Result<usize, Fail> {
+    let known = {
+        let counted = COUNTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        counted.iter().find(|(name, at, _)| name == account && at.elapsed() < FRESH).map(|(.., count)| *count)
+    };
+    match known {
+        Some(count) => Ok(count),
+        None => Ok(groups(server, account).await?.len()),
+    }
+}
+
 pub async fn unnamed(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
-    let libraries = seen(&server, &me.name);
+    Ok(Json(groups(&server, &me.name).await?))
+}
+
+async fn groups(server: &Arc<Server>, account: &str) -> Result<Vec<Value>, Fail> {
+    let libraries = seen(server, account);
     let groups = server
         .home
         .ask(move |catalog| {
@@ -44,7 +64,10 @@ pub async fn unnamed(State(server): State<Arc<Server>>, Signed(me): Signed) -> R
             rows.into_iter().map(|(_, row)| row).collect::<Vec<Value>>()
         })
         .await?;
-    Ok(Json(groups))
+    let mut counted = COUNTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    counted.retain(|(name, ..)| name != account);
+    counted.push((account.to_string(), Instant::now(), groups.len()));
+    Ok(groups)
 }
 
 pub async fn portrait(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Response, Fail> {

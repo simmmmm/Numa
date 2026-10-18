@@ -118,6 +118,8 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
     found.set_homogeneous(true);
     found.set_row_spacing(4);
     found.set_column_spacing(4);
+
+    found.add_css_class("found-chips");
     if segment::is_installed() {
         column.append(&section_header("In this photograph"));
         column.append(&found);
@@ -156,6 +158,7 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
     note.add_css_class("profile-note");
     column.append(&note);
 
+    column.append(&section_header("Your masks"));
     state.masks.mask_list.set_selection_mode(gtk::SelectionMode::None);
     state.masks.mask_list.add_css_class("boxed-list");
     column.append(&state.masks.mask_list);
@@ -192,7 +195,6 @@ pub(super) fn name_selected_mask(state: &App) {
             let masks = photo.document.masks();
             let name = mask_label(&masks, index);
             state.editor_page.mask_name_label.set_text(&name);
-            state.editor_page.mask_crumb_label.set_text(&name);
             state.editor_page.banner_label.set_markup(&format!(
                 "These tabs edit <b>{}</b>",
                 glib::markup_escape_text(&name)
@@ -240,7 +242,6 @@ pub(super) fn set_panel_scope(state: &App) {
         }
     }
 
-    state.editor_page.mask_crumb.set_visible(masked);
     name_selected_mask(state);
 
     if selected_mask(state).is_some_and(|mask| is_gradient(&mask)) && state.masks.brush.get() != MaskTool::Off {

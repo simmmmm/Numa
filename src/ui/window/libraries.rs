@@ -29,12 +29,14 @@ pub(super) fn describe_new_library(state: &App, window: &adw::ApplicationWindow,
         let Ok((cameras, unread, sampled)) = found else { return };
 
         let mut lines = Vec::new();
-        for (camera, (_, profiled)) in &cameras {
-            lines.push(if *profiled {
-                format!("• {camera} — camera profile found")
-            } else {
-                format!("• {camera} — no camera profile; colour comes from the matrix in the file, which is fine")
-            });
+        for (profiled, answer) in [
+            (true, "camera profile found"),
+            (false, "no camera profile; colour comes from the matrix in the file, which is fine"),
+        ] {
+            let names: Vec<&str> = cameras.iter().filter(|(_, (_, has))| *has == profiled).map(|(name, _)| name.as_str()).collect();
+            if !names.is_empty() {
+                lines.push(format!("• {} — {answer}", names.join(", ")));
+            }
         }
         if unread > 0 {
             lines.push(format!("• {unread} RAW file(s) whose details could not be read"));
@@ -52,7 +54,6 @@ pub(super) fn describe_new_library(state: &App, window: &adw::ApplicationWindow,
         let alert = adw::AlertDialog::new(Some("What Numa found"), Some(&body));
         alert.add_response("later", "Later");
         alert.add_response("analyse", "Analyse Now");
-        alert.set_response_appearance("analyse", adw::ResponseAppearance::Suggested);
         alert.set_default_response(Some("analyse"));
         let state = state.clone();
         alert.connect_response(None, move |_, response| {

@@ -9,11 +9,20 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
 
     state.grid.welcome.bind_property("visible", &bar, "visible").invert_boolean().sync_create().build();
     page.append(&bar);
+    let keys = "hint-library-keys";
     let hint = key_hint(
         state,
-        "hint-library-keys",
+        keys,
         "Cull from the keyboard: 0–5 rate, P picks, X rejects, U clears — Ctrl+/ lists every shortcut",
     );
+
+    let offer = &state.grid.extras_banner;
+    offer.connect_revealed_notify(glib::clone!(
+        #[strong] state,
+        #[weak] hint,
+        move |offer| hint.set_revealed(!offer.is_revealed() && first_time(&state, keys))
+    ));
+    offer.bind_property("revealed", &state.grid.update_banner, "visible").invert_boolean().sync_create().build();
     state.grid.welcome.bind_property("visible", &hint, "visible").invert_boolean().sync_create().build();
     page.append(&hint);
 
@@ -181,6 +190,8 @@ fn build_grid_scroller(state: &App) -> gtk::ScrolledWindow {
     scroller
 }
 
+const OFF_UNTIL_USED: [&str; 2] = ["photo-paste", "photo-paste-choose"];
+
 pub(super) fn debug_assert_missing_actions(menu: &gio::Menu, window: &adw::ApplicationWindow) {
     fn walk(model: &gio::MenuModel, into: &mut Vec<String>) {
         for index in 0..model.n_items() {
@@ -204,7 +215,7 @@ pub(super) fn debug_assert_missing_actions(menu: &gio::Menu, window: &adw::Appli
         let Some(bare) = action.strip_prefix("win.") else { continue };
         if !window.has_action(bare) {
             log::error!("menu entry points at win.{bare}, which is not a registered action");
-        } else if !window.is_action_enabled(bare) {
+        } else if !window.is_action_enabled(bare) && !OFF_UNTIL_USED.contains(&bare) {
 
             log::error!("menu entry win.{bare} exists but is disabled");
         }
@@ -231,14 +242,13 @@ pub(super) fn install_photo_menu(state: &App, window: &adw::ApplicationWindow) {
     ));
     window.add_action(&copy);
 
-    for (name, ask) in [("photo-paste", false), ("photo-paste-choose", true)] {
-        let paste = gio::SimpleAction::new(name, None);
+    for (paste, ask) in state.copy_paste.paste.iter().zip([false, true]) {
         paste.connect_activate(glib::clone!(
             #[strong] state,
             #[weak] window,
             move |_, _| paste_settings(&state, &window, ask)
         ));
-        window.add_action(&paste);
+        window.add_action(paste);
     }
 
     for action in [&edit, &rate, &flag, &delete_photos] {
@@ -252,7 +262,7 @@ pub(super) fn install_photo_menu(state: &App, window: &adw::ApplicationWindow) {
     install_photo_menu_popover(state, menu);
 }
 
-fn photo_menu_model(state: &App) -> gio::Menu {
+pub(super) fn photo_menu_model(state: &App) -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("Edit"), Some("win.photo-edit"));
 

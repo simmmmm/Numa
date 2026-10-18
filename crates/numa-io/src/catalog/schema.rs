@@ -390,6 +390,16 @@ CREATE TABLE IF NOT EXISTS positions (
     longitude REAL NOT NULL
 );
 
+-- HOME-051: photographs of a Numa Home library whose originals are not on
+-- this computer: each one's id on the server and the original's size. The
+-- row in `photos` is ordinary; this says its file is not meant to be there,
+-- so a scan neither prunes it nor counts it, until the file is found.
+CREATE TABLE IF NOT EXISTS at_home (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    id       TEXT NOT NULL,
+    size     INTEGER NOT NULL DEFAULT 0
+);
+
 -- GEOM-005: Auto's read of a photograph (`auto::scene::Scene`), in the frame
 -- as shot rather than the cropped one `found` is of, so the two are kept
 -- apart: its readings as JSON and the segmentation's grid as `found` keeps

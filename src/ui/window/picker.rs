@@ -145,6 +145,7 @@ pub(super) fn choose_place(state: &App, place: Place) {
     }
 
     state.libraries.filter.borrow_mut().in_one_library();
+    let library = matches!(place, Place::Library(_));
     match place {
         Place::Everywhere => state.libraries.filter.borrow_mut().all_libraries = true,
         Place::Album(key) => state.libraries.filter.borrow_mut().album = Some(key),
@@ -157,6 +158,10 @@ pub(super) fn choose_place(state: &App, place: Place) {
     reload_grid(state);
 
     offer_clocks(state);
+
+    if library {
+        home_sync::opened(state);
+    }
 }
 
 pub(super) fn rescan_everywhere(state: &App) {

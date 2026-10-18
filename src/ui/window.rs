@@ -59,7 +59,9 @@ mod cards;
 mod exporting;
 mod home;
 mod home_sync;
+mod home_fetch;
 mod startup;
+mod self_test;
 mod places;
 mod cullbar;
 mod busy;
@@ -154,6 +156,7 @@ use zoom::*;
 use cards::*;
 use busy::*;
 use header::*;
+use self_test::*;
 use libraries_dialog::*;
 use people::*;
 use desktop::*;
@@ -199,6 +202,7 @@ use info::*;
 use open::*;
 use mask_toolbar::*;
 pub use header::show_app_about;
+pub use self_test::{request_self_test, self_test_failed};
 
 const GRID_THUMB_EDGE: u32 = numa::io::thumbs::LIBRARY_EDGE;
 
@@ -344,6 +348,7 @@ struct App {
 impl App {
 
     fn toast(&self, message: &str) {
+        self_test::told(message);
         self.toasts.add_toast(adw::Toast::new(&glib::markup_escape_text(message)));
     }
 }

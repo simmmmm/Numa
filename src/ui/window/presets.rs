@@ -649,7 +649,14 @@ pub(super) fn fill_presets_page(state: &App) {
     }
     page.append(&card);
     refresh_strength(state);
+    let browser = preset_browser(state, || {});
+    browser.set_vexpand(true);
 
+    browser.set_margin_top(6);
+    page.append(&browser);
+}
+
+pub(super) fn preset_ends() -> gtk::Box {
     let save = gtk::Button::from_icon_name("list-add-symbolic");
     save.set_tooltip_text(Some("Save Settings as Preset…"));
     save.set_action_name(Some("win.preset-save"));
@@ -658,12 +665,12 @@ pub(super) fn fill_presets_page(state: &App) {
         &[("Import Presets…", "win.preset-import"), ("Import a Folder of Presets…", "win.preset-import-folder")],
         &[("Open Presets Folder", "win.preset-folder")],
     ]);
-    let label = section_row("Presets", &[save.upcast_ref(), more.upcast_ref()]);
-    label.set_margin_bottom(6);
-    page.append(&label);
-    let browser = preset_browser(state, || {});
-    browser.set_vexpand(true);
-    page.append(&browser);
+    let ends = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    for end in [save.upcast_ref::<gtk::Widget>(), more.upcast_ref()] {
+        end.add_css_class("label-action");
+        ends.append(end);
+    }
+    ends
 }
 
 thread_local! {

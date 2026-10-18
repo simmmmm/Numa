@@ -85,7 +85,6 @@ pub(super) fn offer_additional_files(state: &App) {
     if any || state.catalog.recall::<bool>(OFFERED_MODELS).unwrap_or(false) {
         return;
     }
-    state.catalog.remember(OFFERED_MODELS, &true);
     let banner = &state.grid.extras_banner;
     banner.set_title("Some tools need extra files: Select, Faces, AI Denoise");
     banner.set_button_label(Some("Download…"));
@@ -195,8 +194,10 @@ fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.set_child(Some(&view));
 
     later.connect_clicked(glib::clone!(
+        #[strong] state,
         #[weak] dialog,
         move |_| {
+            state.catalog.remember(OFFERED_MODELS, &true);
             dialog.close();
         }
     ));
@@ -204,6 +205,7 @@ fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
         #[strong] state,
         #[weak] dialog,
         move |_| {
+            state.catalog.remember(OFFERED_MODELS, &true);
             dialog.close();
 
             let cancel = Cancel::default();
@@ -245,7 +247,6 @@ pub(super) fn ask_for(state: &App, model: &str, heading: &str, body: &str, then:
     let alert = adw::AlertDialog::new(Some(heading), Some(body));
     alert.add_response("later", "Not Now");
     alert.add_response("download", &format!("Download {} MB", megabytes(&files)));
-    alert.set_response_appearance("download", adw::ResponseAppearance::Suggested);
 
     alert.set_close_response("later");
     alert.connect_response(Some("download"), glib::clone!(

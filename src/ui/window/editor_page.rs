@@ -4,11 +4,6 @@ pub(super) fn build_editor_page(state: &App) -> gtk::Box {
     let page = state.editor_page.page.clone();
 
     fill_header(state);
-    page.append(&key_hint(
-        state,
-        "hint-editor-keys",
-        "Hold Space to compare with the original · double-click a slider to reset it · I shows the camera's details",
-    ));
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
@@ -242,25 +237,11 @@ pub(super) fn build_crumbs(state: &App) -> gtk::Box {
     crumbs.add_css_class("breadcrumbs");
     crumbs.set_halign(gtk::Align::Center);
 
-    for (crumb, tooltip) in [
-        (&state.editor_page.library_crumb, "Back to the library"),
-        (&state.editor_page.photo_crumb, "The whole photograph"),
-    ] {
-        crumb.add_css_class("flat");
-        crumb.set_tooltip_text(Some(tooltip));
-
-        crumb.set_can_shrink(true);
+    for crumb in [&state.editor_page.library_crumb, &state.editor_page.photo_crumb] {
+        crumb.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        whole_on_hover(crumb);
     }
-
-    state.editor_page.library_crumb.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| close_editor(&state)
-    ));
-
-    state.editor_page.photo_crumb.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| select_mask(&state, None)
-    ));
+    state.editor_page.library_crumb.add_css_class("crumb-quiet");
 
     crumbs.append(&libraries_crumb(state));
     crumbs.append(&crumb_arrow());
@@ -275,15 +256,6 @@ pub(super) fn build_crumbs(state: &App) -> gtk::Box {
     info.add_css_class("dim-label");
     name_icon_buttons(info.upcast_ref());
     crumbs.append(info);
-
-    let mask = &state.editor_page.mask_crumb;
-    mask.append(&crumb_arrow());
-    state.editor_page.mask_crumb_label.add_css_class("mask-crumb");
-    state.editor_page.mask_crumb_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    state.editor_page.mask_crumb_label.set_max_width_chars(24);
-    mask.append(&state.editor_page.mask_crumb_label);
-    mask.set_visible(false);
-    crumbs.append(mask);
     crumbs
 }
 
@@ -306,9 +278,9 @@ pub(super) fn build_mask_banner(state: &App) -> gtk::Box {
     words.set_ellipsize(gtk::pango::EllipsizeMode::End);
     banner.append(&words);
 
-    let eye = state.editor_page.banner_eye.clone();
-    eye.add_css_class("flat");
-    eye.connect_toggled(glib::clone!(
+    let power = state.editor_page.banner_power.clone();
+    power.add_css_class("flat");
+    power.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
             if state.applying.get() {
@@ -319,7 +291,7 @@ pub(super) fn build_mask_banner(state: &App) -> gtk::Box {
             }
         }
     ));
-    banner.append(&eye);
+    banner.append(&power);
     banner.set_visible(false);
     banner
 }
@@ -356,7 +328,12 @@ pub(super) fn refresh_crumbs(state: &App) {
         None => None,
     };
     state.editor_page.photo_crumb.set_label(name.as_deref().unwrap_or("\u{2014}"));
+
+    keep_whole(&state.editor_page.photo_crumb, PHOTO_NAME_MOST);
+    keep_whole(&state.editor_page.library_crumb, LIBRARY_NAME_LEAST);
 }
+
+const PHOTO_NAME_MOST: i32 = 200;
 
 pub(super) fn fill_header(state: &App) {
     let start = state.editor_page.header_start.clone();
@@ -401,16 +378,20 @@ fn build_before_group(state: &App) -> gtk::Box {
     ));
     group.append(before);
 
-    let beside = gio::Menu::new();
-    beside.append(Some("Keep as Reference"), Some("editor.reference"));
-    beside.append(Some("Compare with Camera"), Some("editor.camera"));
     let more = gtk::MenuButton::new();
     more.set_icon_name("pan-down-symbolic");
     more.set_tooltip_text(Some("Compare beside it: a reference frame, or the camera's own rendering"));
-    more.set_menu_model(Some(&beside));
+    more.set_menu_model(Some(&beside_menu()));
     more.add_css_class("before-more");
     group.append(&more);
     group
+}
+
+pub(super) fn beside_menu() -> gio::Menu {
+    let beside = gio::Menu::new();
+    beside.append(Some("Keep as Reference"), Some("editor.reference"));
+    beside.append(Some("Compare with Camera"), Some("editor.camera"));
+    beside
 }
 
 pub(super) fn toggle_info(state: &App) {
@@ -590,17 +571,15 @@ pub(super) struct State {
 
     pub(super) mask_name_label: gtk::Label,
 
-    pub(super) mask_crumb: gtk::Box,
-    pub(super) mask_crumb_label: gtk::Label,
-
     pub(super) page: gtk::Box,
     pub(super) strip_line: gtk::Separator,
 
     pub(super) viewport: gtk::Overlay,
 
-    pub(super) banner_eye: gtk::ToggleButton,
-    pub(super) library_crumb: gtk::Button,
-    pub(super) photo_crumb: gtk::Button,
+    pub(super) banner_power: gtk::ToggleButton,
+
+    pub(super) library_crumb: gtk::Label,
+    pub(super) photo_crumb: gtk::Label,
 
     pub(super) header_start: gtk::Box,
     pub(super) header_end: gtk::Box,
@@ -625,14 +604,12 @@ impl State {
             banner: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             banner_label: gtk::Label::new(None),
             mask_name_label: gtk::Label::new(None),
-            mask_crumb: gtk::Box::new(gtk::Orientation::Horizontal, 2),
-            mask_crumb_label: gtk::Label::new(None),
             page: gtk::Box::new(gtk::Orientation::Vertical, 0),
             viewport: gtk::Overlay::new(),
             strip_line: gtk::Separator::new(gtk::Orientation::Horizontal),
-            banner_eye: gtk::ToggleButton::new(),
-            library_crumb: gtk::Button::new(),
-            photo_crumb: gtk::Button::new(),
+            banner_power: gtk::ToggleButton::new(),
+            library_crumb: gtk::Label::new(None),
+            photo_crumb: gtk::Label::new(None),
             header_start: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             header_end: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             photo_menu: gio::Menu::new(),

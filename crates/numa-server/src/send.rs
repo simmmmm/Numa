@@ -58,18 +58,26 @@ pub async fn send(
     if !numa_io::raw::is_supported(FilePath::new(&name)) {
         return Err(Fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("{name} is not a photograph Numa reads.")));
     }
-    let sha256 = headers
-        .get("x-numa-sha256")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
-        .ok_or_else(|| Fail::bad("Send the file's SHA-256, in hex, as X-Numa-Sha256."))?;
+
+    let told = match headers.get("x-numa-sha256") {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .map(|value| value.trim().to_lowercase())
+                .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+                .ok_or_else(|| Fail::bad("Send the file's SHA-256, in hex, as X-Numa-Sha256."))?,
+        ),
+    };
     let hinted: Option<i64> = headers.get("x-numa-taken").and_then(|value| value.to_str().ok()).and_then(|value| value.trim().parse().ok());
     let folder = into.dir.as_deref().map(folder_in).transpose()?;
     let library = destination(&server, &me.name, into.library).await?;
 
-    if let Some(id) = server.store.sent(&me.name, &sha256, library.id).map(|kept| library.path.join(kept)).and_then(|path| server.home.at(&path)) {
-        return Ok((StatusCode::OK, Json(serde_json::json!({ "id": id, "duplicate": true }))).into_response());
+    let already = |sha256: &str| server.store.sent(&me.name, sha256, library.id).map(|kept| library.path.join(kept)).and_then(|path| server.home.at(&path));
+    let duplicate = |id: i64| Ok((StatusCode::OK, Json(serde_json::json!({ "id": id, "duplicate": true }))).into_response());
+    if let Some(id) = told.as_deref().and_then(already) {
+        return duplicate(id);
     }
 
     let incoming = library.path.join(numa_io::catalog::LIBRARY_DIR).join("incoming");
@@ -83,10 +91,15 @@ pub async fn send(
             return Err(fail);
         }
     };
-    if got != sha256 {
+    if told.as_ref().is_some_and(|told| *told != got) {
         let _ = tokio::fs::remove_file(&part).await;
         return Err(Fail::bad("The file changed on the way: its SHA-256 is not the one sent with it."));
     }
+    if let Some(id) = already(&got) {
+        let _ = tokio::fs::remove_file(&part).await;
+        return duplicate(id);
+    }
+    let sha256 = got;
 
     let placed = {
         let (library, name, sha256) = (library.clone(), name.clone(), sha256.clone());
@@ -95,6 +108,10 @@ pub async fn send(
     let (target, duplicate) = placed;
     let kept = target.strip_prefix(&library.path).unwrap_or(&target).to_string_lossy().into_owned();
     server.store.note_sent(&me.name, &sha256, library.id, &kept).map_err(Fail::internal)?;
+
+    if let Some(token) = auth::presented(&headers) {
+        server.store.note_arrival(&auth::digest(&token));
+    }
 
     let id = match server.home.at(&target) {
         Some(id) => id,

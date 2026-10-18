@@ -107,6 +107,9 @@ pub(super) fn reload_grid(state: &App) {
         .iter()
         .map(|photo| LazyThumb::new(photo.id, photo.path.clone(), photo.mtime, photo.edited, edge))
         .collect();
+
+    let libraries: std::collections::HashSet<i64> = photos.iter().map(|photo| numa::io::catalog::library_of(photo.id)).collect();
+    *state.grid.at_home.borrow_mut() = libraries.into_iter().flat_map(|library| state.catalog.at_home(library).unwrap_or_default()).collect();
     *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
     state.grid.wall.fill(aspects);
     if timing() {
@@ -194,6 +197,8 @@ pub(super) struct State {
 
     pub(super) bursts: Rc<RefCell<HashMap<(i64, i64), u32>>>,
 
+    pub(super) at_home: Rc<RefCell<HashMap<i64, (String, u64)>>>,
+
     pub(super) header_end: gtk::Box,
 
     pub(super) card_banner: adw::Banner,
@@ -219,6 +224,7 @@ impl State {
             thumbnail_watch: Rc::new(Cell::new(false)),
             offline: adw::Banner::new(""),
             bursts: Rc::default(),
+            at_home: Rc::default(),
             header_end: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             card_banner: adw::Banner::new(""),
             extras_banner: adw::Banner::new(""),

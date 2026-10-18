@@ -25,6 +25,9 @@ mod burst;
 pub use burst::{burst_of, sharper_in_burst};
 
 mod found;
+
+mod at_home;
+pub use at_home::{home_preview, home_thumb, AtHome};
 use schema::{migrate, HOME_SCHEMA, LEGACY_SCHEMA, LIBRARY_SCHEMA};
 
 pub type Measured = (i64, numa_cull::Frame, Option<u32>, Option<f32>, Vec<([f32; people::LENGTH], Option<Vec<u8>>)>);
@@ -472,6 +475,7 @@ impl Catalog {
         back_up_weekly(&conn, &dir);
 
         let open = Rc::new(OpenLibrary { conn, root, offline: false });
+        at_home::stand_in_all(&open);
         self.opened.borrow_mut().insert(library_id, open.clone());
         if let Some(merged) = self.merge_offline_marks(library_id, &open.conn) {
             self.came_back.borrow_mut().insert(library_id, merged);
@@ -850,7 +854,7 @@ impl Catalog {
             .prepare(
                 "SELECT p.id, p.path, p.mtime, p.rating, p.flag, p.taken \
                  FROM photos p LEFT JOIN analysis a ON a.photo_id = p.id \
-                 WHERE a.photo_id IS NULL OR a.version <> ?1 \
+                 WHERE (a.photo_id IS NULL OR a.version <> ?1) AND p.id NOT IN (SELECT photo_id FROM at_home) \
                  ORDER BY COALESCE(p.taken, p.mtime) ASC, p.path ASC",
             )
             .map_err(text)?;
@@ -1536,7 +1540,10 @@ impl Catalog {
         let open = self.library(library.id)?;
         open.connected()?;
 
-        let mut stmt = open.conn.prepare("SELECT path, mtime, camera_time, camera FROM photos").map_err(text)?;
+        let mut stmt = open
+            .conn
+            .prepare("SELECT path, mtime, camera_time, camera FROM photos WHERE id NOT IN (SELECT photo_id FROM at_home)")
+            .map_err(text)?;
         let rows = stmt
             .query_map([], |row| {
                 let stamp = row.get::<_, Option<String>>(3)?.map(|camera| crate::exif::Stamp { taken: row.get(2).ok().flatten(), camera });
@@ -1591,7 +1598,8 @@ impl Catalog {
 
         if complete && !seen.is_empty() {
             let stale: Vec<(i64, String, i64)> = {
-                let mut stmt = tx.prepare("SELECT id, path, mtime FROM photos").map_err(text)?;
+
+                let mut stmt = tx.prepare("SELECT id, path, mtime FROM photos WHERE id NOT IN (SELECT photo_id FROM at_home)").map_err(text)?;
                 let rows = stmt
                     .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))
                     .map_err(text)?;
@@ -1621,6 +1629,7 @@ impl Catalog {
             }
         }
 
+        at_home::found_here(&open, &tx, &seen)?;
         tx.commit().map_err(text)?;
         if changes.any() {
             self.keep_for_offline(library.id);

@@ -153,13 +153,8 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     });
     dialog.set_content_width(480);
     dialog.set_content_height(720);
-    let header = adw::HeaderBar::new();
-    header.set_show_start_title_buttons(false);
-    header.set_show_end_title_buttons(false);
-    let cancel = gtk::Button::with_label("Cancel");
     let export = primary_button("Export");
-    header.pack_start(&cancel);
-    header.pack_end(&export);
+    let header = dialog_header(&dialog, &export);
     let clamp = adw::Clamp::new();
     clamp.set_child(Some(&controls.page));
     clamp.set_margin_top(12);
@@ -182,12 +177,6 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
         move |how| controls.show_home(how, &group, &export)
     ));
 
-    cancel.connect_clicked(glib::clone!(
-        #[weak] dialog,
-        move |_| {
-            dialog.close();
-        }
-    ));
     export.connect_clicked(glib::clone!(
         #[strong] state,
         #[strong] jobs_holder,
@@ -233,6 +222,8 @@ struct Controls {
     quality: adw::SpinRow,
     size: adw::ComboRow,
     sharpen: adw::SwitchRow,
+
+    sharpen_wish: Rc<Cell<bool>>,
     hdr: adw::SwitchRow,
     metadata: adw::SwitchRow,
     strip_location: adw::SwitchRow,
@@ -269,7 +260,7 @@ impl Controls {
         }
         let size = combo("Size", &sizes.iter().map(String::as_str).collect::<Vec<_>>());
 
-        let sharpen = switch("Sharpen after resizing", "Puts back the edge the reduction took off");
+        let sharpen = switch("Sharpen after resizing", "");
         let (proof, profiles) = proof_row();
         let hdr = switch("HDR", "Brighter highlights on screens that can show them");
 
@@ -324,6 +315,7 @@ impl Controls {
             quality,
             size,
             sharpen,
+            sharpen_wish: Rc::new(Cell::new(false)),
             hdr,
             metadata,
             strip_location,
@@ -360,7 +352,7 @@ impl Controls {
                 at if at <= EDGES.len() => export::Size::LongEdge(EDGES[at - 1]),
                 _ => export::Size::Double,
             },
-            sharpen: self.sharpen.is_active(),
+            sharpen: self.sharpen_wish.get(),
             metadata: self.metadata.is_active(),
             folder: Some(self.destination.borrow().clone()),
             space: ColourSpace::ALL.get(self.space.selected() as usize).copied().unwrap_or_default(),
@@ -391,7 +383,7 @@ impl Controls {
 
             export::Size::Double => (numa::io::upscale::is_installed() as u32) * (EDGES.len() as u32 + 1),
         });
-        self.sharpen.set_active(settings.sharpen);
+        self.sharpen_wish.set(settings.sharpen);
         self.hdr.set_active(settings.hdr);
         self.metadata.set_active(settings.metadata);
         self.strip_location.set_active(settings.strip_location);
@@ -435,7 +427,16 @@ impl Controls {
         }
         self.space.set_sensitive(!dng && !proofed);
         let reduced = (1..=EDGES.len() as u32).contains(&self.size.selected());
-        self.sharpen.set_sensitive(!dng && reduced);
+
+        let sharpens = !dng && reduced;
+        self.sharpen.set_sensitive(sharpens);
+        self.sharpen.set_active(sharpens && self.sharpen_wish.get());
+
+        self.sharpen.set_subtitle(match (dng, reduced) {
+            (true, _) => "Not for a DNG, which is the raw data",
+            (false, true) => "Puts back the edge the reduction took off",
+            (false, false) => "Only when Size is smaller than the original",
+        });
         self.size.set_subtitle(match self.size.selected() as usize > EDGES.len() {
             true => "Minutes a photograph, on the graphics card or off it",
             false => "",
@@ -457,7 +458,7 @@ impl Controls {
         let mut group = self.page.first_child();
         while let Some(widget) = group {
             if widget != *home.upcast_ref::<gtk::Widget>() {
-                widget.set_visible(how != Some(home::How::Originals));
+                widget.set_sensitive(how != Some(home::How::Originals));
             }
             group = widget.next_sibling();
         }
@@ -465,6 +466,12 @@ impl Controls {
     }
 
     fn connect_sensitivity(&self) {
+        let wish = self.sharpen_wish.clone();
+        self.sharpen.connect_active_notify(move |row| {
+            if row.is_sensitive() {
+                wish.set(row.is_active());
+            }
+        });
         for row in [&self.format, &self.space, &self.size, &self.proof] {
             row.connect_selected_notify(glib::clone!(
                 #[strong(rename_to = controls)] self,
@@ -551,7 +558,6 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
             ask.set_extra_child(Some(&group));
             ask.add_response("cancel", "Cancel");
             ask.add_response("save", "Save");
-            ask.set_response_appearance("save", adw::ResponseAppearance::Suggested);
             ask.set_default_response(Some("save"));
             ask.connect_response(
                 Some("save"),

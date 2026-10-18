@@ -2,51 +2,32 @@
    first: the photograph is the brightest thing on screen, white is the one
    accent, spent on what is chosen. */
 :root {
-  --ground-window: #242424;
-  --ground-view: #1e1e1e;
-  --ground-raised: #303030;
-  --ground-sheet: #1b1b1b;
-  --ground-page: #141414;
-  --ground-photo: #0e0e0e;
-  --ground-chip: #2a2a2a;
-  --ground-card: rgba(20, 20, 20, 0.7);
-  --ink: #ffffff;
-  --name: #bdbdbd;
-  --label: #8d8d8d;
-  --rule: rgba(255, 255, 255, 0.1);
-  --accent: #ffffff;
-  --on-accent: #141414;
-  --edge: 16px;
-  --gap: 12px;
-  --system: -apple-system, "SF Pro Text", "Adwaita Sans", Cantarell, system-ui, sans-serif;
-  /* HOME-011: a library's quiet tint — the colour mixer's bands, the one
-     place the design system lets colour sit on a track, brought down to a
-     murmur so the photographs stay the brightest thing. */
-  --tint-0: hsl(205 42% 62%);
-  --tint-1: hsl(30 48% 62%);
-  --tint-2: hsl(150 30% 56%);
-  --tint-3: hsl(330 34% 64%);
-  --tint-4: hsl(55 40% 60%);
-  --tint-5: hsl(265 32% 68%);
-  --tint-6: hsl(180 34% 54%);
-  --tint-7: hsl(0 42% 64%);
-  --ground-hud: rgba(20, 20, 20, 0.55);
+  /* The design system's times (README, Motion): a state's colour is quick,
+     what comes and goes is standard, grid and photograph are one screen. */
   --quick: 120ms ease-out;
   --standard: 200ms ease-out;
+  --standard-out: 160ms ease-out;
+  --screen: 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --blur: blur(12px);
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--ground-page); color: var(--ink); font: 13px/18px var(--system); }
+html, body { margin: 0; background: var(--ground-page); color: var(--ink); font: 13px/18px var(--font-system); }
 body { min-height: 100vh; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Text chosen is the accent, thinned: no system blue remains. */
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+/* A tap is a tap, not the start of a double-tap zoom. */
+button, a, input, select { touch-action: manipulation; }
 
 /* The small grey spaced section label. */
 .section-label { font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 1.1px; text-transform: uppercase; color: var(--label); }
 .caption { font-size: 12px; line-height: 16px; color: var(--label); font-variant-numeric: tabular-nums; }
 .body { color: var(--label); max-width: 34em; }
+.body.fault { color: var(--name); }
 
 /* Buttons: one white primary per screen; the rest grey chips. */
 .primary, .chip, .round {
@@ -57,9 +38,13 @@ button, input, select { font: inherit; color: inherit; }
 .primary { background: var(--accent); color: var(--on-accent); height: 40px; border-radius: 20px; padding: 0 22px; }
 .chip.chosen { background: var(--accent); color: var(--on-accent); }
 .chip:active, .primary:active, .round:active { opacity: 0.7; }
-.chip .x { margin-left: 6px; opacity: 0.7; }
-.round { width: 44px; height: 44px; padding: 0; border-radius: 22px; display: inline-grid; place-items: center; background: var(--ground-card); }
-.round svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.chip .x { margin-left: 6px; opacity: 0.7; display: inline-grid; vertical-align: -2px; }
+.chip .x svg { width: 12px; height: 12px; }
+/* On the photograph: one ground for all of it, the HUD's with its blur — the
+   corner buttons, the bar, the value, the badge, the chips (P4). */
+.round, .hud, .zoom-badge, .loupe-bar, .viewer .open-in-numa { background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.round { width: 44px; height: 44px; padding: 0; border-radius: var(--radius-hud); display: inline-grid; place-items: center; }
+.round svg { width: 20px; height: 20px; }
 .round.chosen { background: var(--accent); color: var(--on-accent); }
 
 input[type=text], input[type=password], input[type=search], select {
@@ -78,22 +63,31 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
 
 /* The header: the mark, the places, search, the account. */
 header {
-  position: sticky; top: 0; z-index: 5; background: rgba(20, 20, 20, 0.92); backdrop-filter: blur(12px);
+  position: sticky; top: 0; z-index: 5; background: var(--ground-bar); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   display: flex; align-items: center; gap: var(--gap); padding: 10px var(--edge); border-bottom: 1px solid var(--rule);
 }
-header .mark { height: 34px; width: auto; flex: none; cursor: pointer; }
+header .mark { height: 34px; width: auto; flex: none; display: block; }
+header .mark-link { flex: none; border-radius: 8px; }
+header .mark-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 header .search { flex: 1; max-width: 480px; margin-left: auto; }
 header .search input { width: 100%; }
 header .who { flex: none; }
-.menu { position: absolute; right: var(--edge); top: 58px; background: var(--ground-window); border-radius: 10px; padding: 6px; display: grid; min-width: 180px; box-shadow: 0 8px 20px rgba(0,0,0,.6); z-index: 6; }
+header .add { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+header .add svg { width: 16px; height: 16px; flex: none; }
+/* HOME-052: files dragged over the page: the whole window says where they go.
+   Only the window takes the drag, so leaving it is the one dragleave. */
+.dropzone { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: var(--edge);
+  background: var(--ground-bar); outline: 2px dashed var(--accent); outline-offset: -12px; }
+.dropzone > * { pointer-events: none; }
+.menu { position: absolute; right: var(--edge); top: 58px; background: var(--ground-window); border-radius: var(--radius-card); padding: 6px; display: grid; min-width: 180px; box-shadow: var(--shadow-print-front); z-index: 6; }
 .menu button, .menu a { background: none; border: 0; text-align: left; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-decoration: none; color: var(--ink); }
-.menu button:hover, .menu a:hover { background: var(--ground-chip); }
 .menu .section-label { padding: 6px 10px 2px; }
+.menu button:focus-visible, .menu a:focus-visible { outline-offset: -2px; }
 
 main { padding: 0 var(--edge) 48px; }
 
 /* HOME-009: the card bar, under the header on every page. */
-.cardbar { margin: 12px var(--edge) 0; padding: 12px 16px; border-radius: 10px; background: var(--ground-window); display: grid; gap: 12px; }
+.cardbar, .banner { margin: 12px var(--edge) 0; padding: 12px 16px; border-radius: var(--radius-card); background: var(--ground-window); display: grid; gap: 12px; }
 .cardbar .line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
 .cardbar .line.progress { justify-content: flex-start; }
 /* The import's meter: its own width, filled as far as it is; the numbers
@@ -105,6 +99,25 @@ main { padding: 0 var(--edge) 48px; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0 4px; }
 .filters .count { margin-left: auto; }
 .filters select { height: 32px; border-radius: 16px; }
+/* UX-081: the One filter (P10). Filter, then All · Picks · ★ 3+ (the chosen
+   white), then what else narrows the page with its ×, then how many. */
+.filters.one .chip { display: inline-flex; align-items: center; }
+.filters.one .chip.filter { gap: var(--space-6); }
+.filters.one .chip.filter svg { width: 14px; height: 14px; }
+.filters.one .preset:not(.chosen) { color: var(--name); }
+.filters.one .chip .x { color: var(--label); opacity: 1; }
+.filters.one .divider { width: 1px; height: 20px; background: var(--rule); flex: none; }
+.rated { display: inline-flex; align-items: center; gap: var(--space-4); }
+.rated svg { width: 12px; height: 12px; fill: currentColor; }
+.filter-menu { min-width: 240px; }
+.filter-menu button { display: flex; align-items: center; gap: var(--space-12); }
+.filter-menu button .caption { margin-left: auto; }
+.filter-menu button > svg { width: 14px; height: 14px; flex: none; color: var(--label); }
+.filter-menu .back { color: var(--name); }
+.filter-menu .back > svg { margin-left: calc(-1 * var(--space-4)); }
+.filter-menu .town { padding-left: var(--space-20); }
+.filter-menu .note { padding: var(--space-6) var(--space-10); max-width: 260px; }
+.filter-menu .chosen .caption, .filter-menu .chosen > svg { color: inherit; }
 
 /* The timeline: a month at a time, rows justified to the width. */
 .month { padding-top: 22px; }
@@ -113,7 +126,25 @@ main { padding: 0 var(--edge) 48px; }
 .tile { -webkit-touch-callout: none; user-select: none; position: absolute; display: block; overflow: hidden; border-radius: 4px; background: var(--ground-raised); cursor: pointer; padding: 0; border: 0; }
 .tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); }
 .tile img.in { opacity: 1; }
-.tile .stars { position: absolute; left: 6px; bottom: 4px; font-size: 11px; line-height: 14px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.85); }
+/* UX-081: what is set on a photograph, said on it as every client says it
+   (TileMarks): small dark pills at its corners, 11/700 in tabular figures —
+   the judgement bottom left, the edited dot bottom right, a burst's count top
+   right; what Numa noticed is said in the loupe only. A reject is its cross in the
+   reject red and the photograph dimmed; red is nowhere else on a tile. */
+.tile .mark { position: absolute; display: inline-flex; align-items: center; gap: var(--space-4); padding: var(--space-2) var(--space-6); border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surround-black) 62%, transparent); color: var(--ink); font-size: 11px; line-height: 14px; font-weight: 700;
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; transition: opacity var(--quick); }
+.tile .mark svg { width: 11px; height: 11px; flex: none; }
+.tile .judged { left: var(--space-6); bottom: var(--space-6); }
+.tile .judged svg { fill: currentColor; }
+.tile .judged.rejected { color: var(--reject); }
+.tile .judged.rejected svg { fill: none; stroke-width: 2.6; }
+.tile .edited { right: var(--space-6); bottom: var(--space-6); width: 14px; height: 14px; padding: 0; justify-content: center; }
+.tile .edited i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tile .burst { right: var(--space-6); top: var(--space-6); }
+.tile .burst svg { stroke-width: 2.2; }
+.tile.rejected img.in { opacity: 0.35; }
+.tile.tiny .burst { display: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px; padding-top: 12px; }
 .grid .tile { position: relative; aspect-ratio: 1; }
 
@@ -131,9 +162,9 @@ main { padding: 0 var(--edge) 48px; }
 .stack { position: relative; width: 140px; height: 124px; }
 .stack .print { position: absolute; left: 11px; top: 10px; width: 118px; height: 104px; border-radius: 6px; overflow: hidden; background: var(--ground-raised); }
 .stack .print img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.stack .print:nth-child(1) { transform: rotate(-8deg); filter: brightness(0.8); box-shadow: 0 6px 16px rgba(0,0,0,.55); }
-.stack .print:nth-child(2) { transform: rotate(6deg); filter: brightness(0.9); box-shadow: 0 6px 16px rgba(0,0,0,.55); }
-.stack .print:nth-child(3) { box-shadow: 0 8px 20px rgba(0,0,0,.6); }
+.stack .print:nth-child(1) { transform: rotate(-8deg); filter: brightness(var(--print-back)); box-shadow: var(--shadow-print-back); }
+.stack .print:nth-child(2) { transform: rotate(6deg); filter: brightness(var(--print-mid)); box-shadow: var(--shadow-print-back); }
+.stack .print:nth-child(3) { box-shadow: var(--shadow-print-front); }
 
 /* Naming the faces nobody has named. */
 .unnamed-label { padding-top: 36px; }
@@ -149,34 +180,101 @@ main { padding: 0 var(--edge) 48px; }
 .accounts li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--rule); }
 .accounts form { display: grid; gap: 10px; }
 .accounts label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
+.accounts input[type=checkbox] { accent-color: var(--accent); }
 .accounts .primary { justify-self: start; }
 .cameras { max-width: 680px; }
 .cameras li { align-items: center; gap: 12px; flex-wrap: wrap; }
 .cameras .link { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.filters .by-label { margin-left: 8px; }
 
 /* The photograph large, on the photo ground. */
-.viewer { position: fixed; inset: 0; z-index: 10; background: var(--ground-photo); display: flex; }
+.viewer { position: fixed; inset: 0; z-index: 10; background: var(--ground-photo); display: flex; animation: fade-in var(--screen); }
+.viewer:focus { outline: none; }
+/* Closed, it stays a moment over the page and fades (see closeViewer). */
+.viewer.leaving { opacity: 0; transition: opacity var(--screen); pointer-events: none; }
+@keyframes fade-in { from { opacity: 0; } }
 .viewer .stage { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
 .viewer .stage > img { max-width: none; flex: none; display: block; user-select: none; -webkit-user-drag: none; transform-origin: 0 0; cursor: zoom-in; }
 .viewer .stage.zoomed > img { cursor: grab; }
 .viewer .stage.zoomed > img:active { cursor: grabbing; }
 /* The floating value: one name, one number, top centre on the photograph. */
 .hud { position: absolute; top: var(--edge); left: 50%; transform: translateX(-50%); z-index: 3; display: grid; justify-items: center; gap: 2px;
-  padding: 8px 18px; border-radius: 22px; background: rgba(20, 20, 20, 0.55); backdrop-filter: blur(12px); pointer-events: none; }
+  padding: 8px 18px; border-radius: var(--radius-hud); pointer-events: none; }
 .hud .section-label { color: var(--name); font-size: 12px; line-height: 16px; }
+.stage.zoomed .hud { top: calc(var(--edge) + 44px); }
+/* Zoomed: how far, at the top centre, where states and values are (P15). */
+.zoom-badge { position: absolute; top: var(--edge); left: 50%; transform: translateX(-50%); z-index: 3; padding: 6px 14px; border-radius: var(--radius-hud); pointer-events: none;
+  font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
 .hud .value { font-size: 26px; line-height: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
-.info .marks { display: flex; gap: 2px; margin-top: 10px; }
-.info .star { background: none; border: 0; padding: 2px; font-size: 20px; line-height: 24px; color: var(--label); opacity: 0.45; cursor: pointer; transition: opacity var(--quick), color var(--quick); }
-.info .star:hover { opacity: 0.8; }
-.info .star.set { color: var(--accent); opacity: 1; }
-.info .chips { margin-top: 8px; }
+/* Edit: in the info panel's place, the sliders slim — a hairline, filled in
+   white from nought to the value, with a white dot. */
+.edit .tools { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.edit .tools.foot { margin-top: 22px; }
+.edit .chips + .caption { margin-top: 6px; }
+.edit .slider { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 8px; margin-top: 6px; cursor: default; }
+.edit .slider .name { color: var(--name); }
+.edit .slider .value { font-variant-numeric: tabular-nums; color: var(--ink); }
+.edit .slider input { grid-column: 1 / -1; width: 100%; height: 20px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer;
+  --from: 50%; --to: 50%; --line: linear-gradient(to right, var(--track) var(--from), var(--accent) var(--from) var(--to), var(--track) var(--to)); }
+.edit .slider input::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: var(--line); }
+.edit .slider input::-moz-range-track { height: 2px; border-radius: 1px; background: var(--line); }
+.edit .slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -6px; border-radius: 7px; background: var(--accent); border: 0; }
+.edit .slider input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 7px; background: var(--accent); border: 0; }
+.edit .slider input:focus-visible { outline-offset: 0; }
+
+/* Crop & Straighten: the whole frame on the photo ground, the box over it
+   in a white hairline with its corners, the rest dimmed; thirds while it
+   moves. */
+.viewer.cropping .stage > img, .viewer.cropping .loupe-bar, .viewer.cropping .step, .viewer.cropping .hud, .viewer.cropping .noticed { display: none; }
+.viewer.cropping { user-select: none; -webkit-user-select: none; }
+.crop-tool { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; overflow: hidden; background: var(--ground-photo); }
+.crop-frame { position: relative; }
+.crop-frame img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.crop-box { position: absolute; box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--ground-photo) 72%, transparent); outline: 1px solid color-mix(in srgb, var(--ink) 85%, transparent); cursor: move; touch-action: none; }
+.crop-tool.dragging .crop-box { --third: color-mix(in srgb, var(--ink) 40%, transparent); background:
+  linear-gradient(to right, transparent calc(100% / 3 - 0.5px), var(--third) calc(100% / 3 - 0.5px) calc(100% / 3 + 0.5px), transparent calc(100% / 3 + 0.5px) calc(200% / 3 - 0.5px), var(--third) calc(200% / 3 - 0.5px) calc(200% / 3 + 0.5px), transparent calc(200% / 3 + 0.5px)),
+  linear-gradient(to bottom, transparent calc(100% / 3 - 0.5px), var(--third) calc(100% / 3 - 0.5px) calc(100% / 3 + 0.5px), transparent calc(100% / 3 + 0.5px) calc(200% / 3 - 0.5px), var(--third) calc(200% / 3 - 0.5px) calc(200% / 3 + 0.5px), transparent calc(200% / 3 + 0.5px)); }
+.crop-box .handle { position: absolute; width: 22px; height: 22px; }
+.crop-box .nw, .crop-box .ne, .crop-box .se, .crop-box .sw { border: 0 solid var(--accent); }
+.crop-box .nw { left: -3px; top: -3px; border-width: 3px 0 0 3px; cursor: nwse-resize; }
+.crop-box .ne { right: -3px; top: -3px; border-width: 3px 3px 0 0; cursor: nesw-resize; }
+.crop-box .se { right: -3px; bottom: -3px; border-width: 0 3px 3px 0; cursor: nwse-resize; }
+.crop-box .sw { left: -3px; bottom: -3px; border-width: 0 0 3px 3px; cursor: nesw-resize; }
+.crop-box .n, .crop-box .s { left: 22px; right: 22px; width: auto; height: 14px; cursor: ns-resize; }
+.crop-box .n { top: -7px; }
+.crop-box .s { bottom: -7px; }
+.crop-box .e, .crop-box .w { top: 22px; bottom: 22px; height: auto; width: 14px; cursor: ew-resize; }
+.crop-box .e { right: -7px; }
+.crop-box .w { left: -7px; }
+.edit .tools .primary { margin-left: auto; }
+
+/* What the keys do, as a bar at the photograph's foot, on the HUD's ground. */
+.loupe-bar { position: absolute; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2; display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 6px 14px; border-radius: 24px; white-space: nowrap; }
+.loupe-bar:empty { display: none; }
+.loupe-bar .stars { display: flex; margin-right: 6px; }
+.loupe-bar .acts { display: flex; align-items: center; gap: 6px; }
+.loupe-bar .star { background: none; border: 0; padding: 3px; color: var(--name); opacity: 0.5; cursor: pointer; display: grid; place-items: center; transition: opacity var(--quick), color var(--quick); }
+.loupe-bar .star svg { width: 20px; height: 20px; }
+.loupe-bar .star.set { color: var(--accent); opacity: 1; }
+.loupe-bar .star.set svg, .round.flag-pick.chosen svg { fill: currentColor; }
+.loupe-bar .round.small { background: none; }
+.loupe-bar .round.small.chosen { background: var(--accent); }
+/* UX-082: the flag and the cross quiet until set, as the stars are and the
+   desktop's bar has them; set, white (chosen is white). */
+.loupe-bar .flag-pick:not(.chosen), .loupe-bar .flag-reject:not(.chosen) { color: var(--name); opacity: 0.5; transition: opacity var(--quick), background var(--quick), color var(--quick); }
+/* UX-082: what Numa saw of the sharpness, a pill at the photograph's top
+   left where what Numa did is kept (PhotoCard): beside the cross, and under
+   it on a phone, where the top row is full. */
+.viewer .noticed { position: absolute; top: calc(var(--edge) + 6px); left: calc(var(--edge) + var(--space-44) + var(--gap)); z-index: 2; padding: 6px 14px; line-height: 20px;
+  border-radius: var(--radius-hud); background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  font-weight: 600; color: var(--ink); white-space: nowrap; pointer-events: none; animation: fade-in var(--standard); }
+@media (max-width: 720px) { .viewer .noticed { top: calc(var(--edge) + var(--space-44) + var(--space-8)); left: var(--edge); } }
 .viewer .corner { position: absolute; top: var(--edge); display: flex; gap: var(--gap); z-index: 2; }
 .viewer .corner.left { left: var(--edge); }
 .viewer .corner.right { right: var(--edge); }
 .viewer .open-in-numa { display: inline-flex; align-items: center; text-decoration: none; color: var(--ink); align-self: center; }
 .viewer .step { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; opacity: 0; transition: opacity var(--standard); }
-.viewer .stage:hover .step { opacity: 1; }
+.viewer .step:focus-visible { opacity: 1; }
 .viewer .step.back { left: var(--edge); }
 .viewer .step.on { right: var(--edge); }
 .viewer .menu { top: 68px; }
@@ -206,12 +304,13 @@ header .activity .what { color: var(--name); font-weight: 600; overflow: hidden;
 .job .name { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--name); }
 .job.running .name { color: var(--ink); }
 /* The slim slider's track: a 2px hairline, its fill in the accent. */
-.meter { height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.11); overflow: hidden; }
-.meter .fill { height: 100%; background: var(--accent); transition: width var(--standard); }
-.job.idle .meter .fill, .job.waits .meter .fill, .job.paused .meter .fill, .job.waiting .meter .fill { background: rgba(255, 255, 255, 0.35); }
+.meter { height: var(--track-height); border-radius: var(--radius-track); background: var(--track); overflow: hidden; }
+.meter .fill { width: 100%; height: 100%; background: var(--accent); transform-origin: left; transition: transform var(--standard); }
+.job.idle .meter .fill, .job.waits .meter .fill, .job.paused .meter .fill, .job.waiting .meter .fill { background: var(--rest-tick); }
 .numa-saw { font-style: italic; }
 .chip.numa-saw { background: none; border: 1px solid var(--name); color: var(--ink); }
-.place .name .tint, .scrub-libraries i { display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin-right: 7px; vertical-align: 1px; }
+/* A library's tint is a mark of 8px at most, only where libraries mix: the places list and the scrubber (1A). */
+.scrub-libraries i { display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin-right: 7px; vertical-align: 1px; }
 
 /* HOME-011: the scrubber. The year labels left of a tinted track, a white
    thumb on it, and the floating value with the month while it is held. */
@@ -221,9 +320,9 @@ main.scrubbed { padding-right: 76px; }
 /* Room at the foot too, above a phone's home bar or a browser's own, so
    the oldest month is in sight and in reach. */
 .scrub-track, .scrub-years { position: absolute; top: 16px; bottom: max(24px, calc(env(safe-area-inset-bottom) + 16px)); }
-.scrub-track { right: 14px; width: 6px; border-radius: 3px; background: var(--ground-raised); overflow: hidden; transition: width var(--quick), right var(--quick); }
-.scrubber:hover .scrub-track, .scrubber.active .scrub-track { width: 10px; right: 12px; }
-.scrub-month { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.35); }
+.scrub-track { right: 14px; width: 6px; border-radius: 3px; background: var(--ground-raised); overflow: hidden; transition: transform var(--quick); }
+.scrubber.active .scrub-track { transform: scaleX(1.3333); }
+.scrub-month { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-shadow: inset 0 -1px 0 var(--ground-page); }
 .scrub-month > div { min-height: 0; background: var(--label); opacity: 0.85; }
 .scrub-years { left: 0; right: 32px; }
 .scrub-year { position: absolute; right: 0; transform: translateY(-2px); font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 1.1px; color: var(--label); font-variant-numeric: tabular-nums; }
@@ -238,21 +337,59 @@ main.scrubbed { padding-right: 76px; }
 /* The places, in one list. Wide: down the side, under the header, the page
    beside it. Narrow: four tabs and More along the foot, gone while choosing
    so the selection bar has the foot to itself. */
-:root { --head: 57px; --side: 200px; --foot: calc(56px + env(safe-area-inset-bottom)); }
+:root { --head: 57px; --side: 256px; --foot: calc(56px + env(safe-area-inset-bottom)); }
 header { height: var(--head); }
 .places-nav { z-index: 5; display: grid; align-content: start; gap: 2px; }
 .place-link { border: 0; background: none; color: var(--name); font-weight: 600; text-align: left; height: 36px; padding: 0 14px; border-radius: 18px; cursor: pointer; white-space: nowrap;
   transition: background var(--quick), color var(--quick); }
-.place-link:hover { background: var(--ground-chip); color: var(--ink); }
 .place-link.chosen { background: var(--accent); color: var(--on-accent); }
 .places-nav .section-label { padding: 18px 14px 6px; }
 .places-nav .more { display: none; }
-.menu .chosen { background: var(--ground-chip); }
+/* HOME-031: a place that folds open. Its row is one pill with the arrow at
+   its end; under it, on a hairline, every library with its tint, every
+   person with their face, every album, and how many photographs. The row
+   stays in sight while its list scrolls by. */
+.place-head { position: sticky; top: 0; z-index: 1; display: grid; background: var(--ground-page); }
+.place-fold { position: absolute; right: 4px; top: 4px; width: 28px; height: 28px; border-radius: 14px; border: 0; padding: 0; background: none; color: var(--label); cursor: pointer;
+  display: grid; place-items: center; transition: background var(--quick), color var(--quick); }
+.place-link.chosen + .place-fold { color: var(--on-accent); }
+.place-fold svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform var(--standard); }
+.place-group.open .place-fold svg { transform: rotate(90deg); }
+.place-entries { display: none; }
+.place-group.open .place-entries { display: grid; margin: 4px 0 10px; animation: drop-in var(--standard); }
+@keyframes drop-in { from { opacity: 0; transform: translateY(-4px); } }
+.place-entries .rail { display: grid; gap: 1px; margin-left: 16px; padding-left: 4px; border-left: 1px solid var(--rule); }
+.place-entry { border: 0; background: none; color: var(--name); text-align: left; height: 30px; padding: 0 12px 0 6px; border-radius: 15px; cursor: pointer;
+  display: flex; gap: 10px; align-items: center; min-width: 0; transition: background var(--quick), color var(--quick); }
+.place-entry .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.place-entry .caption { font-size: 11px; transition: color var(--quick); }
+.place-entry .tint { flex: none; width: 8px; height: 8px; margin: 0 4px; border-radius: 4px; background: var(--label); }
+.place-entry .face { flex: none; width: 16px; height: 16px; border-radius: 8px; object-fit: cover; background: var(--ground-raised); }
+.place-entry.chosen { background: var(--accent); color: var(--on-accent); }
+.place-entry.chosen .caption { color: inherit; }
+.place-entry.new { color: var(--label); }
+.place-entry .plus { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
+.place-entry .plus svg { width: 14px; height: 14px; }
+/* Held a moment: the entry's stack of prints beside the list. */
+.peek { position: fixed; left: calc(var(--side) + 8px); z-index: 6; display: grid; justify-items: center; gap: 2px; padding: 16px 20px 14px; border-radius: 14px;
+  background: var(--ground-window); box-shadow: var(--shadow-print-front); pointer-events: none; animation: peek var(--standard); }
+.peek .stack { margin-bottom: 10px; }
+.peek .name { font-weight: 600; max-width: 180px; text-align: center; }
+@keyframes peek { from { opacity: 0; } }
+.menu .chosen { background: var(--accent); color: var(--on-accent); }
 
 @media (min-width: 900px) {
-  .places-nav { position: fixed; top: var(--head); left: 0; bottom: 0; width: var(--side); overflow-y: auto; padding: 14px 10px 24px var(--edge); }
+  /* The scrollbar's room is kept while nothing scrolls, so opening a list
+     moves nothing sideways. */
+  .places-nav { position: fixed; top: var(--head); left: 0; bottom: 0; width: var(--side); overflow-y: auto; padding: 0 4px 24px var(--edge);
+    scrollbar-width: thin; scrollbar-color: var(--ground-raised) transparent; scrollbar-gutter: stable; }
+  .place-head .place-link { padding-right: 40px; }
+  /* Room above the first place outside the scroll's padding, so a row held
+     at the top has nothing showing above it. */
+  .places-nav > :first-child { margin-top: 14px; }
   main { padding-left: calc(var(--side) + var(--edge)); }
-  .cardbar { margin-left: calc(var(--side) + var(--edge)); }
+  .cardbar, .banner { margin-left: calc(var(--side) + var(--edge)); }
+  .gate .banner { margin: 0; }
   body .selection { left: calc(50% + var(--side) / 2); }
 }
 
@@ -261,80 +398,109 @@ header { height: var(--head); }
   header .search { margin-left: 0; min-width: 0; }
   header .activity { padding: 0 6px; }
   header .activity .what { display: none; }
+  header .add { padding: 0 var(--space-8); }
+  header .add .what { display: none; }
   header .who { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; }
   .places-nav { position: fixed; left: 0; right: 0; bottom: 0; height: var(--foot); padding: 6px 8px env(safe-area-inset-bottom);
-    grid-template-columns: repeat(5, 1fr); gap: 4px; background: rgba(20, 20, 20, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--rule); }
+    grid-template-columns: repeat(5, 1fr); gap: 4px; background: var(--ground-bar); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); border-top: 1px solid var(--rule); }
   .places-nav .extra { display: none; }
+  .place-group, .place-head { display: contents; }
   .places-nav .more { display: block; }
   .place-link { text-align: center; padding: 0 4px; height: 44px; border-radius: 22px; font-size: 12px; }
   .places-nav .menu { top: auto; bottom: calc(100% + 8px); right: 8px; }
   body.picking .places-nav { display: none; }
   main { padding-bottom: calc(var(--foot) + 48px); }
   .scrubber { bottom: var(--foot); }
-  body .toast { bottom: calc(var(--foot) + 16px); }
+  body .toasts, body .loader { bottom: calc(var(--foot) + 16px); }
 }
 
 @media (max-width: 720px) {
   main.scrubbed { padding-right: 28px; }
   .scrubber { width: 30px; }
   .scrub-track { right: 6px; }
-  .scrubber:hover .scrub-track, .scrubber.active .scrub-track { right: 5px; }
   .scrub-thumb { right: 2px; }
   /* The years only while a thumb holds the bar, over a shade. */
   .scrub-years { display: none; right: 22px; left: auto; width: 60px; }
   .scrubber.active .scrub-years { display: block; }
-  .scrubber.active { width: 96px; background: linear-gradient(to left, rgba(20, 20, 20, 0.85), rgba(20, 20, 20, 0)); }
+  .scrubber.active { width: 96px; background: linear-gradient(to left, var(--ground-bar), transparent); }
   .scrub-pill { right: 40px; }
   .viewer .step { display: none; }
   .info { width: auto; max-height: 55vh; border-radius: 18px 18px 0 0; background: var(--ground-sheet); position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; }
   .places { grid-template-columns: repeat(2, 1fr); }
+  /* The One filter is one line that scrolls sideways (P10). */
+  .filters.one { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-bottom: var(--space-6); }
+  /* The count stays in sight at the row's end while the chips scroll under it. */
+  .filters.one .count { position: sticky; right: 0; flex: none; padding-left: var(--space-20); background: linear-gradient(to right, transparent, var(--ground-page) var(--space-14)); }
+  .filters.one::-webkit-scrollbar { display: none; }
+  .filters.one > * { flex: none; }
   .face { width: 100px; height: 100px; border-radius: 50px; }
   .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; }
   .cardbar .meter { width: 120px; }
 }
 
-/* HOME-017: choosing on the grid. A ring in the corner on hover, while
-   choosing, and filled white on what is chosen. */
-.tile .check, .place .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); opacity: 0; transition: opacity var(--quick); }
-.tile:hover .check, body.picking .tile .check, .tile.picked .check, .tile.ticked .check,
-.place:hover .check, body.picking .place .check, .place.picked .check { opacity: 1; }
-.tile.picked .check, .tile.ticked .check, .place.picked .check { background: var(--accent) no-repeat center / 12px
-  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2l2.6 2.6L10 3.4' fill='none' stroke='%23141414' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); border-color: var(--accent); }
-.tile.picked img { transform: scale(0.9); border-radius: 4px; }
-.tile.picked { background: var(--ground-chip); }
+/* HOME-017: choosing on the grid. A ring in the corner on hover and while
+   choosing; what is chosen carries a 3px ring of the accent (P2), and on touch
+   a white check at the top right as well (below, under pointer: coarse). */
+.tile .check, .place .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid var(--ink);
+  box-shadow: var(--shadow-badge); opacity: 0; transition: opacity var(--quick); }
+/* The tick, Lucide's check, cut out of the circle's fill (a label.check is a
+   field's label, and has none). */
+.tile .check::after, .place .check::after, .frame .check::after { content: ''; position: absolute; inset: 0; background: var(--on-accent); opacity: 0;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20 6 9 17l-5-5' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20 6 9 17l-5-5' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
+body.picking .tile .check, body.picking .place .check, .place.picked .check { opacity: 1; }
+.tile::after { content: ''; position: absolute; inset: 0; border: 3px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; transition: opacity var(--quick); }
+.tile.picked::after, .tile.ticked::after { opacity: 1; }
+body .tile.picked .check { opacity: 0; }
+.place.picked .check, .tile.ticked .check, .frame.kept .check { background: var(--accent); border-color: var(--accent); }
+.place.picked .check::after, .tile.ticked .check::after, .frame.kept .check::after { opacity: 1; }
 /* HOME-021: a library chosen on its page, as a photograph is. */
 .place .check { z-index: 1; left: 0; top: 0; }
 .place .stack { transition: transform var(--quick); }
 .place.picked .stack { transform: scale(0.92); }
 .place.picked .name { color: var(--accent); }
-.tile img { transition: opacity var(--standard), transform var(--quick); }
 .selection { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 8px;
-  padding: 8px; border-radius: 26px; background: var(--ground-window); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); max-width: calc(100vw - 32px); overflow-x: auto; }
+  padding: 8px; border-radius: var(--radius-hud); background: var(--ground-window); box-shadow: var(--shadow-print-front); max-width: calc(100vw - 32px); overflow-x: auto; }
+.selection .add { background: var(--accent); color: var(--on-accent); }
 .selection .count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 0 6px 0 2px; }
+.selection .lead, .selection .acts { display: contents; }
 .selection a { text-decoration: none; color: var(--ink); }
 .menu .rule { height: 1px; background: var(--rule); margin: 4px 6px; }
-.menu.floating { position: fixed; right: auto; max-height: calc(100vh - 16px); overflow-y: auto; z-index: 9; }
+.menu.floating { position: fixed; right: auto; max-height: calc(100vh - 16px); overflow-y: auto; z-index: 12; }
 .menu .star-row { display: flex; gap: 2px; padding: 0 4px; }
-.menu .star-row button { padding: 6px 6px; font-size: 12px; letter-spacing: -1px; }
+.menu .star-row button { padding: 8px 6px; display: inline-flex; gap: 1px; }
+.menu .star-row svg { width: 12px; height: 12px; fill: currentColor; }
 /* A drag across the photographs: the box it draws, and no text chosen meanwhile. */
-.marquee { position: fixed; z-index: 7; border: 1px solid var(--accent); background: rgba(255, 255, 255, 0.08); border-radius: 2px; pointer-events: none; }
+.marquee { position: fixed; z-index: 7; border: 1px solid var(--accent); background: var(--rule-sheet); border-radius: 2px; pointer-events: none; }
 body.dragging { user-select: none; cursor: crosshair; }
-.round.small { width: 32px; height: 32px; border-radius: 16px; background: var(--ground-chip); }
+.round.small { width: 32px; height: 32px; border-radius: var(--radius-chip); background: var(--ground-chip); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .round.small svg { width: 16px; height: 16px; }
 .chip.small { height: 28px; padding: 0 12px; font-size: 12px; }
-.toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 8; padding: 10px 18px; border-radius: 20px; background: var(--ground-raised); color: var(--ink); }
-dialog.ask { border: 0; border-radius: 14px; padding: 22px; width: min(420px, calc(100vw - 32px)); background: var(--ground-window); color: var(--ink); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7); }
-dialog.ask::backdrop { background: rgba(0, 0, 0, 0.55); }
+/* An event: a toast at the bottom centre, with one action at most. Over the
+   photograph it is on the photograph's ground. The loader floats in the same
+   place on the same ground: against the window, centred in what the places list
+   leaves, as the selection bar is; with the loupe open, in the loupe's stage
+   (the script moves both there), centred on the photograph as its bar, its
+   value and its badge are, above the bar. */
+.toasts { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 11; display: grid; justify-items: center; pointer-events: none; }
+.stage > .toasts, .stage > .loader { position: absolute; left: 50%; bottom: 84px; }
+.toast { display: flex; align-items: center; gap: 14px; padding: 10px 18px; border-radius: var(--radius-hud); background: var(--ground-raised); color: var(--ink); pointer-events: auto;
+  animation: toast-in var(--standard); transition: opacity var(--standard-out); }
+.toast.leaving { opacity: 0; }
+@keyframes toast-in { from { opacity: 0; } }
+.toast .undo { background: none; border: 0; padding: 0; color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+body.viewing .toast, body.viewing .loader { background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+dialog.ask { border: 0; border-radius: var(--radius-photo-card); padding: 22px; width: min(420px, calc(100vw - 32px)); background: var(--ground-window); color: var(--ink); box-shadow: var(--shadow-print-front); }
+dialog.ask::backdrop { background: color-mix(in srgb, var(--surround-black) 55%, transparent); }
 dialog.ask form { display: grid; gap: 12px; }
 dialog.ask h2 { font-size: 17px; line-height: 22px; margin: 0; }
 dialog.ask .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+dialog.ask .buttons .chip { height: 40px; border-radius: 20px; padding: 0 22px; }
 dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 dialog.ask input[type=checkbox] { accent-color: var(--accent); }
 dialog.ask .chapters { display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
 dialog.ask .chapters .caption { margin-left: auto; }
 dialog.ask .year { width: 80px; margin-left: auto; }
-.primary.destructive { background: #e35d5b; color: #fff; }
 .primary:disabled { opacity: 0.4; cursor: default; }
 .shelf { display: grid; justify-items: center; gap: 4px; align-content: start; }
 .info .by-pick { margin-top: 4px; height: 32px; }
@@ -356,22 +522,22 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .import-page .tile.ticked img.in { opacity: 1; }
 .import-page .tile.already img.in { opacity: 0.25; }
 .import-page .tile.already.ticked img.in { opacity: 0.8; }
-.import-page .tile .badge { position: absolute; right: 6px; bottom: 4px; font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--name); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); font-variant-numeric: tabular-nums; }
+.import-page .tile .badge { position: absolute; right: 6px; bottom: 4px; font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 0.5px; color: var(--name); text-shadow: var(--shadow-badge); font-variant-numeric: tabular-nums; }
 .import-page .tile .check { opacity: 1; }
 
 @media (max-width: 720px) {
   .import-page .grid { grid-template-columns: repeat(3, 1fr); }
   .import-page .shoot .to { margin-left: 0; }
-  .selection { left: 16px; right: 16px; transform: none; max-width: none; }
+  .selection { left: 16px; right: 16px; transform: none; max-width: none; flex-wrap: wrap; justify-content: center; overflow: visible; }
+  .selection .lead, .selection .acts { display: flex; align-items: center; gap: 8px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  * { transition-duration: 0ms !important; }
-}
 
-/* HOME-019: Tidy Up. Each set side by side, tall enough to judge; on a
-   phone the row scrolls. What is kept carries the white ring. */
+/* HOME-019: Tidy Up. The libraries with something to tidy are stacks; a
+   library's sets go side by side, tall enough to judge; on a phone the row
+   scrolls. What is kept carries the white ring. */
 .tidy-page .filters .n { margin-left: 6px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.tidy-page .collection-head { padding-top: 0; }
 .tidy-page, .tidy-page .sets { grid-template-columns: minmax(0, 1fr); }
 .tidy-page .sets { display: grid; gap: 34px; padding-top: 18px; }
 .set .head { display: grid; gap: 2px; padding-bottom: 10px; }
@@ -381,12 +547,11 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .frame .pick img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); }
 .frame .pick img.in { opacity: 0.35; }
 .set.who .frame .pick img.in, .frame.kept .pick img.in { opacity: 1; }
-.frame.kept .pick { box-shadow: inset 0 0 0 2px var(--accent); }
-.frame .check { position: absolute; left: 8px; top: 8px; width: 22px; height: 22px; border-radius: 11px; border: 2px solid rgba(255, 255, 255, 0.9); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
-.frame.kept .check { background: var(--accent) no-repeat center / 12px
-  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2l2.6 2.6L10 3.4' fill='none' stroke='%23141414' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); border-color: var(--accent); }
+.frame .pick::after { content: ''; position: absolute; inset: 0; border: 3px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; }
+.frame.kept .pick::after { opacity: 1; }
+.frame .check { position: absolute; left: 8px; top: 8px; width: 22px; height: 22px; border-radius: 11px; border: 2px solid var(--ink); box-shadow: var(--shadow-badge); }
 .frame .best { position: absolute; left: 8px; bottom: 8px; padding: 2px 9px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 11px; line-height: 16px; font-weight: 600; }
-.frame .look { position: absolute; right: 8px; top: 8px; background: rgba(20, 20, 20, 0.6); }
+.frame .look { position: absolute; right: 8px; top: 8px; background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
 .frame figcaption { display: grid; text-align: left; color: var(--name); min-height: 32px; }
 .frame figcaption .where { color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set .foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; }
@@ -394,7 +559,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .set .said { text-align: left; }
 .set.who .frame { --h: 150px; }
 .chip.go { background: none; box-shadow: inset 0 0 0 1px var(--ink); color: var(--ink); font-weight: 600; }
-.chip:disabled { opacity: 0.4; cursor: default; }
+.chip:disabled, .chip[aria-disabled=true] { opacity: 0.4; cursor: default; }
 @media (max-width: 720px) {
   .frame { --h: 200px; }
   .set.who .frame { --h: 110px; }
@@ -415,3 +580,130 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 /* HOME-029: names from where the photographs were taken. */
 .ideas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .import-page .shoot .ideas { justify-content: flex-end; padding-bottom: 6px; }
+
+/* The loader: the activity ring turning while Numa Home is asked, where
+   the toast shows; a toast while it turns goes above it. */
+.loader { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); z-index: 11; display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px 8px 10px; border-radius: var(--radius-hud); background: var(--ground-raised); color: var(--ink); pointer-events: none; }
+.loader:not([hidden]) { animation: toast-in var(--standard); }
+.loader .ring { animation: turning 0.9s linear infinite; }
+@keyframes turning { to { transform: rotate(270deg); } }
+.loader:not([hidden]) ~ .toasts { transform: translate(-50%, -48px); }
+@media (min-width: 900px) { .toasts, .loader { left: calc(50% + var(--side) / 2); } }
+
+/* HOME-035: Safe at Home. Its tabs a chip row under the title; `attention`
+   (amber, decided 18 October) only on what asks for a person, never as a
+   ground, always with its words. */
+.safe-head { display: grid; gap: 12px; padding-top: 22px; margin-bottom: 18px; }
+.safe-head h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; }
+.safe-head .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.safe-head + .activity-page { padding-top: 0; }
+.safe { display: grid; gap: 14px; max-width: 1100px; }
+.safe .attention { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: 14px; background: var(--ground-view); color: var(--ink); font-weight: 600; }
+.safe .signal { width: 10px; height: 10px; border-radius: 5px; background: var(--attention); flex: none; }
+.safe .role { margin: 0; }
+.safe .all-home { margin: 0; color: var(--ink); font-weight: 600; }
+/* Boxes flow down three columns, so a short one fills under a short one. */
+.safe .boxes { columns: 300px 3; column-gap: 14px; }
+.safe .box { background: var(--ground-view); border-radius: 14px; padding: 16px 18px; display: grid; gap: 10px; break-inside: avoid; margin-bottom: 14px; }
+.safe .box > .chip { justify-self: start; }
+.safe ul { list-style: none; margin: 0; padding: 0; }
+.safe li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
+.safe li:last-child { border-bottom: 0; }
+.safe .done li { display: block; color: var(--name); }
+.safe .name { color: var(--ink); font-weight: 600; }
+.safe .late { color: var(--attention); }
+.safe .big { font-size: 26px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.safe .disk { display: grid; gap: 4px; }
+.safe .disk .meter { height: 6px; border-radius: 3px; margin-top: 4px; }
+
+/* HOME-039: Today. The years on one shelf that scrolls; on a wide screen
+   what waits and what the night did beside the photographs. */
+.today { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px 32px; align-items: start; padding-top: 24px; }
+.today-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 12px; }
+.today-head h1 { font-size: 26px; line-height: 32px; font-weight: 700; margin: 0; }
+.today-column, .today-part { display: grid; gap: 26px; min-width: 0; }
+.today-part { gap: 12px; }
+.today-part > .head, .arrival > .head { display: flex; align-items: center; gap: 10px; }
+.today-part > .head .caption, .arrival > .head .chip { margin-left: auto; }
+.today .name { font-weight: 600; }
+.today a { color: var(--name); }
+.today .places { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 176px; overflow-x: auto; padding-top: 0; }
+.today .place { align-content: start; }
+.arrival { display: grid; gap: 10px; }
+.strip { display: flex; gap: 4px; overflow: hidden; }
+.strip button { flex: none; height: 104px; min-width: 60px; padding: 0; border: 0; border-radius: 4px; overflow: hidden; background: var(--ground-raised); cursor: pointer; }
+.strip img { height: 100%; width: auto; display: block; }
+.waiting { gap: 0; padding: 16px 18px; border-radius: 14px; background: var(--ground-view); }
+.waiting .section-label { margin-bottom: 4px; }
+.wait { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.wait:last-child { border-bottom: 0; }
+.wait .what { flex: 1; display: grid; gap: 1px; }
+@media (min-width: 1100px) { .today.two { grid-template-columns: minmax(0, 1fr) 320px; } }
+@media (max-width: 720px) { .strip button { height: 96px; } }
+/* HOME-035 on Today: Safe at Home's one line, at the head's far end. */
+.today-head { flex-wrap: wrap; }
+.today-head .safe-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border-radius: 15px; background: var(--ground-chip); color: var(--name); font-size: 12px; font-weight: 600; text-decoration: none; }
+.today-head .safe-pill .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--ink); }
+.today-head .safe-pill .dot.attention { background: var(--attention); }
+
+/* Hover only where there is a pointer to hover with: on touch it would stay
+   on after a tap. */
+@media (hover: hover) {
+  .menu button:not(.chosen):hover, .menu a:hover { background: var(--ground-chip); }
+  .loupe-bar .star:not(.set):hover, .loupe-bar .flag-pick:not(.chosen):hover, .loupe-bar .flag-reject:not(.chosen):hover { opacity: 0.85; }
+  .loupe-bar .round.small:not(.chosen):hover { background: var(--ground-chip); }
+  .viewer .stage:hover .step { opacity: 1; }
+  .scrubber:hover .scrub-track { transform: scaleX(1.3333); }
+  .place-link:not(.chosen):hover, .place-head:hover .place-link:not(.chosen) { background: var(--ground-chip); color: var(--ink); }
+  .place-fold:hover { background: var(--rule-sheet); color: var(--ink); }
+  .place-link.chosen + .place-fold:hover { background: color-mix(in srgb, var(--on-accent) 8%, transparent); }
+  .place-entry:not(.chosen):hover { background: var(--ground-chip); color: var(--ink); }
+  .place-entry:hover .caption { color: var(--name); }
+  .tile:hover .check, .place:hover .check { opacity: 1; }
+}
+
+/* Touch (P15): every control has a hit area of 44 × 44 at least, whatever is
+   drawn. What is drawn small is reached through a pseudo-element centred on it;
+   fields, rows and the two bars are simply that size. */
+@media (pointer: coarse) {
+  :root { --head: 65px; }
+  .chip, .primary, .round, .mark-link, .safe-pill { position: relative; }
+  .chip::before, .primary::before, .round::before, .mark-link::before, .safe-pill::before { content: ''; position: absolute; left: 50%; top: 50%;
+    width: max(100%, var(--space-44)); height: max(100%, var(--space-44)); transform: translate(-50%, -50%); }
+  input[type=text], input[type=password], input[type=search], select, .filters select, .info .by-pick { height: var(--space-44); }
+  input[type=checkbox], .import-page .tick input { width: 22px; height: 22px; }
+  label.check, .import-page .tick { min-height: var(--space-44); }
+  .edit .slider input { height: var(--space-44); }
+  .menu button, .menu a { min-height: var(--space-44); display: flex; align-items: center; }
+  .menu .star-row button { min-width: var(--space-44); justify-content: center; }
+  .place-link, .place-entry { height: var(--space-44); border-radius: var(--radius-hud); }
+  .place-fold { width: var(--space-44); height: var(--space-44); top: 0; right: 0; border-radius: var(--radius-hud); }
+  .night .needs a, .today a.caption, .safe a.caption { display: inline-flex; align-items: center; min-height: var(--space-44); }
+  .scrubber { width: var(--space-44); }
+  main.scrubbed { padding-right: var(--space-44); }
+  .crop-box .handle::after { content: ''; position: absolute; inset: -11px; }
+  .crop-box .n::after, .crop-box .s::after { inset: -15px 0; }
+  .crop-box .e::after, .crop-box .w::after { inset: 0 -15px; }
+  /* The bars: the controls are 44 themselves, and a narrow bar breaks between its groups. */
+  .loupe-bar { flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 2 * var(--edge)); padding: 4px 8px; gap: 0 var(--space-4); }
+  .loupe-bar .stars { margin-right: 0; }
+  .loupe-bar .star { width: var(--space-44); height: var(--space-44); padding: 0; }
+  .loupe-bar .round.small, .selection .round.small, .collection-head .round.small { width: var(--space-44); height: var(--space-44); border-radius: var(--radius-hud); }
+  .selection { padding: 4px 8px; }
+  .stage > .toasts, .stage > .loader { bottom: 132px; }
+  /* Chosen: the check, at the top right (P2), over the count's corner. */
+  .tile .check { left: auto; right: 6px; }
+  body.picking .tile .burst { opacity: 0; }
+  body .tile.picked .check { opacity: 1; background: var(--accent); border-color: var(--accent); }
+  body .tile.picked .check::after { opacity: 1; }
+}
+
+/* Reduced motion (README, Motion): every movement is a 150 ms crossfade, and
+   a spinner is the word it already carries, Working… or Loading…. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-property: opacity, color, background-color, border-color !important; transition-duration: 150ms !important;
+    animation-duration: 150ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+  .loader .ring { display: none; }
+  .loader { padding: 8px 16px; }
+}

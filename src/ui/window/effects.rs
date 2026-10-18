@@ -12,7 +12,12 @@ pub(super) fn build_effects(
     effects.append(&presence_header);
 
     for (name, scale, readout) in all[11..13].iter().chain(&all[22..23]) {
-        effects.append(&slider_row(state, name, scale, *readout));
+        let row = slider_row(state, name, scale, *readout);
+
+        if *name == "Clarity" {
+            row.add_css_class("lead");
+        }
+        effects.append(&row);
     }
 
     for (title, range, frame_only) in [("Mist", 39..40, true), ("Vignette", 23..27, true), ("Grain", 27..30, false)] {
@@ -21,8 +26,12 @@ pub(super) fn build_effects(
             global_only(header.as_ref());
         }
         effects.append(&header);
-        for (name, scale, readout) in &all[range] {
+        for (index, (name, scale, readout)) in all[range].iter().enumerate() {
             let row = slider_row(state, name, scale, *readout);
+
+            if index == 0 {
+                row.add_css_class("lead");
+            }
             if frame_only {
                 global_only(row.as_ref());
             }

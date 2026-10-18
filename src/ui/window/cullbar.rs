@@ -44,7 +44,10 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     let paste = gtk::Button::with_label("Paste Settings");
     paste.add_css_class("flat");
     paste.set_action_name(Some("win.photo-paste"));
-    paste.set_tooltip_text(Some("Paste the copied settings onto the selection (Ctrl+V)"));
+
+    paste.set_tooltip_text(Some(
+        "Paste the settings copied with Copy Settings — a photograph's right-click menu, or Ctrl+C in the editor — onto the selection (Ctrl+V)",
+    ));
     bar.pack_start(&paste);
     let album = album_button(state);
     back_to_grid(state, &album);
@@ -93,10 +96,18 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
             merge.set_sensitive(chosen >= 2);
             export.set_label(&format!("Export {number}…"));
 
-            bar.set_revealed(chosen > 0 && !state.loupe.reveal.reveals_child());
+            bar.set_revealed(chosen > 0 && !state.loupe.reveal.reveals_child() && !rapid::choosing(&state));
         }
     ));
     state.grid.wall.connect_selection_changed(glib::clone!(
+        #[strong] update,
+        move |_| update()
+    ));
+    rapid::deliver_button(state).connect_sensitive_notify(glib::clone!(
+        #[strong] update,
+        move |_| update()
+    ));
+    rapid::of(state).views.connect_visible_child_name_notify(glib::clone!(
         #[strong] update,
         move |_| update()
     ));

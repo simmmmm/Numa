@@ -37,7 +37,7 @@ pub struct Need {
     pub link: String,
 }
 
-fn local() -> (u32, String) {
+pub fn local() -> (u32, String) {
 
     let tm = unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
@@ -225,6 +225,7 @@ fn trash(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> boo
 }
 
 fn tidy(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool {
+
     let counts = crate::tidy::prepare(server);
     let count = |kind| counts.get(kind).copied().unwrap_or(0);
     let total = count("copies") + count("bursts") + count("unusable");
@@ -239,7 +240,7 @@ fn tidy(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool
     };
     report.done.push(line);
     if total > 0 {
-        report.needs.push(Need { text: format!("{} in Tidy Up {} for a choice", plural(total, "set", "sets"), if total == 1 { "waits" } else { "wait" }), link: "#/tidy".into() });
+        report.needs.push(Need { text: format!("{} in Tidy Up {} for a choice", plural(total, "set", "sets"), if total == 1 { "waits" } else { "wait" }), link: "#/tidy?everyone=1".into() });
     }
     true
 }

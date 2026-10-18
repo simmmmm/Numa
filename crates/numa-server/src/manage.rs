@@ -29,11 +29,11 @@ fn year(name: &str) -> bool {
 }
 
 pub fn may_manage(server: &Server, me: &Account, library: &Library) -> bool {
-    me.admin || library.path == server.home.sent_folder(&me.name)
+    me.admin || me.manage || library.path == server.home.sent_folder(&me.name)
 }
 
 pub fn refused() -> Fail {
-    Fail(StatusCode::FORBIDDEN, "Only an admin, or the account whose library it is, may change it.".into())
+    Fail(StatusCode::FORBIDDEN, "Only an admin, an account an admin lets delete and move photographs, or the account whose library it is, may change it.".into())
 }
 
 fn admin(me: &Account) -> Result<(), Fail> {
@@ -75,7 +75,7 @@ fn take_in(server: &Arc<Server>, folder: PathBuf) -> Result<Library, Fail> {
     Ok(library)
 }
 
-fn new_folders(server: &Server) -> Vec<PathBuf> {
+pub fn new_folders(server: &Server) -> Vec<PathBuf> {
     let shelved: HashSet<PathBuf> = server.home.all_libraries().into_iter().map(|library| library.path).collect();
     crate::home::found_under(&server.home.photos).into_iter().filter(|folder| !shelved.contains(folder)).collect()
 }
@@ -174,6 +174,61 @@ pub fn keep(catalog: &Catalog, photo: &Photo, author: Option<String>) -> Kept {
     let albums = catalog.albums().unwrap_or_default().into_iter().filter(|(_, name)| names.contains(name)).map(|(key, _)| key).collect();
     let edits = catalog.edits_json(photo.id).ok().flatten();
     Kept { rating: photo.rating, flag: crate::photos::flag_name(photo.flag).into(), edits, albums, author }
+}
+
+impl Kept {
+
+    fn without_edits(self) -> Self {
+        Kept { edits: None, ..self }
+    }
+}
+
+pub static KEEPING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub async fn keep_jpegs(server: Arc<Server>, raws: Vec<(Library, Photo)>) {
+    for (library, raw) in raws {
+        let _one = server.renders.acquire().await;
+        let working = server.clone();
+        let name = raw.path.display().to_string();
+        let done = tokio::task::spawn_blocking(move || keep_jpeg(&working, library, raw)).await;
+        match done {
+            Ok(Err(err)) => log::warn!("{name}: not kept as a JPEG: {err}"),
+            Err(err) => log::warn!("{name}: not kept as a JPEG: {err}"),
+            Ok(Ok(())) => log::info!("{name}: kept as a JPEG, the raw in the trash"),
+        }
+        KEEPING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn keep_jpeg(server: &Arc<Server>, library: Library, raw: Photo) -> Result<(), String> {
+    let path = within(&library, &raw.path);
+    let author = server.store.authors().get(&(library.id, path)).cloned();
+    let held = raw.clone();
+    let kept = server.home.blocking(move |catalog| keep(catalog, &held, author)).ok_or("the catalog did not answer")?;
+    let twins: Vec<Photo> = server.home.with_twins(&[raw.id]).into_iter().filter(|id| *id != raw.id).filter_map(|id| server.home.any_photo(id)).collect();
+    let camera = twins.iter().find(|twin| matches!(twin.path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("jpg" | "jpeg")));
+    if let (Some(twin), None) = (camera, kept.edits.as_ref()) {
+
+        let (id, at, given) = (twin.id, twin.path.clone(), kept.without_edits());
+        server.home.blocking(move |catalog| give(catalog, id, &at, &given));
+        server.store.touch(id);
+        trash(server, vec![(library, raw)]);
+        return Ok(());
+    }
+    let edits = match &kept.edits {
+        Some(edits) => edits.clone(),
+        None => serde_json::to_string(&numa_core::document::Document::new(raw.path.to_string_lossy().into_owned())).map_err(|err| err.to_string())?,
+    };
+    let image = numa_io::thumbs::render(&raw.path, u32::MAX, &edits)?;
+
+    let made = free(raw.path.with_extension("jpg"));
+    let settings = numa_io::export::ExportSettings { quality: 95, ..Default::default() };
+    numa_io::export::save(&image, &made, &settings, Some(&raw.path))?;
+    let mut gone = vec![(library.clone(), raw)];
+    gone.extend(twins.into_iter().map(|twin| (library.clone(), twin)));
+    trash(server, gone);
+    land(server, vec![(library, made, kept.without_edits())]);
+    Ok(())
 }
 
 pub fn give(catalog: &Catalog, id: i64, path: &FilePath, kept: &Kept) {

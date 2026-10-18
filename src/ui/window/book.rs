@@ -52,7 +52,6 @@ fn book_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.set_content_width(600);
     dialog.set_content_height(680);
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
     let page = adw::PreferencesPage::new();
     page.set_description(
         "The photographs in the order they happened, a numbered folder per chapter, sized for the printer. \
@@ -78,17 +77,8 @@ fn book_dialog(state: &App, window: &adw::ApplicationWindow) {
     place.add(&folder_row(&destination));
     page.add(&place);
 
-    let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("pill");
     let make = primary_button("Make the Folders");
-    make.add_css_class("pill");
-    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    bottom.set_halign(gtk::Align::Center);
-    bottom.set_margin_top(12);
-    bottom.set_margin_bottom(12);
-    bottom.append(&cancel);
-    bottom.append(&make);
-    view.add_bottom_bar(&bottom);
+    view.add_top_bar(&dialog_header(&dialog, &make));
     dialog.set_child(Some(&view));
     dialog.set_default_widget(Some(&make));
 
@@ -136,12 +126,6 @@ fn book_dialog(state: &App, window: &adw::ApplicationWindow) {
     fill();
     by.connect_selected_notify(move |_| fill());
 
-    cancel.connect_clicked(glib::clone!(
-        #[weak] dialog,
-        move |_| {
-            dialog.close();
-        }
-    ));
     make.connect_clicked(glib::clone!(
         #[strong] state,
         #[weak] dialog,
@@ -156,10 +140,10 @@ fn book_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.present(Some(window));
 }
 
-fn count(photographs: usize) -> String {
-    match photographs {
-        1 => "1 photograph".to_string(),
-        n => format!("{} photographs", places::grouped(n as i64)),
+fn count(photos: usize) -> String {
+    match photos {
+        1 => "1 photo".to_string(),
+        n => format!("{} photos", places::grouped(n as i64)),
     }
 }
 

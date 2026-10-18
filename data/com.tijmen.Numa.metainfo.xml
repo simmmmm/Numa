@@ -51,6 +51,31 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.43.0" date="2026-10-18">
+      <description>
+        <p>
+          Calmer around the photograph. Looks is now only presets and LUTs;
+          the camera profile, tone mapping and the camera's own look are at
+          the end of Colour, and the header, the panels and mask mode carry
+          less at rest, with nothing hidden.
+        </p>
+        <p>
+          One Numa. A dialog's main button is white, at the end of its
+          header; alerts have no blue; Numa Home has one word for each thing
+          (Send Home, Keep at Numa Home, Move to Trash), and Export sends home
+          from one Destination row. P or X on a photograph that already has
+          that mark takes it off.
+        </p>
+        <p>
+          Numa Home's libraries are libraries here. A photograph still at
+          home has a house on its tile and opens on Home's preview; editing
+          it, or Get Original, brings the original down. Keep on This
+          Computer brings a whole library down, and new photographs with it.
+        </p>
+        <p>A burst shows three cameras and how many frames, in the grid, the filmstrip and on Numa Home.</p>
+        <p>On Arch the package is numa-photo, beside Arch's own numa.</p>
+      </description>
+    </release>
     <release version="0.42.0" date="2026-10-17">
       <description>
         <p>

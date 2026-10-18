@@ -340,10 +340,39 @@ scale.numa-slider:hover slider {
     background: white;
 }
 
-/* LIB-023: what narrows the grid, under the header while anything does. */
+/* HOME-051: an original on its way from Numa Home, on the photograph: across
+   its tile, clear of its marks, in a pill of the photograph's own ground; in
+   the loupe, in the pill that says the frame is Home's preview. */
+.card-fetch {
+    margin: 8px 16px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: alpha(@numa_photo_ground_page, 0.7);
+}
+
+.photo-fetch {
+    min-width: 120px;
+}
+
+.card-fetch trough,
+.photo-fetch trough {
+    min-height: 4px;
+    border-radius: 999px;
+    background: alpha(@numa_photo_ink, 0.25);
+}
+
+.card-fetch progress,
+.photo-fetch progress {
+    min-height: 4px;
+    border-radius: 999px;
+    background: @numa_photo_ink;
+}
+
+/* LIB-023: what narrows the grid, under the header while anything does.
+   UX-057: no rule under it — the top line of the content, on its ground,
+   not a second toolbar under the header. */
 .filter-chips {
     padding: 10px 14px;
-    border-bottom: 1px solid alpha(currentColor, 0.08);
 }
 
 .filter-chips .filter-chip {
@@ -455,9 +484,11 @@ scale.numa-slider:hover slider {
     padding: 8px 16px 12px;
 }
 
+/* UX-075, P6: what the chosen frames are called is a plain name, not a third
+   kind of heading. */
 .tape-title {
     font-size: 13px;
-    font-weight: 700;
+    color: @numa_name;
     font-feature-settings: "tnum";
 }
 
@@ -481,6 +512,12 @@ headerbar .linked menubutton.before-more > button {
 .profile-note {
     font-size: 12px;
     opacity: 0.45;
+}
+
+/* UX-055: a how-to line in the label grey, legible, not faded below it. */
+.profile-note.hint {
+    color: @numa_label;
+    opacity: 1;
 }
 
 
@@ -565,13 +602,16 @@ listview.filmstrip-frames > row {
 /* UX-033: a choice among a few is a row of chips (`chip_row`) — the panel's
    RGB | R | G | B, Presets | LUTs, the grade's ranges, the crop's aspects,
    retouch's tools, the filter's rows, the mask bar's tools and Add | Subtract.
+   UX-054: and the Masks tab's found things, Subject, Sky…, which make a mask
+   rather than choose one, in the same form so the panel has one.
    At rest a quiet fill rather than a raised button: the only thing drawn as a
    *button* should be something that does something when pressed. Chosen, the
    accent with its ink on it — white on the dark scheme.
 
    TOOL-002: tight padding, so four aspects fit a 240-pixel panel rather than
    making the panel as wide as the row. */
-.chip-row > button {
+.chip-row > button,
+.found-chips > flowboxchild > button {
     border-radius: 999px;
     padding-left: 8px;
     padding-right: 8px;
@@ -583,7 +623,13 @@ listview.filmstrip-frames > row {
     border-color: transparent;
 }
 
-.chip-row > button:hover:not(:checked) {
+/* A flowbox's child pads 3 px round its button; a chip is its button. */
+.found-chips > flowboxchild {
+    padding: 0;
+}
+
+.chip-row > button:hover:not(:checked),
+.found-chips > flowboxchild > button:hover {
     background: alpha(currentColor, 0.12);
 }
 
@@ -596,40 +642,6 @@ listview.filmstrip-frames > row {
     background: alpha(@numa_accent, 0.9);
 }
 
-/* RENDER-024: the As Shot tile on the Looks tab — a chip's quiet fill at rest,
-   and chosen it is white with its ink on it, as a chosen chip is. */
-.camera-look-tile {
-    padding: 8px 12px;
-    border-radius: 8px;
-    background: alpha(currentColor, 0.1);
-    box-shadow: none;
-    border-color: transparent;
-}
-
-.camera-look-tile:hover:not(:checked) {
-    background: alpha(currentColor, 0.12);
-}
-
-.camera-look-tile:checked {
-    background: @numa_accent;
-    color: @numa_on_accent;
-}
-
-.camera-look-tile:checked:hover {
-    background: alpha(@numa_accent, 0.9);
-}
-
-.camera-look-tile .title {
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.camera-look-tile .recipe {
-    font-size: 12px;
-    font-weight: 400;
-    opacity: 0.75;
-}
-
 /* The mask bar's tools, set tighter where the bar is short of room. */
 .chip-row.tight > button {
     padding-left: 8px;
@@ -637,8 +649,16 @@ listview.filmstrip-frames > row {
 }
 
 /* UX-032: while a mask is edited, its Done is the screen's one white button;
-   the header's Export steps back to an ordinary one. */
-.masking button.numa-primary.export-primary {
+   the header's Export steps back to an ordinary one. UX-048: and while the
+   crop is open, whose Done it is then. And a primary that cannot be pressed
+   is an ordinary insensitive button — the grid's Export with nothing
+   selected, Deliver… while the kind of shoot is asked — where white and
+   dimmed it was the brightest block in the header. Deliver… is ordinary
+   too until there is a pick to deliver. */
+.masking button.numa-primary.export-primary,
+.cropping button.numa-primary.export-primary,
+button.numa-primary.unready,
+button.numa-primary:disabled {
     background-color: alpha(currentColor, 0.1);
     color: inherit;
 }
@@ -654,8 +674,10 @@ listview.filmstrip-frames > row {
 
 /* UX-012: the path across the top of the editor. Flat buttons that read as
    text, because a row of framed buttons reads as a toolbar and this is a
-   position, not a set of commands. */
-.breadcrumbs button {
+   position, not a set of commands; since UX-046 only "Libraries" is one, and
+   the names after it are text, set where a button's would be. */
+.breadcrumbs button,
+.breadcrumbs > label {
     padding-left: 6px;
     padding-right: 6px;
     font-weight: 600;
@@ -663,6 +685,13 @@ listview.filmstrip-frames > row {
 
 .breadcrumbs .crumb-arrow {
     opacity: 0.4;
+}
+
+/* "Libraries", and the editor's library name after it: quiet, in the name
+   grey rather than `.dim-label`, whose 55 % falls to 3.2:1 on the light
+   header. */
+.crumb-quiet {
+    color: @numa_name;
 }
 
 /* MASK-005: what a mask is made of, under the mask it belongs to. Quieter than
@@ -930,6 +959,18 @@ listview.filmstrip-frames > row {
     background: alpha(currentColor, 0.14);
 }
 
+/* UX-052: the mixer's hue rainbow stays, at about 40 % under a wash of the
+   panel's own ground, and comes up whole under the hand. An inset shadow
+   rather than opacity, which would take the white handle down with it. */
+.adjustment .quiet scale.track-hue trough {
+    box-shadow: inset 0 0 0 8px alpha(@window_bg_color, 0.6);
+    transition: box-shadow 120ms ease-out;
+}
+
+.adjustment .quiet scale.track-hue:hover trough {
+    box-shadow: none;
+}
+
 /* ADJ-005: the pipette beside the mixer's eight colours.
    Not one of them: `.mixer-bands button` makes every button in that row a
    coloured dot, and a dot with no colour assigned is a dot nobody can see —
@@ -1081,20 +1122,13 @@ button.rail-tab {
     font-size: 13px;
 }
 
-/* The eye, small: a full button filled the 34 px line top to bottom, where
-   the artboard has it at 26 with the line's air round it. */
+/* The power switch, small: a full button filled the 34 px line top to
+   bottom, where the artboard has it at 26 with the line's air round it. */
 .mask-scope > button {
     min-height: 26px;
     min-width: 26px;
     padding: 0;
     margin: 4px 0;
-}
-
-/* The path's last step while a mask is edited: the name, in ink. */
-.mask-crumb {
-    color: @window_fg_color;
-    font-weight: 600;
-    padding: 0 6px;
 }
 
 .mask-chip > button {

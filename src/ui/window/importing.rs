@@ -58,8 +58,8 @@ fn offer(state: &App, name: &str, root: PathBuf) {
         if new == 0 {
             return;
         }
-        let photographs = if new == 1 { "photograph" } else { "photographs" };
-        state.grid.card_banner.set_title(&format!("{name} · {} new {photographs}", places::grouped(new as i64)));
+        let photos = if new == 1 { "photo" } else { "photos" };
+        state.grid.card_banner.set_title(&format!("{name} · {} new {photos}", places::grouped(new as i64)));
         OFFERED.with(|offered| *offered.borrow_mut() = Some(root));
         state.grid.card_banner.set_revealed(true);
     });
@@ -117,13 +117,11 @@ pub(super) fn import_dialog(state: &App, window: &adw::ApplicationWindow, from: 
     dialog.set_title("Import");
     dialog.set_content_width(560);
     dialog.set_content_height(712);
+    let go = import_button();
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&dialog_header(&dialog, &go));
     let page = adw::PreferencesPage::new();
     view.set_content(Some(&page));
-
-    let go = import_button();
-    view.add_bottom_bar(&go);
     dialog.set_child(Some(&view));
 
     let home = home::account(state).signed_in();
@@ -343,12 +341,16 @@ fn later_groups(card: &Card, jpegs_on: &Rc<Cell<bool>>, placed: Rc<RefCell<HashM
 
 fn import_button() -> gtk::Button {
     let go = primary_button("Import");
-    go.add_css_class("pill");
-    go.set_halign(gtk::Align::Center);
-    go.set_margin_top(12);
-    go.set_margin_bottom(12);
     go.set_sensitive(false);
     go
+}
+
+pub(super) fn import_label(count: usize) -> String {
+    match count {
+        0 => "Import".to_string(),
+        1 => "Import 1 Photo".to_string(),
+        many => format!("Import {} Photos", places::grouped(many as i64)),
+    }
 }
 
 fn import_count(read: &Rc<RefCell<Option<(Card, Rc<RefCell<Vec<Place>>>, PathBuf)>>>, marks: &import_look::Marks, go: &gtk::Button) -> Rc<dyn Fn()> {
@@ -359,11 +361,7 @@ fn import_count(read: &Rc<RefCell<Option<(Card, Rc<RefCell<Vec<Place>>>, PathBuf
         move || {
             let new = read.borrow().as_ref().map_or(0, |(card, _, _)| import_look::new_frames(card).len());
             let coming = new.saturating_sub(import_look::left_on_card(&marks));
-            go.set_label(&match (new, coming) {
-                (0, _) => "Nothing new to import".to_string(),
-                (_, 0) => "Everything left on the card".to_string(),
-                (_, coming) => format!("Import {}", places::grouped(coming as i64)),
-            });
+            go.set_label(&import_label(coming));
             go.set_sensitive(coming > 0);
         }
     ))
@@ -417,13 +415,13 @@ impl Copies {
         group.set_title("Copies");
         let home = home::account(state).signed_in().then(|| {
             let row = adw::SwitchRow::new();
-            row.set_title(&format!("Keep This Library at {}", home::NUMA_HOME));
+            row.set_title(&format!("Keep at {}", home::NUMA_HOME));
             let pace = match home_sync::pace(state).night {
                 true => "at night",
                 false => "while Numa is open",
             };
             row.set_subtitle(&format!(
-                "The library it goes into, Original and Edits, to a new one of the same name on {}, then kept in step {pace} (Preferences)",
+                "The library it goes into, Original and Edits, to a new one of the same name at {}, then updated {pace} (Preferences)",
                 home::NUMA_HOME
             ));
             row
@@ -619,8 +617,8 @@ fn fill(state: &App, dialog: &adw::Dialog, group: &adw::PreferencesGroup, card: 
     let places = Rc::new(RefCell::new(card.shoots.iter().map(|shoot| import::suggest(shoot, &spans, import_offset())).collect::<Vec<_>>()));
 
     group.set_title(&match card.found.len() {
-        0 => "No photographs on it".to_string(),
-        count => format!("{count} photographs"),
+        0 => "No photos on it".to_string(),
+        count => format!("{count} photos"),
     });
     let old = card.already.iter().filter(|there| there.is_some()).count();
     if old > 0 {
@@ -637,7 +635,7 @@ fn fill(state: &App, dialog: &adw::Dialog, group: &adw::PreferencesGroup, card: 
         group.add(&row);
     }
     for (at, shoot) in card.shoots.iter().enumerate() {
-        let title = format!("{} \u{b7} {} photographs", days(shoot.first, shoot.last), shoot.photos.len());
+        let title = format!("{} \u{b7} {} photos", days(shoot.first, shoot.last), shoot.photos.len());
         let row: adw::PreferencesRow = match &places.borrow()[at] {
             Place::Library(library) => {
                 let row = adw::ActionRow::new();

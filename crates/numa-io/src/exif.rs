@@ -179,6 +179,29 @@ fn from_raw(path: &Path) -> Option<(String, String)> {
 }
 
 pub fn all(path: &Path) -> Vec<(String, String)> {
+    let (photograph, file) = photograph_and_file(path);
+    photograph.into_iter().chain(file).collect()
+}
+
+const ABOUT_THE_FILE: [::exif::Tag; 41] = {
+    use ::exif::Tag;
+    [
+        Tag::ExifIFDPointer, Tag::GPSInfoIFDPointer, Tag::InteropIFDPointer,
+        Tag::BitsPerSample, Tag::Compression, Tag::PhotometricInterpretation,
+        Tag::StripOffsets, Tag::SamplesPerPixel, Tag::RowsPerStrip, Tag::StripByteCounts,
+        Tag::XResolution, Tag::YResolution, Tag::PlanarConfiguration, Tag::ResolutionUnit,
+        Tag::TransferFunction, Tag::WhitePoint, Tag::PrimaryChromaticities,
+        Tag::TileOffsets, Tag::TileByteCounts, Tag::JPEGInterchangeFormat, Tag::JPEGInterchangeFormatLength,
+        Tag::YCbCrCoefficients, Tag::YCbCrSubSampling, Tag::YCbCrPositioning, Tag::ReferenceBlackWhite,
+        Tag::ExifVersion, Tag::ComponentsConfiguration, Tag::CompressedBitsPerPixel,
+        Tag::SubSecTime, Tag::SubSecTimeOriginal, Tag::SubSecTimeDigitized, Tag::FlashpixVersion,
+        Tag::FocalPlaneXResolution, Tag::FocalPlaneYResolution, Tag::FocalPlaneResolutionUnit,
+        Tag::GPSVersionID, Tag::InteroperabilityIndex, Tag::InteroperabilityVersion,
+        Tag::RelatedImageFileFormat, Tag::RelatedImageWidth, Tag::RelatedImageLength,
+    ]
+};
+
+pub fn photograph_and_file(path: &Path) -> (Vec<(String, String)>, Vec<(String, String)>) {
     use ::exif::{Context, In, Tag, Value};
     let found = exifs(path);
 
@@ -197,9 +220,9 @@ pub fn all(path: &Path) -> Vec<(String, String)> {
             if field.tag == Tag::MakerNote || !seen.insert(field.tag) {
                 continue;
             }
-            let name = match field.tag.description() {
-                Some(_) => words(&field.tag.to_string()),
-                None => format!("Tag 0x{:04X}", field.tag.number()),
+            let (kind, name) = match field.tag.description() {
+                Some(_) => (ABOUT_THE_FILE.contains(&field.tag) as u8, words(&field.tag.to_string())),
+                None => (2, format!("Tag 0x{:04X}", field.tag.number())),
             };
 
             let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim_matches(|c: char| c == '\0' || c.is_whitespace()).to_string();
@@ -221,12 +244,14 @@ pub fn all(path: &Path) -> Vec<(String, String)> {
                 Some((at, _)) => format!("{}…", &value[..at]),
                 None => value,
             };
-            rows.push((name, value));
+            rows.push((kind, name, value));
         }
     }
 
-    rows.sort_by_key(|(name, _)| name.starts_with("Tag 0x"));
-    rows
+    rows.sort_by_key(|(kind, ..)| *kind);
+    let (photograph, file): (Vec<_>, Vec<_>) = rows.into_iter().map(|(kind, name, value)| (kind, (name, value))).partition(|(kind, _)| *kind == 0);
+    let rows = |part: Vec<(u8, (String, String))>| part.into_iter().map(|(_, row)| row).collect();
+    (rows(photograph), rows(file))
 }
 
 fn exifs(path: &Path) -> Vec<::exif::Exif> {
@@ -369,6 +394,26 @@ mod tests {
         assert_eq!(words("GPSLatitude"), "GPS Latitude");
         assert_eq!(words("FNumber"), "F Number");
         assert_eq!(words("FocalLengthIn35mmFilm"), "Focal Length In 35mm Film");
+    }
+
+    #[test]
+    fn the_files_own_tags_come_last() {
+        let mut tiff: Vec<u8> = b"IIRO".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x69, 0x87, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0]);
+
+        tiff.extend(2u16.to_le_bytes());
+        tiff.extend([0x00, 0x90, 7, 0, 4, 0, 0, 0, b'0', b'2', b'3', b'0']);
+        tiff.extend([0x03, 0x90, 2, 0, 20, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0]);
+        tiff.extend(b"2022:07:17 12:14:32\0");
+        let path = std::env::temp_dir().join(format!("numa-file-{}.orf", std::process::id()));
+        std::fs::write(&path, &tiff).unwrap();
+        let (photograph, file) = photograph_and_file(&path);
+        std::fs::remove_file(&path).unwrap();
+        let names = |rows: &[(String, String)]| rows.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&photograph), ["Date Time Original"]);
+        assert_eq!(names(&file), ["Exif Version"]);
     }
 
     #[test]

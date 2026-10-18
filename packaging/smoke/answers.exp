@@ -1,0 +1,11 @@
+set timeout 2400
+spawn su --pty - photographer -c "cd ~ && bash -ex /tmp/readme.sh"
+expect {
+    -re {trust always} { send "a\r"; exp_continue }
+    -re {\[[yY]/[nN]|Is this ok|Continue\?|Proceed with} { send "y\r"; exp_continue }
+    -re {default=1\)?:} { send "\r"; exp_continue }
+    timeout { puts "\nno answer for 40 minutes: a question the README does not answer"; exit 1 }
+    eof
+}
+lassign [wait] pid id os status
+exit $status

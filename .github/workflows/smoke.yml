@@ -1,0 +1,79 @@
+name: Smoke
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, for example 0.43.0 (empty: the latest release)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.repository == 'simmmmm/Numa'
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Fedora 44", image: "fedora:44", how: readme, heading: "**Fedora 44**" }
+          - { name: "openSUSE Tumbleweed", image: "opensuse/tumbleweed", how: readme, heading: "**openSUSE Tumbleweed**" }
+          - { name: "Ubuntu 26.04 (nl_NL)", image: "ubuntu:26.04", how: readme, heading: "**Ubuntu 26.04**", locale: nl_NL.UTF-8 }
+          - { name: "Debian Testing", image: "debian:testing", how: readme, heading: "**Debian Testing**" }
+          - { name: "Arch", image: "archlinux:latest", how: readme, heading: "**Arch, CachyOS, EndeavourOS**" }
+          - { name: "AppImage on Ubuntu 24.04", image: "ubuntu:24.04", how: appimage, heading: "**AppImage.**" }
+          - { name: "AppImage on Debian 13", image: "debian:13", how: appimage, heading: "**AppImage.**" }
+          - { name: "Flatpak", image: "ubuntu:24.04", how: flatpak, heading: "**Flatpak.**" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/numa-smoke
+          key: smoke-raws-${{ hashFiles('packaging/smoke/raws.tsv') }}
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pil
+      - name: Version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          tag=${WANTED:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
+          echo "number=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: ${{ matrix.name }}
+        env:
+          LOCALE: ${{ matrix.locale }}
+          REPOSITORY: ${{ github.repository }}
+          OUT: ${{ runner.temp }}/smoke
+        run: packaging/smoke/run.sh "${{ matrix.name }}" "${{ matrix.image }}" "${{ matrix.how }}" "${{ matrix.heading }}" "${{ steps.version.outputs.number }}"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/smoke/result.md
+            ${{ runner.temp }}/smoke/log.txt
+            ${{ runner.temp }}/smoke/self-test.log
+          if-no-files-found: ignore
+
+  summary:
+    if: always() && github.repository == 'simmmmm/Numa'
+    needs: smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: smoke-*
+      - run: |
+          {
+            echo "| | | version | decoded on | |"
+            echo "|---|---|---|---|---|"
+            cat smoke-*/result.md 2>/dev/null || echo "| no results | ❌ | | | every job stopped before it wrote one |"
+          } >> "$GITHUB_STEP_SUMMARY"

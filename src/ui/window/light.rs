@@ -59,10 +59,7 @@ pub(super) fn build_light(
         light.append(&row);
     }
 
-    let curve_header = section_header("Tone curve");
-    let curve = build_tone_curve(state, global_only);
-    light.append(&curve_header);
-    light.append(&curve);
+    light.append(&build_tone_curve(state, global_only));
     light
 }
 
@@ -76,6 +73,8 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
     area.set_content_height(CURVE_EDGE);
     area.set_hexpand(true);
     area.add_css_class("tone-curve");
+
+    area.set_tooltip_text(Some("Drag to shape · right-click a point to remove"));
 
     area.set_draw_func(glib::clone!(
         #[strong] state,
@@ -160,13 +159,20 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
     ));
     area.add_controller(remove);
 
+    let _ = global_only;
+    column.append(&curve_line(state));
+    column.append(&area);
+    column
+}
+
+fn curve_line(state: &App) -> gtk::Box {
+
     let channels = chip_row();
     let mut first: Option<gtk::ToggleButton> = None;
     for (index, (label, tooltip)) in
         [("RGB", "All channels"), ("R", "Red"), ("G", "Green"), ("B", "Blue")].into_iter().enumerate()
     {
         let button = gtk::ToggleButton::with_label(label);
-        button.set_hexpand(true);
         button.set_tooltip_text(Some(tooltip));
         button.set_active(index == 0);
         if let Some(first) = &first {
@@ -186,15 +192,17 @@ pub(super) fn build_tone_curve(state: &App, global_only: &dyn Fn(&gtk::Widget)) 
         channels.append(&button);
     }
 
-    let hint = gtk::Label::new(Some("Drag to shape · right-click a point to remove"));
-    hint.set_xalign(0.0);
-    hint.add_css_class("profile-note");
-
-    let _ = global_only;
-    column.append(&channels);
-    column.append(&area);
-    column.append(&hint);
-    column
+    let title = section_header("Tone curve");
+    title.set_hexpand(true);
+    title.set_margin_top(0);
+    title.set_margin_bottom(0);
+    title.set_valign(gtk::Align::Center);
+    channels.set_valign(gtk::Align::Center);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    line.set_margin_top(10);
+    line.append(&title);
+    line.append(&channels);
+    line
 }
 
 pub(super) fn draw_tone_distribution(

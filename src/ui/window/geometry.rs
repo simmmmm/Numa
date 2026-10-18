@@ -38,6 +38,12 @@ pub(super) fn toggle_crop(state: &App, active: bool) {
         }
     }
 
+    let end = &state.editor_page.header_end;
+    match active {
+        true => end.add_css_class("cropping"),
+        false => end.remove_css_class("cropping"),
+    }
+
     set_panel_scope(state);
     commit_crop(state);
 }

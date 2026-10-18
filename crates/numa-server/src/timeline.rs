@@ -22,7 +22,17 @@ pub struct Wanted {
 
     thing: Option<String>,
 
-    pub(crate) by: Option<String>,
+    by: Option<String>,
+
+    flag: Option<String>,
+
+    rating: Option<u8>,
+
+    camera: Option<String>,
+
+    place: Option<String>,
+
+    date: Option<String>,
 }
 
 fn given(text: &Option<String>) -> Option<String> {
@@ -31,7 +41,10 @@ fn given(text: &Option<String>) -> Option<String> {
 
 pub async fn libraries(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Vec<Value>> {
     let mine = server.home.sent_folder(&me.name);
-    let rows = server.home.libraries(&me.name).into_iter().map(|library| {
+
+    let mut libraries = server.home.libraries(&me.name);
+    libraries.sort_by_cached_key(|library| std::cmp::Reverse(server.home.newest(library.id)));
+    let rows = libraries.into_iter().map(|library| {
         json!({ "id": library.id, "name": library.label(), "count": server.home.count(library.id), "mine": library.path == mine })
     });
     Json(rows.collect())
@@ -74,6 +87,7 @@ pub async fn month(
         return Err(Fail::bad("A month is written 2026-03."));
     }
     let photos: Vec<Photo> = chosen(&server, &me.name, &wanted).await?.into_iter().filter(|photo| month_of(photo) == month).collect();
+    let marks = Marks::of(&server, &photos);
 
     let rows = tokio::task::spawn_blocking(move || {
         photos
@@ -82,13 +96,43 @@ pub async fn month(
                 let aspect = photo.aspect.or_else(|| {
                     numa_io::thumbs::cached_size(&photo.path, photo.mtime, numa_io::thumbs::LIBRARY_EDGE).map(|(w, h)| w as f32 / h as f32)
                 });
-                json!({ "id": photo.id, "taken": when(photo), "aspect": aspect.unwrap_or(1.5), "rating": photo.rating, "edited": photo.edited })
+                let mut row = marks.tile(photo);
+                row["aspect"] = json!(aspect.unwrap_or(1.5));
+                row
             })
             .collect()
     })
     .await
     .map_err(Fail::internal)?;
     Ok(Json(rows))
+}
+
+struct Marks {
+    bursts: HashMap<(i64, i64), usize>,
+}
+
+impl Marks {
+    fn of<'a>(server: &Server, photos: impl IntoIterator<Item = &'a Photo>) -> Self {
+        let mut marks = Marks { bursts: HashMap::new() };
+        for library in photos.into_iter().map(|photo| library_of(photo.id)).collect::<HashSet<i64>>() {
+            let files = server.home.files(library);
+            for burst in files.iter().filter_map(|photo| photo.burst) {
+                *marks.bursts.entry((library, burst)).or_default() += 1;
+            }
+        }
+        marks
+    }
+
+    fn tile(&self, photo: &Photo) -> Value {
+        let library = library_of(photo.id);
+        let stack = photo.burst.filter(|_| photo.best_of_burst).and_then(|burst| self.bursts.get(&(library, burst)));
+
+        json!({
+            "id": photo.id, "name": photo.path.file_name().map(|name| name.to_string_lossy()), "taken": when(photo),
+            "rating": photo.rating, "flag": crate::photos::flag_name(photo.flag), "edited": photo.edited, "raw": numa_io::raw::is_raw(&photo.path),
+            "stack": stack,
+        })
+    }
 }
 
 pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted) -> Result<Vec<Photo>, Fail> {
@@ -101,37 +145,84 @@ pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted)
     }
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
     let mut photos = server.home.photos(&ids);
+    let tests = tests(server, &libraries, &photos, wanted).await?;
+    photos.retain(|photo| tests.iter().all(|(_, test)| test(photo)));
+    let oldest_first = wanted.library.is_some() || given(&wanted.album).is_some();
+    photos.sort_by(|a, b| order(when(a), when(b), oldest_first).then_with(|| a.path.cmp(&b.path)));
+    Ok(photos)
+}
+
+fn order(a: i64, b: i64, oldest_first: bool) -> std::cmp::Ordering {
+    const DAY: i64 = 86_400;
+    match oldest_first {
+        true => a.cmp(&b),
+        false => b.div_euclid(DAY).cmp(&a.div_euclid(DAY)).then(a.cmp(&b)),
+    }
+}
+
+type Test = (&'static str, Box<dyn Fn(&Photo) -> bool + Send + Sync>);
+
+async fn tests(server: &Arc<Server>, libraries: &[Library], photos: &[Photo], wanted: &Wanted) -> Result<Vec<Test>, Fail> {
+    let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
+    let mut tests: Vec<Test> = Vec::new();
+    if let Some(only) = wanted.library {
+        tests.push(("library", Box::new(move |photo: &Photo| library_of(photo.id) == only)));
+    }
     if let Some(person) = given(&wanted.person) {
+        let ids = ids.clone();
         let keep = server.home.ask(move |catalog| in_person(catalog, &ids, &person)).await?;
-        photos.retain(|photo| keep.contains(&photo.id));
+        tests.push(("person", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
     if let Some(album) = given(&wanted.album) {
-        let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
+        let ids = ids.clone();
         let keep = server.home.ask(move |catalog| in_album(catalog, &ids, &album)).await?;
-        photos.retain(|photo| keep.contains(&photo.id));
+        tests.push(("album", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
     if let Some(by) = given(&wanted.by) {
-        let owners = crate::by::owners(server, &libraries).await?;
+        let owners = crate::by::owners(server, libraries).await?;
         let nobody = by.eq_ignore_ascii_case(crate::by::UNKNOWN);
-        photos.retain(|photo| match owners.get(&photo.id) {
-            Some(owner) => owner.eq_ignore_ascii_case(&by),
-            None => nobody,
-        });
+        tests.push(("by", Box::new(move |photo: &Photo| owners.get(&photo.id).map_or(nobody, |owner| owner.eq_ignore_ascii_case(&by)))));
     }
     if let Some(thing) = given(&wanted.thing) {
         let at = words::THINGS.iter().position(|known| known.eq_ignore_ascii_case(&thing));
         let at = at.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "Numa does not look for that thing.".into()))?;
-        let indexes = indexes(server, &libraries);
-        photos.retain(|photo| {
-            let saw = indexes.get(&library_of(photo.id)).and_then(|index| index.saw(&photo.path, photo.mtime));
-            saw.is_some_and(|saw| saw.contains(&at))
-        });
+        let keep: HashSet<i64> = saw(server, libraries, photos).into_iter().filter(|(_, saw)| saw.contains(&at)).map(|(id, _)| id).collect();
+        tests.push(("thing", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
     if let Some(q) = given(&wanted.q) {
-        let keep: HashSet<i64> = found(server, libraries, q).await?.into_iter().map(|(id, _)| id).collect();
-        photos.retain(|photo| keep.contains(&photo.id));
+        let keep: HashSet<i64> = found(server, libraries.to_vec(), q).await?.into_iter().map(|(id, _)| id).collect();
+        tests.push(("q", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
-    Ok(photos)
+    if let Some(flag) = given(&wanted.flag) {
+        tests.push(("flag", Box::new(move |photo: &Photo| crate::photos::flag_name(photo.flag) == flag)));
+    }
+    if let Some(stars) = wanted.rating {
+        tests.push(("rating", Box::new(move |photo: &Photo| photo.rating >= stars)));
+    }
+    if let Some(date) = given(&wanted.date) {
+        tests.push(("date", Box::new(move |photo: &Photo| numa_io::import::day(when(photo), 0).starts_with(&date))));
+    }
+    if let Some(camera) = given(&wanted.camera) {
+        let names = cameras(server, &ids).await?;
+        tests.push(("camera", Box::new(move |photo: &Photo| names.get(&photo.id).is_some_and(|name| name.eq_ignore_ascii_case(&camera)))));
+    }
+    if let Some(place) = given(&wanted.place) {
+        let (known, _) = crate::places::known(server, photos);
+        let at = move |photo: &Photo| known.get(&photo.id).is_some_and(|(town, country)| town.eq_ignore_ascii_case(&place) || country.eq_ignore_ascii_case(&place));
+        tests.push(("place", Box::new(at)));
+    }
+    Ok(tests)
+}
+
+async fn cameras(server: &Server, libraries: &[i64]) -> Result<HashMap<i64, String>, Fail> {
+    let ids = libraries.to_vec();
+    let bodies = server.home.ask(move |catalog| ids.iter().filter_map(|&id| catalog.bodies(id).ok()).flatten().collect::<Vec<(i64, String)>>()).await?;
+    Ok(bodies.into_iter().filter(|(_, key)| !key.is_empty()).map(|(id, key)| (id, numa_io::clocks::camera_name(&key, &[]))).collect())
+}
+
+fn saw(server: &Server, libraries: &[Library], photos: &[Photo]) -> HashMap<i64, Vec<usize>> {
+    let indexes = indexes(server, libraries);
+    photos.iter().filter_map(|photo| Some((photo.id, indexes.get(&library_of(photo.id))?.saw(&photo.path, photo.mtime)?.to_vec()))).collect()
 }
 
 fn in_person(catalog: &numa_io::catalog::Catalog, libraries: &[i64], person: &str) -> HashSet<i64> {
@@ -188,21 +279,22 @@ pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
     Ok(Json(rows.collect()))
 }
 
-#[derive(Deserialize)]
-pub struct Asked {
-    q: String,
-    by: Option<String>,
-}
-
-pub async fn search(State(server): State<Arc<Server>>, Signed(me): Signed, Query(asked): Query<Asked>) -> Result<Json<Vec<Value>>, Fail> {
-    let libraries = server.home.libraries(&me.name);
-    let mut found = found(&server, libraries.clone(), asked.q.trim().to_string()).await?;
-    if let Some(by) = given(&asked.by) {
-        let owners = crate::by::owners(&server, &libraries).await?;
-        let nobody = by.eq_ignore_ascii_case(crate::by::UNKNOWN);
-        found.retain(|(id, _)| owners.get(id).map_or(nobody, |owner| owner.eq_ignore_ascii_case(&by)));
-    }
-    Ok(Json(found.into_iter().map(|(id, score)| json!({ "id": id, "score": score })).collect()))
+pub async fn search(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
+    let q = given(&wanted.q).ok_or_else(|| Fail::bad("Say what to look for."))?;
+    let found = found(&server, server.home.libraries(&me.name), q).await?;
+    let kept: HashMap<i64, Photo> = chosen(&server, &me.name, &Wanted { q: None, ..wanted }).await?.into_iter().map(|photo| (photo.id, photo)).collect();
+    let photos: Vec<(&Photo, f32)> = found.into_iter().filter_map(|(id, score)| Some((kept.get(&id)?, score))).collect();
+    let marks = Marks::of(&server, photos.iter().map(|(photo, _)| *photo));
+    Ok(Json(
+        photos
+            .iter()
+            .map(|(photo, score)| {
+                let mut row = marks.tile(photo);
+                row["score"] = json!(score);
+                row
+            })
+            .collect(),
+    ))
 }
 
 async fn found(server: &Arc<Server>, libraries: Vec<Library>, q: String) -> Result<Vec<(i64, f32)>, Fail> {
@@ -244,24 +336,61 @@ pub fn indexes<'a>(server: &'a Server, libraries: &[Library]) -> MutexGuard<'a, 
     indexes
 }
 
-pub async fn things(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
+pub async fn filters(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Value>, Fail> {
     let libraries = server.home.libraries(&me.name);
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
     let photos = server.home.photos(&ids);
-    let counts = tokio::task::spawn_blocking(move || {
-        let indexes = indexes(&server, &libraries);
-        let mut counts = vec![0usize; words::THINGS.len()];
-        for photo in &photos {
-            let saw = indexes.get(&library_of(photo.id)).and_then(|index| index.saw(&photo.path, photo.mtime));
-            saw.into_iter().flatten().for_each(|&at| counts[at] += 1);
-        }
-        counts
+    let tests = tests(&server, &libraries, &photos, &wanted).await?;
+    let people = {
+        let ids = ids.clone();
+        server.home.ask(move |catalog| ids.iter().flat_map(|&id| catalog.people(id).unwrap_or_default()).collect::<Vec<_>>()).await?
+    };
+    let mut named: HashMap<i64, Vec<String>> = HashMap::new();
+    for (name, photos) in people {
+        photos.into_iter().for_each(|id| named.entry(id).or_default().push(name.clone()));
+    }
+    let cameras = cameras(&server, &ids).await?;
+    let owners = crate::by::owners(&server, &libraries).await?;
+    let (places, looking) = crate::places::known(&server, &photos);
+    let answer = tokio::task::spawn_blocking(move || {
+        let saw = saw(&server, &libraries, &photos);
+
+        let within = |own: &str| photos.iter().filter(|photo| tests.iter().all(|(key, test)| *key == own || test(photo))).collect::<Vec<&Photo>>();
+        let here: Vec<(&str, &str)> = within("place").iter().filter_map(|photo| places.get(&photo.id).copied()).collect();
+        let lands = tally(here.iter().map(|(_, country)| *country)).into_iter().map(|(country, count)| {
+            let towns = tally(here.iter().filter(|(_, land)| *land == country).map(|(town, _)| *town));
+            json!({ "country": country, "count": count, "towns": towns })
+        });
+        let mut years = tally(within("date").iter().map(|photo| numa_io::import::day(when(photo), 0)[..4].to_string()));
+        years.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut by = tally(within("by").iter().map(|photo| owners.get(&photo.id).map(String::as_str)));
+        by.sort_by_key(|(account, count)| (account.is_none(), std::cmp::Reverse(*count)));
+        let mut ratings = [0usize; 6];
+        within("rating").iter().for_each(|photo| ratings[photo.rating.min(5) as usize] += 1);
+        json!({
+            "libraries": tally(within("library").iter().map(|photo| library_of(photo.id))),
+            "people": tally(within("person").iter().flat_map(|photo| named.get(&photo.id).into_iter().flatten().map(String::as_str))),
+            "places": lands.collect::<Vec<Value>>(),
+            "looking": looking,
+            "cameras": tally(within("camera").iter().filter_map(|photo| cameras.get(&photo.id).map(String::as_str))),
+            "years": years,
+            "by": by,
+            "things": tally(within("thing").iter().flat_map(|photo| saw.get(&photo.id).into_iter().flatten().map(|&at| words::THINGS[at]))),
+            "flags": tally(within("flag").iter().map(|photo| crate::photos::flag_name(photo.flag))),
+            "ratings": ratings,
+        })
     })
     .await
     .map_err(Fail::internal)?;
-    let mut rows: Vec<(usize, &str)> = counts.into_iter().zip(words::THINGS).filter(|(count, _)| *count > 0).collect();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
-    Ok(Json(rows.into_iter().map(|(count, thing)| json!({ "thing": thing, "count": count })).collect()))
+    Ok(Json(answer))
+}
+
+fn tally<T: Ord + std::hash::Hash>(values: impl Iterator<Item = T>) -> Vec<(T, usize)> {
+    let mut counts: HashMap<T, usize> = HashMap::new();
+    values.for_each(|value| *counts.entry(value).or_default() += 1);
+    let mut rows: Vec<(T, usize)> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    rows
 }
 
 #[derive(Deserialize)]
@@ -297,6 +426,7 @@ pub async fn in_step(
                         "taken": when(photo),
                         "rating": photo.rating,
                         "flag": crate::photos::flag_name(photo.flag),
+                        "edited": photo.edited,
                         "updated": changed,
                     })
                 })
@@ -306,4 +436,20 @@ pub async fn in_step(
     .await
     .map_err(Fail::internal)?;
     Ok(([("x-numa-now", now.to_string())], Json(rows)).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::order;
+
+    #[test]
+    fn a_day_reads_forward_with_the_newest_day_on_top() {
+        let day = 86_400;
+        let mut times = vec![day + 10, 2 * day + 5, day + 3, 2 * day + 9];
+        times.sort_by(|a, b| order(*a, *b, false));
+        assert_eq!(times, [2 * day + 5, 2 * day + 9, day + 3, day + 10]);
+
+        times.sort_by(|a, b| order(*a, *b, true));
+        assert_eq!(times, [day + 3, day + 10, 2 * day + 5, 2 * day + 9]);
+    }
 }

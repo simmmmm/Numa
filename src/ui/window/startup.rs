@@ -1,8 +1,8 @@
 use gtk::{glib, prelude::*};
 
 use super::{
-    build_editor_page, consider_update_check, downloads, integrate_appimage, offer_crash_report, open_requested,
-    reload_libraries, report_panel, request_render, watch_cards, App,
+    build_editor_page, consider_update_check, downloads, integrate_appimage, key_toast, offer_crash_report,
+    open_requested, reload_libraries, report_panel, request_render, watch_cards, App,
 };
 
 pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
@@ -35,11 +35,18 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
 
     report_panel(state);
     open_requested(state);
+
+    super::start_self_test(state, window);
 }
 
 pub(super) fn show_editor(state: &App) {
     ensure_editor_page(state);
     state.stack.set_visible_child_name("editor");
+    key_toast(
+        state,
+        "hint-editor-keys",
+        "Hold Space to compare with the original · double-click a slider to reset it · I shows the camera's details",
+    );
 }
 
 pub(super) fn ensure_editor_page(state: &App) {

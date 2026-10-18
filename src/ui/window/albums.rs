@@ -45,7 +45,6 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
             ask.set_extra_child(Some(&entry));
             ask.add_response("cancel", "Cancel");
             ask.add_response("create", "Create");
-            ask.set_response_appearance("create", adw::ResponseAppearance::Suggested);
             ask.set_default_response(Some("create"));
             ask.set_close_response("cancel");
             let (state, name) = (state.clone(), entry.clone());

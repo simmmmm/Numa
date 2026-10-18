@@ -29,6 +29,28 @@
 @define-color numa_mask_erase rgba(255, 255, 255, 0.35);
 @define-color numa_clip_shadow #2858ff;
 @define-color numa_clip_highlight #ff4040;
+@define-color numa_ground_photo_card_linux rgba(20, 20, 20, 0.7);
+@define-color numa_attention #e0b04a;
+@define-color numa_ground_bar rgba(20, 20, 20, 0.92);
+@define-color numa_surround_black #000000;
+@define-color numa_surround_dark #0e0e0e;
+@define-color numa_surround_grey #777777;
+@define-color numa_surround_light #c6c6c6;
+@define-color numa_map_land #141414;
+@define-color numa_map_water #0e0e0e;
+@define-color numa_map_road rgba(255, 255, 255, 0.07);
+@define-color numa_map_road_major rgba(255, 255, 255, 0.12);
+@define-color numa_map_border rgba(255, 255, 255, 0.1);
+@define-color numa_map_label #8d8d8d;
+@define-color numa_map_label_place #bdbdbd;
+@define-color numa_library_tint_0 #75a5c7;
+@define-color numa_library_tint_1 #cd9e70;
+@define-color numa_library_tint_2 #6db08f;
+@define-color numa_library_tint_3 #c284a3;
+@define-color numa_library_tint_4 #c2bb70;
+@define-color numa_library_tint_5 #a993c8;
+@define-color numa_library_tint_6 #62b2b2;
+@define-color numa_library_tint_7 #ca7d7d;
 @define-color numa_photo_ground_window #242424;
 @define-color numa_photo_ground_view #1e1e1e;
 @define-color numa_photo_ground_raised #303030;
@@ -51,6 +73,7 @@
 @define-color numa_photo_on_accent #141414;
 @define-color numa_photo_reject #ff7a66;
 @define-color numa_photo_star_rest #5e5e5e;
+@define-color numa_photo_attention #e0b04a;
 /* light */
 @define-color numa_ground_window #fafafb;
 @define-color numa_ground_view #ffffff;
@@ -74,3 +97,4 @@
 @define-color numa_on_accent #ffffff;
 @define-color numa_reject #c01c28;
 @define-color numa_star_rest #8d8d8d;
+@define-color numa_attention #8f6400;

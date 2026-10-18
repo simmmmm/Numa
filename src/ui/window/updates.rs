@@ -11,7 +11,6 @@ pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow
         Some("yes") => check_for_update(state, window),
         Some(_) => {}
         None => {
-            let _ = state.catalog.set_setting(UPDATE_CHECK, "no");
             let banner = &state.grid.update_banner;
             banner.set_title("Look for new versions once a day?");
             banner.set_button_label(Some("Check Daily"));
@@ -25,6 +24,17 @@ pub(super) fn consider_update_check(state: &App, window: &adw::ApplicationWindow
                 }
             ));
             banner.set_revealed(true);
+
+            let seen = glib::clone!(
+                #[strong] state,
+                move |banner: &adw::Banner| {
+                    if banner.get_visible() && state.catalog.setting(UPDATE_CHECK).is_none() {
+                        let _ = state.catalog.set_setting(UPDATE_CHECK, "no");
+                    }
+                }
+            );
+            seen(banner);
+            banner.connect_visible_notify(seen);
         }
     }
 }
@@ -83,6 +93,21 @@ pub(super) fn key_hint(state: &App, key: &'static str, text: &str) -> adw::Banne
         }
     ));
     banner
+}
+
+pub(super) fn key_toast(state: &App, key: &'static str, text: &str) {
+    thread_local!(static SHOWN: Cell<bool> = const { Cell::new(false) });
+    if !first_time(state, key) || SHOWN.with(|shown| shown.replace(true)) {
+        return;
+    }
+    let toast = adw::Toast::new(text);
+    toast.set_button_label(Some("Got It"));
+    toast.set_timeout(12);
+    toast.connect_button_clicked(glib::clone!(
+        #[strong] state,
+        move |_| mark_seen(&state, key)
+    ));
+    state.toasts.add_toast(toast);
 }
 
 pub(super) fn banners(state: &App) -> gtk::Box {

@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use numa_cull::Scale;
@@ -23,22 +23,25 @@ const SAMPLES: usize = 8;
 #[derive(Default)]
 pub struct Tidy {
     copies: Mutex<Option<Arc<(Vec<Vec<i64>>, usize)>>>,
+
+    stale: std::sync::atomic::AtomicBool,
     hashes: Mutex<Option<HashMap<String, (i64, u64, String)>>>,
 }
 
 impl Tidy {
 
     pub fn stale(&self) {
-        *self.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        self.stale.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
 pub fn prepare(server: &Server) -> HashMap<&'static str, usize> {
     let found = copies(server, true);
     *server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(found));
-    let everyone = Account { name: String::new(), admin: true };
+    server.tidy.stale.store(false, std::sync::atomic::Ordering::Relaxed);
+    let everyone = Account { name: String::new(), admin: true, manage: true };
     let mut counts = HashMap::new();
-    for card in cards(server, &everyone) {
+    for card in cards(server, &everyone, None, None) {
         *counts.entry(card.kind).or_default() += 1;
     }
     counts
@@ -89,9 +92,11 @@ fn copies(server: &Server, hash: bool) -> (Vec<Vec<i64>>, usize) {
 }
 
 fn copies_now(server: &Server) -> Arc<(Vec<Vec<i64>>, usize)> {
-    if let Some(found) = server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
+    let found = server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    if let Some(found) = found.filter(|_| !server.tidy.stale.load(std::sync::atomic::Ordering::Relaxed)) {
         return found;
     }
+    server.tidy.stale.store(false, std::sync::atomic::Ordering::Relaxed);
     let found = Arc::new(copies(server, false));
     *server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(found.clone());
     found
@@ -111,7 +116,7 @@ pub struct Card {
     notes: HashMap<i64, Vec<String>>,
 }
 
-fn scale(server: &Server, library: i64) -> Scale {
+pub fn scale(server: &Server, library: i64) -> Scale {
     Scale::of(server.home.files(library).iter().filter_map(|photo| photo.face_sharpness.or(photo.sharpness)))
 }
 
@@ -180,18 +185,42 @@ fn unusable(photo: &Photo, scale: &Scale) -> Option<String> {
     None
 }
 
-pub fn cards(server: &Server, me: &Account) -> Vec<Card> {
+pub fn cards(server: &Server, me: &Account, mine: Option<&HashSet<i64>>, only: Option<i64>) -> Vec<Card> {
+    sets(server, me, &copies_now(server).0, mine, only)
+}
+
+pub fn waiting(server: &Server, me: &Account, mine: Option<&HashSet<i64>>) -> usize {
+    let found = server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone().unwrap_or_default();
+    sets(server, me, &found.0, mine, None).len()
+}
+
+pub async fn mine(server: &Arc<Server>, me: &Account, everyone: bool) -> Result<Option<HashSet<i64>>, Fail> {
+    if everyone || server.store.accounts().map_err(Fail::internal)?.len() < 2 {
+        return Ok(None);
+    }
+    let owners = crate::by::owners(server, &server.home.libraries(&me.name)).await?;
+    Ok(Some(owners.into_iter().filter(|(_, owner)| owner.eq_ignore_ascii_case(&me.name)).map(|(photo, _)| photo).collect()))
+}
+
+fn own(photos: &[Photo], mine: Option<&HashSet<i64>>, least: usize) -> Option<Vec<Photo>> {
+    let kept: Vec<Photo> = photos.iter().filter(|photo| mine.is_none_or(|mine| mine.contains(&photo.id))).cloned().collect();
+    (kept.len() >= least).then_some(kept)
+}
+
+fn sets(server: &Server, me: &Account, copies: &[Vec<i64>], mine: Option<&HashSet<i64>>, only: Option<i64>) -> Vec<Card> {
     let settled = server.store.settled();
     let libraries: Vec<Library> = server.home.libraries(&me.name).into_iter().filter(|library| may_manage(server, me, library)).collect();
     let ours: HashSet<i64> = libraries.iter().map(|library| library.id).collect();
     let mut cards = Vec::new();
 
-    for group in &copies_now(server).0 {
-        let photos: Vec<Photo> = group.iter().filter_map(|id| server.home.photo(&me.name, *id).ok()).collect();
-        if photos.len() < 2 || photos.iter().any(|photo| !ours.contains(&library_of(photo.id))) {
+    for group in copies {
+        let all: Vec<Photo> = group.iter().filter_map(|id| server.home.photo(&me.name, *id).ok()).collect();
+        let Some(photos) = own(&all, mine, 2) else { continue };
+        let here = |photo: &Photo| only.is_none_or(|only| library_of(photo.id) == only);
+        if photos.iter().any(|photo| !ours.contains(&library_of(photo.id))) || !photos.iter().any(here) {
             continue;
         }
-        let key = photos
+        let key = all
             .iter()
             .filter_map(|photo| Some(format!("copies:{}:{}", library_of(photo.id), within(&server.home.library(library_of(photo.id))?, &photo.path))))
             .min()
@@ -204,7 +233,7 @@ pub fn cards(server: &Server, me: &Account) -> Vec<Card> {
         cards.push(Card { key: key.clone(), kind: "copies", keep, why: why.into(), settle: vec![key], notes: HashMap::new(), photos });
     }
 
-    for library in &libraries {
+    for library in libraries.iter().filter(|library| only.is_none_or(|only| library.id == only)) {
         let scale = scale(server, library.id);
         let photos = server.home.photos(&[library.id]);
         let mut runs: HashMap<i64, Vec<Photo>> = HashMap::new();
@@ -221,6 +250,7 @@ pub fn cards(server: &Server, me: &Account) -> Vec<Card> {
             if settled.contains(&key) {
                 continue;
             }
+            let Some(run) = own(&run, mine, RUN) else { continue };
             let Some(best) = best_frame(&run) else { continue };
             let (keep, why) = (vec![best.id], burst_why(best, &run));
             let notes = run.iter().map(|photo| (photo.id, numa_io::notes::issues(photo, &scale))).collect();
@@ -228,7 +258,7 @@ pub fn cards(server: &Server, me: &Account) -> Vec<Card> {
         }
         let found: Vec<(Photo, String, String)> = photos
             .into_iter()
-            .filter(|photo| !in_run.contains(&photo.id))
+            .filter(|photo| !in_run.contains(&photo.id) && mine.is_none_or(|mine| mine.contains(&photo.id)))
             .filter_map(|photo| {
                 let key = format!("unusable:{}:{}", library.id, within(library, &photo.path));
                 let why = unusable(&photo, &scale).filter(|_| !settled.contains(&key))?;
@@ -256,39 +286,66 @@ pub fn cards(server: &Server, me: &Account) -> Vec<Card> {
     cards
 }
 
-async fn who(server: &Arc<Server>, me: &Account) -> Result<(Vec<Value>, Vec<String>), Fail> {
-    let accounts: Vec<String> = server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect();
+async fn nobodys(server: &Arc<Server>, me: &Account, only: Option<i64>, accounts: &[String]) -> Result<Vec<(i64, String, Vec<Photo>)>, Fail> {
     if accounts.len() < 2 {
-        return Ok((Vec::new(), accounts));
+        return Ok(Vec::new());
     }
     let settled = server.store.settled();
-    let libraries = server.home.libraries(&me.name);
+    let libraries: Vec<Library> = server.home.libraries(&me.name).into_iter().filter(|library| only.is_none_or(|only| library.id == only)).collect();
     let owners = crate::by::owners(server, &libraries).await?;
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
     let bodies: HashMap<i64, String> =
         server.home.ask(move |catalog| ids.into_iter().filter_map(|id| catalog.bodies(id).ok()).flatten().collect()).await?;
-    let mut by_camera: HashMap<String, Vec<Photo>> = HashMap::new();
-    for photo in server.home.photos(&libraries.iter().map(|library| library.id).collect::<Vec<_>>()) {
-        if !owners.contains_key(&photo.id) {
-            by_camera.entry(bodies.get(&photo.id).cloned().unwrap_or_default()).or_default().push(photo);
+    let mut by_camera: HashMap<(i64, String), Vec<Photo>> = HashMap::new();
+    for library in &libraries {
+        for photo in server.home.photos(&[library.id]) {
+            if !owners.contains_key(&photo.id) {
+                by_camera.entry((library.id, bodies.get(&photo.id).cloned().unwrap_or_default())).or_default().push(photo);
+            }
         }
     }
-    let mut cards: Vec<(String, Vec<Photo>)> = by_camera.into_iter().filter(|(camera, _)| !settled.contains(&format!("who:{camera}"))).collect();
-    cards.sort_by_key(|(_, photos)| std::cmp::Reverse(photos.len()));
-    let cards = cards
-        .into_iter()
-        .map(|(camera, photos)| {
-            let mut parts = camera.splitn(3, '|');
-            let name = [parts.next().unwrap_or(""), parts.next().unwrap_or("")].join(" ").trim().to_string();
-            let name = if name.is_empty() { "A camera that does not say its name".to_string() } else { name };
-            let shown: Vec<Value> = photos.iter().take(SAMPLES).map(|photo| json!({ "id": photo.id, "aspect": photo.aspect, "notes": [] })).collect();
-            json!({
-                "key": format!("who:{camera}"), "kind": "who", "title": name, "why": format!("{} photograph{} by nobody known yet", photos.len(), if photos.len() == 1 { "" } else { "s" }),
-                "photos": shown, "ids": photos.iter().map(|photo| photo.id).collect::<Vec<_>>(), "keep": [],
-            })
-        })
-        .collect();
-    Ok((cards, accounts))
+    let mut found: Vec<(i64, String, Vec<Photo>)> =
+        by_camera.into_iter().filter(|((_, camera), _)| !settled.contains(&format!("who:{camera}"))).map(|((library, camera), photos)| (library, camera, photos)).collect();
+    found.sort_by(|a, b| b.2.len().cmp(&a.2.len()).then_with(|| (a.0, &a.1).cmp(&(b.0, &b.1))));
+    Ok(found)
+}
+
+fn who(camera: &str, photos: &[Photo]) -> Value {
+    let mut parts = camera.splitn(3, '|');
+    let name = [parts.next().unwrap_or(""), parts.next().unwrap_or("")].join(" ").trim().to_string();
+    let name = if name.is_empty() { "A camera that does not say its name".to_string() } else { name };
+    let shown: Vec<Value> = photos.iter().take(SAMPLES).map(|photo| json!({ "id": photo.id, "aspect": photo.aspect, "notes": [] })).collect();
+    json!({
+        "key": format!("who:{camera}"), "kind": "who", "title": name, "why": format!("{} photograph{} by nobody known yet", photos.len(), if photos.len() == 1 { "" } else { "s" }),
+        "photos": shown, "ids": photos.iter().map(|photo| photo.id).collect::<Vec<_>>(), "keep": [],
+    })
+}
+
+#[derive(Default)]
+struct Waits {
+    photos: usize,
+    sets: usize,
+    covers: Vec<i64>,
+}
+
+fn per_library(sets: impl Iterator<Item = Vec<i64>>) -> BTreeMap<i64, Waits> {
+    let mut waits: BTreeMap<i64, Waits> = BTreeMap::new();
+    let mut counted = HashSet::new();
+    for ids in sets {
+        for library in ids.iter().map(|id| library_of(*id)).collect::<BTreeSet<_>>() {
+            waits.entry(library).or_default().sets += 1;
+        }
+        for id in ids {
+            let waiting = waits.entry(library_of(id)).or_default();
+            if counted.insert(id) {
+                waiting.photos += 1;
+            }
+            if waiting.covers.len() < 3 && !waiting.covers.contains(&id) {
+                waiting.covers.push(id);
+            }
+        }
+    }
+    waits
 }
 
 fn place(server: &Server, photo: &Photo) -> String {
@@ -298,11 +355,45 @@ fn place(server: &Server, photo: &Photo) -> String {
     }
 }
 
-pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Value>, Fail> {
+#[derive(Deserialize, Default)]
+pub struct Asked {
+    library: Option<i64>,
+
+    everyone: Option<String>,
+}
+
+pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed, Query(asked): Query<Asked>) -> Result<Json<Value>, Fail> {
+    let everyone = matches!(asked.everyone.as_deref(), Some("1" | "true"));
+    let seen = server.home.libraries(&me.name);
+    let only = match asked.library {
+        Some(id) => Some(seen.iter().find(|library| library.id == id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?),
+        None => None,
+    };
+    let accounts: Vec<String> = server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect();
+    let chosen = mine(&server, &me, everyone).await?;
+    let only_id = only.as_ref().map(|library| library.id);
     let (working, asking) = (server.clone(), me.clone());
-    let (cards, pending) = tokio::task::spawn_blocking(move || (cards(&working, &asking), copies_now(&working).1)).await.map_err(Fail::internal)?;
-    let (who, accounts) = who(&server, &me).await?;
-    let mut counts: HashMap<&str, usize> = HashMap::from([("copies", 0), ("bursts", 0), ("unusable", 0), ("who", who.len())]);
+    let (cards, pending) = tokio::task::spawn_blocking(move || (cards(&working, &asking, chosen.as_ref(), only_id), copies_now(&working).1)).await.map_err(Fail::internal)?;
+    let nobody = if everyone { nobodys(&server, &me, only_id, &accounts).await? } else { Vec::new() };
+    let waits = per_library(
+        cards.iter().map(|card| card.photos.iter().map(|photo| photo.id).collect::<Vec<i64>>()).chain(nobody.iter().map(|(_, _, photos)| photos.iter().take(SAMPLES).map(|photo| photo.id).collect::<Vec<i64>>())),
+    );
+    let (home, single) = (server.home.sent_folder(&me.name), accounts.len() < 2);
+
+    let Some(library) = only else {
+        let mut shown: Vec<Library> = seen.into_iter().filter(|library| waits.contains_key(&library.id)).collect();
+        shown.sort_by_cached_key(|library| std::cmp::Reverse(server.home.newest(library.id)));
+        let rows: Vec<Value> = shown
+            .iter()
+            .map(|library| {
+                let waiting = &waits[&library.id];
+                json!({ "id": library.id, "name": library.label(), "mine": library.path == home, "photos": waiting.photos, "sets": waiting.sets, "covers": waiting.covers })
+            })
+            .collect();
+        return Ok(Json(json!({ "libraries": rows, "everyone": everyone, "single": single, "pending": pending, "accounts": accounts })));
+    };
+
+    let mut counts: HashMap<&str, usize> = HashMap::from([("copies", 0), ("bursts", 0), ("unusable", 0), ("who", nobody.len())]);
     let mut rows: Vec<Value> = cards
         .iter()
         .map(|card| {
@@ -320,14 +411,21 @@ pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed) -> Resu
             json!({ "key": card.key, "kind": card.kind, "why": card.why, "keep": card.keep, "photos": photos })
         })
         .collect();
-    rows.extend(who);
-    Ok(Json(json!({ "counts": counts, "cards": rows, "pending": pending, "accounts": accounts })))
+    rows.extend(nobody.iter().map(|(_, camera, photos)| who(camera, photos)));
+    let may = may_manage(&server, &me, &library);
+    let photos = waits.get(&library.id).map_or(0, |waiting| waiting.photos);
+    let library = json!({ "id": library.id, "name": library.label(), "mine": library.path == home, "may": may, "photos": photos });
+    Ok(Json(json!({ "library": library, "everyone": everyone, "single": single, "counts": counts, "cards": rows, "pending": pending, "accounts": accounts })))
 }
 
 #[derive(Deserialize)]
 pub struct Kept {
     key: String,
     keep: Vec<i64>,
+
+    library: Option<i64>,
+    #[serde(default)]
+    everyone: bool,
 }
 
 pub async fn keep(State(server): State<Arc<Server>>, Signed(me): Signed, Json(kept): Json<Kept>) -> Result<Json<Value>, Fail> {
@@ -335,10 +433,11 @@ pub async fn keep(State(server): State<Arc<Server>>, Signed(me): Signed, Json(ke
         server.store.settle(&[kept.key]);
         return Ok(Json(json!({ "trashed": 0 })));
     }
+    let chosen = mine(&server, &me, kept.everyone).await?;
     let working = server.clone();
     let trashed = tokio::task::spawn_blocking(move || {
         let server = working;
-        let card = cards(&server, &me)
+        let card = cards(&server, &me, chosen.as_ref(), kept.library)
             .into_iter()
             .find(|card| card.key == kept.key)
             .ok_or_else(|| Fail(StatusCode::CONFLICT, "That set has changed since the page was made; it is shown again.".into()))?;
@@ -379,6 +478,33 @@ mod tests {
         let run = [frame(1, 0.9, true, None, 4.4), frame(2, 0.7, false, None, 3.0)];
         assert_eq!(best_frame(&run).map(|photo| photo.id), Some(1));
         assert_eq!(burst_why(&run[0], &run), "Numa's pick: the sharpest of the run, suggested 4.4★");
+    }
+
+    #[test]
+    fn a_set_is_cut_down_to_the_accounts_own_and_needs_enough_of_them_left() {
+        let run: Vec<Photo> = (1..=5).map(|id| frame(id, 0.5, false, None, 3.0)).collect();
+        let ids = |kept: Option<Vec<Photo>>| kept.map(|photos| photos.iter().map(|photo| photo.id).collect::<Vec<_>>());
+        let mine: HashSet<i64> = [1, 3, 4, 9].into();
+        assert_eq!(ids(own(&run, Some(&mine), RUN)), Some(vec![1, 3, 4]));
+        let few: HashSet<i64> = [1, 5].into();
+        assert_eq!(ids(own(&run, Some(&few), RUN)), None, "two of five frames are not a run of one's own");
+        assert_eq!(ids(own(&run, Some(&few), 2)), Some(vec![1, 5]), "but they are a pair");
+        assert_eq!(ids(own(&run, None, RUN)), Some(vec![1, 2, 3, 4, 5]), "everyone's keeps them all");
+        assert_eq!(ids(own(&run[..1], None, 2)), None, "a pair needs both");
+    }
+
+    #[test]
+    fn a_library_counts_its_photographs_once_and_shows_three_of_them() {
+        let at = |library: i64, row: i64| (library << 32) | row;
+
+        let sets = vec![vec![at(1, 1), at(2, 1)], vec![at(2, 1), at(2, 2), at(2, 3), at(2, 4)], vec![at(1, 5)]];
+        let waits = per_library(sets.into_iter());
+        let (first, second) = (&waits[&1], &waits[&2]);
+        assert_eq!((first.photos, first.sets), (2, 2));
+        assert_eq!((second.photos, second.sets), (4, 2), "the copy that is also in the run is one photograph");
+        assert_eq!(second.covers, [at(2, 1), at(2, 2), at(2, 3)]);
+        assert_eq!(first.covers, [at(1, 1), at(1, 5)]);
+        assert!(!waits.contains_key(&3), "a library with nothing waiting is not listed");
     }
 
     #[test]

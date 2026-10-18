@@ -1,7 +1,7 @@
 use super::*;
 
 fn remote(id: &str, path: &str, updated: i64) -> Remote {
-    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), updated }
+    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), edited: false, updated }
 }
 
 fn local(path: &str, edits: Option<&str>, rating: u8) -> Local {
@@ -17,7 +17,7 @@ fn link(kept: &[(&str, &Local, i64)]) -> Link {
 fn new_on_the_server_comes_down_and_new_here_goes_up() {
     let ours = [local("2026/a.raf", None, 0)];
     let steps = plan(&Link::default(), &[remote("7", "2026/b.raf", 5)], &ours);
-    assert_eq!(steps, vec![Step::Download(remote("7", "2026/b.raf", 5)), Step::Send("2026/a.raf".into())]);
+    assert_eq!(steps, vec![Step::Arrive(remote("7", "2026/b.raf", 5)), Step::Send("2026/a.raf".into())]);
 
     let sent = link(&[("7", &local("2026/b.RAF", None, 0), 5)]);
     assert_eq!(plan(&sent, &[remote("7", "2026/b.raf", 5)], &[local("2026/b.RAF", None, 0)]), vec![]);
@@ -112,6 +112,8 @@ fn the_answers_are_read() {
     let listed = photos("[{\"id\":3,\"path\":\"2026/a.raf\",\"size\":9,\"mtime\":1,\"taken\":null,\"rating\":2,\"flag\":\"pick\",\"updated\":44}]\n200").unwrap();
     assert_eq!(listed[0].id, "3");
     assert_eq!((listed[0].rating, listed[0].flag.as_str(), listed[0].updated), (2, "pick", 44));
+    assert!(!listed[0].edited, "a server from before says nothing of edits");
+    assert!(photos("[{\"id\":3,\"path\":\"a.raf\",\"edited\":true,\"updated\":1}]\n200").unwrap()[0].edited);
     assert_eq!(libraries("[{\"id\":1,\"name\":\"Family\",\"count\":12,\"mine\":false}]\n200").unwrap()[0].name, "Family");
     assert_eq!(edits("{\"edits\":null,\"updated\":5}\n200"), Ok((None, 5)));
     assert_eq!(edits("{\"edits\":{\"exposure\":1},\"updated\":6}\n200"), Ok((Some("{\"exposure\":1}".into()), 6)));
@@ -149,4 +151,40 @@ fn the_night_and_the_hotspot_hold_a_round_back() {
     let always = Pace { night: false, unmetered: false };
     assert!(always.allows(14, true));
     assert!(!Pace { night: false, unmetered: true }.allows(14, true));
+}
+
+#[test]
+fn a_library_from_before_lists_everything_once_and_nothing_comes_twice() {
+    let brought = local("2026-03/a.raf", None, 3);
+    let removed = local("2026-03/b.raf", None, 0);
+    let kept = Link { since: 500, ..link(&[("1", &brought, 400), ("2", &removed, 400)]) };
+    assert_eq!(listed_after(&kept), 0);
+    let all = [remote("1", "2026-03/a.raf", 400), remote("2", "2026-03/b.raf", 400), remote("3", "2026-01/c.raf", 200)];
+    assert_eq!(plan(&kept, &all, &[brought.clone()]), vec![Step::Arrive(remote("3", "2026-01/c.raf", 200))]);
+    assert_eq!(listed_after(&Link { everything: true, ..kept }), 500);
+
+    let before: Link = serde_json::from_str(r#"{"address":"nas","library":"2","name":"Garden","since":9,"photos":{}}"#).unwrap();
+    assert!(!before.everything && !before.keep_here);
+
+    let at_home = local("2026-01/c.raf", None, 0);
+    let now = link(&[("3", &at_home, 200)]);
+    let starred = local("2026-01/c.raf", None, 5);
+    assert_eq!(plan(&now, &[], &[starred]), vec![both("2026-01/c.raf", "3", None, NONE, MARKS)]);
+}
+
+#[test]
+fn home_thumbnails_come_in_one_curl_and_each_is_read() {
+    let to = |name: &str| PathBuf::from(format!("/lib/.numa/home/{name}.jpg.part"));
+    let argv = thumbnails("nas", &[("7".into(), to("7")), ("8".into(), to("8"))]);
+    let text: Vec<String> = argv.iter().map(|arg| arg.to_string_lossy().to_string()).collect();
+    assert_eq!(text.iter().filter(|arg| *arg == "--output").count(), 2);
+    assert!(text.ends_with(&["--output".into(), "/lib/.numa/home/8.jpg.part".into(), "http://nas:8283/api/v1/photos/8/thumb?edge=256".into()]));
+    assert!(text.windows(2).any(|pair| pair == ["--header", "@-"]) && text.contains(&"--fail".to_string()));
+    let preview: Vec<String> = preview("nas", "8", Path::new("/c/p.jpg")).iter().map(|arg| arg.to_string_lossy().to_string()).collect();
+    assert_eq!(preview.last().unwrap(), "http://nas:8283/api/v1/photos/8/preview");
+    assert!(preview.windows(2).any(|pair| pair == ["--output", "/c/p.jpg"]) && preview.contains(&"--fail".to_string()));
+    assert_eq!(thumbnails_came("200\n404\n"), Ok(vec![true, false]));
+    assert_eq!(thumbnails_came("000\n000\n"), Err(Failure::Unreachable));
+    assert_eq!(thumbnails_came(""), Err(Failure::Unreachable));
+    assert!(matches!(thumbnails_came("401\n401\n"), Err(Failure::SignIn(_))));
 }

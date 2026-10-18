@@ -51,7 +51,6 @@ fn ask(state: &App, m: usize, parent: &gtk::Widget) {
     let dialog = adw::AlertDialog::new(Some("Let Numa Do…"), Some("Each part stays a switch in the panel, and Undo All takes everything back."));
     dialog.set_extra_child(Some(&list));
     dialog.add_responses(&[("cancel", "Cancel"), ("every", "Every Moment"), ("this", "This Moment")]);
-    dialog.set_response_appearance("this", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("this"));
     dialog.set_close_response("cancel");
     dialog.connect_response(
@@ -590,7 +589,6 @@ fn undo_numas_work(state: &App, window: &adw::ApplicationWindow) {
     );
     alert.add_response("cancel", "Cancel");
     alert.add_response("undo", "Undo Numa's Work");
-    alert.set_response_appearance("undo", adw::ResponseAppearance::Destructive);
     let state = state.clone();
     alert.connect_response(None, move |_, response| {
         if response != "undo" {

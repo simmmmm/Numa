@@ -52,7 +52,15 @@ pub(super) fn fill(state: &App) {
         page.remove(&child);
     }
     page.append(&card);
+    let browser = browser(state, Kind::Luts, || {});
+    browser.set_vexpand(true);
 
+    browser.set_margin_top(6);
+    page.append(&browser);
+    write(state);
+}
+
+pub(super) fn more_button(state: &App) -> gtk::MenuButton {
     let more = more_menu(&[&[("Import LUTs…", "lut.import")], &[("Open LUTs Folder", "lut.folder")]]);
     let actions = gio::SimpleActionGroup::new();
     let import = gio::SimpleAction::new("import", None);
@@ -69,13 +77,7 @@ pub(super) fn fill(state: &App) {
     actions.add_action(&import);
     actions.add_action(&folder);
     more.insert_action_group("lut", Some(&actions));
-    let label = section_row("LUTs", &[more.upcast_ref()]);
-    label.set_margin_bottom(6);
-    page.append(&label);
-    let browser = browser(state, Kind::Luts, || {});
-    browser.set_vexpand(true);
-    page.append(&browser);
-    write(state);
+    more
 }
 
 pub(super) fn write(state: &App) {

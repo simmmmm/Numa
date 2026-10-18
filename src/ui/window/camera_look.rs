@@ -2,7 +2,7 @@ use super::*;
 
 thread_local! {
 
-    static CONTROLS: std::cell::OnceCell<(gtk::ToggleButton, gtk::Label, gtk::Box, gtk::Scale)> = const { std::cell::OnceCell::new() };
+    static CONTROLS: std::cell::OnceCell<(gtk::Switch, gtk::Label, gtk::Box, gtk::Scale)> = const { std::cell::OnceCell::new() };
 
     static SAID: RefCell<HashMap<String, Result<String, String>>> = RefCell::new(HashMap::new());
 
@@ -11,32 +11,29 @@ thread_local! {
 
 pub(super) fn build(state: &App) -> gtk::Box {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    section.append(&section_header("From the Camera"));
 
-    let tile = gtk::ToggleButton::new();
-    tile.add_css_class("camera-look-tile");
-    tile.set_margin_top(8);
-    let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    let title = gtk::Label::new(Some("As Shot"));
-    title.set_xalign(0.0);
-    title.add_css_class("title");
     let line = gtk::Label::new(None);
-    line.set_xalign(0.0);
+    line.set_xalign(1.0);
+    line.set_justify(gtk::Justification::Right);
     line.set_wrap(true);
-    line.add_css_class("recipe");
-    words.append(&title);
-    words.append(&line);
-    tile.set_child(Some(&words));
-    tile.set_tooltip_text(Some("Follow this photo's own camera JPEG: its film simulation and recipe"));
-    tile.connect_toggled(glib::clone!(
+    line.add_css_class("slider-value");
+    let switch = gtk::Switch::new();
+    switch.set_valign(gtk::Align::Center);
+    switch.update_property(&[gtk::accessible::Property::Label("As Shot")]);
+    let end = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    end.append(&line);
+    end.append(&switch);
+    let head = named_row("As Shot", &end);
+    head.set_tooltip_text(Some("Follow this photo's own camera JPEG: its film simulation and recipe"));
+    switch.connect_active_notify(glib::clone!(
         #[strong] state,
-        move |tile| {
+        move |switch| {
             if !state.applying.get() {
-                choose(&state, tile.is_active());
+                choose(&state, switch.is_active());
             }
         }
     ));
-    section.append(&tile);
+    section.append(&head);
 
     let strength = strength_scale();
     let row = slider_row(state, "Strength", &strength, Readout::Positive(0));
@@ -63,7 +60,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
     section.append(&row);
 
     CONTROLS.with(|controls| {
-        let _ = controls.set((tile, line, row, strength));
+        let _ = controls.set((switch, line, row, strength));
     });
     write(state);
     section
@@ -83,18 +80,18 @@ fn said(path: &str) -> Result<String, String> {
 }
 
 pub(super) fn write(state: &App) {
-    let Some((tile, line, row, strength)) = CONTROLS.with(|controls| controls.get().cloned()) else { return };
+    let Some((switch, line, row, strength)) = CONTROLS.with(|controls| controls.get().cloned()) else { return };
     let look = state.open.borrow().as_ref().and_then(|photo| photo.document.camera_look.clone());
     let told = match open_path(state) {
         Some(path) => said(&path),
         None => Err("Not for a merged photo".to_string()),
     };
     let was = state.applying.replace(true);
-    tile.set_active(look.is_some());
+    switch.set_active(look.is_some());
     strength.set_value(look.as_ref().map_or(100.0, |look| look.strength as f64));
     state.applying.set(was);
 
-    tile.set_sensitive(told.is_ok() || look.is_some());
+    switch.set_sensitive(told.is_ok() || look.is_some());
     row.set_visible(look.is_some());
     line.set_text(&match (&told, FITTING.get() && look.as_ref().is_some_and(|look| look.fit.is_none())) {
         (Ok(_), true) => "Reading the camera's JPEG…".to_string(),

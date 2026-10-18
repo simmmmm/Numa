@@ -190,14 +190,13 @@ pub(super) fn build_retouch(state: &App) -> gtk::Box {
     }
     column.append(&finders);
 
-    let note = gtk::Label::new(Some(
-        "Click the blemish, then drag to where the replacement should come from.",
-    ));
+    let note = gtk::Label::new(Some("Click a blemish, then drag to a clean spot."));
     note.set_xalign(0.0);
     note.set_wrap(true);
     note.set_margin_top(4);
     note.set_margin_bottom(8);
     note.add_css_class("profile-note");
+    note.add_css_class("hint");
     column.append(&note);
 
     state.retouch.list.set_selection_mode(gtk::SelectionMode::None);

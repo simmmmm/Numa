@@ -150,6 +150,10 @@ pub(super) fn open_photo(state: &App, id: i64) {
     if refused_offline(state, [id], "editing") {
         return;
     }
+
+    if home_fetch::fetch_first(state, id, move |state| open_photo(state, id)) {
+        return;
+    }
     let Some(photo) = state.grid.cards.borrow().get(&id).cloned() else { return };
     let mut laps = raw::Laps::start();
     let asked = timing().then(std::time::Instant::now);

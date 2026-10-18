@@ -5,7 +5,7 @@
 // chosen on their page the same way, and what can be done to them.
 'use strict';
 
-const picked = { ids: new Set(), anchor: null, mode: false };
+const picked = { ids: new Set(), anchor: null, mode: false, album: null };
 const libraryOf = id => Math.floor(id / 2 ** 32);
 
 // Whether the click chose (true) rather than opened.
@@ -112,6 +112,7 @@ function unpick() {
   picked.ids.clear();
   picked.anchor = null;
   picked.mode = false;
+  picked.album = null;
   paintPicked();
 }
 
@@ -122,65 +123,123 @@ function paintPicked() {
   selectionBar();
 }
 
+// Every photograph of the page, the months not yet asked for included, which
+// is the chip in the bar and Ctrl or ⌘ + A.
+async function selectAll() {
+  await Promise.allSettled(state.sections.map(section => section.load?.()));
+  state.sections.flatMap(section => section.photos || []).forEach(photo => picked.ids.add(photo.id));
+  paintPicked();
+}
+
 function selectToggle() {
   return h('button', { class: 'chip select-toggle' + (picked.mode ? ' chosen' : ''), onclick: () => {
     if (picked.mode) unpick(); else { picked.mode = true; paintPicked(); }
-  } }, 'Select');
+  } }, S.select);
 }
 
 // What may change these: an admin anything, an account its own Sent Home.
 async function mayManage(ids) {
-  if (state.me.admin) return true;
+  if (state.me.admin || state.me.manage) return true;
   const mine = (await libraries().catch(() => [])).filter(library => library.mine).map(library => library.id);
   return [...ids].every(id => mine.includes(libraryOf(id)));
 }
 
 // What can be done to these photographs, as menu items: the bar's star and
 // ⋯ menus, and the right-click menu, are made of the same ones.
-function chosenActions(ids, manage) {
+function chosenActions(ids, manage, own = {}) {
   const n = ids.length;
   const send = async (path, body, after) => {
     try { const answer = await api(path, { method: 'POST', body: JSON.stringify({ ids, ...body }) }); after?.(answer); } catch (error) { toast(error.message); }
   };
   const refresh = () => { unpick(); state.libraries = null; refreshAround(ids); };
-  const marks = (body, label) => send('photos/marks', body, () => {
+  const marks = body => send('photos/marks', body, () => {
     for (const section of state.sections) section.photos?.filter(photo => ids.includes(photo.id)).forEach(photo => { if ('rating' in body) photo.rating = body.rating; });
-    for (const id of ids) {
-      const tile = document.querySelector(`.tile[data-id="${id}"]`);
-      if (!tile || !('rating' in body)) continue;
-      tile.querySelector('.stars')?.remove();
-      if (body.rating > 0) tile.append(h('span', { class: 'stars' }, '★'.repeat(body.rating)));
-    }
-    toast(`${label} · ${counted(n)}`);
+    remark(ids);
+    toast(phrase('saidCount', { said: markSaid(body), photos: counted(n) }));
   });
+  // Pick and Reject are toggles, as P and X are: a flag every one chosen has
+  // already is taken off, else it is set on all of them. The flags they had
+  // are kept for Undo.
+  const flag = which => {
+    const listed = new Map(state.sections.flatMap(section => section.photos || []).map(photo => [photo.id, photo]));
+    const had = ids.map(id => listed.get(id)?.flag);
+    const now = which !== 'none' && had.some(one => one !== which) ? which : 'none';
+    send('photos/marks', { flag: now }, () => {
+      ids.forEach(id => { const photo = listed.get(id); if (photo) photo.flag = now; });
+      remark(ids);
+      toast(phrase('saidCount', { said: markSaid({ flag: now }), photos: counted(n) }), had.every(Boolean) && { label: S.undo, run: () => putFlagsBack(ids, had) });
+    });
+  };
   const item = (label, onclick, title) => h('button', { onclick, title }, label);
-  const erase = async () => {
-    if (await ask(`Delete ${counted(n)} from the disk?`, "They go to their library's trash, where they can be put back for 30 days; after that they are gone for good.", 'Delete from Disk', true))
-      send('photos/delete', {}, answer => { toast(`${counted(answer.trashed)} in the trash`); refresh(); });
+  // The loupe has its own (`own.erase`): it goes on to the next photograph.
+  const erase = own.erase || (async () => {
+    if (!await ask(phrase('trashQN', { photos: counted(n) }), S.trashTextN, n === 1 ? S.moveToTrash : phrase('moveN', { n: grouped(n) }))) return;
+    const before = await trashIds();
+    send('photos/delete', {}, async answer => { toast(phrase('movedN', { photos: counted(answer.trashed) }), await trashed(before)); refresh(); });
+  });
+  // HOME-033: the raws among them, which may be kept as JPEGs instead.
+  const raws = ids.filter(id => state.sections.some(section => section.photos?.some(photo => photo.id === id && photo.raw)));
+  const keepJpegs = async () => {
+    const m = raws.length;
+    if (!await ask(m === 1 ? S.keepRawQ : phrase('keepRawsQ', { n: grouped(m) }),
+      S.keepText,
+      m === 1 ? S.deleteRaw : S.deleteRaws)) return;
+    send('photos/keep-jpeg', { ids: raws }, answer => {
+      unpick();
+      if (state.viewer) leaveViewer();
+      toast(phrase(answer.raws === 1 ? 'keepingOne' : 'keepingMany', { n: grouped(answer.raws) }));
+      waitKept(raws);
+    });
   };
   return {
     erase: manage ? erase : null,
-    album: () => item('Album…', () => albumDialog(ids)),
-    download: () => h('a', { href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', title: 'The originals, as one zip' }, 'Download'),
+    album: () => item(S.albumEll, () => albumDialog(ids)),
+    download: () => h('a', { href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', title: S.zipTip }, S.download),
     marks: () => [
-      h('div', { class: 'section-label' }, 'Stars'),
-      h('div', { class: 'star-row' }, [1, 2, 3, 4, 5].map(stars => h('button', { title: `${stars} (${stars})`, 'aria-label': `${stars} star${stars > 1 ? 's' : ''}`, onclick: () => marks({ rating: stars }, '★'.repeat(stars)) }, '★'.repeat(stars)))),
-      item('No Rating', () => marks({ rating: 0 }, 'No Rating'), '0'),
-      h('div', { class: 'section-label' }, 'Flag'),
-      Object.entries(FLAGS).map(([flag, label]) => item(label, () => marks({ flag }, label), { pick: 'P', reject: 'X', none: 'U' }[flag])),
+      h('div', { class: 'section-label' }, S.starsLabel),
+      h('div', { class: 'star-row' }, [1, 2, 3, 4, 5].map(stars => h('button', { title: `${stars} (${stars})`, 'aria-label': starsOf(stars), onclick: () => marks({ rating: stars }) },
+        Array.from({ length: stars }, () => icon('star'))))),
+      item(S.noRating, () => marks({ rating: 0 }), '0'),
+      h('div', { class: 'section-label' }, S.flagLabel),
+      Object.entries(FLAGS).map(([which, label]) => item(label, () => flag(which), { pick: 'P', reject: 'X', none: 'U' }[which])),
     ],
     more: () => [
-      item('Taken By…', () => byDialog(ids)),
-      item('For a Book…', () => bookDialog(`ids=${ids.join(',')}`)),
+      item(S.takenBy, () => byDialog(ids)),
+      item(S.forABook, () => bookDialog(`ids=${ids.join(',')}`)),
       manage && h('div', { class: 'rule' }),
-      manage && item('Move…', () => moveDialog(ids, refresh)),
-      manage && item('Remove from Library…', async () => {
-        if (await ask(`Remove ${counted(n)} from the library?`, 'The files stay in their folder. Numa Home leaves them out from now on, and their stars, flags and edits here are forgotten.', 'Remove from Library'))
+      manage && item(S.moveEll, () => moveDialog(ids, refresh)),
+      manage && item(S.removeFromLibraryEll, async () => {
+        if (await ask(phrase('removeQ', { photos: counted(n) }), S.removeText, S.removeFromLibrary))
           send('photos/remove', {}, refresh);
       }),
-      manage && item('Delete from Disk…', erase, 'Delete (Del)'),
+      manage && item(S.moveToTrashEll, erase, phrase('moveTip', { key: DELETE_KEY })),
+      manage && raws.length > 0 && item(raws.length === 1 ? S.deleteRawEll : S.deleteRawsEll, keepJpegs, S.keepJpegTip),
     ].filter(Boolean),
   };
+}
+
+// What Undo does to a flag chosen on several: each goes back to the flag it had.
+async function putFlagsBack(ids, had) {
+  try {
+    for (const value of new Set(had)) await api('photos/marks', { method: 'POST', body: JSON.stringify({ ids: ids.filter((_, at) => had[at] === value), flag: value }) });
+  } catch (error) { return toast(error.message); }
+  const back = new Map(ids.map((id, at) => [id, had[at]]));
+  for (const section of state.sections) section.photos?.forEach(photo => { if (back.has(photo.id)) photo.flag = back.get(photo.id); });
+  remark(ids);
+  toast(S.flagsBack);
+}
+
+// HOME-033: the raws being kept as JPEGs, followed until the last is done,
+// then their months shown again.
+async function waitKept(ids) {
+  for (;;) {
+    await new Promise(done => setTimeout(done, 3000));
+    const { left } = await api('photos/keep-jpeg', { quiet: true }).catch(() => ({ left: 0 }));
+    if (!left) break;
+  }
+  state.libraries = null;
+  await refreshAround(ids);
+  toast(phrase('keptAs', { photos: counted(ids.length) }));
 }
 
 async function selectionBar() {
@@ -189,28 +248,33 @@ async function selectionBar() {
   if (!picked.ids.size && !picked.mode) return;
   const ids = [...picked.ids];
   const n = ids.length;
-  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': 'Chosen photographs' });
+  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': S.chosenPhotos });
   document.body.append(bar);
   // The few that are done most in sight; the rest under More, so the bar
   // holds on a phone's width too.
-  const close = h('button', { class: 'round small', 'aria-label': 'Clear the choice', title: 'Clear (Esc)', onclick: unpick }, icon('close'));
+  const close = h('button', { class: 'round small', 'aria-label': S.clearChoice, title: S.clearTip, onclick: unpick }, icon('close'));
   const round = (name, label, items) => h('button', { class: 'round small', 'aria-label': label, title: label, onclick: event => {
     event.stopPropagation();
     menuOver(event.currentTarget, items());
   } }, icon(name));
+  // Select All is in the bar, where it can be seen, not only under a key (P15).
+  const everything = h('button', { class: 'chip', onclick: selectAll }, S.selectAll);
   if (!n) {
-    bar.append(close, h('span', { class: 'count' }, 'Choose photographs'));
+    bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, picked.album ? phrase('choosePhotosFor', { album: picked.album }) : S.choosePhotos), everything));
     return;
   }
   const manage = await mayManage(ids);
   if (!bar.isConnected) return;
   const actions = chosenActions(ids, manage);
   picked.erase = actions.erase;
-  bar.append(close, h('span', { class: 'count' }, `${grouped(n)} chosen`),
-    h('button', { class: 'chip', onclick: () => albumDialog(ids) }, 'Album…'),
-    round('star', 'Stars and Flag', actions.marks),
-    h('a', { class: 'round small', href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', 'aria-label': 'Download', title: 'Download the originals, as one zip' }, icon('download')),
-    round('more', 'More', actions.more));
+  // Two groups, so a phone's bar breaks between them and not in the middle of one.
+  bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('chosenN', { n: grouped(n) })), everything),
+    h('div', { class: 'acts' },
+      picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album) }, phrase('addTo', { album: picked.album }))
+        : h('button', { class: 'chip', onclick: () => albumDialog(ids) }, S.albumEll),
+      round('star', S.starsAndFlag, actions.marks),
+      h('a', { class: 'round small', href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', 'aria-label': S.download, title: S.downloadTip }, icon('download')),
+      round('more', S.more, actions.more)));
 }
 
 // Right-click on a photograph: it is chosen (alone, unless it already was),
@@ -226,7 +290,7 @@ async function chosenMenu(event, tile, id) {
   const ids = [...picked.ids];
   const actions = chosenActions(ids, await mayManage(ids));
   menuAt(event.clientX, event.clientY, [
-    ids.length === 1 ? h('button', { onclick: () => { unpick(); tile.click(); } }, 'Open') : h('div', { class: 'section-label' }, `${grouped(ids.length)} chosen`),
+    ids.length === 1 ? h('button', { onclick: () => { unpick(); tile.click(); } }, S.open) : h('div', { class: 'section-label' }, phrase('chosenN', { n: grouped(ids.length) })),
     actions.album(), actions.download(),
     h('div', { class: 'rule' }), actions.marks(),
     h('div', { class: 'rule' }), actions.more(),
@@ -237,65 +301,110 @@ async function chosenMenu(event, tile, id) {
 // again in place, so the page stays where it was; the search anew.
 async function refreshAround(ids) {
   const touched = state.sections.filter(section => section.el && section.photos?.some(photo => ids.includes(photo.id)));
-  if (!touched.length) return render();
+  if (!touched.length) {
+    // A page without months of its own (a search, Today) is asked again whole;
+    // with a photograph open on it that waits until the loupe closes.
+    const viewer = state.viewer;
+    if (!viewer) return render();
+    viewer.stale = true;
+    for (const section of viewer.sections) section.photos = section.photos?.filter(photo => !ids.includes(photo.id));
+    return keepShown(viewer);
+  }
   await Promise.allSettled(touched.map(section => { section.loading = null; return section.load(); }));
   const count = document.querySelector('main .count');
   if (count) count.textContent = counted(state.sections.reduce((sum, section) => sum + section.count, 0));
+  if (state.viewer) await keepShown(state.viewer);
 }
 
 document.addEventListener('keydown', event => {
   if (state.viewer || event.target.matches?.('input, select, textarea') || document.querySelector('dialog[open]')) return;
-  const open = document.querySelector('.menu');
-  if (event.key === 'Escape' && open) open.remove();
+  if (event.key === 'Escape' && openMenu) closeMenu();
   else if (event.key === 'Escape' && (shelved.ids.size || shelved.mode)) unshelve();
   else if (event.key === 'Escape' && (picked.ids.size || picked.mode)) unpick();
   else if ((event.key === 'Delete' || event.key === 'Backspace') && picked.ids.size && picked.erase) picked.erase();
   else if (event.key === 'a' && (event.ctrlKey || event.metaKey) && state.sections.length) {
     event.preventDefault();
-    state.sections.flatMap(section => section.photos || []).forEach(photo => picked.ids.add(photo.id));
-    paintPicked();
+    selectAll();
   }
 });
 window.addEventListener('hashchange', () => { unpick(); unshelve(); });
 
-// A short word at the foot, gone in two seconds; a longer one (a reason
-// something failed) stays as long as it takes to read.
-function toast(text) {
-  document.querySelector('.toast')?.remove();
-  const el = h('div', { class: 'toast', role: 'status' }, text);
-  document.body.append(el);
-  setTimeout(() => el.remove(), Math.max(2200, text.length * 70));
+// An event, as a toast at the bottom centre: a short word, gone in two
+// seconds; a longer one (a reason something failed) stays as long as it takes
+// to read; with one action at most, Undo, which stays a little longer.
+// `toasts` is the live region app.js keeps in the page.
+function toast(text, action) {
+  clearTimeout(toasts.timer);
+  const el = h('div', { class: 'toast' }, h('span', {}, text),
+    action && h('button', { class: 'undo', onclick: () => { toasts.replaceChildren(); action.run(); } }, action.label));
+  toasts.replaceChildren(el);
+  toasts.timer = setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 160); }, Math.max(action ? 6000 : 2200, text.length * 70));
 }
+
+// Moved to the Trash can be undone: the rows the Trash gained since `before`
+// are put back. (The delete answers with how many, not which.)
+const trashIds = () => api('trash', { quiet: true }).then(list => new Set(list.map(item => item.id)), () => null);
+async function trashed(before) {
+  const now = await trashIds();
+  const ids = before && now ? [...now].filter(id => !before.has(id)) : [];
+  return ids.length > 0 && { label: S.undo, run: async () => {
+    try { await api('trash/restore', { method: 'POST', body: JSON.stringify({ ids }) }); state.libraries = null; render(); toast(S.putBack); } catch (error) { toast(error.message); }
+  } };
+}
+
+// What a change of stars or of the flag says.
+const markSaid = change => 'rating' in change
+  ? (change.rating ? phrase('rated', { stars: starsOf(change.rating) }) : S.ratingCleared)
+  : { pick: S.picked, reject: S.rejected, none: S.flagCleared }[change.flag];
 
 // The browser's own dialog: a title, a sentence, what goes in it, Cancel
 // and one button. Resolves to the form's fields by name, or null.
-function dialog(title, text, fields, button, destructive) {
+function dialog(title, text, fields, button) {
   return new Promise(resolve => {
-    const done = answer => { box.close(); box.remove(); resolve(answer); };
+    const done = answer => { box.close(); box.remove(); holdLoupe(); resolve(answer); };
     // Answered on submit, not on the dialog's close event, which a browser
     // may hold back while its tab is in the background.
     const form = h('form', { onsubmit: event => { event.preventDefault(); done(Object.fromEntries(new FormData(form))); } },
       h('h2', {}, title), text && h('p', { class: 'body' }, text), ...fields,
       h('div', { class: 'buttons' },
-        h('button', { class: 'chip', type: 'button', onclick: () => done(null) }, 'Cancel'),
-        h('button', { class: destructive ? 'primary destructive' : 'primary', type: 'submit' }, button)));
+        h('button', { class: 'chip', type: 'button', onclick: () => done(null) }, S.cancel),
+        h('button', { class: 'primary', type: 'submit' }, button)));
     const box = h('dialog', { class: 'ask', oncancel: event => { event.preventDefault(); done(null); } }, form);
     document.body.append(box);
     box.showModal();
   });
 }
-const ask = async (title, text, button, destructive) => (await dialog(title, text, [], button, destructive)) !== null;
+const ask = async (title, text, button) => (await dialog(title, text, [], button)) !== null;
 
 async function albumDialog(ids) {
   const list = await api('albums').catch(() => []);
-  const select = h('select', { name: 'album', 'aria-label': 'Album' }, list.map(album => h('option', { value: album.key }, album.name)), h('option', { value: '' }, 'A new album…'));
-  const name = h('input', { type: 'text', name: 'name', placeholder: 'Name of the new album', hidden: list.length > 0 });
+  const select = h('select', { name: 'album', 'aria-label': S.album }, list.map(album => h('option', { value: album.key }, album.name)), h('option', { value: '' }, S.albumOption));
+  const name = h('input', { type: 'text', name: 'name', placeholder: S.newAlbumName, hidden: list.length > 0 });
   select.addEventListener('change', () => { name.hidden = select.value !== ''; });
-  const out = h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'out' }), 'Take them out of it instead');
-  const asked = await dialog(`${counted(ids.length)} and an album`, null, [select, name, list.length > 0 && out].filter(Boolean), 'Done');
+  const out = h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'out' }), S.takeOut);
+  const asked = await dialog(phrase('albumAnd', { photos: counted(ids.length) }), null, [select, name, list.length > 0 && out].filter(Boolean), S.done);
   if (!asked) return;
   const body = { ids, inside: !asked.out, ...(asked.album ? { album: asked.album } : { name: (asked.name || '').trim() }) };
-  try { await api('photos/album', { method: 'POST', body: JSON.stringify(body) }); toast(asked.out ? 'Out of the album' : 'In the album'); } catch (error) { toast(error.message); }
+  try { await api('photos/album', { method: 'POST', body: JSON.stringify(body) }); toast(asked.out ? S.outOfAlbum : S.inAlbum); } catch (error) { toast(error.message); }
+}
+
+// New Album…: its name first, then the photographs for it, chosen on
+// Photos, and Add to puts them in and opens it. An album is never empty.
+async function newAlbum() {
+  const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' })], S.choosePhotosBtn);
+  const name = (asked?.name || '').trim();
+  if (!name) return;
+  const start = () => { picked.mode = true; picked.album = name; paintPicked(); };
+  if (location.hash === '#/') return start();
+  // After the page has changed, which lets go of any choice.
+  addEventListener('hashchange', start, { once: true });
+  go('/');
+}
+async function intoNewAlbum(ids, name) {
+  try {
+    const { album } = await api('photos/album', { method: 'POST', body: JSON.stringify({ ids, inside: true, name }) });
+    go('/', { album });
+  } catch (error) { toast(error.message); }
 }
 
 // HOME-023: For a Book — the picks of a trip, or the photographs chosen,
@@ -307,28 +416,28 @@ async function bookDialog(query) {
   try { plan = await api('book?' + query); } catch (error) { toast(error.message); return; }
   let kept = 0;
   try { kept = Number(localStorage.getItem('numa-book-product')) || 0; } catch (_) { /* a private window */ }
-  const product = h('select', { name: 'product', 'aria-label': 'Photo Book' },
+  const product = h('select', { name: 'product', 'aria-label': S.photoBook },
     plan.products.map((one, at) => h('option', { value: at, selected: at === kept }, one.name)));
   const list = h('div', { class: 'chapters' });
   const fill = () => list.replaceChildren(...plan.chapters.map((chapter, at) => h('label', { class: 'check' },
     h('input', { type: 'checkbox', name: `c${at}`, checked: true }), `${String(at + 1).padStart(2, '0')} · ${chapter.name}`,
     h('span', { class: 'caption' }, grouped(chapter.count)))));
-  const by = h('select', { name: 'by', 'aria-label': 'Chapters By', hidden: !plan.albums, onchange: async () => {
+  const by = h('select', { name: 'by', 'aria-label': S.chaptersBy, hidden: !plan.albums, onchange: async () => {
     try { plan = await api(`book?${query}&by=${by.value}`); fill(); } catch (error) { toast(error.message); }
-  } }, [['album', 'Chapters by Album'], ['day', 'Chapters by Day']].map(([value, label]) => h('option', { value, selected: plan.by === value }, label)));
+  } }, [['album', S.byAlbum], ['day', S.byDay]].map(([value, label]) => h('option', { value, selected: plan.by === value }, label)));
   fill();
   const asked = await dialog(`${plan.name} · ${counted(plan.count)}`,
-    'In the order they happened, a numbered folder per chapter, at the page\'s size. Unzip it and open the folder in CEWE, Albelli or Popsa: the book is half laid out.',
-    [by, list, product], 'Make the Book');
+    S.bookText,
+    [by, list, product], S.makeBook);
   if (!asked) return;
   try { localStorage.setItem('numa-book-product', asked.product); } catch (_) { /* a private window */ }
   const leave = plan.chapters.map((_, at) => at).filter(at => !asked[`c${at}`]);
-  if (leave.length === plan.chapters.length) return toast('Leave at least one chapter in the book.');
+  if (leave.length === plan.chapters.length) return toast(S.leaveOne);
   const link = h('a', { href: `/api/v1/book/zip?${query}&by=${plan.by}&mm=${plan.products[asked.product].mm}&leave=${leave.join(',')}`, download: '' });
   document.body.append(link);
   link.click();
   link.remove();
-  toast('The book downloads as Numa develops each photograph');
+  toast(S.bookDownloads);
 }
 
 // HOME-012: whose these are, said by hand; it wins over the camera's say.
@@ -338,32 +447,32 @@ async function setBy(ids, account) {
 
 async function byDialog(ids) {
   const users = await api('users').catch(() => []);
-  const select = h('select', { name: 'account', 'aria-label': 'Photographer' },
-    users.map(user => h('option', { value: user.name }, user.name)), h('option', { value: '' }, 'As the camera says'));
-  const asked = await dialog(`Who took ${ids.length === 1 ? 'it' : 'them'}?`, 'Said here, it wins over the camera linked to an account and its Artist.', [select], 'Done');
+  const select = h('select', { name: 'account', 'aria-label': S.photographer },
+    users.map(user => h('option', { value: user.name }, user.name)), h('option', { value: '' }, S.asCamera));
+  const asked = await dialog((ids.length === 1 ? S.whoTookOne : S.whoTookMany), S.whoTookText, [select], S.done);
   if (!asked) return;
-  try { await setBy(ids, asked.account); toast(asked.account ? `By ${asked.account}` : 'As the camera says'); } catch (error) { toast(error.message); }
+  try { await setBy(ids, asked.account); toast(asked.account ? phrase('byName', { name: asked.account }) : S.asCamera); } catch (error) { toast(error.message); }
 }
 
 // The info panel's By: a choice of the household, or the camera's say.
 async function byPicker(photo) {
   const users = await api('users').catch(() => []);
-  const select = h('select', { class: 'by-pick', 'aria-label': 'Photographer', onchange: async () => {
+  const select = h('select', { class: 'by-pick', 'aria-label': S.photographer, onchange: async () => {
     try { await setBy([photo.id], select.value); photo.by = select.value || null; photo.chosen = !!select.value; } catch (error) { toast(error.message); }
-  } }, h('option', { value: '' }, photo.chosen || !photo.by ? 'As the camera says' : `${photo.by}, as the camera says`),
+  } }, h('option', { value: '' }, photo.chosen || !photo.by ? S.asCamera : phrase('byAsCamera', { name: photo.by })),
   users.map(user => h('option', { value: user.name, selected: photo.chosen && user.name === photo.by }, user.name)));
   return select;
 }
 
 async function moveDialog(ids, after) {
-  const list = (await libraries().catch(() => [])).filter(library => state.me.admin || library.mine);
-  const select = h('select', { name: 'library', 'aria-label': 'Library' }, list.map(library => h('option', { value: library.id, selected: library.id === libraryOf(ids[0]) }, libraryName(library))));
-  const dir = h('input', { type: 'text', name: 'dir', placeholder: 'A folder inside it (optional)', autocomplete: 'off' });
-  const asked = await dialog(`Move ${counted(ids.length)}`, 'The files move, with their stars, flags, edits and albums.', [select, dir], 'Move');
+  const list = (await libraries().catch(() => [])).filter(library => state.me.admin || state.me.manage || library.mine);
+  const select = h('select', { name: 'library', 'aria-label': S.library }, list.map(library => h('option', { value: library.id, selected: library.id === libraryOf(ids[0]) }, libraryName(library))));
+  const dir = h('input', { type: 'text', name: 'dir', placeholder: S.folderOption, autocomplete: 'off' });
+  const asked = await dialog(phrase('moveTitle', { photos: counted(ids.length) }), S.moveText, [select, dir], S.moveBtn);
   if (!asked) return;
   try {
     const answer = await api('photos/move', { method: 'POST', body: JSON.stringify({ ids, library: Number(asked.library), dir: asked.dir.trim() }) });
-    toast(`${counted(answer.moved)} moved`);
+    toast(phrase('moved', { photos: counted(answer.moved) }));
     after();
   } catch (error) { toast(error.message); }
 }
@@ -372,21 +481,21 @@ async function moveDialog(ids, after) {
 function libraryCommands(list) {
   const row = h('div', { class: 'filters' });
   if (state.me.admin) {
-    row.append(h('button', { class: 'chip', onclick: newLibrary }, 'New Library…'), h('button', { class: 'chip', onclick: addFolder }, 'Add Folder…'), librarySelectToggle());
+    row.append(h('button', { class: 'chip', onclick: newLibrary }, S.newLibraryEll), h('button', { class: 'chip', onclick: addFolder }, S.addFolderEll), librarySelectToggle());
   }
   return row;
 }
 
 async function newLibrary() {
-  const year = h('input', { type: 'text', name: 'year', value: String(new Date().getFullYear()), inputmode: 'numeric', pattern: '\\d{4}', maxlength: 4, 'aria-label': 'Year', class: 'year' });
-  const inYear = h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'inyear', checked: true, onchange: event => { year.disabled = !event.target.checked; } }), 'In a year folder', year);
-  const asked = await dialog('New Library', 'A new folder in the photos folder, as Import makes them: photos/2026/Japan.',
-    [h('input', { type: 'text', name: 'name', placeholder: 'Name', required: true, autocomplete: 'off' }), inYear], 'Make Library');
+  const year = h('input', { type: 'text', name: 'year', value: String(new Date().getFullYear()), inputmode: 'numeric', pattern: '\\d{4}', maxlength: 4, 'aria-label': S.year, class: 'year' });
+  const inYear = h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'inyear', checked: true, onchange: event => { year.disabled = !event.target.checked; } }), S.inYear, year);
+  const asked = await dialog(S.newLibrary, S.newLibraryText,
+    [h('input', { type: 'text', name: 'name', placeholder: S.name, required: true, autocomplete: 'off' }), inYear], S.makeLibrary);
   if (!asked) return;
   try {
     const made = await api('libraries', { method: 'POST', body: JSON.stringify({ name: asked.name.trim(), year: asked.inyear ? asked.year : null }) });
     state.libraries = null;
-    toast(`${made.name} is a library`);
+    toast(phrase('isLibrary', { name: made.name }));
     render();
   } catch (error) { toast(error.message); }
 }
@@ -394,9 +503,9 @@ async function newLibrary() {
 async function addFolder() {
   let folders;
   try { folders = await api('libraries/folders'); } catch (error) { return toast(error.message); }
-  if (!folders.length) return ask('Add Folder', 'Every folder in the photos folder is a library already. A folder copied in shows up here before the next look round, every quarter of an hour.', 'OK');
-  const asked = await dialog('Add Folder', 'A folder put in the photos folder since Numa Home last looked, taken in now.',
-    [h('select', { name: 'folder', 'aria-label': 'Folder' }, folders.map(one => h('option', { value: one.folder }, one.folder)))], 'Add');
+  if (!folders.length) return ask(S.addFolder, S.addFolderNone, S.ok);
+  const asked = await dialog(S.addFolder, S.addFolderText,
+    [h('select', { name: 'folder', 'aria-label': S.folder }, folders.map(one => h('option', { value: one.folder }, one.folder)))], S.add);
   if (!asked) return;
   try { await api('libraries', { method: 'POST', body: JSON.stringify({ folder: asked.folder }) }); state.libraries = null; render(); } catch (error) { toast(error.message); }
 }
@@ -405,10 +514,10 @@ async function addFolder() {
 // chosen, shift for a run, Ctrl or ⌘ to start, Select — and the bar of what
 // can be done to them. An admin's, for the libraries in the photos folder.
 const shelved = { ids: new Set(), anchor: null, mode: false };
-const librariesCounted = n => `${grouped(n)} librar${n === 1 ? 'y' : 'ies'}`;
+const librariesCounted = n => `${grouped(n)} ${n === 1 ? S.libraryOne : S.librariesMany}`;
 
 function libraryShelf(library, list) {
-  const place = collection([h('i', { class: 'tint', style: { background: tint(library.id) } }), libraryName(library)], counted(library.count), 'library=' + library.id, event => {
+  const place = collection(libraryName(library), counted(library.count), 'library=' + library.id, event => {
     if (!chooseLibrary(event, library, list)) go('/', { library: library.id });
   });
   place.dataset.library = library.id;
@@ -450,7 +559,7 @@ function paintShelved(list) {
 function librarySelectToggle() {
   return h('button', { class: 'chip library-select' + (shelved.mode ? ' chosen' : ''), onclick: () => {
     if (shelved.mode) unshelve(); else { shelved.mode = true; paintShelved(); }
-  } }, 'Select');
+  } }, S.select);
 }
 
 async function libraryBar(list) {
@@ -460,13 +569,14 @@ async function libraryBar(list) {
   const chosen = list.filter(library => shelved.ids.has(library.id));
   const ids = chosen.map(library => library.id);
   const n = ids.length;
-  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': 'Chosen libraries' });
+  const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': S.chosenLibraries });
   document.body.append(bar);
-  const close = h('button', { class: 'round small', 'aria-label': 'Clear the choice', title: 'Clear (Esc)', onclick: unshelve }, icon('close'));
+  const close = h('button', { class: 'round small', 'aria-label': S.clearChoice, title: S.clearTip, onclick: unshelve }, icon('close'));
   const button = (label, onclick) => h('button', { class: 'chip', onclick }, label);
   const item = (label, onclick) => h('button', { onclick }, label);
+  const everything = button(S.selectAll, () => { list.filter(library => !library.mine).forEach(library => shelved.ids.add(library.id)); paintShelved(list); });
   if (!n) {
-    bar.append(close, h('span', { class: 'count' }, 'Choose libraries'));
+    bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, S.chooseLibraries), everything));
     return;
   }
   const send = async (path, body, said) => {
@@ -479,33 +589,31 @@ async function libraryBar(list) {
     } catch (error) { toast(error.message); }
   };
   const names = chosen.length === 1 ? chosen[0].name : librariesCounted(n);
-  bar.append(...[
-    close,
-    h('span', { class: 'count' }, `${librariesCounted(n)} chosen`),
-    n === 1 && button('Open', () => go('/', { library: ids[0] })),
-    n === 1 && button('Rename…', () => renameLibrary(chosen[0])),
-    h('button', { class: 'round small', 'aria-label': 'More', title: 'More', onclick: event => { event.stopPropagation(); menuOver(event.currentTarget, [
-      item('Combine…', () => combineDialog(chosen, list.filter(library => !library.mine), send)),
+  bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('librariesChosen', { libraries: librariesCounted(n) })), everything), h('div', { class: 'acts' }, ...[
+    n === 1 && button(S.open, () => go('/', { library: ids[0] })),
+    n === 1 && button(S.renameEll, () => renameLibrary(chosen[0])),
+    h('button', { class: 'round small', 'aria-label': S.more, title: S.more, onclick: event => { event.stopPropagation(); menuOver(event.currentTarget, [
+      item(S.combineEll, () => combineDialog(chosen, list.filter(library => !library.mine), send)),
       h('div', { class: 'rule' }),
-      item('Remove from Numa Home…', async () => {
-        if (await ask(`Remove ${names} from Numa Home?`, 'The folders stay in the photos folder, untouched. Add Folder takes one in again, with all that was done in it.', 'Remove from Numa Home'))
-          send('libraries/remove', { ids }, answer => `${librariesCounted(answer.removed)} removed`);
+      item(S.removeFromNumaEll, async () => {
+        if (await ask(phrase('removeNumaQ', { names }), S.removeNumaText, S.removeFromNuma))
+          send('libraries/remove', { ids }, answer => phrase('removed', { libraries: librariesCounted(answer.removed) }));
       }),
-      item('Delete from Disk…', async () => {
-        if (await ask(`Delete ${names} from the disk?`, 'The folders go to the trash, photographs, edits and all, where they can be put back for 30 days; after that they are gone for good.', 'Delete from Disk', true))
-          send('libraries/delete', { ids }, answer => `${librariesCounted(answer.trashed)} in the trash`);
+      item(S.moveToTrashEll, async () => {
+        if (await ask(phrase('trashLibQ', { names }), S.trashLibText, S.moveToTrash))
+          send('libraries/delete', { ids }, answer => phrase('movedLibs', { libraries: librariesCounted(answer.trashed) }));
       }),
-    ]); } }, icon('more'))].filter(Boolean));
+    ]); } }, icon('more'))].filter(Boolean)));
 }
 
 // HOME-029: names from where the photographs were taken, by their GPS or
 // that of the household's photos of the same hours, as chips that fill
 // `field`. Gone again when there is nothing to offer.
 function nameIdeas(asked, field) {
-  const box = h('div', { class: 'ideas' }, h('span', { class: 'caption' }, 'Looking where these were taken…'));
+  const box = h('div', { class: 'ideas' }, h('span', { class: 'caption' }, S.lookingWhere));
   asked.then(answer => {
     if (!answer?.names?.length) return box.remove();
-    box.replaceChildren(h('span', { class: 'caption' }, answer.from === 'borrowed' ? 'From photos taken in the same hours' : 'Where they were taken'),
+    box.replaceChildren(h('span', { class: 'caption' }, answer.from === 'borrowed' ? S.sameHours : S.whereTaken),
       ...answer.names.map(name => h('button', { type: 'button', class: 'chip small', onclick: () => {
         field.value = name;
         field.dispatchEvent(new Event('input'));
@@ -516,8 +624,8 @@ function nameIdeas(asked, field) {
 
 async function renameLibrary(library) {
   const field = h('input', { type: 'text', name: 'name', value: library.name, required: true, autocomplete: 'off' });
-  const ideas = nameIdeas(api(`libraries/${library.id}/names`, { wait: 120 }), field);
-  const asked = await dialog('Rename Library', 'The folder itself is renamed, in its place.', [field, ideas], 'Rename');
+  const ideas = nameIdeas(api(`libraries/${library.id}/names`, { wait: 120, quiet: true }), field);
+  const asked = await dialog(S.renameLibrary, S.renameText, [field, ideas], S.rename);
   if (!asked) return;
   try { await api('libraries/' + library.id, { method: 'PUT', body: JSON.stringify({ name: asked.name.trim() }) }); unshelve(); state.libraries = null; render(); } catch (error) { toast(error.message); }
 }
@@ -526,36 +634,36 @@ async function renameLibrary(library) {
 // folder, the others' photographs move into it.
 async function combineDialog(chosen, archive, send) {
   const choices = chosen.length > 1 ? chosen : archive.filter(library => library.id !== chosen[0].id);
-  if (!choices.length) return ask('Combine', 'There is no other library to combine it with.', 'OK');
-  const select = h('select', { name: 'into', 'aria-label': 'Into' }, choices.map(library => h('option', { value: library.id }, library.name)));
-  const asked = await dialog(chosen.length > 1 ? `Combine ${librariesCounted(chosen.length)}` : `Combine ${chosen[0].name} with…`,
-    "The photographs move into the library chosen here, each in the folder it had, with their stars, flags, edits and albums. The emptied folders go to the trash.", [select], 'Combine');
+  if (!choices.length) return ask(S.combine, S.combineNone, S.ok);
+  const select = h('select', { name: 'into', 'aria-label': S.into }, choices.map(library => h('option', { value: library.id }, library.name)));
+  const asked = await dialog(chosen.length > 1 ? phrase('combineN', { libraries: librariesCounted(chosen.length) }) : phrase('combineWith', { name: chosen[0].name }),
+    S.combineText, [select], S.combine);
   if (!asked) return;
-  send('libraries/combine', { ids: chosen.map(library => library.id), into: Number(asked.into) }, answer => `${counted(answer.moved)} combined`);
+  send('libraries/combine', { ids: chosen.map(library => library.id), into: Number(asked.into) }, answer => phrase('combined', { photos: counted(answer.moved) }));
 }
 
-// HOME-017: the trash — what was deleted from the disk, for 30 days.
+// HOME-017: the Trash — what was moved to it, for 30 days.
 async function trashPage(main) {
   let list;
-  try { list = await api('trash'); } catch (error) { return main.append(empty('Trash', error.message)); }
+  try { list = await api('trash'); } catch (error) { return main.append(empty(S.trash, error.message, true)); }
   const dropped = state.me.admin ? await api('trash/libraries').catch(() => []) : [];
   if (!main.isConnected) return;
-  if (!list.length && !dropped.length) return main.append(empty('The Trash Is Empty', 'Photographs and libraries deleted from the disk wait here for 30 days, to be put back.'));
+  if (!list.length && !dropped.length) return main.append(empty(S.trashEmpty, S.trashEmptyText));
   // HOME-021: whole libraries, each put back on its own.
-  if (dropped.length) main.append(h('div', { class: 'import-page dropped' }, h('h1', {}, 'Libraries in the Trash'), dropped.map(row => h('div', { class: 'shoot' }, h('div', { class: 'head' },
-    h('span', { class: 'name' }, row.name), h('span', { class: 'caption' }, `${row.folder} · ${row.left} day${row.left === 1 ? '' : 's'}`),
+  if (dropped.length) main.append(h('div', { class: 'import-page dropped' }, h('h1', {}, S.librariesInTrash), dropped.map(row => h('div', { class: 'shoot' }, h('div', { class: 'head' },
+    h('span', { class: 'name' }, row.name), h('span', { class: 'caption' }, phrase('folderDays', { folder: row.folder, days: `${row.left} ${row.left === 1 ? S.day : S.days}` })),
     h('button', { class: 'chip', onclick: async () => {
-      try { const answer = await api('trash/libraries/restore', { method: 'POST', body: JSON.stringify({ ids: [row.id] }) }); if (!answer.restored) throw new Error(`A folder ${row.folder} is in the photos folder again; rename it first.`); toast(`${row.name} put back`); state.libraries = null; render(); } catch (error) { toast(error.message); }
-    } }, 'Put Back'))))));
+      try { const answer = await api('trash/libraries/restore', { method: 'POST', body: JSON.stringify({ ids: [row.id] }) }); if (!answer.restored) throw new Error(phrase('folderBack', { folder: row.folder })); toast(phrase('libPutBack', { name: row.name })); state.libraries = null; render(); } catch (error) { toast(error.message); }
+    } }, S.putBackBtn))))));
   if (!list.length) return;
   const chosen = new Set();
   const restore = h('button', { class: 'primary', disabled: true, onclick: async () => {
-    try { const answer = await api('trash/restore', { method: 'POST', body: JSON.stringify({ ids: [...chosen] }) }); toast(`${counted(answer.restored)} put back`); render(); } catch (error) { toast(error.message); }
-  } }, 'Put Back');
+    try { const answer = await api('trash/restore', { method: 'POST', body: JSON.stringify({ ids: [...chosen] }) }); toast(phrase('photosPutBack', { photos: counted(answer.restored) })); render(); } catch (error) { toast(error.message); }
+  } }, S.putBackBtn);
   const count = h('span', { class: 'caption count' }, counted(list.length));
   const names = new Map((await libraries().catch(() => [])).map(library => [library.id, libraryName(library)]));
   main.append(h('div', { class: 'import-page' },
-    h('div', { class: 'top' }, h('div', {}, h('h1', {}, 'Trash'), h('p', { class: 'body' }, 'Deleted from the disk; each is gone for good when its days are up. Choose what to put back.')),
+    h('div', { class: 'top' }, h('div', {}, h('h1', {}, S.trash), h('p', { class: 'body' }, S.trashText)),
       h('div', { class: 'act' }, count, restore)),
     h('div', { class: 'grid' }, list.map(item => {
       const image = h('img', { src: `/api/v1/trash/${item.id}/thumb`, loading: 'lazy', alt: '' });
@@ -564,7 +672,7 @@ async function trashPage(main) {
         if (chosen.has(item.id)) chosen.delete(item.id); else chosen.add(item.id);
         event.currentTarget.classList.toggle('ticked', chosen.has(item.id));
         restore.disabled = !chosen.size;
-        count.textContent = chosen.size ? `${grouped(chosen.size)} chosen` : counted(list.length);
-      } }, image, h('span', { class: 'check', 'aria-hidden': 'true' }), h('span', { class: 'badge' }, `${item.left} day${item.left === 1 ? '' : 's'}`));
+        count.textContent = chosen.size ? phrase('chosenN', { n: grouped(chosen.size) }) : counted(list.length);
+      } }, image, h('span', { class: 'check', 'aria-hidden': 'true' }), h('span', { class: 'badge' }, `${item.left} ${item.left === 1 ? S.day : S.days}`));
     }))));
 }

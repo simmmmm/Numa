@@ -333,7 +333,6 @@ fn set_by_hand(
     }
     alert.set_extra_child(Some(&list));
     alert.add_responses(&[("cancel", "Cancel"), ("set", "Set")]);
-    alert.set_response_appearance("set", adw::ResponseAppearance::Suggested);
     let keys: Vec<(String, String)> = cameras.iter().map(|camera| (camera.key.clone(), names[&camera.key].clone())).collect();
     let library_id = library.id;
     alert.connect_response(

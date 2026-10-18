@@ -5,7 +5,7 @@ use numa_io::models::{self, ModelFile, MIRROR};
 
 use crate::activity::Download;
 
-const WANTED: [&str; 4] = ["YuNet", "SFace", "Open-closed eye", numa_io::words::MODEL];
+const WANTED: [&str; 5] = ["YuNet", "SFace", "Open-closed eye", numa_io::words::MODEL, "EfficientViT-Seg B2"];
 
 pub fn fetch(server: &crate::Server) {
     let mut files = models::files_of(&WANTED);

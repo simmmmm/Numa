@@ -50,7 +50,6 @@ struct Shown {
 
     quick: Vec<gtk::ToggleButton>,
     count: gtk::Label,
-    clear: gtk::Button,
 
     order: gtk::MenuButton,
     direction: gtk::Button,
@@ -104,9 +103,9 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
 
     state.grid.welcome.bind_property("visible", end, "visible").invert_boolean().sync_create().build();
 
-    let (chips, chip_row, quick, count, clear, order, direction) = build_chips(state);
+    let (chips, chip_row, quick, count, order, direction) = build_chips(state);
     state.grid.welcome.bind_property("visible", &chips, "visible").invert_boolean().sync_create().build();
-    let shown = Shown { button, rating, flag, kind, actions, chip_row, quick, count, clear, order, direction };
+    let shown = Shown { button, rating, flag, kind, actions, chip_row, quick, count, order, direction };
 
     state.libraries.show_filter.replace(Some(Box::new(glib::clone!(
         #[strong] state,
@@ -232,7 +231,7 @@ fn quick_press(filter: &mut Filter, at: usize, on: bool) {
     }
 }
 
-fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>, gtk::Label, gtk::Button, gtk::MenuButton, gtk::Button) {
+fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>, gtk::Label, gtk::MenuButton, gtk::Button) {
     let quick_row = chip_row();
     let quick: Vec<gtk::ToggleButton> = QUICK
         .iter()
@@ -240,6 +239,10 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
         .map(|(at, label)| {
             let button = gtk::ToggleButton::with_label(label);
             button.set_focus_on_click(false);
+
+            if at == 0 {
+                button.set_tooltip_text(Some("Everything in the library: clears what narrows it"));
+            }
             button.connect_toggled(glib::clone!(
                 #[strong] state,
                 move |button| {
@@ -264,12 +267,6 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
     let count = gtk::Label::new(None);
     count.add_css_class("dim-label");
     count.add_css_class("numeric");
-    let everything = gtk::Button::with_label("Clear");
-    everything.add_css_class("flat");
-    everything.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| clear(&state, &EVERY_FACET)
-    ));
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     bar.add_css_class("filter-chips");
     bar.append(&quick_row);
@@ -278,13 +275,11 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
     let (order, direction) = order_buttons();
     bar.append(&order);
     bar.append(&direction);
-    bar.append(&everything);
-    everything.set_focus_on_click(false);
     let chips = gtk::Revealer::new();
     chips.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     chips.set_child(Some(&bar));
     chips.set_reveal_child(true);
-    (chips, chip_row, quick, count, everything, order, direction)
+    (chips, chip_row, quick, count, order, direction)
 }
 
 fn order_buttons() -> (gtk::MenuButton, gtk::Button) {
@@ -371,7 +366,6 @@ fn show_filter(state: &App, shown: &Shown) {
         shown.count.set_text(&format!("{}{total}", places::grouped(state.grid.wall.len() as i64)));
     }
     shown.count.set_visible(!facets.is_empty());
-    shown.clear.set_visible(!facets.is_empty());
 }
 
 fn quick_says(filter: &Filter, facet: Facet) -> bool {

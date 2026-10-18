@@ -26,6 +26,8 @@ pub(super) struct State {
     pub(super) mixer_sliders: Vec<gtk::Scale>,
     pub(super) mixer_band: Rc<Cell<usize>>,
 
+    pub(super) mixer_header: gtk::Label,
+
     pub(super) monochrome: gtk::Switch,
 
     pub(super) mask_temperature: gtk::Scale,
@@ -60,6 +62,7 @@ impl State {
             .map(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, -100.0, 100.0, 1.0))
             .collect(),
             mixer_band: Rc::new(Cell::new(0)),
+            mixer_header: section_header("Mixer"),
             monochrome: gtk::Switch::new(),
 
             mask_temperature: gtk::Scale::with_range(gtk::Orientation::Horizontal, -2000.0, 2000.0, 10.0),
@@ -149,19 +152,10 @@ pub(super) fn build_mixer(state: &App) -> gtk::Box {
 }
 
 fn build_monochrome(state: &App) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.set_margin_top(6);
-    row.set_margin_bottom(6);
-    let title = gtk::Label::new(Some("Black & white"));
-    title.set_xalign(0.0);
-    title.set_hexpand(true);
-    title.add_css_class("slider-name");
     let switch = state.colour.monochrome.clone();
-    switch.set_valign(gtk::Align::Center);
+    let row = named_row("Black & white", &switch);
     switch.update_property(&[gtk::accessible::Property::Label("Black & white")]);
     row.set_tooltip_text(Some("The mixer sets how light each colour's grey is"));
-    row.append(&title);
-    row.append(&switch);
     switch.connect_active_notify(glib::clone!(
         #[strong] state,
         move |switch| {
@@ -356,13 +350,20 @@ pub(super) fn build_colour(
         colour.append(&row);
     }
 
-    let mixer_header = section_header("Mixer");
+    let mixer_header = state.colour.mixer_header.clone();
     let mixer = build_mixer(state);
     let point = build_point_colours(state);
     colour.append(&mixer_header);
     colour.append(&mixer);
     colour.append(&point);
 
+    let camera = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    camera.append(&section_header("Camera"));
+    camera.append(&build_profile_picker(state));
+    camera.append(&build_tone_mapping(state));
+    camera.append(&super::camera_look::build(state));
+    global_only(camera.as_ref());
+    colour.append(&camera);
     colour
 }
 
@@ -389,9 +390,6 @@ fn white_pipette(state: &App) -> gtk::ToggleButton {
 }
 
 pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    row.set_margin_bottom(6);
-
     state.colour.profile_picker.set_hexpand(true);
     narrow_dropdown(&state.colour.profile_picker);
     state.colour.profile_picker.connect_selected_notify(glib::clone!(
@@ -429,16 +427,11 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
         }
     ));
 
-    row.append(&state.colour.profile_picker);
-    row
+    named_row("Profile", &state.colour.profile_picker)
 }
 
 pub(super) fn build_tone_mapping(state: &App) -> gtk::Box {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    section.append(&section_header("Tone mapping"));
-    let row = chip_row();
-    row.set_homogeneous(true);
-    row.set_margin_top(8);
+    let chips = chip_row();
     let (camera, agx) = (&state.colour.tone_camera, &state.colour.tone_agx);
     camera.set_tooltip_text(Some("The curve the cameras themselves draw, read off their own JPEGs"));
     agx.set_tooltip_text(Some("AgX: bright colours roll off to white as on film, so lamps, neon and sunsets keep their hue"));
@@ -464,10 +457,9 @@ pub(super) fn build_tone_mapping(state: &App) -> gtk::Box {
             schedule_history_push(&state);
         }
     ));
-    row.append(camera);
-    row.append(agx);
-    section.append(&row);
-    section
+    chips.append(camera);
+    chips.append(agx);
+    named_row("Tone mapping", &chips)
 }
 
 fn profile_choices(state: &App) -> Vec<Option<String>> {

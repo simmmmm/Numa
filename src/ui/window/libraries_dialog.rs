@@ -95,7 +95,6 @@ fn connect_rename(
             );
             confirm.add_response("cancel", "Cancel");
             confirm.add_response("rename", "Rename");
-            confirm.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
             confirm.set_default_response(Some("cancel"));
 
             let (state, dialog, parent) = (state.clone(), dialog.clone(), window.clone());
@@ -169,7 +168,7 @@ fn remove_button(
     count: Option<i64>,
 ) -> gtk::Button {
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-    remove.set_tooltip_text(Some("Remove from the catalog"));
+    remove.set_tooltip_text(Some("Remove from Numa…"));
     remove.set_valign(gtk::Align::Center);
     remove.add_css_class("flat");
     remove.connect_clicked(glib::clone!(
@@ -192,7 +191,6 @@ fn remove_button(
             );
             confirm.add_response("cancel", "Cancel");
             confirm.add_response("remove", "Remove");
-            confirm.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
             confirm.set_default_response(Some("cancel"));
 
             let state = state.clone();

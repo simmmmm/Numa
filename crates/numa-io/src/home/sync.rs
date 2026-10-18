@@ -15,6 +15,12 @@ pub struct Link {
 
     pub since: i64,
 
+    #[serde(default)]
+    pub everything: bool,
+
+    #[serde(default)]
+    pub keep_here: bool,
+
     pub photos: BTreeMap<String, Kept>,
 }
 
@@ -70,8 +76,26 @@ pub struct Remote {
     pub rating: u8,
     #[serde(default = "no_flag")]
     pub flag: String,
+
+    #[serde(default)]
+    pub edited: bool,
     #[serde(default)]
     pub updated: i64,
+}
+
+impl Remote {
+
+    pub fn at_home(&self) -> crate::catalog::AtHome {
+        crate::catalog::AtHome {
+            path: self.path.clone(),
+            id: self.id.clone(),
+            size: self.size,
+            mtime: self.mtime,
+            taken: self.taken,
+            rating: self.rating,
+            flag: flag(&self.flag),
+        }
+    }
 }
 
 fn no_flag() -> String {
@@ -115,7 +139,7 @@ impl Parts {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
 
-    Download(Remote),
+    Arrive(Remote),
 
     Both { path: String, id: String, theirs: Option<Remote>, down: Parts, up: Parts },
 
@@ -136,7 +160,7 @@ pub fn plan(link: &Link, remote: &[Remote], local: &[Local]) -> Vec<Step> {
 
             (Some(_), None) => None,
             (None, None) if known.contains(theirs.id.as_str()) => None,
-            (None, None) => Some(Step::Download(theirs.clone())),
+            (None, None) => Some(Step::Arrive(theirs.clone())),
 
             (None, Some(ours)) if ours.untouched() => both(ours, &theirs.id, Some(theirs), Parts::ALL, Parts::default()),
             (None, Some(ours)) => both(ours, &theirs.id, Some(theirs), Parts::default(), Parts::ALL),
@@ -159,6 +183,13 @@ pub fn plan(link: &Link, remote: &[Remote], local: &[Local]) -> Vec<Step> {
         steps.extend(step);
     }
     steps
+}
+
+pub fn listed_after(link: &Link) -> i64 {
+    match link.everything {
+        true => link.since,
+        false => 0,
+    }
 }
 
 pub fn next_since(since: i64, remote: &[Remote]) -> i64 {
@@ -283,6 +314,30 @@ pub fn photos(out: &str) -> Result<Vec<Remote>, Failure> {
 pub fn original(address: &str, id: &str, to: &Path) -> Vec<OsString> {
     let rest = words(&["--header", "@-", "--output"]).into_iter().chain([to.into()]);
     curl(rest, format!("{}/api/v1/photos/{}/original", base(address), escaped(id)))
+}
+
+pub fn thumbnails(address: &str, wanted: &[(String, PathBuf)]) -> Vec<OsString> {
+    let start = ["curl", "--silent", "--show-error", "--fail", "--connect-timeout", "10", "--max-time", "600", "--header", "@-", "--write-out", "%{http_code}\n"];
+    let each = wanted.iter().flat_map(|(id, to)| {
+        ["--output".into(), to.into(), format!("{}/api/v1/photos/{}/thumb?edge=256", base(address), escaped(id)).into()]
+    });
+    words(&start).into_iter().chain(each).collect()
+}
+
+pub fn thumbnails_came(out: &str) -> Result<Vec<bool>, Failure> {
+    let statuses: Vec<u16> = out.lines().map(|line| line.trim().parse().unwrap_or(0)).collect();
+    if statuses.contains(&401) {
+        return Err(Failure::SignIn("Sign in again".to_string()));
+    }
+    if statuses.iter().all(|status| *status == 0) {
+        return Err(Failure::Unreachable);
+    }
+    Ok(statuses.iter().map(|status| *status == 200).collect())
+}
+
+pub fn preview(address: &str, id: &str, to: &Path) -> Vec<OsString> {
+    let rest = words(&["--fail", "--max-time", "120", "--header", "@-", "--output"]).into_iter().chain([to.into()]);
+    curl(rest, format!("{}/api/v1/photos/{}/preview", base(address), escaped(id)))
 }
 
 pub fn get_edits(address: &str, id: &str) -> Vec<OsString> {

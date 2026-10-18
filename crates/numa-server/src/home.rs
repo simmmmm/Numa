@@ -133,6 +133,11 @@ impl Home {
         self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner()).order.get(&library).map_or(0, Vec::len)
     }
 
+    pub fn newest(&self, library: i64) -> Option<i64> {
+        let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        shelf.order.get(&library)?.first().and_then(|id| shelf.photos.get(id)).map(when)
+    }
+
     pub fn photo(&self, account: &str, id: i64) -> Result<Photo, Fail> {
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let library = shelf.libraries.iter().find(|library| library.id == library_of(id));
@@ -155,6 +160,10 @@ impl Home {
     pub fn files(&self, library: i64) -> Vec<Photo> {
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         shelf.files.get(&library).into_iter().flatten().filter_map(|id| shelf.photos.get(id)).cloned().collect()
+    }
+
+    pub fn any_photo(&self, id: i64) -> Option<Photo> {
+        self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner()).photos.get(&id).cloned()
     }
 
     pub fn with_twins(&self, ids: &[i64]) -> Vec<i64> {

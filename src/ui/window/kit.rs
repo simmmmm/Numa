@@ -10,6 +10,20 @@ pub(super) fn section_header(title: &str) -> gtk::Label {
     label
 }
 
+pub(super) fn named_row(name: &str, end: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.set_margin_top(6);
+    row.set_margin_bottom(6);
+    let title = gtk::Label::new(Some(name));
+    title.set_xalign(0.0);
+    title.set_hexpand(!end.hexpands());
+    title.add_css_class("slider-name");
+    end.set_valign(gtk::Align::Center);
+    row.append(&title);
+    row.append(end);
+    row
+}
+
 pub(super) fn primary_button(label: &str) -> gtk::Button {
     let button = gtk::Button::with_label(label);
     primary(&button);
@@ -20,6 +34,41 @@ pub(super) fn primary(button: &impl IsA<gtk::Widget>) {
     button.add_css_class("numa-primary");
     button.add_css_class("opaque");
 }
+
+pub(super) fn dialog_header(dialog: &adw::Dialog, primary: &impl IsA<gtk::Widget>) -> adw::HeaderBar {
+    let header = adw::HeaderBar::new();
+    header.set_show_start_title_buttons(false);
+    header.set_show_end_title_buttons(false);
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.connect_clicked(glib::clone!(
+        #[weak] dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    header.pack_start(&cancel);
+    header.pack_end(primary);
+    header
+}
+
+pub(super) fn whole_on_hover(label: &gtk::Label) {
+    label.set_has_tooltip(true);
+    label.connect_query_tooltip(|label, _, _, _, tip| {
+        let cut = label.layout().is_ellipsized();
+        if cut {
+            tip.set_text(Some(&label.text()));
+        }
+        cut
+    });
+}
+
+pub(super) fn keep_whole(label: &gtk::Label, most: i32) {
+    label.set_size_request(-1, -1);
+    let (_, whole, _, _) = label.measure(gtk::Orientation::Horizontal, -1);
+    label.set_size_request(whole.min(most), -1);
+}
+
+pub(super) const LIBRARY_NAME_LEAST: i32 = 72;
 
 pub(super) fn chip_row() -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);

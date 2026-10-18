@@ -62,6 +62,21 @@ pub async fn delete(State(server): State<Arc<Server>>, Signed(me): Signed, Json(
     Ok(Json(json!({ "trashed": trashed })))
 }
 
+pub async fn keep_jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
+    let raws: Vec<_> = chosen(&server, &me, &asked.ids, false, true)?.into_iter().filter(|(_, photo)| numa_io::raw::is_raw(&photo.path)).collect();
+    if raws.is_empty() {
+        return Err(Fail::bad("None of these is a raw."));
+    }
+    let n = raws.len();
+    manage::KEEPING.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    tokio::spawn(manage::keep_jpegs(server.clone(), raws));
+    Ok(Json(json!({ "raws": n })))
+}
+
+pub async fn keeping(Signed(_): Signed) -> Json<Value> {
+    Json(json!({ "left": manage::KEEPING.load(std::sync::atomic::Ordering::Relaxed) }))
+}
+
 #[derive(Deserialize)]
 pub struct Moved {
     ids: Vec<i64>,

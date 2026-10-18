@@ -464,4 +464,7 @@ pub(super) fn tint_mixer(state: &App) {
         }
         scale.add_css_class(&format!("band-{band}"));
     }
+
+    let name = BANDS[band].0.to_uppercase();
+    state.colour.mixer_header.set_label(&format!("MIXER · {name}"));
 }

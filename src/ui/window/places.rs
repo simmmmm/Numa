@@ -276,7 +276,8 @@ fn lean(index: usize, tile: f32) -> gsk::Transform {
 }
 
 pub(super) fn centre(state: &App, header: &adw::HeaderBar) {
-    header.set_centering_policy(adw::CenteringPolicy::Strict);
+    header.set_centering_policy(adw::CenteringPolicy::Loose);
+    state.libraries.picker.set_factory(Some(&name_gives_way()));
     state.libraries.picker.set_tooltip_text(Some("Library, album or person"));
     state.libraries.picker.set_hexpand(false);
     state.libraries.picker.set_halign(gtk::Align::Center);
@@ -296,6 +297,23 @@ pub(super) fn dress(state: &App) {
         state,
         move || state.libraries.picker.set_list_factory(Some(&rows(&state)))
     ));
+}
+
+fn name_gives_way() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
+        let name = gtk::Label::builder().xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build();
+        whole_on_hover(&name);
+        item.set_child(Some(&name));
+    });
+    factory.connect_bind(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
+        let Some(name) = item.child().and_downcast::<gtk::Label>() else { return };
+        name.set_label(&item.item().and_downcast::<gtk::StringObject>().map(|it| it.string()).unwrap_or_default());
+        keep_whole(&name, LIBRARY_NAME_LEAST);
+    });
+    factory
 }
 
 fn rows(state: &App) -> gtk::SignalListItemFactory {

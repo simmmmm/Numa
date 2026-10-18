@@ -184,16 +184,11 @@ pub(super) fn tether_dialog(state: &App, window: &adw::ApplicationWindow) {
     let dialog = adw::Dialog::new();
     dialog.set_title("Shoot Tethered");
     dialog.set_content_width(480);
+    let go = primary_button("Start");
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&dialog_header(&dialog, &go));
     let page = adw::PreferencesPage::new();
     view.set_content(Some(&page));
-    let go = primary_button("Start");
-    go.add_css_class("pill");
-    go.set_halign(gtk::Align::Center);
-    go.set_margin_top(12);
-    go.set_margin_bottom(12);
-    view.add_bottom_bar(&go);
     dialog.set_child(Some(&view));
 
     let camera_group = adw::PreferencesGroup::new();
@@ -369,8 +364,8 @@ fn stop_tethering(state: &App) {
     rescan_in_background(state, true);
     state.toast(&match stopped.received {
         0 => "Tethering stopped".to_string(),
-        1 => "Tethering stopped · 1 photograph".to_string(),
-        count => format!("Tethering stopped · {} photographs", places::grouped(count as i64)),
+        1 => "Tethering stopped · 1 photo".to_string(),
+        count => format!("Tethering stopped · {} photos", places::grouped(count as i64)),
     });
 }
 
@@ -455,8 +450,8 @@ fn say() {
             (Some(Waiting::NoCamera), _) | (None, None) => "Waiting for a camera — connect it with its cable and switch it on".to_string(),
             (None, Some(name)) => match tether.received {
                 0 => format!("Tethered to {name} · into {}", tether.library.label()),
-                1 => format!("Tethered to {name} · 1 photograph into {}", tether.library.label()),
-                count => format!("Tethered to {name} · {} photographs into {}", places::grouped(count as i64), tether.library.label()),
+                1 => format!("Tethered to {name} · 1 photo into {}", tether.library.label()),
+                count => format!("Tethered to {name} · {} photos into {}", places::grouped(count as i64), tether.library.label()),
             },
         })
     });

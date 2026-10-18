@@ -8,7 +8,7 @@ pub const PACE_MS: u32 = 167;
 pub const LONE_MS: u32 = 500;
 pub const BURST_MS: u32 = 100;
 
-pub const LABEL_GAP: i64 = 5 * 60;
+pub const WIDE_GAP: i64 = 5 * 60;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Layout {
@@ -21,22 +21,25 @@ pub struct Layout {
 }
 
 pub fn layout(times: &[i64], pitch: f64, widest: f64, room: f64) -> Layout {
-    let doublings = (LABEL_GAP as f64 / NEAR as f64).log2();
+    let doublings = (WIDE_GAP as f64 / NEAR as f64).log2();
     let mut x = Vec::with_capacity(times.len());
     let mut labels = Vec::new();
     let mut at = 0.0;
     let mut last_label = f64::NEG_INFINITY;
+    let mut pending = false;
     for (index, &time) in times.iter().enumerate() {
-        let jump = index.checked_sub(1).map_or(LABEL_GAP, |before| (time - times[before]).abs());
+        let jump = index.checked_sub(1).map_or(WIDE_GAP, |before| (time - times[before]).abs());
         if index > 0 {
             at += pitch;
             if jump > NEAR {
                 at += (widest * (jump as f64 / NEAR as f64).log2() / doublings).min(widest);
             }
         }
-        if jump >= LABEL_GAP && at - last_label >= room {
+        pending |= index.checked_sub(1).is_none_or(|before| time.div_euclid(3600) != times[before].div_euclid(3600));
+        if pending && at - last_label >= room {
             labels.push(index);
             last_label = at;
+            pending = false;
         }
         x.push(at);
     }
@@ -79,11 +82,25 @@ mod tests {
 
     #[test]
     fn a_label_too_close_to_the_last_is_left_out() {
-        let times = [0, 600, 1200];
+        let times = [0, 3600, 7200];
         let tape = layout(&times, 7.0, 30.0, 70.0);
 
         assert_eq!(tape.labels, vec![0, 2]);
         assert!(layout(&[], 7.0, 30.0, 80.0).x.is_empty());
+    }
+
+    #[test]
+    fn an_hour_begun_too_close_to_the_last_label_is_said_further_on() {
+
+        let times = [3599, 3600, 3601, 3602, 3603];
+        assert_eq!(layout(&times, 7.0, 30.0, 20.0).labels, vec![0, 3]);
+    }
+
+    #[test]
+    fn labels_mark_the_hours_not_the_pauses() {
+
+        let times = [36_000, 36_600, 39_599, 39_600];
+        assert_eq!(layout(&times, 7.0, 30.0, 0.0).labels, vec![0, 3]);
     }
 
     #[test]

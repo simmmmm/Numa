@@ -128,15 +128,11 @@ fn client_picks_dialog(state: &App, window: &adw::ApplicationWindow) {
     list.append(&make);
     list.append(&album);
 
-    let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("pill");
     let mark = primary_button("Mark as Picks");
-    mark.add_css_class("pill");
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    buttons.set_halign(gtk::Align::Center);
-    buttons.set_margin_top(6);
-    buttons.append(&cancel);
-    buttons.append(&mark);
+    if let Some(label) = mark.child().and_downcast::<gtk::Label>() {
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(28);
+    }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(4);
@@ -146,9 +142,8 @@ fn client_picks_dialog(state: &App, window: &adw::ApplicationWindow) {
     content.append(&intro);
     content.append(&scroll);
     content.append(&list);
-    content.append(&buttons);
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&dialog_header(&dialog, &mark));
     view.set_content(Some(&content));
     dialog.set_child(Some(&view));
 
@@ -198,12 +193,6 @@ fn client_picks_dialog(state: &App, window: &adw::ApplicationWindow) {
     ));
     album.connect_changed(move |_| update());
 
-    cancel.connect_clicked(glib::clone!(
-        #[weak] dialog,
-        move |_| {
-            dialog.close();
-        }
-    ));
     mark.connect_clicked(glib::clone!(
         #[strong] state,
         #[weak] dialog,

@@ -59,6 +59,7 @@ modules:
     build-commands:
       - cargo build --profile dist
       - install -Dm755 target/dist/numa /app/bin/numa
+      - install -Dm644 -t /app/share/licenses/com.tijmen.Numa/onnxruntime data/onnxruntime/*
       - install -Dm644 -t /app/share/numa/lensfun data/lensfun/*
       - if [ -d data/private-profiles ]; then
           install -Dm644 -t /app/share/numa/profiles/numa data/private-profiles/*;

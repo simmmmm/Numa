@@ -166,8 +166,8 @@ pub(super) fn draw_histogram(
 pub(super) fn build_info(state: &App) -> gtk::Box {
     let column = state.info.page.clone();
     column.set_orientation(gtk::Orientation::Vertical);
-    column.set_spacing(18);
-    column.set_margin_top(6);
+    column.set_spacing(16);
+    column.set_margin_top(8);
 
     let label = &state.info.render_info;
     label.set_xalign(0.0);
@@ -183,7 +183,7 @@ pub(super) fn build_info(state: &App) -> gtk::Box {
     let rows = &state.info.everything_rows;
     rows.add_css_class("boxed-list");
     rows.set_selection_mode(gtk::SelectionMode::None);
-    rows.set_margin_top(6);
+    rows.set_margin_top(8);
     let none = gtk::Label::new(Some("This file holds no more EXIF"));
     none.add_css_class("dim-label");
     none.set_margin_top(12);

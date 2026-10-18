@@ -170,6 +170,15 @@ pub(super) fn busy<T: Send + 'static>(
     busy_until(state, label, BUSY_AFTER, work)
 }
 
+pub(super) fn progress_on(class: &str) -> gtk::ProgressBar {
+    let bar = gtk::ProgressBar::new();
+    bar.add_css_class(class);
+    bar.set_valign(gtk::Align::End);
+    bar.set_visible(false);
+    bar.set_can_target(false);
+    bar
+}
+
 pub(super) fn progress_toast(state: &App, cancel: &Cancel) -> (adw::Toast, gtk::Label, gtk::ProgressBar) {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let text = gtk::Label::new(None);

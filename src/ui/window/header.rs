@@ -32,6 +32,7 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
 
     let editor_menu = state.editor_page.photo_menu.clone();
     editor_menu.append_section(None, &main_menu);
+    install_shortcuts(state, window, &main_menu, &library_menu, &editor_menu);
     header.insert_action_group("editor", Some(&state.editor_page.actions));
     header.pack_end(&menu_button);
     let end = gtk::Stack::new();
@@ -61,6 +62,26 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     });
 
     header
+}
+
+fn install_shortcuts(state: &App, window: &adw::ApplicationWindow, main: &gio::Menu, library: &gio::Menu, editor: &gio::Menu) {
+    let menus: Vec<(&str, gio::MenuModel)> = vec![
+        ("☰ Main Menu", main.clone().upcast()),
+        ("☰ Main Menu, in the library", library.clone().upcast()),
+        ("☰ Main Menu, in the editor", editor.clone().upcast()),
+        ("A photograph's right-click menu, in the library", photo_menu_model(state).upcast()),
+        ("Before ▾, in the editor", beside_menu().upcast()),
+    ];
+    let shortcuts = gio::SimpleAction::new("shortcuts", None);
+    shortcuts.connect_activate(glib::clone!(
+        #[weak] window,
+        move |_, _| shortcuts_dialog(&window, &menus)
+    ));
+    window.add_action(&shortcuts);
+    if let Some(app) = window.application() {
+
+        app.set_accels_for_action("win.shortcuts", &["<primary>question", "<primary>slash"]);
+    }
 }
 
 fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stack {
@@ -164,9 +185,7 @@ fn build_header_title(state: &App) -> gtk::Stack {
 
     let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     picker_holder.append(&balance);
-    let libraries = libraries_crumb(state);
-    libraries.add_css_class("dim-label");
-    picker_holder.append(&libraries);
+    picker_holder.append(&libraries_crumb(state));
     let arrow = crumb_arrow();
     arrow.add_css_class("dim-label");
 
@@ -242,17 +261,6 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
 
     tonight::install_tonight_action(state, window);
     tracks::install_track_action(state, window);
-
-    let shortcuts = gio::SimpleAction::new("shortcuts", None);
-    shortcuts.connect_activate(glib::clone!(
-        #[weak] window,
-        move |_, _| shortcuts_dialog(&window)
-    ));
-    window.add_action(&shortcuts);
-    if let Some(app) = window.application() {
-
-        app.set_accels_for_action("win.shortcuts", &["<primary>question", "<primary>slash"]);
-    }
 
     let preferences = gio::SimpleAction::new("preferences", None);
     preferences.connect_activate(glib::clone!(
@@ -371,9 +379,13 @@ fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
     let library = gio::Menu::new();
     library.append(Some("Rescan Library"), Some("win.rescan"));
 
-    let sync_now = gio::MenuItem::new(Some("Sync Now"), Some("win.home-sync"));
+    let sync_now = gio::MenuItem::new(Some("Update Now"), Some("win.home-sync"));
     sync_now.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
     library.append_item(&sync_now);
+
+    let keep_here = gio::MenuItem::new(Some("Keep on This Computer"), Some("win.home-keep"));
+    keep_here.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    library.append_item(&keep_here);
     library.append(Some("Camera Clocks…"), Some("win.clocks"));
     library.append(Some("Add Places from a Track…"), Some("win.places-from-track"));
 
@@ -477,7 +489,6 @@ fn feedback_dialog(state: &App, window: &adw::ApplicationWindow) {
     ask.add_response("cancel", "Cancel");
     ask.add_response("mail", "Send by Mail");
     ask.add_response("github", "Post on GitHub");
-    ask.set_response_appearance("github", adw::ResponseAppearance::Suggested);
     ask.set_close_response("cancel");
     for response in ["mail", "github"] {
         ask.set_response_enabled(response, false);

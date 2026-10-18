@@ -21,7 +21,25 @@ pub(super) fn make_card(state: &App) -> gtk::Widget {
     };
     let rating = pill("card-rating", gtk::Align::Start, gtk::Align::End);
     rating.add_css_class("card-foot");
-    let burst = pill("card-burst", gtk::Align::End, gtk::Align::Start);
+
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    top.add_css_class("card-marks");
+    top.set_halign(gtk::Align::End);
+    top.set_valign(gtk::Align::Start);
+
+    let burst = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    burst.add_css_class("card-badge");
+    burst.add_css_class("card-burst");
+    let sign = gtk::Image::from_icon_name("numa-burst-symbolic");
+    sign.set_pixel_size(11);
+    burst.append(&sign);
+    burst.append(&gtk::Label::new(None));
+    let home = gtk::Image::from_icon_name("go-home-symbolic");
+    home.set_pixel_size(11);
+    home.add_css_class("card-badge");
+    home.add_css_class("card-home");
+    top.append(&burst);
+    top.append(&home);
 
     let marks = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     marks.add_css_class("card-foot");
@@ -52,7 +70,7 @@ pub(super) fn make_card(state: &App) -> gtk::Widget {
     caption.append(&name);
 
     name.set_can_target(false);
-    for part in [rating.upcast_ref::<gtk::Widget>(), burst.upcast_ref(), marks.upcast_ref()] {
+    for part in [rating.upcast_ref::<gtk::Widget>(), top.upcast_ref(), marks.upcast_ref(), home_fetch::card_bar().upcast_ref()] {
         part.set_can_target(false);
         card.add_overlay(part);
     }
@@ -126,11 +144,14 @@ pub(super) fn edited_mark() -> gtk::Box {
 struct CardParts {
     picture: gtk::Picture,
     rating: gtk::Label,
-    burst: gtk::Label,
+    burst: gtk::Box,
     away: gtk::Widget,
     edited: gtk::Widget,
     name: gtk::Label,
     stars: gtk::Label,
+
+    home: gtk::Widget,
+    fetch: gtk::ProgressBar,
 }
 
 impl CardParts {
@@ -143,6 +164,8 @@ impl CardParts {
             edited: part(card, "card-edited")?,
             name: part(card, "card-name")?,
             stars: part(card, "card-stars")?,
+            home: part(card, "card-home")?,
+            fetch: part(card, "card-fetch")?,
         })
     }
 }
@@ -194,6 +217,11 @@ fn mark_card(state: &App, card: &gtk::Widget, parts: &CardParts, photo: &Photo, 
     parts.stars.set_markup(&hover_stars(photo.rating));
     parts.edited.set_visible(photo.edited);
     parts.away.set_visible(state.catalog.is_offline(numa::io::catalog::library_of(photo.id)));
+    let at_home = state.grid.at_home.borrow().contains_key(&photo.id);
+    parts.home.set_visible(at_home);
+    let coming = home_fetch::progress(photo.id);
+    parts.fetch.set_visible(coming.is_some());
+    parts.fetch.set_fraction(coming.unwrap_or(0.0));
     match photo.flag == Flag::Rejected {
         true => card.add_css_class("rejected"),
         false => card.remove_css_class("rejected"),
@@ -212,11 +240,15 @@ fn mark_card(state: &App, card: &gtk::Widget, parts: &CardParts, photo: &Photo, 
     }
 
     parts.burst.set_visible(burst.is_some());
-    if let Some(size) = burst {
-        parts.burst.set_text(&format!("×{size}"));
+    if let Some((size, count)) = burst.zip(parts.burst.last_child().and_downcast::<gtk::Label>()) {
+        count.set_text(&size.to_string());
     }
 
-    card.set_tooltip_markup(Some(&card_tooltip(photo, &scale)));
+    let mut tooltip = card_tooltip(photo, &scale);
+    if at_home {
+        tooltip.push_str(&format!("\nAt {}", home::NUMA_HOME));
+    }
+    card.set_tooltip_markup(Some(&tooltip));
 
     card.set_widget_name(&photo.id.to_string());
 }

@@ -51,6 +51,8 @@ struct Job {
     library: Option<i64>,
     done: usize,
     total: usize,
+
+    all: usize,
     started: Option<Instant>,
     last: Option<Instant>,
 }
@@ -125,8 +127,12 @@ impl Activity {
         self.job(kind, |job| job.total = total)
     }
 
+    pub fn all(&self, kind: Kind, all: usize) {
+        self.job(kind, |job| job.all = all)
+    }
+
     pub fn finish(&self, kind: Kind) {
-        self.job(kind, |job| *job = Job { last: Some(Instant::now()), ..Job::default() })
+        self.job(kind, |job| *job = Job { last: Some(Instant::now()), all: job.all, ..Job::default() })
     }
 
     pub fn downloads(&self) -> MutexGuard<'_, Vec<Download>> {
@@ -159,7 +165,7 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
             let library = job.library.and_then(|id| seen.iter().find(|library| library.id == id)).map(|library| library.label());
             json!({
                 "job": key, "name": name, "state": state, "doing": doing, "library": library,
-                "done": job.done, "total": job.total,
+                "done": job.done, "total": job.total, "all": job.all,
                 "left": if state == "running" { left(job) } else { None },
                 "ago": job.last.map(|last| last.elapsed().as_secs()),
             })
@@ -170,7 +176,7 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
     if let Some((done, total)) = crate::cards::progress(&server) {
         rows.push(json!({
             "job": "import", "name": "Importing from the Card", "state": "running", "doing": "Copying each photograph and reading it back",
-            "library": null, "done": done, "total": total, "left": null, "ago": null,
+            "library": null, "done": done, "total": total, "all": 0, "left": null, "ago": null,
         }));
     }
     let downloads: Vec<Value> = server

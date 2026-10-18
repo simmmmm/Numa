@@ -88,11 +88,16 @@ fn make_frame(state: &App) -> gtk::Button {
     badge.set_valign(gtk::Align::End);
     stacked.add_overlay(&badge);
 
-    let hint = gtk::Label::new(None);
+    let hint = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     hint.add_css_class("strip-badge");
     hint.set_halign(gtk::Align::Start);
     hint.set_valign(gtk::Align::End);
-    hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let sign = gtk::Image::from_icon_name("numa-burst-symbolic");
+    sign.set_pixel_size(12);
+    hint.append(&sign);
+    let count = gtk::Label::new(None);
+    count.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    hint.append(&count);
     stacked.add_overlay(&hint);
 
     let frame = gtk::Button::new();
@@ -114,7 +119,7 @@ fn bind_frame(state: &App, frame: &gtk::Button, index: usize) {
     let Some(picture) = stacked.child().and_downcast::<gtk::Picture>() else { return };
     let Some(mark) = picture.next_sibling() else { return };
     let Some(badge) = mark.next_sibling().and_downcast::<gtk::Label>() else { return };
-    let Some(hint) = badge.next_sibling().and_downcast::<gtk::Label>() else { return };
+    let Some(hint) = badge.next_sibling().and_downcast::<gtk::Box>() else { return };
     let lazy = state.filmstrip.lazy.borrow();
     let Some(thumb) = lazy.get(index) else { return };
     let aspect = state.filmstrip.aspects.borrow().get(index).copied().unwrap_or(justified::UNKNOWN_ASPECT);
@@ -152,7 +157,7 @@ fn burst_at(state: &App, index: usize) -> Option<(i64, i64)> {
     Some((numa::io::catalog::library_of(id), burst))
 }
 
-fn group_burst(state: &App, frame: &gtk::Button, hint: &gtk::Label, index: usize) {
+fn group_burst(state: &App, frame: &gtk::Button, hint: &gtk::Box, index: usize) {
     let burst = burst_at(state, index);
     let same = |other: usize| burst.is_some() && burst_at(state, other) == burst;
     let (left, right) = (index > 0 && same(index - 1), same(index + 1));
@@ -172,10 +177,12 @@ fn group_burst(state: &App, frame: &gtk::Button, hint: &gtk::Label, index: usize
         let cards = state.grid.cards.borrow();
         run.iter().filter(|at| lazy.get(**at).and_then(|thumb| cards.get(&thumb.id)).is_some_and(|photo| photo.flag == Flag::Picked)).count()
     };
-    hint.set_text(&match picked {
-        0 => "Pick a few".to_string(),
+    let Some(count) = hint.last_child().and_downcast::<gtk::Label>() else { return };
+    count.set_text(&match picked {
+        0 => run.len().to_string(),
         n => format!("{n} of {} picked", run.len()),
     });
+    hint.set_tooltip_text(Some(&format!("A burst of {}: pick the frames to keep", run.len())));
 }
 
 pub(super) fn rebind_frame(state: &App, index: usize) {

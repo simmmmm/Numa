@@ -24,18 +24,18 @@ pub(super) fn refresh_masks(state: &App) {
 
     if let Some(mask) = current.map(|index| &masks[index]) {
         state.applying.set(true);
-        state.editor_page.banner_eye.set_active(mask.visible);
+        state.editor_page.banner_power.set_active(mask.visible);
         state.applying.set(false);
-        state.editor_page.banner_eye.set_icon_name(if mask.visible {
-            "view-reveal-symbolic"
-        } else {
-            "view-conceal-symbolic"
-        });
-        state.editor_page.banner_eye.set_tooltip_text(Some(if mask.visible {
-            "Hide this mask"
-        } else {
-            "Show this mask"
-        }));
+        paint_power(&state.editor_page.banner_power, mask.visible);
+    }
+}
+
+pub(super) fn paint_power(button: &gtk::ToggleButton, on: bool) {
+    button.set_icon_name("system-shutdown-symbolic");
+    button.set_tooltip_text(Some(if on { "Turn this mask off" } else { "Turn this mask on" }));
+    match on {
+        true => button.remove_css_class("dim-label"),
+        false => button.add_css_class("dim-label"),
     }
 }
 
@@ -51,7 +51,7 @@ fn append_mask_list_row(
     row.set_subtitle_lines(1);
     set_row_title(&row, &mask_label(masks, index));
     row.set_subtitle(&match (mask.visible, mask.is_pending(), mask.is_idle()) {
-        (false, ..) => "Hidden".to_string(),
+        (false, ..) => "Off".to_string(),
         (_, true, _) => "Working out where it is…".to_string(),
         (_, _, true) => "Nothing set yet".to_string(),
 
@@ -72,15 +72,10 @@ fn append_mask_list_row(
     row.add_prefix(&grip);
 
     let shown = gtk::ToggleButton::new();
-    shown.set_icon_name(if mask.visible {
-        "view-reveal-symbolic"
-    } else {
-        "view-conceal-symbolic"
-    });
+    paint_power(&shown, mask.visible);
     shown.set_active(mask.visible);
     shown.set_valign(gtk::Align::Center);
     shown.add_css_class("flat");
-    shown.set_tooltip_text(Some(if mask.visible { "Hide this mask" } else { "Show this mask" }));
     shown.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {

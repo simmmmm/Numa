@@ -13,7 +13,7 @@ function tintsOf(months) {
   for (const month of months) for (const library of month.libraries || []) if (!order.has(library.id)) order.set(library.id, order.size % TINTS);
   return order;
 }
-const tint = id => `var(--tint-${state.tints.get(id) ?? 0})`;
+const tint = id => `var(--library-tint-${state.tints.get(id) ?? 0})`;
 
 function scrubber(months, sections) {
   state.tints = tintsOf(months);
@@ -23,7 +23,8 @@ function scrubber(months, sections) {
   const thumb = h('div', { class: 'scrub-thumb' });
   const hover = h('div', { class: 'scrub-hover', hidden: true });
   const pill = h('div', { class: 'scrub-pill', hidden: true });
-  const bar = h('div', { class: 'scrubber', role: 'slider', 'aria-label': 'Timeline', tabindex: '0' }, labels, track, hover, thumb, pill);
+  const bar = h('div', { class: 'scrubber', role: 'slider', 'aria-label': S.timeline, 'aria-orientation': 'vertical', 'aria-valuemin': 0, 'aria-valuemax': months.length - 1, 'aria-valuenow': 0, tabindex: '0' },
+    labels, track, hover, thumb, pill);
 
   // Where each month starts and ends, 0..1 down the bar: as long as its
   // photographs, but never thinner than FLOOR, so a month of a few — often
@@ -106,6 +107,8 @@ function scrubber(months, sections) {
     const into = Math.min(1, Math.max(0, (line - box.top) / (box.height || 1)));
     const span = spans[index];
     thumb.style.top = (span.top + into * (span.bottom - span.top)) * room() + 'px';
+    bar.setAttribute('aria-valuenow', index);
+    bar.setAttribute('aria-valuetext', monthName(span.month.month));
   }
   let ticking = false, quiet;
   function onScroll() {

@@ -33,6 +33,7 @@ done
 install -Dm644 data/com.tijmen.Numa.metainfo.xml \
         "$APPDIR/usr/share/metainfo/com.tijmen.Numa.metainfo.xml"
 install -Dm644 LICENSE "$APPDIR/usr/share/licenses/com.tijmen.Numa/LICENSE"
+install -Dm644 -t "$APPDIR/usr/share/licenses/com.tijmen.Numa/onnxruntime" data/onnxruntime/*
 install -Dm644 -t "$APPDIR/usr/share/numa/lensfun" data/lensfun/*
 if [[ -d data/private-profiles ]]; then
     install -Dm644 -t "$APPDIR/usr/share/numa/profiles/numa" data/private-profiles/*

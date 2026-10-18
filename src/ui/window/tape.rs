@@ -5,7 +5,7 @@ const PITCH: f64 = 7.0;
 
 const WIDEST: f64 = 30.0;
 
-const LABEL_ROOM: f64 = 88.0;
+const LABEL_ROOM: f64 = 150.0;
 
 const EDGE: f64 = 16.0;
 const HEIGHT: i32 = 60;
@@ -20,6 +20,8 @@ const REST: f64 = 0.32;
 const PICKED: f64 = 0.85;
 const REJECTED: f64 = 0.12;
 const TIME: f64 = 0.55;
+
+const LABEL_GAP: f64 = 12.0;
 
 const DRAG_SLOP: f64 = 4.0;
 
@@ -170,9 +172,18 @@ fn install_gestures(state: &App, area: &gtk::DrawingArea) {
         #[strong] state,
         move |_, x, _| skim(&state, x)
     ));
+
+    motion.connect_enter(glib::clone!(
+        #[weak] area,
+        move |_, _, _| area.queue_draw()
+    ));
     motion.connect_leave(glib::clone!(
         #[strong] state,
-        move |_| end_skim(&state)
+        #[weak] area,
+        move |_| {
+            end_skim(&state);
+            area.queue_draw();
+        }
     ));
     area.add_controller(motion);
 
@@ -461,8 +472,8 @@ pub(super) fn refresh(state: &App) {
             let count = places::grouped((last - first + 1) as i64);
             let (from, to) = (places::grouped(first as i64 + 1), places::grouped(last as i64 + 1));
             tape.title.set_text(&match first == last {
-                true => format!("Frame {from} \u{b7} 1 photograph"),
-                false => format!("Frames {from}\u{2013}{to} \u{b7} {count} photographs"),
+                true => format!("Frame {from} \u{b7} 1 photo"),
+                false => format!("Frames {from}\u{2013}{to} \u{b7} {count} photos"),
             });
             tape.title.set_tooltip_text(Some("Escape lets them go"));
             tape.reject.set_label(&format!("Reject {count}"));
@@ -507,7 +518,20 @@ fn draw(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i
     let left = tape.scroll.value() - EDGE;
     let (width, foot) = (width as f64, height as f64 - FOOT);
 
-    paint(TIME);
+    let now = current(state);
+    let lit = now.and_then(|now| layout.labels.iter().rev().find(|&&index| index <= now).copied());
+    let hovered = area.state_flags().contains(gtk::StateFlags::PRELIGHT);
+    let hour = |index: usize| times[index].div_euclid(3600);
+    let own = now.filter(|&now| hovered || lit.is_none_or(|lit| hour(lit) != hour(now)));
+    let skimmed = own.map(|now| {
+
+        let before = layout.labels.iter().rev().find(|&&index| index < now);
+        let day = before.map(|&index| times[index].div_euclid(86_400));
+        let words = area.create_pango_layout(Some(&time_text(times[now], day)));
+        let wide = words.pixel_size().0 as f64;
+        ((layout.x[now] - left).clamp(0.0, (width - wide).max(0.0)), wide, words)
+    });
+    let grey = label_grey(area);
     let mut day = None;
     for &index in &layout.labels {
         let x = layout.x[index] - left;
@@ -520,11 +544,23 @@ fn draw(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i
             continue;
         }
         let words = area.create_pango_layout(Some(&text));
+        let wide = words.pixel_size().0 as f64;
+        if skimmed.as_ref().is_some_and(|(at, room, _)| x < at + room + LABEL_GAP && x + wide + LABEL_GAP > *at) {
+            continue;
+        }
+        match Some(index) == lit && skimmed.is_none() {
+            true => paint(1.0),
+            false => cr.set_source_rgba(grey.red() as f64, grey.green() as f64, grey.blue() as f64, grey.alpha() as f64),
+        }
         cr.move_to(x, 0.0);
         pangocairo::functions::show_layout(cr, &words);
     }
+    if let Some((x, _, words)) = &skimmed {
+        paint(1.0);
+        cr.move_to(*x, 0.0);
+        pangocairo::functions::show_layout(cr, words);
+    }
 
-    let now = current(state);
     let home = tape.home.get().and_then(|card| tape.place.borrow().get(card).copied());
     let lazy = state.grid.lazy.borrow();
     let cards = state.grid.cards.borrow();
@@ -562,6 +598,14 @@ fn draw(state: &App, area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i
         cr.set_line_width(2.0);
         let _ = cr.stroke();
     }
+}
+
+#[allow(deprecated)]
+fn label_grey(area: &gtk::DrawingArea) -> gtk::gdk::RGBA {
+    area.style_context().lookup_color("numa_label").unwrap_or_else(|| {
+        let ink = area.color();
+        ink.with_alpha(ink.alpha() * TIME as f32)
+    })
 }
 
 fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {

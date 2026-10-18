@@ -4,6 +4,7 @@ mod book;
 mod auth;
 mod by;
 mod cards;
+mod edit;
 mod faces;
 mod home;
 mod jobs;
@@ -11,6 +12,7 @@ mod manage;
 mod models;
 mod night;
 mod pages;
+mod safe;
 mod photos;
 mod places;
 mod selection;
@@ -18,6 +20,7 @@ mod send;
 mod store;
 mod tidy;
 mod timeline;
+mod today;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -42,6 +45,8 @@ pub struct Server {
 
     pub artists: by::Artists,
 
+    pub places: places::Known,
+
     pub cards: cards::Cards,
 
     pub scanned: std::sync::atomic::AtomicBool,
@@ -50,6 +55,8 @@ pub struct Server {
     pub renders: tokio::sync::Semaphore,
 
     pub tidy: tidy::Tidy,
+
+    pub editing: edit::Editing,
 }
 
 impl Server {
@@ -112,6 +119,7 @@ fn main() -> Result<(), String> {
         activity: activity::Activity::new(&store),
         things: Default::default(),
         artists: Default::default(),
+        places: Default::default(),
         store,
         home: home::Home::start(photos, sent)?,
         data,
@@ -122,6 +130,7 @@ fn main() -> Result<(), String> {
         decodes: tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get())),
         renders: tokio::sync::Semaphore::new(1),
         tidy: tidy::Tidy::default(),
+        editing: Default::default(),
     });
     jobs::start(server.clone());
     cards::watch(server.clone(), path_from("NUMA_HOME_CARDS", "/cards"));
@@ -148,8 +157,9 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/setup", post(accounts::setup))
         .route("/api/v1/login", post(accounts::login))
         .route("/api/v1/logout", post(accounts::logout))
-        .route("/api/v1/me", get(accounts::me))
+        .route("/api/v1/me", get(accounts::me).put(accounts::set_start))
         .route("/api/v1/users", get(accounts::users).post(accounts::add_user))
+        .route("/api/v1/users/{name}", put(accounts::set_user))
         .route("/api/v1/libraries", get(timeline::libraries).post(manage::add))
         .route("/api/v1/libraries/folders", get(manage::folders))
         .route("/api/v1/libraries/{id}", put(manage::rename))
@@ -163,6 +173,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/trash/restore", post(manage::restore))
         .route("/api/v1/photos/remove", post(selection::remove))
         .route("/api/v1/photos/delete", post(selection::delete))
+        .route("/api/v1/photos/keep-jpeg", get(selection::keeping).post(selection::keep_jpeg))
         .route("/api/v1/photos/move", post(selection::moved))
         .route("/api/v1/photos/album", post(selection::album))
         .route("/api/v1/photos/marks", post(selection::marks))
@@ -170,17 +181,19 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/zip", get(selection::zip))
         .route("/api/v1/book", get(book::show))
         .route("/api/v1/book/zip", get(book::zip))
+        .route("/api/v1/today", get(today::today))
         .route("/api/v1/timeline", get(timeline::months))
         .route("/api/v1/timeline/{month}", get(timeline::month))
         .route("/api/v1/people", get(timeline::people))
         .route("/api/v1/albums", get(timeline::albums))
-        .route("/api/v1/activity", get(activity::status))
-        .route("/api/v1/activity/pause", post(activity::pause))
-        .route("/api/v1/activity/resume", post(activity::resume))
-        .route("/api/v1/things", get(timeline::things))
+
+        .route("/api/v1/background", get(activity::status))
+        .route("/api/v1/safe", get(safe::show))
+        .route("/api/v1/background/pause", post(activity::pause))
+        .route("/api/v1/background/resume", post(activity::resume))
         .route("/api/v1/tidy", get(tidy::list))
         .route("/api/v1/tidy/keep", post(tidy::keep))
-        .route("/api/v1/by", get(by::counts))
+        .route("/api/v1/filters", get(timeline::filters))
         .route("/api/v1/cameras", get(by::cameras).put(by::link))
         .route("/api/v1/card", get(cards::status))
         .route("/api/v1/card/import", post(cards::start))
@@ -196,8 +209,11 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/{id}", get(photos::detail))
         .route("/api/v1/photos/{id}/thumb", get(photos::thumb))
         .route("/api/v1/photos/{id}/preview", get(photos::preview))
+        .route("/api/v1/photos/{id}/sharpness", get(photos::sharpness_now))
         .route("/api/v1/photos/{id}/original", get(photos::original))
         .route("/api/v1/photos/{id}/jpeg", get(photos::jpeg))
+        .route("/api/v1/photos/{id}/edit", get(edit::get).post(edit::post))
+        .route("/api/v1/photos/{id}/frame", get(edit::frame))
         .route("/api/v1/photos/{id}/edits", get(photos::edits_get).put(photos::edits_put).layer(axum::extract::DefaultBodyLimit::max(64 << 20)))
         .route("/api/v1/photos/{id}/marks", put(photos::marks))
         .route("/api/v1/libraries/{id}/photos", get(timeline::in_step))

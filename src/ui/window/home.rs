@@ -16,6 +16,17 @@ pub(super) fn forget_token(state: &App) {
     state.catalog.remember(ACCOUNT, &Account { token: String::new(), ..account(state) });
 }
 
+pub(super) fn signed_out() -> String {
+    format!("Signed out of {NUMA_HOME}. Sign in again in Preferences.")
+}
+
+pub(super) fn sign_in_first(account: &Account, host: &str) -> String {
+    match account.signed_in() {
+        true => format!("Sign in to {NUMA_HOME} at {host} in Preferences first."),
+        false => format!("Sign in to {NUMA_HOME} in Preferences first."),
+    }
+}
+
 pub(super) type Running = Rc<RefCell<Option<gio::Subprocess>>>;
 
 pub(super) async fn curl(argv: Vec<OsString>, input: String, running: &Running) -> String {
@@ -52,8 +63,8 @@ pub(super) async fn sha256(path: &Path) -> Result<String, Failure> {
 
 pub(super) fn said(failure: Failure, account: &Account) -> String {
     match failure {
-        Failure::SignIn(_) => "Sign in again in Preferences".to_string(),
-        Failure::Unreachable => format!("{NUMA_HOME} at {} cannot be reached", api::host(&account.address)),
+        Failure::SignIn(_) => signed_out(),
+        Failure::Unreachable => format!("{NUMA_HOME} at {} cannot be reached.", api::host(&account.address)),
         Failure::Said(sentence) => sentence,
     }
 }
@@ -61,11 +72,8 @@ pub(super) fn said(failure: Failure, account: &Account) -> String {
 pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title(NUMA_HOME);
-    group.set_description(Some(&format!(
-        "The household's own photo server. Signed in, Export can send photographs there with {SEND_HOME}, \
-         and Import can keep a library there. \
-         The address is the server's, as nas.local or 192.168.1.20."
-    )));
+
+    group.set_description(Some("The household's own photo server, as nas.local or 192.168.1.20."));
     let address = adw::EntryRow::new();
     address.set_title("Address");
     let name = adw::EntryRow::new();
@@ -82,9 +90,11 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
         group.add(row);
     }
     group.set_header_suffix(Some(&sign_in));
-    for row in pace_rows(state) {
-        group.add(&row);
-    }
+
+    let kept = state.catalog.libraries().unwrap_or_default().iter().any(|library| home_sync::is_home(state, library.id));
+    let [keep, metered] = pace_rows(state);
+    group.add(&keep);
+    group.add(&metered);
 
     let show = Rc::new(glib::clone!(
         #[weak] address,
@@ -92,14 +102,19 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
         #[weak] password,
         #[weak] sign_in,
         #[weak] signed,
+        #[weak] keep,
+        #[weak] metered,
         move |account: &Account| {
             address.set_text(&account.address);
             name.set_text(&account.name);
             for row in [address.upcast_ref::<gtk::Widget>(), name.upcast_ref(), password.upcast_ref(), sign_in.upcast_ref()] {
                 row.set_visible(!account.signed_in());
             }
+            for row in [&keep, &metered] {
+                row.set_visible(account.signed_in() && kept);
+            }
             signed.set_visible(account.signed_in());
-            signed.set_title(&format!("Signed in as {} on {}", account.name, api::host(&account.address)));
+            signed.set_title(&format!("Signed in as {} at {}", account.name, api::host(&account.address)));
         }
     ));
     show(&account(state));
@@ -138,6 +153,8 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
                             state.catalog.remember(ACCOUNT, &account);
                             password.set_text("");
                             show(&account);
+
+                            home_sync::adopt(&state);
                         }
                         Err(Failure::SignIn(sentence)) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&sentence))),
                         Err(failure) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&said(failure, &account)))),
@@ -164,10 +181,37 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     group
 }
 
+pub(super) fn kept_group(state: &App) -> Option<adw::PreferencesGroup> {
+    let libraries: Vec<Library> =
+        state.catalog.libraries().unwrap_or_default().into_iter().filter(|library| home_sync::is_home(state, library.id)).collect();
+    if libraries.is_empty() {
+        return None;
+    }
+    let group = adw::PreferencesGroup::new();
+    group.set_title(&format!("Kept at {NUMA_HOME}"));
+    group.set_description(Some("Keep on This Computer brings every original down, new ones too. Off, each comes when it is opened."));
+    for library in libraries {
+        let row = adw::SwitchRow::new();
+        row.set_title(&library.label());
+        row.set_subtitle(&home_sync::kept_here_line(state, library.id).unwrap_or_default());
+        row.set_active(home_sync::keeps_here(state, library.id));
+        row.set_tooltip_text(Some("Keep on This Computer"));
+        row.connect_active_notify(glib::clone!(
+            #[strong] state,
+            move |row| {
+                home_sync::keep_here(&state, &library, row.is_active());
+                row.set_subtitle(&home_sync::kept_here_line(&state, library.id).unwrap_or_default());
+            }
+        ));
+        group.add(&row);
+    }
+    Some(group)
+}
+
 fn pace_rows(state: &App) -> [adw::PreferencesRow; 2] {
     let pace = home_sync::pace(state);
     let keep = adw::ComboRow::new();
-    keep.set_title("Keep in Step");
+    keep.set_title("Update Kept Libraries");
     keep.set_model(Some(&gtk::StringList::new(&["At Night", "While Open"])));
     keep.set_selected(if pace.night { 0 } else { 1 });
     let said = |keep: &adw::ComboRow| {
@@ -184,15 +228,16 @@ fn pace_rows(state: &App) -> [adw::PreferencesRow; 2] {
             home_sync::set_pace(&state, Pace { night: keep.selected() == 0, ..home_sync::pace(&state) });
         }
     ));
-    let unmetered = adw::SwitchRow::new();
-    unmetered.set_title("Only on Unmetered Networks");
-    unmetered.set_subtitle("Not over a phone's hotspot or another connection the system calls metered");
-    unmetered.set_active(pace.unmetered);
-    unmetered.connect_active_notify(glib::clone!(
+
+    let metered = adw::SwitchRow::new();
+    metered.set_title("Also on Metered Connections");
+    metered.set_subtitle("Off: not over a phone's hotspot or another connection the system calls metered");
+    metered.set_active(!pace.unmetered);
+    metered.connect_active_notify(glib::clone!(
         #[strong] state,
-        move |row| home_sync::set_pace(&state, Pace { unmetered: row.is_active(), ..home_sync::pace(&state) })
+        move |row| home_sync::set_pace(&state, Pace { unmetered: !row.is_active(), ..home_sync::pace(&state) })
     ));
-    [keep.upcast(), unmetered.upcast()]
+    [keep.upcast(), metered.upcast()]
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -207,79 +252,70 @@ pub(super) enum How {
 pub(super) struct Destination {
     pub(super) group: adw::PreferencesGroup,
     to: adw::ComboRow,
-    how: adw::ComboRow,
+    signed_in: bool,
 }
 
 impl Destination {
     pub(super) fn new(state: &App) -> Self {
-        let combo = |title: &str, names: &[&str]| {
-            let row = adw::ComboRow::new();
-            row.set_title(title);
-            row.set_model(Some(&gtk::StringList::new(names)));
-            row
-        };
-        let to = combo("Destination", &["Folder", NUMA_HOME]);
-        let how = combo("Send", &["As JPEG", "Original and Edits"]);
-        let (at, way): (u32, u32) = state.catalog.recall(CHOICE).unwrap_or_default();
-        how.set_selected(way);
-        let group = adw::PreferencesGroup::new();
-        group.add(&to);
-        group.add(&how);
-        if account(state).signed_in() {
-            to.set_selected(at);
+        let to = adw::ComboRow::new();
+        to.set_title("Destination");
+
+        let originals = format!("{NUMA_HOME}, Original");
+        to.set_model(Some(&gtk::StringList::new(&["Folder", NUMA_HOME, originals.as_str()])));
+        let signed_in = account(state).signed_in();
+        if signed_in {
+
+            let (at, way): (u32, u32) = state.catalog.recall(CHOICE).unwrap_or_default();
+            to.set_selected(if at == 0 { 0 } else { 1 + way.min(1) });
         } else {
             to.set_sensitive(false);
-            to.set_subtitle(&format!("Sign in to {NUMA_HOME}, the household's own photo server, to send photographs there"));
-            let sign_in = gtk::Button::with_label("Sign In…");
-            sign_in.set_valign(gtk::Align::Center);
-            sign_in.connect_clicked(|button| {
-                let window = button.root().and_downcast::<gtk::Window>();
-                if let Some(dialog) = button.ancestor(adw::Dialog::static_type()).and_downcast::<adw::Dialog>() {
-                    dialog.close();
-                }
-                if let Some(window) = window {
-                    let _ = window.activate_action("win.preferences", None);
-                }
-            });
-            group.set_header_suffix(Some(&sign_in));
         }
-        Self { group, to, how }
+        let group = adw::PreferencesGroup::new();
+        group.add(&to);
+        Self { group, to, signed_in }
     }
 
     pub(super) fn chosen(&self) -> Option<How> {
-        match (self.to.selected(), self.how.selected()) {
-            (0, _) => None,
-            (_, 0) => Some(How::Jpeg),
+        match self.to.selected() {
+            0 => None,
+            1 => Some(How::Jpeg),
             _ => Some(How::Originals),
         }
     }
 
     pub(super) fn remember(&self, state: &App) {
 
-        if !self.to.is_sensitive() {
+        if !self.signed_in {
             return;
         }
-        state.catalog.remember(CHOICE, &(self.to.selected(), self.how.selected()));
+        let (_, way): (u32, u32) = state.catalog.recall(CHOICE).unwrap_or_default();
+        let now = match self.to.selected() {
+            0 => (0, way),
+            at => (1, at - 1),
+        };
+        state.catalog.remember(CHOICE, &now);
+    }
+
+    fn said(&self) -> String {
+        match (self.signed_in, self.to.selected()) {
+            (false, _) => format!("Sign in to {NUMA_HOME} in Preferences"),
+            (true, 0) => String::new(),
+            (true, 1) => "The export set up below, as a JPEG".to_string(),
+            (true, _) => "Original and Edits: nothing below applies".to_string(),
+        }
     }
 
     pub(super) fn connect_changed(&self, changed: impl Fn(Option<How>) + 'static) {
         let changed = Rc::new(move |this: &Self| {
-            let how = this.chosen();
-            this.how.set_visible(this.to.selected() == 1);
-            this.how.set_subtitle(match how {
-                Some(How::Originals) => "The file as the camera wrote it, then its edits; of a RAW+JPEG, the raw",
-                _ => "The export set up below, as a JPEG",
-            });
-            changed(how);
+            this.to.set_subtitle(&this.said());
+            changed(this.chosen());
         });
         changed(self);
-        for row in [&self.to, &self.how] {
-            row.connect_selected_notify(glib::clone!(
-                #[strong(rename_to = this)] self,
-                #[strong] changed,
-                move |_| changed(&this)
-            ));
-        }
+        self.to.connect_selected_notify(glib::clone!(
+            #[strong(rename_to = this)] self,
+            #[strong] changed,
+            move |_| changed(&this)
+        ));
     }
 }
 
@@ -357,7 +393,7 @@ fn upload(state: &App, files: Vec<(PathBuf, Option<String>)>, mut failures: Vec<
             if cancel.stopped() {
                 break;
             }
-            text.set_text(&format!("Sending {} of {total} to {NUMA_HOME}", at + 1));
+            text.set_text(&format!("Sending {} of {total} home", at + 1));
             bar.set_fraction(at as f64 / total as f64);
             match one(&account, file, edits.as_deref(), &folder, &running).await {
                 Ok(duplicate) => {
@@ -407,7 +443,7 @@ fn summary(sent: usize, already: usize, total: usize, stopped: bool, failures: &
     };
     match failures {
         _ if stopped => format!("Stopped after {sent} of {total}; those are on {NUMA_HOME}"),
-        [] => format!("Sent {} to {NUMA_HOME}{there}", photographs(sent)),
+        [] => format!("{} sent home{there}", photographs(sent)),
         [only] if sent == 0 => only.clone(),
         [first, ..] => format!("Sent {sent}, {} failed: {first}", failures.len()),
     }

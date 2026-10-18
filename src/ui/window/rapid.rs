@@ -204,6 +204,10 @@ pub(super) fn is_on(state: &App) -> bool {
     of(state).views.visible_child_name().as_deref() == Some("rapid")
 }
 
+pub(super) fn choosing(state: &App) -> bool {
+    is_on(state) && !of(state).deliver.is_sensitive()
+}
+
 pub(super) fn first_look(state: &App) -> bool {
     of(state).first_look.is_active()
 }
@@ -491,6 +495,7 @@ pub(super) fn fill_list(state: &App) {
 
     let asking = library_of_view(state).is_some() && kind_of_view(state).is_none();
     rapid.deliver.set_sensitive(!asking);
+    paint_deliver(state);
     if asking {
         rapid.list.append(&rapid_panel::kind_question(state));
     } else if first_look(state) {
@@ -1044,6 +1049,19 @@ pub(super) fn set_flags(state: &App, ids: &[i64], flag: Flag) {
         }
     }
     state.grid.stale.set(true);
+    paint_deliver(state);
+}
+
+fn paint_deliver(state: &App) {
+    let rapid = of(state);
+    let ready = match first_look(state) {
+        true => !kept_ids(state, "teaser").is_empty(),
+        false => rapid.moments.borrow().iter().any(|moment| !picked(state, &moment.ids).is_empty()),
+    };
+    match ready {
+        true => rapid.deliver.remove_css_class("unready"),
+        false => rapid.deliver.add_css_class("unready"),
+    }
 }
 
 fn toggle_teaser(state: &App, id: i64) {

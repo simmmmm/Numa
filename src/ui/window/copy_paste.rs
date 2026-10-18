@@ -57,8 +57,6 @@ pub(super) fn save_preset_dialog(state: &App, window: &adw::ApplicationWindow, s
     page.add(&group);
 
     let save = primary_button("Save");
-    save.set_halign(gtk::Align::End);
-    save.set_margin_top(12);
     save.connect_clicked(glib::clone!(
         #[strong] state,
         #[weak] dialog,
@@ -83,15 +81,9 @@ pub(super) fn save_preset_dialog(state: &App, window: &adw::ApplicationWindow, s
         }
     ));
 
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.append(&page);
-    column.append(&save);
-    column.set_margin_bottom(12);
-    column.set_margin_end(12);
-
     let bar = adw::ToolbarView::new();
-    bar.add_top_bar(&adw::HeaderBar::new());
-    bar.set_content(Some(&column));
+    bar.add_top_bar(&dialog_header(&dialog, &save));
+    bar.set_content(Some(&page));
     dialog.set_child(Some(&bar));
     dialog.present(Some(window));
 }
@@ -99,12 +91,15 @@ pub(super) fn save_preset_dialog(state: &App, window: &adw::ApplicationWindow, s
 pub(super) fn copy_settings(state: &App) {
     let copied = state.open.borrow().as_ref().map(|photo| photo.document.clone());
     match copied {
-        Some(document) => {
-            *state.copy_paste.document.borrow_mut() = Some(document);
-            state.toast("Settings copied");
-        }
+        Some(document) => hold(state, document),
         None => state.toast("Open a photo to copy its settings"),
     }
+}
+
+fn hold(state: &App, document: Document) {
+    *state.copy_paste.document.borrow_mut() = Some(document);
+    state.copy_paste.paste.iter().for_each(|action| action.set_enabled(true));
+    state.toast("Settings copied");
 }
 
 pub(super) fn copy_from_selection(state: &App) {
@@ -119,10 +114,7 @@ pub(super) fn copy_from_selection(state: &App) {
     };
 
     match state.catalog.load_edits(id) {
-        Ok(Some(document)) => {
-            *state.copy_paste.document.borrow_mut() = Some(document);
-            state.toast("Settings copied");
-        }
+        Ok(Some(document)) => hold(state, document),
 
         Ok(None) => state.toast("That photo has no edits to copy"),
         Err(err) => state.toast(&format!("Could not read its settings: {err}")),
@@ -155,8 +147,6 @@ pub(super) fn paste_settings(state: &App, window: &adw::ApplicationWindow, ask: 
     let chosen = parts_checklist(&group, state.copy_paste.parts.get());
 
     let apply = primary_button("Paste");
-    apply.set_halign(gtk::Align::End);
-    apply.set_margin_top(12);
     apply.connect_clicked(glib::clone!(
         #[strong] state,
         #[weak] dialog,
@@ -166,17 +156,11 @@ pub(super) fn paste_settings(state: &App, window: &adw::ApplicationWindow, ask: 
             apply_clipboard(&state);
         }
     ));
-
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     page.add(&group);
-    column.append(&page);
-    column.append(&apply);
-    column.set_margin_bottom(12);
-    column.set_margin_end(12);
 
     let bar = adw::ToolbarView::new();
-    bar.add_top_bar(&adw::HeaderBar::new());
-    bar.set_content(Some(&column));
+    bar.add_top_bar(&dialog_header(&dialog, &apply));
+    bar.set_content(Some(&page));
     dialog.set_child(Some(&bar));
     dialog.present(Some(window));
 }
@@ -334,6 +318,8 @@ pub(super) struct State {
     pub(super) parts: Rc<Cell<EditParts>>,
 
     pub(super) presets_menu: gio::Menu,
+
+    pub(super) paste: [gio::SimpleAction; 2],
 }
 
 impl State {
@@ -342,6 +328,11 @@ impl State {
             document: Rc::new(RefCell::new(None)),
             parts: Rc::new(Cell::new(EditParts::default())),
             presets_menu: gio::Menu::new(),
+            paste: ["photo-paste", "photo-paste-choose"].map(|name| {
+                let action = gio::SimpleAction::new(name, None);
+                action.set_enabled(false);
+                action
+            }),
         }
     }
 }

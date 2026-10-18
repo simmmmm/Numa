@@ -11,7 +11,7 @@ September 2026.
 |---|---|
 | `numa.spec` | Fedora, openSUSE |
 | `numa.dsc`, `debian.*` | Debian, Ubuntu (OBS's debtransform makes the source package) |
-| `PKGBUILD` | Arch |
+| `PKGBUILD` | Arch, where the package is `numa-photo` (below) |
 | `build.sh` | the build and install steps all three share |
 | `_constraints` | a worker with room for the fat-LTO link |
 
@@ -47,6 +47,20 @@ password stays in the keyring). The account is `Numa`, with a capital N.
 xUbuntu_26.04 and Arch, all x86_64 (`osc meta prj home:Numa`). Its project
 config says `Prefer: hdf5` for Arch, where something deep in the dependencies
 could be either hdf5 or hdf5-openmpi and OBS will not choose.
+
+## Arch's `numa-photo`
+
+Since 6 October 2026 Arch's own `extra` has a DNS resolver called `numa`, and
+`extra` comes before `[home_Numa_Arch]` in `pacman.conf`. A package named
+`numa` in our repository is then neither what `pacman -S numa` installs nor
+what `pacman -Syu` updates to ("local (0.42.0-1) is newer than extra
+(0.24.1-1)"). So the PKGBUILD names it `numa-photo`, with `conflicts=(numa)`
+because both have `/usr/bin/numa`. The OBS package, the tarball and every
+other distribution's package stay `numa`.
+
+The download page writes its Arch line from the OBS package's name,
+`pacman -Sy home_Numa_Arch/numa`, which no longer exists; Arch users get the
+README's lines instead (numa.photo and the guide send them there).
 
 ## Not yet
 

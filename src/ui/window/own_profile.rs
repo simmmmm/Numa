@@ -88,7 +88,6 @@ fn ask(state: &App, dialog: &adw::PreferencesDialog, cameras: Vec<fit::Camera>) 
     alert.set_extra_child(Some(&picker));
     alert.add_response("cancel", "Cancel");
     alert.add_response("make", "Make Profile");
-    alert.set_response_appearance("make", adw::ResponseAppearance::Suggested);
     alert.set_default_response(Some("make"));
     alert.set_close_response("cancel");
     let (state, preferences) = (state.clone(), dialog.clone());

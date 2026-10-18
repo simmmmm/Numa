@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use numa_io::catalog::Photo;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
@@ -137,6 +140,48 @@ pub fn names_for(server: &Server, paths: &[PathBuf], times: &[i64]) -> Value {
 }
 
 const HOUR: i64 = 3600;
+
+#[derive(Default)]
+pub struct Known {
+    found: Mutex<HashMap<i64, (i64, Option<&'static Place>)>>,
+    reading: AtomicBool,
+}
+
+pub fn known(server: &Arc<Server>, photos: &[Photo]) -> (HashMap<i64, (&'static str, &'static str)>, bool) {
+    let found = server.places.found.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut places = HashMap::new();
+    let mut missing = false;
+    for photo in photos {
+        match found.get(&photo.id).filter(|(mtime, _)| *mtime == photo.mtime) {
+            Some((_, Some(place))) => drop(places.insert(photo.id, (place.name.as_str(), place.country.as_str()))),
+            Some((_, None)) => {}
+            None => missing = true,
+        }
+    }
+    drop(found);
+    if missing && !server.places.reading.swap(true, Ordering::SeqCst) {
+        let server = server.clone();
+        std::thread::spawn(move || {
+            read_places(&server);
+            server.places.reading.store(false, Ordering::SeqCst);
+        });
+    }
+    (places, missing)
+}
+
+fn read_places(server: &Server) {
+    let everyone: Vec<i64> = server.home.all_libraries().iter().map(|library| library.id).collect();
+    for photo in server.home.photos(&everyone) {
+        if server.activity.paused() {
+            return;
+        }
+        let read = server.places.found.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&photo.id).is_some_and(|(mtime, _)| *mtime == photo.mtime);
+        if !read {
+            let place = numa_io::exif::position(&photo.path).and_then(|(latitude, longitude)| nearest((latitude as f32, longitude as f32)));
+            server.places.found.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(photo.id, (photo.mtime, place));
+        }
+    }
+}
 
 pub async fn library(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
     let library = server.home.libraries(&me.name).into_iter().find(|library| library.id == id)

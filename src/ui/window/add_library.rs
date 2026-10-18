@@ -98,7 +98,6 @@ pub(super) fn open_path(state: &App, window: &adw::ApplicationWindow, path: Path
     );
     alert.add_response("cancel", "Cancel");
     alert.add_response("add", "Add and Open");
-    alert.set_response_appearance("add", adw::ResponseAppearance::Suggested);
     let state = state.clone();
     alert.connect_response(None, move |_, response| {
         if response != "add" {

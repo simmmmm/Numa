@@ -37,7 +37,8 @@ pub(super) fn build_adjustment_panel(state: &App) -> gtk::Box {
 
     let masks = page_column();
     masks.add_css_class("quiet");
-    masks.append(&section_header("Masks"));
+
+    masks.append(&section_header("New mask"));
     masks.append(&build_masks(state));
     pages.add_named(&wrap_page(&masks), Some("masks"));
 
@@ -112,9 +113,9 @@ pub(super) fn refresh_rail_dots(state: &App) {
 }
 
 pub(super) const PANEL_TABS: [(&str, &str, &str, Option<&str>); 9] = [
-    ("presets", "Looks", "Looks — the camera profile, presets and LUTs", Some("starred-symbolic")),
+    ("presets", "Looks", "Looks — presets and LUTs", Some("starred-symbolic")),
     ("light", "Light", "Light", Some("display-brightness-symbolic")),
-    ("colour", "Colour", "Colour", Some("color-select-symbolic")),
+    ("colour", "Colour", "Colour — white balance, the mixer and the camera", Some("color-select-symbolic")),
     ("effects", "Effects", "Presence, mist, vignette and grain", None),
     ("grade", "Grade", "Colour grading", None),
     ("detail", "Detail", "Detail — judge these at 1:1", Some("edit-find-symbolic")),
@@ -139,15 +140,10 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
 
     let top = page_column();
     top.set_margin_bottom(0);
-    top.append(&section_header("Camera profile"));
-    top.append(&build_profile_picker(state));
-    top.append(&build_tone_mapping(state));
-
-    top.append(&camera_look::build(state));
 
     let choice = chip_row();
     choice.set_homogeneous(true);
-    choice.set_margin_top(8);
+    choice.set_hexpand(true);
     let kinds = gtk::Stack::new();
     kinds.set_vexpand(true);
     kinds.add_named(presets, Some("presets"));
@@ -182,7 +178,21 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
         choice.append(&button);
     }
     first.set_active(true);
-    top.append(&choice);
+
+    let ends = gtk::Stack::new();
+    ends.add_named(&preset_ends(), Some("presets"));
+    let lut_more = lut::more_button(state);
+    lut_more.add_css_class("label-action");
+    lut_more.set_halign(gtk::Align::End);
+    ends.add_named(&lut_more, Some("luts"));
+    kinds.bind_property("visible-child-name", &ends, "visible-child-name").sync_create().build();
+    ends.set_valign(gtk::Align::Center);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    line.set_margin_top(8);
+    line.append(&choice);
+    line.append(&ends);
+    name_icon_buttons(line.upcast_ref());
+    top.append(&line);
 
     looks.append(&top);
     looks.append(&kinds);

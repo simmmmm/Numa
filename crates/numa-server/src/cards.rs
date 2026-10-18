@@ -158,7 +158,7 @@ pub struct Asked {
 
 pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(asked): Json<Asked>) -> Result<StatusCode, Fail> {
     let libraries = archive(&server);
-    let (items, places) = {
+    let (items, places, camera) = {
         let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let card = card.as_ref().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no card in the NAS.".into()))?;
         if asked.shoots.len() != card.shoots.len() {
@@ -184,7 +184,7 @@ pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(as
         if items.is_empty() {
             return Err(Fail::bad("Tick a photograph to import."));
         }
-        (items, places)
+        (items, places, card.camera.clone())
     };
     if server.cards.importing.swap(true, Ordering::SeqCst) {
         return Err(Fail(StatusCode::CONFLICT, "An import is already under way.".into()));
@@ -196,7 +196,13 @@ pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(as
     std::thread::Builder::new()
         .name("numa-import".into())
         .spawn(move || {
+            let total = items.len();
             let said = import_now(&running, items, &places);
+
+            if let Some(camera) = &camera {
+                let landed = total.saturating_sub(said.1.len());
+                let _ = running.store.set_setting(&format!("card:{camera}"), &format!("{} {landed}", crate::store::now()));
+            }
             *running.cards.said.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(said);
 
             let root = running.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|card| card.root.clone());
