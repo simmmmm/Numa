@@ -176,7 +176,7 @@ fn home_folder(state: &App, from: &sync::Library, account: &Account) -> Result<L
     let link = linked(state, library.id)
         .unwrap_or_else(|| Link { address: account.address.clone(), library: from.id.clone(), name: from.name.clone(), ..Link::default() });
 
-    if link.library != from.id || api::base(&link.address) != api::base(&account.address) {
+    if link.library != from.id || !api::same_server(&link.address, &account.address) {
         return Err(format!("{} is kept at {NUMA_HOME} as another library", root.display()));
     }
     keep(state, library.id, &link);
@@ -218,7 +218,7 @@ pub(super) fn adopt(state: &App) {
             .unwrap_or_default()
             .iter()
             .filter_map(|library| linked(&state, library.id))
-            .filter(|link| api::base(&link.address) == api::base(&account.address))
+            .filter(|link| api::same_server(&link.address, &account.address))
             .collect();
 
         let new = listed.into_iter().filter(|from| !links.iter().any(|link| link.library == from.id || (link.library.is_empty() && link.name == from.name)));
@@ -249,7 +249,7 @@ pub(super) fn open_link(state: &App, uri: &str) {
         return state.toast("That Open in Numa link could not be read");
     };
     let account = account(state);
-    if !account.signed_in() || api::base(&server) != api::base(&account.address) {
+    if !account.signed_in() || !api::same_server(&server, &account.address) {
         return state.toast(&sign_in_first(&account, &api::host(&server)));
     }
     let links: Vec<(Library, Link)> = state
@@ -258,7 +258,7 @@ pub(super) fn open_link(state: &App, uri: &str) {
         .unwrap_or_default()
         .into_iter()
         .filter_map(|library| Some((library.clone(), linked(state, library.id)?)))
-        .filter(|(_, link)| api::base(&link.address) == api::base(&server))
+        .filter(|(_, link)| api::same_server(&link.address, &server))
         .collect();
     let here = links.iter().find_map(|(library, link)| {
         let (path, _) = link.photos.iter().find(|(_, kept)| kept.id == photo)?;
@@ -448,7 +448,7 @@ enum How {
 fn in_step(state: &App, library: Library, how: How) {
     let Some(mut link) = linked(state, library.id) else { return };
     let account = account(state);
-    if !account.signed_in() || api::base(&link.address) != api::base(&account.address) {
+    if !account.signed_in() || !api::same_server(&link.address, &account.address) {
         if how == How::ByHand {
             state.toast(&sign_in_first(&account, &api::host(&link.address)));
         }

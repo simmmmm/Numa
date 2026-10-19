@@ -59,10 +59,6 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
 
     page.add(&home::preferences_group(state, dialog));
 
-    if let Some(kept) = home::kept_group(state) {
-        page.add(&kept);
-    }
-
     if let Some(path) = appimage() {
         let menu = adw::PreferencesGroup::new();
         menu.set_title("Applications Menu");

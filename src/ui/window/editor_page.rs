@@ -245,7 +245,16 @@ pub(super) fn build_crumbs(state: &App) -> gtk::Box {
 
     crumbs.append(&libraries_crumb(state));
     crumbs.append(&crumb_arrow());
-    crumbs.append(&state.editor_page.library_crumb);
+    let library = gtk::Button::new();
+    library.add_css_class("flat");
+    library.add_css_class("crumb-quiet");
+    library.set_valign(gtk::Align::Center);
+    library.set_child(Some(&state.editor_page.library_crumb));
+    library.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| close_editor(&state)
+    ));
+    crumbs.append(&library);
     crumbs.append(&crumb_arrow());
     crumbs.append(&state.editor_page.photo_crumb);
 

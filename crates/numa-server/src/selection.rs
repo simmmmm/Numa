@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -176,11 +177,19 @@ pub async fn by(State(server): State<Arc<Server>>, Signed(me): Signed, Json(aske
 pub struct Listed {
 
     ids: String,
+
+    #[serde(rename = "as")]
+    kind: Option<String>,
+
+    edge: Option<u32>,
 }
 
 pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(listed): Query<Listed>) -> Result<Response, Fail> {
     let ids: Vec<i64> = listed.ids.split(',').filter_map(|id| id.trim().parse().ok()).collect();
     let photos = chosen(&server, &me, &ids, false, false)?;
+    if listed.kind.as_deref() == Some("jpeg") {
+        return jpegs(server, photos, listed.edge.map_or(u32::MAX, |edge| edge.clamp(256, 8192))).await;
+    }
     let scratch = server.data.join("tmp").join(format!("zip-{}-{}.zip", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos())));
     let file = tokio::task::spawn_blocking(move || -> Result<std::fs::File, String> {
         std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|err| err.to_string())?;
@@ -210,5 +219,53 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(li
     if let Some(length) = length {
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
     }
+    Ok(response)
+}
+
+async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) -> Result<Response, Fail> {
+    let mut stacks = Vec::with_capacity(photos.len());
+    for (_, photo) in &photos {
+        stacks.push(match crate::photos::edits(&server, photo).await? {
+            Some(edits) => edits,
+            None => serde_json::to_string(&numa_core::document::Document::new(photo.path.to_string_lossy().into_owned())).map_err(Fail::internal)?,
+        });
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let runtime = tokio::runtime::Handle::current();
+    let scratch = server.data.join("tmp");
+    tokio::task::spawn_blocking(move || {
+        let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, crate::book::Pipe(tx)));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let (mut names, mut left_out) = (HashSet::new(), Vec::new());
+        for ((library, photo), edits) in photos.iter().zip(&stacks) {
+            let base = std::path::Path::new(&format!("{}/{}", library.label(), within(library, &photo.path))).with_extension("");
+
+            let mut name = format!("{}.jpg", base.display());
+            for at in 2.. {
+                if names.insert(name.clone()) {
+                    break;
+                }
+                name = format!("{} {at}.jpg", base.display());
+            }
+            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::book::develop(photo, edge, edits, &scratch));
+            match developed {
+                Ok(bytes) => {
+                    if zip.start_file(name, options).is_err() || zip.write_all(&bytes).is_err() {
+                        return;
+                    }
+                }
+                Err(why) => left_out.push(format!("{name}: {why}")),
+            }
+        }
+        if !left_out.is_empty() && zip.start_file("Left Out.txt", options).is_ok() {
+            let _ = zip.write_all(format!("Numa could not develop these:\n\n{}\n", left_out.join("\n")).as_bytes());
+        }
+        let _ = zip.finish();
+    });
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|chunk| (chunk, rx)) });
+    let mut response = Body::from_stream(stream).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+    headers.insert(header::CONTENT_DISPOSITION, crate::photos::attachment("Numa Home.zip"));
     Ok(response)
 }

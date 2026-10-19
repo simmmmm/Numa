@@ -107,6 +107,10 @@ main { padding: 0 var(--edge) 48px; }
 .filters.one .preset:not(.chosen) { color: var(--name); }
 .filters.one .chip .x { color: var(--label); opacity: 1; }
 .filters.one .divider { width: 1px; height: 20px; background: var(--rule); flex: none; }
+/* HOME-054: Photo Size at the row's end, a small and a large photograph either side. */
+.filters .size { display: inline-flex; align-items: center; gap: var(--space-8); color: var(--label); }
+.filters .size svg { width: 12px; height: 12px; flex: none; }
+.filters .size svg:last-child { width: 16px; height: 16px; }
 .rated { display: inline-flex; align-items: center; gap: var(--space-4); }
 .rated svg { width: 12px; height: 12px; fill: currentColor; }
 .filter-menu { min-width: 240px; }
@@ -145,7 +149,7 @@ main { padding: 0 var(--edge) 48px; }
 .tile .burst svg { stroke-width: 2.2; }
 .tile.rejected img.in { opacity: 0.35; }
 .tile.tiny .burst { display: none; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px; padding-top: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile, 150px), 1fr)); gap: 3px; padding-top: 12px; }
 .grid .tile { position: relative; aspect-ratio: 1; }
 
 .empty { padding: 80px 0; display: grid; gap: 8px; justify-items: center; text-align: center; }
@@ -213,13 +217,14 @@ main { padding: 0 var(--edge) 48px; }
 .edit .slider { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 8px; margin-top: 6px; cursor: default; }
 .edit .slider .name { color: var(--name); }
 .edit .slider .value { font-variant-numeric: tabular-nums; color: var(--ink); }
-.edit .slider input { grid-column: 1 / -1; width: 100%; height: 20px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer;
+.edit .slider input, .filters .size input { grid-column: 1 / -1; width: 100%; height: 20px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer;
   --from: 50%; --to: 50%; --line: linear-gradient(to right, var(--track) var(--from), var(--accent) var(--from) var(--to), var(--track) var(--to)); }
-.edit .slider input::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: var(--line); }
-.edit .slider input::-moz-range-track { height: 2px; border-radius: 1px; background: var(--line); }
-.edit .slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -6px; border-radius: 7px; background: var(--accent); border: 0; }
-.edit .slider input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 7px; background: var(--accent); border: 0; }
-.edit .slider input:focus-visible { outline-offset: 0; }
+.edit .slider input::-webkit-slider-runnable-track, .filters .size input::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: var(--line); }
+.edit .slider input::-moz-range-track, .filters .size input::-moz-range-track { height: 2px; border-radius: 1px; background: var(--line); }
+.edit .slider input::-webkit-slider-thumb, .filters .size input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -6px; border-radius: 7px; background: var(--accent); border: 0; }
+.edit .slider input::-moz-range-thumb, .filters .size input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 7px; background: var(--accent); border: 0; }
+.edit .slider input:focus-visible, .filters .size input:focus-visible { outline-offset: 0; }
+.filters .size input { width: 120px; }
 
 /* Crop & Straighten: the whole frame on the photo ground, the box over it
    in a white hairline with its corners, the rest dimmed; thirds while it
@@ -435,6 +440,7 @@ header { height: var(--head); }
   .filters.one > * { flex: none; }
   .face { width: 100px; height: 100px; border-radius: 50px; }
   .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; }
+  .filters .size { display: none; }
   .cardbar .meter { width: 120px; }
 }
 
@@ -674,7 +680,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
   input[type=text], input[type=password], input[type=search], select, .filters select, .info .by-pick { height: var(--space-44); }
   input[type=checkbox], .import-page .tick input { width: 22px; height: 22px; }
   label.check, .import-page .tick { min-height: var(--space-44); }
-  .edit .slider input { height: var(--space-44); }
+  .edit .slider input, .filters .size input { height: var(--space-44); }
   .menu button, .menu a { min-height: var(--space-44); display: flex; align-items: center; }
   .menu .star-row button { min-width: var(--space-44); justify-content: center; }
   .place-link, .place-entry { height: var(--space-44); border-radius: var(--radius-hud); }

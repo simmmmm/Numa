@@ -194,7 +194,7 @@ function chosenActions(ids, manage, own = {}) {
   return {
     erase: manage ? erase : null,
     album: () => item(S.albumEll, () => albumDialog(ids)),
-    download: () => h('a', { href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', title: S.zipTip }, S.download),
+    downloads: () => downloadItems(`/api/v1/photos/zip?ids=${ids.join(',')}`, `/api/v1/photos/zip?ids=${ids.join(',')}&as=jpeg`),
     marks: () => [
       h('div', { class: 'section-label' }, S.starsLabel),
       h('div', { class: 'star-row' }, [1, 2, 3, 4, 5].map(stars => h('button', { title: `${stars} (${stars})`, 'aria-label': starsOf(stars), onclick: () => marks({ rating: stars }) },
@@ -273,7 +273,7 @@ async function selectionBar() {
       picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album) }, phrase('addTo', { album: picked.album }))
         : h('button', { class: 'chip', onclick: () => albumDialog(ids) }, S.albumEll),
       round('star', S.starsAndFlag, actions.marks),
-      h('a', { class: 'round small', href: `/api/v1/photos/zip?ids=${ids.join(',')}`, download: '', 'aria-label': S.download, title: S.downloadTip }, icon('download')),
+      round('download', S.downloadTip, actions.downloads),
       round('more', S.more, actions.more)));
 }
 
@@ -291,7 +291,8 @@ async function chosenMenu(event, tile, id) {
   const actions = chosenActions(ids, await mayManage(ids));
   menuAt(event.clientX, event.clientY, [
     ids.length === 1 ? h('button', { onclick: () => { unpick(); tile.click(); } }, S.open) : h('div', { class: 'section-label' }, phrase('chosenN', { n: grouped(ids.length) })),
-    actions.album(), actions.download(),
+    actions.album(),
+    h('div', { class: 'rule' }), h('div', { class: 'section-label' }, S.download), ...actions.downloads(),
     h('div', { class: 'rule' }), actions.marks(),
     h('div', { class: 'rule' }), actions.more(),
   ]);

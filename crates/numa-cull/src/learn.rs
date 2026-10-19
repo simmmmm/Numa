@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::{Frame, Scale};
@@ -23,6 +24,8 @@ pub struct Sample {
     pub label: Option<f32>,
 
     pub burst: usize,
+
+    pub best: bool,
 }
 
 impl Sample {
@@ -61,6 +64,7 @@ impl Sample {
             rule,
             label: label(rating, rejected),
             burst,
+            best,
         }
     }
 }
@@ -126,8 +130,24 @@ pub fn score(samples: &[Sample]) -> (Vec<f32>, Outcome) {
     }
 
     let model = Model::fit(&rated);
-    let scores = samples.iter().map(|sample| model.predict(sample).clamp(0.0, 5.0) as f32).collect();
+    let mut scores: Vec<f32> = samples.iter().map(|sample| model.predict(sample).clamp(0.0, 5.0) as f32).collect();
+    best_on_top(samples, &mut scores);
     (scores, Outcome::Learned { rated: rated.len(), learned, rule })
+}
+
+fn best_on_top(samples: &[Sample], scores: &mut [f32]) {
+    let best: HashMap<usize, usize> =
+        samples.iter().enumerate().filter(|(_, sample)| sample.best).map(|(index, sample)| (sample.burst, index)).collect();
+    let mut top: HashMap<usize, f32> = HashMap::new();
+    for (sample, score) in samples.iter().zip(scores.iter()) {
+        if let Some(&at) = best.get(&sample.burst).filter(|&&at| sample.rule <= samples[at].rule) {
+            let top = top.entry(sample.burst).or_insert(scores[at]);
+            *top = top.max(*score);
+        }
+    }
+    for (burst, at) in best {
+        scores[at] = top[&burst];
+    }
 }
 
 fn distinct(samples: &[&Sample]) -> usize {
@@ -268,7 +288,7 @@ mod tests {
             .map(|burst| {
                 let features = std::array::from_fn(|_| noise(&mut seed));
                 let rule = (noise(&mut seed) * 5.0) as f32;
-                Sample { features, rule, label: rate(&features, rule), burst }
+                Sample { features, rule, label: rate(&features, rule), burst, best: false }
             })
             .collect()
     }
@@ -292,6 +312,28 @@ mod tests {
         };
         let (fitted, constant) = (error(&|i| scores[i]), error(&|_| mean));
         assert!(fitted < constant / 2.0, "{fitted} against a constant's {constant}");
+    }
+
+    #[test]
+    fn the_best_of_a_run_is_never_scored_below_it() {
+
+        let mut samples = samples(240, |_, _| None);
+        for (index, sample) in samples.iter_mut().enumerate() {
+            sample.burst = index / 3;
+            sample.best = index % 3 == 0;
+            sample.features[6] = f64::from(u8::from(sample.best));
+            if sample.best {
+                sample.rule = 5.0;
+            }
+            let penalty = if sample.best { 2.0 } else { 0.0 };
+            sample.label = Some((1.0 + 3.0 * sample.features[7] - penalty).round().clamp(0.0, 5.0) as f32);
+        }
+        let (scores, outcome) = score(&samples);
+
+        assert!(matches!(outcome, Outcome::Learned { .. }), "{outcome:?}");
+        for run in scores.chunks(3) {
+            assert!(run[0] >= run[1] && run[0] >= run[2], "{run:?}");
+        }
     }
 
     #[test]

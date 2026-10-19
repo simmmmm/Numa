@@ -151,9 +151,9 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(as
     Ok(response)
 }
 
-fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path) -> Result<Vec<u8>, String> {
+pub(crate) fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path) -> Result<Vec<u8>, String> {
     let mut image = numa_io::thumbs::render(&photo.path, edge, edits)?;
-    if image.width().max(image.height()) < edge {
+    if edge < u32::MAX && image.width().max(image.height()) < edge {
         let whole = numa_io::thumbs::render(&photo.path, u32::MAX, edits)?;
         image = match whole.width().max(whole.height()) > edge {
             true => image::DynamicImage::ImageRgb8(whole).thumbnail(edge, edge).into_rgb8(),
@@ -170,7 +170,7 @@ fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path) -> 
     bytes
 }
 
-struct Pipe(tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>);
+pub(crate) struct Pipe(pub(crate) tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>);
 
 impl Write for Pipe {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

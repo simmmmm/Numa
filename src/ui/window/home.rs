@@ -181,33 +181,6 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     group
 }
 
-pub(super) fn kept_group(state: &App) -> Option<adw::PreferencesGroup> {
-    let libraries: Vec<Library> =
-        state.catalog.libraries().unwrap_or_default().into_iter().filter(|library| home_sync::is_home(state, library.id)).collect();
-    if libraries.is_empty() {
-        return None;
-    }
-    let group = adw::PreferencesGroup::new();
-    group.set_title(&format!("Kept at {NUMA_HOME}"));
-    group.set_description(Some("Keep on This Computer brings every original down, new ones too. Off, each comes when it is opened."));
-    for library in libraries {
-        let row = adw::SwitchRow::new();
-        row.set_title(&library.label());
-        row.set_subtitle(&home_sync::kept_here_line(state, library.id).unwrap_or_default());
-        row.set_active(home_sync::keeps_here(state, library.id));
-        row.set_tooltip_text(Some("Keep on This Computer"));
-        row.connect_active_notify(glib::clone!(
-            #[strong] state,
-            move |row| {
-                home_sync::keep_here(&state, &library, row.is_active());
-                row.set_subtitle(&home_sync::kept_here_line(&state, library.id).unwrap_or_default());
-            }
-        ));
-        group.add(&row);
-    }
-    Some(group)
-}
-
 fn pace_rows(state: &App) -> [adw::PreferencesRow; 2] {
     let pace = home_sync::pace(state);
     let keep = adw::ComboRow::new();

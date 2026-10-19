@@ -69,7 +69,7 @@ pub(super) fn preview(state: &App, id: i64, near: impl Fn(&App) -> bool + 'stati
     let file = home_preview(&library.path, &server);
     let account = account(state);
     let link = home_sync::linked(state, library.id);
-    let reachable = account.signed_in() && link.is_some_and(|link| api::base(&link.address) == api::base(&account.address));
+    let reachable = account.signed_in() && link.is_some_and(|link| api::same_server(&link.address, &account.address));
     let thumb = home_thumb(&library.path, &server);
     let state = state.clone();
     glib::spawn_future_local(async move {
@@ -117,7 +117,7 @@ pub(super) fn fetch_first(state: &App, id: i64, then: impl FnOnce(&App) + 'stati
     let (Some(photo), Some(library)) = (photo, library) else { return false };
     let Some(link) = home_sync::linked(state, library.id) else { return false };
     let account = account(state);
-    if !account.signed_in() || api::base(&link.address) != api::base(&account.address) {
+    if !account.signed_in() || !api::same_server(&link.address, &account.address) {
         state.toast(&sign_in_first(&account, &api::host(&link.address)));
         return true;
     }

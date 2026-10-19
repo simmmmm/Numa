@@ -226,6 +226,14 @@ fn trash(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> boo
 
 fn tidy(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool {
 
+    for library in server.home.all_libraries() {
+        let home = server.clone();
+        server.home.blocking(move |catalog| {
+            let _ = numa_io::analysis::regroup_bursts(catalog, library.id);
+            home.shelve(Some(library.id), catalog);
+        });
+    }
+
     let counts = crate::tidy::prepare(server);
     let count = |kind| counts.get(kind).copied().unwrap_or(0);
     let total = count("copies") + count("bursts") + count("unusable");

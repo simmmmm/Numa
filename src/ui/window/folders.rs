@@ -252,6 +252,15 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
             house.set_valign(gtk::Align::Start);
             house.set_tooltip_text(Some(home::NUMA_HOME));
             line.append(&house);
+
+            if matches!(place, Place::Library(library) if home_sync::keeps_here(state, library.id)) {
+                let here = gtk::Image::from_icon_name("computer-symbolic");
+                here.set_pixel_size(12);
+                here.add_css_class("dim-label");
+                here.set_valign(gtk::Align::Start);
+                here.set_tooltip_text(Some("Kept on This Computer"));
+                line.append(&here);
+            }
             line.append(&under);
             inside.append(&line);
         }
@@ -265,6 +274,11 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
         Place::Library(library) => Some(library.path.to_string_lossy().into_owned()),
         _ => None,
     }.as_deref());
+    if let Place::Library(library) = place {
+        if at_home {
+            keep_menu(state, &button, library.clone());
+        }
+    }
     let place = place.clone();
     button.connect_clicked(glib::clone!(
         #[strong] state,
@@ -274,4 +288,43 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
         }
     ));
     button
+}
+
+fn keep_menu(state: &App, button: &gtk::Button, library: Library) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(glib::clone!(
+        #[strong] state,
+        #[weak] button,
+        move |_, _, x, y| {
+            let model = gio::Menu::new();
+            model.append(Some("Keep on This Computer"), Some("library.keep"));
+            let popover = gtk::PopoverMenu::from_model(Some(&model));
+            let keep = gio::SimpleAction::new_stateful("keep", None, &home_sync::keeps_here(&state, library.id).to_variant());
+            keep.connect_change_state(glib::clone!(
+                #[strong] state,
+                #[strong] library,
+                #[weak] popover,
+                move |_, value| {
+                    let Some(on) = value.and_then(|value| value.get::<bool>()) else { return };
+
+                    popover.popdown();
+                    let (state, library) = (state.clone(), library.clone());
+                    glib::idle_add_local_once(move || home_sync::keep_here(&state, &library, on));
+                }
+            ));
+            let actions = gio::SimpleActionGroup::new();
+            actions.add_action(&keep);
+            button.insert_action_group("library", Some(&actions));
+            popover.set_parent(&button);
+            popover.set_has_arrow(false);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.connect_closed(|popover| {
+                let popover = popover.clone();
+                glib::idle_add_local_once(move || popover.unparent());
+            });
+            popover.popup();
+        }
+    ));
+    button.add_controller(click);
 }

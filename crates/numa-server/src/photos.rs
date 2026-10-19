@@ -110,7 +110,7 @@ pub async fn preview(state: State<Arc<Server>>, signed: Signed, id: Path<i64>, h
     picture(state, signed, id, 2048, headers).await
 }
 
-async fn edits(server: &Server, photo: &Photo) -> Result<Option<String>, Fail> {
+pub(crate) async fn edits(server: &Server, photo: &Photo) -> Result<Option<String>, Fail> {
     if !photo.edited {
         return Ok(None);
     }
@@ -212,9 +212,10 @@ pub fn attachment(name: &str) -> HeaderValue {
     HeaderValue::from_str(&format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}")).unwrap_or(HeaderValue::from_static("attachment"))
 }
 
-pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Response, Fail> {
+pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Query(asked): Query<Edge>) -> Result<Response, Fail> {
     let photo = server.home.photo(&me.name, id)?;
-    if !photo.edited && kind(&photo.path) == "image/jpeg" {
+    let edge = asked.edge.map(|edge| edge.clamp(256, 8192));
+    if edge.is_none() && !photo.edited && kind(&photo.path) == "image/jpeg" {
         return original(State(server), Signed(me), Path(id)).await;
     }
     let edits = match edits(&server, &photo).await? {
@@ -225,6 +226,9 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
     let scratch = server.data.join("tmp").join(format!("{id}-{}.jpg", std::process::id()));
     let _turn = server.renders.acquire().await.map_err(Fail::internal)?;
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        if let Some(edge) = edge {
+            return crate::book::develop(&photo, edge, &edits, scratch.parent().unwrap_or(&scratch));
+        }
         let image = thumbs::render(&photo.path, u32::MAX, &edits)?;
         std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|err| err.to_string())?;
         let written = numa_io::export::save(&image, &scratch, &numa_io::export::ExportSettings::default(), Some(&photo.path));
@@ -235,7 +239,8 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
     .await
     .map_err(Fail::internal)?
     .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not develop this photograph: {err}")))?;
-    let headers = [(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")), (header::CONTENT_DISPOSITION, attachment(&format!("{stem}.jpg")))];
+    let name = edge.map_or_else(|| format!("{stem}.jpg"), |edge| format!("{stem} {edge}.jpg"));
+    let headers = [(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")), (header::CONTENT_DISPOSITION, attachment(&name))];
     Ok((headers, bytes).into_response())
 }
 

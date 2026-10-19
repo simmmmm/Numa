@@ -674,8 +674,8 @@ button.numa-primary:disabled {
 
 /* UX-012: the path across the top of the editor. Flat buttons that read as
    text, because a row of framed buttons reads as a toolbar and this is a
-   position, not a set of commands; since UX-046 only "Libraries" is one, and
-   the names after it are text, set where a button's would be. */
+   position, not a set of commands; "Libraries" and the library are steps,
+   the photograph's name is text, set where a button's would be. */
 .breadcrumbs button,
 .breadcrumbs > label {
     padding-left: 6px;

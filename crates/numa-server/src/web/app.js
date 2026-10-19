@@ -39,6 +39,7 @@ const ICONS = {
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   upload: '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
   filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   // A burst's sign: three stacked cameras.
   burst: '<path d="M9 3h11a2 2 0 0 1 2 2v9"/><path d="M6 6h11a2 2 0 0 1 2 2v9"/><path d="M4 10h2l1.5-2h3l1.5 2H14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"/><circle cx="9" cy="15.5" r="2.5"/>',
 };
@@ -422,6 +423,14 @@ function menu(parent, items) {
   showMenu(box, () => parent.append(box));
 }
 
+// What a download gives, as Export in the apps: the file as it is, or
+// developed with its edits at full size or at 2048 px on the long edge.
+const downloadItems = (original, jpeg) => [
+  h('a', { href: original, download: '' }, S.original),
+  h('a', { href: jpeg, download: '' }, S.jpegFull),
+  h('a', { href: `${jpeg}${jpeg.includes('?') ? '&' : '?'}edge=2048`, download: '' }, phrase('jpegEdge', { edge: 2048 })),
+];
+
 // A menu at a point of the screen, kept inside it: where the pointer is for a
 // right-click, or above its button in a selection bar, whose own box would
 // clip it.
@@ -446,7 +455,15 @@ function empty(title, text, failed) {
   return h('div', { class: 'empty' }, h('h2', {}, title), failed ? fault(text) : h('p', { class: 'body' }, text));
 }
 
-const rowHeight = () => innerWidth < 720 ? 110 : 200;
+// HOME-054: how tall the rows are, Linux's Photo Size: chosen with the
+// slider at the One filter's end and kept in this browser. A phone keeps its own.
+const SIZE = { min: 120, max: 440, step: 40, rest: 200 };
+let photoSize = SIZE.rest;
+try { photoSize = Number(localStorage.getItem('numa-photo-size')) || SIZE.rest; } catch (_) { /* a private window */ }
+const rowHeight = () => innerWidth < 720 ? 110 : photoSize;
+// A search's grid: tiles about as wide as a row of that height.
+const tileWide = () => innerWidth < 720 ? 150 : Math.round(photoSize * 0.75);
+document.documentElement.style.setProperty('--tile', tileWide() + 'px');
 const GAP = 3;
 
 // The timeline: every month's count at once, a month's photographs when it
@@ -540,7 +557,7 @@ async function filterRow(params, narrowed) {
     preset(S.all, !flag && !rating, { flag: null, rating: null }),
     preset(S.picks, flag === 'pick', { flag: flag === 'pick' ? null : 'pick' }),
     preset(rated(3), rating === '3', { rating: rating === '3' ? null : 3 }, ratedSaid(3)),
-    active, count);
+    active, count, sizeSlider());
   // HOME-023: a trip is a library or an album; its picks make the book.
   const book = (params.get('library') || params.get('album')) &&
     h('button', { class: 'chip', title: S.bookTip, onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, S.forABook);
@@ -554,6 +571,18 @@ async function filterRow(params, narrowed) {
       owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'chip', onclick: () => renameLibrary(library) }, S.renameEll),
       selectToggle()));
   return { head, row, count, dates };
+}
+
+// HOME-054: smaller to larger; a double click puts it back.
+function sizeSlider() {
+  const input = h('input', { type: 'range', min: SIZE.min, max: SIZE.max, step: SIZE.step, value: photoSize, 'aria-label': S.photoSize,
+    oninput: () => {
+      photoSize = Number(input.value);
+      try { localStorage.setItem('numa-photo-size', photoSize); } catch (_) { /* a private window */ }
+      relayout();
+    },
+    ondblclick: () => { input.value = SIZE.rest; input.dispatchEvent(new Event('input')); } });
+  return h('label', { class: 'size', title: S.photoSize }, icon('image'), input, icon('image'));
 }
 
 // The Filter menu: every filter by name, with what it is set to; a name
@@ -729,10 +758,26 @@ function remark(ids) {
   }
 }
 
+// Every month again at the row height, and a search's grid at its width;
+// the photograph at the top of the page stays where it was.
+function relayout() {
+  document.documentElement.style.setProperty('--tile', tileWide() + 'px');
+  const page = document.querySelector('main')?.getBoundingClientRect();
+  const kept = page && document.elementFromPoint(page.left + page.width / 2, (document.querySelector('header')?.offsetHeight || 0) + 24)?.closest('.rows .tile');
+  const was = kept?.getBoundingClientRect().top;
+  for (const section of state.sections) {
+    if (!section.rows) continue;
+    if (section.photos) layout(section);
+    else section.rows.style.height = estimate(section.count, section.rows.clientWidth || innerWidth) + 'px';
+  }
+  const now = kept && document.querySelector(`.rows .tile[data-id="${kept.dataset.id}"]`);
+  if (now) scrollBy(0, now.getBoundingClientRect().top - was);
+}
+
 let resizing;
 window.addEventListener('resize', () => {
   clearTimeout(resizing);
-  resizing = setTimeout(() => state.sections.forEach(section => section.photos && section.rows && layout(section)), 150);
+  resizing = setTimeout(relayout, 150);
 });
 
 // LIB-028: names narrow, the rest is read by the model; best first. The
@@ -751,7 +796,7 @@ async function search(main, params) {
   if (!found.length) return main.append(empty(S.nothingFound, S.tryOther));
   const section = { photos: found, load: async () => section.photos };
   state.sections = [section];
-  main.append(h('div', { class: 'grid' }, found.map(photo => tile(section, photo, null, 150))));
+  main.append(h('div', { class: 'grid' }, found.map(photo => tile(section, photo, null, tileWide()))));
 }
 
 async function people(main) {
@@ -892,10 +937,7 @@ function openViewer(section, at) {
     h('button', { class: 'round', 'aria-label': S.download, onclick: event => {
       event.stopPropagation();
       const id = current().id;
-      menu(corner, [
-        h('a', { href: `/api/v1/photos/${id}/original`, download: '' }, S.original),
-        h('a', { href: `/api/v1/photos/${id}/jpeg`, download: '' }, S.asJpeg),
-      ]);
+      menu(corner, downloadItems(`/api/v1/photos/${id}/original`, `/api/v1/photos/${id}/jpeg`));
     } }, icon('download')));
   const bar = h('div', { class: 'loupe-bar', role: 'toolbar', 'aria-label': S.thisPhoto });
   const stage = h('div', { class: 'stage' }, image, hud, badge, noticed,

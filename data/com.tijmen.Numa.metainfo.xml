@@ -51,6 +51,12 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.43.2" date="2026-10-19">
+      <description>
+        <p>Right-click a Numa Home library to keep it on this computer; a computer beside its house says it is kept, and Preferences no longer lists them. The library's name in the editor's path goes back to its grid again.</p>
+        <p>The learned stars never rate the sharpest of a burst below the rest of it, and Open in Numa from Numa Home's web page knows the server by its name, also behind https.</p>
+      </description>
+    </release>
     <release version="0.43.1" date="2026-10-19">
       <description>
         <p>On Fedora, Numa brings the library GTK needs to draw its window, so it also starts on a minimal installation.</p>

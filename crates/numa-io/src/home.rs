@@ -45,6 +45,17 @@ pub fn host(address: &str) -> String {
     address.split('/').next().unwrap_or_default().to_string()
 }
 
+pub fn same_server(a: &str, b: &str) -> bool {
+    let name = |address: &str| {
+        let host = host(address).to_ascii_lowercase();
+        match host.rsplit_once(':') {
+            Some((name, port)) if port.parse::<u16>().is_ok() => name.to_string(),
+            _ => host,
+        }
+    };
+    name(a) == name(b)
+}
+
 pub fn open_link(uri: &str) -> Option<(String, String)> {
     let query = uri.strip_prefix("numa://home/open?")?;
     let (mut server, mut photo) = (None, None);
@@ -217,6 +228,9 @@ mod tests {
         assert_eq!(base("[::1]"), "http://[::1]:8283");
         assert_eq!(host("http://nas.local:8283/"), "nas.local:8283");
         assert_eq!(host("nas.local"), "nas.local");
+        assert!(same_server("https://Numa.example.org", "numa.example.org"));
+        assert!(same_server("http://[::1]:8297", "[::1]"));
+        assert!(!same_server("https://photos.example.org", "nas.local"));
     }
 
     #[test]
