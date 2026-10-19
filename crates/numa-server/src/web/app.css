@@ -444,9 +444,9 @@ header { height: var(--head); }
   .cardbar .meter { width: 120px; }
 }
 
-/* HOME-017: choosing on the grid. A ring in the corner on hover and while
-   choosing; what is chosen carries a 3px ring of the accent (P2), and on touch
-   a white check at the top right as well (below, under pointer: coarse). */
+/* Choosing on the grid: a ring in the corner on hover and while choosing; a
+   chosen tile has a 3px accent ring and a white check in that corner (top
+   right on touch, below). */
 .tile .check, .place .check { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 10px; border: 2px solid var(--ink);
   box-shadow: var(--shadow-badge); opacity: 0; transition: opacity var(--quick); }
 /* The tick, Lucide's check, cut out of the circle's fill (a label.check is a
@@ -457,9 +457,9 @@ header { height: var(--head); }
 body.picking .tile .check, body.picking .place .check, .place.picked .check { opacity: 1; }
 .tile::after { content: ''; position: absolute; inset: 0; border: 3px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; transition: opacity var(--quick); }
 .tile.picked::after, .tile.ticked::after { opacity: 1; }
-body .tile.picked .check { opacity: 0; }
-.place.picked .check, .tile.ticked .check, .frame.kept .check { background: var(--accent); border-color: var(--accent); }
-.place.picked .check::after, .tile.ticked .check::after, .frame.kept .check::after { opacity: 1; }
+.tile.picked .check { opacity: 1; }
+.place.picked .check, .tile.picked .check, .tile.ticked .check, .frame.kept .check { background: var(--accent); border-color: var(--accent); }
+.place.picked .check::after, .tile.picked .check::after, .tile.ticked .check::after, .frame.kept .check::after { opacity: 1; }
 /* HOME-021: a library chosen on its page, as a photograph is. */
 .place .check { z-index: 1; left: 0; top: 0; }
 .place .stack { transition: transform var(--quick); }
@@ -701,8 +701,6 @@ dialog.ask .year { width: 80px; margin-left: auto; }
   /* Chosen: the check, at the top right (P2), over the count's corner. */
   .tile .check { left: auto; right: 6px; }
   body.picking .tile .burst { opacity: 0; }
-  body .tile.picked .check { opacity: 1; background: var(--accent); border-color: var(--accent); }
-  body .tile.picked .check::after { opacity: 1; }
 }
 
 /* Reduced motion (README, Motion): every movement is a 150 ms crossfade, and

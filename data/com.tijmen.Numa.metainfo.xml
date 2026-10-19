@@ -51,6 +51,12 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.44.0" date="2026-10-19">
+      <description>
+        <p>Raws from Bayer sensors are demosaicked with RCD, with fewer artefacts along edges and in fine detail, and monochrome raws develop as grey. The loupe opened on several selected photographs goes through those only, and an older Numa keeps the edits a newer one made.</p>
+        <p>Libraries come newest first. Numa Home's libraries have a shelf of their own with a house on each stack, and This Computer shows only this computer's libraries. After signing in, every Numa Home library has its stack within moments and the rest of its thumbnails sooner. Right-click a library for Remove from Numa….</p>
+      </description>
+    </release>
     <release version="0.43.2" date="2026-10-19">
       <description>
         <p>Right-click a Numa Home library to keep it on this computer; a computer beside its house says it is kept, and Preferences no longer lists them. The library's name in the editor's path goes back to its grid again.</p>

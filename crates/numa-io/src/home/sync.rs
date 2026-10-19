@@ -44,8 +44,14 @@ pub struct Local {
 }
 
 impl Local {
+
     fn edits_agree(&self, kept: &Kept) -> bool {
         digest(self.edits.as_deref()) == kept.edits
+            || self
+                .edits
+                .as_deref()
+                .and_then(|edits| serde_json::to_string(&serde_json::from_str::<numa_core::document::Document>(edits).ok()?).ok())
+                .is_some_and(|again| digest(Some(&again)) == kept.edits)
     }
 
     fn marks_agree(&self, kept: &Kept) -> bool {
@@ -317,22 +323,31 @@ pub fn original(address: &str, id: &str, to: &Path) -> Vec<OsString> {
 }
 
 pub fn thumbnails(address: &str, wanted: &[(String, PathBuf)]) -> Vec<OsString> {
-    let start = ["curl", "--silent", "--show-error", "--fail", "--connect-timeout", "10", "--max-time", "600", "--header", "@-", "--write-out", "%{http_code}\n"];
+    let start = [
+        "curl", "--silent", "--show-error", "--fail", "--parallel", "--parallel-max", "8", "--connect-timeout", "10", "--max-time", "600",
+        "--header", "@-", "--write-out", "%{http_code} %{filename_effective}\n",
+    ];
     let each = wanted.iter().flat_map(|(id, to)| {
         ["--output".into(), to.into(), format!("{}/api/v1/photos/{}/thumb?edge=256", base(address), escaped(id)).into()]
     });
     words(&start).into_iter().chain(each).collect()
 }
 
-pub fn thumbnails_came(out: &str) -> Result<Vec<bool>, Failure> {
-    let statuses: Vec<u16> = out.lines().map(|line| line.trim().parse().unwrap_or(0)).collect();
-    if statuses.contains(&401) {
+pub fn thumbnails_came(out: &str) -> Result<HashSet<PathBuf>, Failure> {
+    let statuses: Vec<(u16, &str)> = out
+        .lines()
+        .map(|line| {
+            let (status, file) = line.split_once(' ').unwrap_or((line, ""));
+            (status.trim().parse().unwrap_or(0), file)
+        })
+        .collect();
+    if statuses.iter().any(|(status, _)| *status == 401) {
         return Err(Failure::SignIn("Sign in again".to_string()));
     }
-    if statuses.iter().all(|status| *status == 0) {
+    if statuses.iter().all(|(status, _)| *status == 0) {
         return Err(Failure::Unreachable);
     }
-    Ok(statuses.iter().map(|status| *status == 200).collect())
+    Ok(statuses.into_iter().filter(|(status, _)| *status == 200).map(|(_, file)| PathBuf::from(file)).collect())
 }
 
 pub fn preview(address: &str, id: &str, to: &Path) -> Vec<OsString> {

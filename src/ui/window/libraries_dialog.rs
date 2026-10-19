@@ -176,42 +176,52 @@ fn remove_button(
         #[weak] dialog,
         #[weak] window,
         move |_| {
-
-            let which = match count {
-                Some(count) => format!("The {count} photograph(s)"),
-                None => "Its photographs".to_string(),
-            };
-            let confirm = adw::AlertDialog::new(
-                Some(&format!("Remove {}?", library.label())),
-                Some(&format!(
-                    "{which} stay on disk, and so do their ratings, \
-                     flags and edits — they are kept in the folder itself. Adding the \
-                     folder back brings everything back.",
-                )),
+            let again = glib::clone!(
+                #[strong] state,
+                #[weak] dialog,
+                #[weak] window,
+                move || {
+                    dialog.close();
+                    libraries_dialog(&state, &window);
+                }
             );
-            confirm.add_response("cancel", "Cancel");
-            confirm.add_response("remove", "Remove");
-            confirm.set_default_response(Some("cancel"));
-
-            let state = state.clone();
-            let dialog = dialog.clone();
-            let parent = window.clone();
-            confirm.connect_response(None, move |confirm, response| {
-                confirm.close();
-                if response != "remove" {
-                    return;
-                }
-                match state.catalog.remove_library(library.id) {
-                    Ok(()) => {
-                        reload_libraries(&state);
-                        dialog.close();
-                        libraries_dialog(&state, &parent);
-                    }
-                    Err(err) => state.toast(&format!("Could not remove: {err}")),
-                }
-            });
-            confirm.present(Some(&window));
+            confirm_remove_library(&state, &window, library.clone(), count, again);
         }
     ));
     remove
+}
+
+pub(super) fn confirm_remove_library(state: &App, window: &adw::ApplicationWindow, library: Library, count: Option<i64>, removed: impl Fn() + 'static) {
+
+    let which = match count {
+        Some(count) => format!("The {count} photograph(s)"),
+        None => "Its photographs".to_string(),
+    };
+    let confirm = adw::AlertDialog::new(
+        Some(&format!("Remove {}?", library.label())),
+        Some(&format!(
+            "{which} stay on disk, and so do their ratings, \
+             flags and edits — they are kept in the folder itself. Adding the \
+             folder back brings everything back.",
+        )),
+    );
+    confirm.add_response("cancel", "Cancel");
+    confirm.add_response("remove", "Remove");
+    confirm.set_default_response(Some("cancel"));
+
+    let state = state.clone();
+    confirm.connect_response(None, move |confirm, response| {
+        confirm.close();
+        if response != "remove" {
+            return;
+        }
+        match state.catalog.remove_library(library.id) {
+            Ok(()) => {
+                reload_libraries(&state);
+                removed();
+            }
+            Err(err) => state.toast(&format!("Could not remove: {err}")),
+        }
+    });
+    confirm.present(Some(window));
 }

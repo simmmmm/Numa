@@ -57,6 +57,28 @@ pub struct Document {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto: Option<AutoRecord>,
+
+    #[serde(default, serialize_with = "stamp", skip_serializing_if = "unstamped")]
+    pub schema: u32,
+}
+
+pub const SCHEMA: u32 = 0;
+
+fn stamp<S: serde::Serializer>(read: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32((*read).max(SCHEMA))
+}
+
+fn unstamped(read: &u32) -> bool {
+    (*read).max(SCHEMA) == 0
+}
+
+pub fn schema_of(json: &str) -> u32 {
+    #[derive(Deserialize)]
+    struct Stamp {
+        #[serde(default)]
+        schema: u32,
+    }
+    serde_json::from_str::<Stamp>(json).map_or(0, |stamp| stamp.schema)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -404,6 +426,7 @@ impl Document {
             masks_map: None,
             moment: None,
             auto: None,
+            schema: 0,
         }
     }
 
@@ -1040,6 +1063,42 @@ mod tests {
         assert_eq!(serde_json::to_string(&target).unwrap(), before);
         assert!(!EditParts::nothing().any());
         assert!(EditParts::default().any());
+    }
+
+    #[test]
+    fn a_newer_builds_field_is_lost_on_the_way_back() {
+        let mut stored = serde_json::to_value(edited()).unwrap();
+        stored["future_field"] = 42.into();
+        let basic = stored["operations"].as_array_mut().unwrap().iter_mut().find(|op| op["type"] == "Basic").unwrap();
+        basic["future_slider"] = 7.5.into();
+
+        let read: Document = serde_json::from_value(stored.clone()).expect("a newer stack with new fields still reads");
+        let written = serde_json::to_value(&read).unwrap();
+        assert!(written.get("future_field").is_none(), "a newer top-level field came back");
+        let basic = written["operations"].as_array().unwrap().iter().find(|op| op["type"] == "Basic").unwrap();
+        assert!(basic.get("future_slider").is_none(), "a newer slider came back");
+        assert_ne!(written, stored);
+
+        let only_new: Document = serde_json::from_str(r#"{"source":{"path":"a.RAF"},"operations":[],"future_field":1}"#).unwrap();
+        assert!(only_new.is_untouched());
+
+        let unknown_operation = r#"{"source":{"path":"a.RAF"},"operations":[{"type":"Basic","exposure":1.0},{"type":"FutureOp"}]}"#;
+        assert!(serde_json::from_str::<Document>(unknown_operation).is_err(), "an unknown operation read");
+    }
+
+    #[test]
+    fn a_stack_says_which_schema_wrote_it() {
+        let plain = serde_json::to_string(&Document::new("a.RAF".into())).unwrap();
+        assert_eq!(plain.contains("schema"), SCHEMA > 0, "schema 0 is not written");
+        assert_eq!(schema_of(&plain), SCHEMA);
+
+        let newer = format!(r#"{{"source":{{"path":"a.RAF"}},"operations":[{{"type":"FutureOp"}}],"schema":{}}}"#, SCHEMA + 1);
+        assert_eq!(schema_of(&newer), SCHEMA + 1, "said even where the stack does not read");
+        let readable = newer.replace(r#"{"type":"FutureOp"}"#, "");
+        let read: Document = serde_json::from_str(&readable).unwrap();
+        assert_eq!(read.schema, SCHEMA + 1);
+        assert_eq!(schema_of(&serde_json::to_string(&read).unwrap()), SCHEMA + 1, "kept on the way out");
+        assert_eq!(schema_of("not a stack"), 0);
     }
 
     #[test]

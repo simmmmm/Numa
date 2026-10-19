@@ -4,14 +4,16 @@
 // (TOOL-003) and the downscale to the proxy (RENDER-001). Each mirrors its
 // processor twin in `numa-core::lens`, `numa-io::raw` or `numa-core::image`
 // operation for operation, so the two differ only by how the card rounds.
-// The demosaics are in demosaic.wgsl, appended to this one.
+// The demosaics are in demosaic.wgsl (Markesteijn) and rcd.wgsl (Bayer),
+// appended to this one.
 
 struct Params {
     raw_w: u32, raw_h: u32, scaled_w: u32, scaled_h: u32,
     roi_x: u32, roi_y: u32, roi_w: u32, roi_h: u32,
     crop_x: u32, crop_y: u32, crop_w: u32, crop_h: u32,
     levels: array<u32, 4>,
-    spare4: array<u32, 4>,
+    // RENDER-027: red and blue as shot, then one over each; all 1 for X-Trans.
+    balance: array<f32, 4>,
     baseline: f32, fc_black: f32, factor: f32, flags: u32,
     centre_x: f32, centre_y: f32, half_diag: f32, fit: f32,
     n_radii: u32, sgrow: u32, sgcol: u32, band_n: u32,
@@ -127,9 +129,19 @@ fn scaled(x: u32, y: u32) -> f32 {
     let word = mosaic[i >> 1u];
     let v = select(word & 0xffffu, word >> 16u, (i & 1u) == 1u);
     if (sx >= P.scaled_w || sy >= P.scaled_h) {
-        return f32(v);
+        return f32(v) * balanced(colour(i32(x), i32(y)));
     }
     return bitcast<f32>(table[P.levels[(sy & 1u) * 2u + (sx & 1u)] + v]);
+}
+
+// RENDER-027: what a site of colour `c` is multiplied by before the Bayer
+// demosaic, the as-shot white balance; the levels' table has it already.
+fn balanced(c: u32) -> f32 {
+    switch c {
+        case 0u: { return P.balance[0]; }
+        case 2u: { return P.balance[1]; }
+        default: { return 1.0; }
+    }
 }
 
 // Every site of the active area, scaled, once — the demosaics read each

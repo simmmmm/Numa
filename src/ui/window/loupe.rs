@@ -512,10 +512,14 @@ pub(super) fn show_in_loupe(state: &App, id: i64) -> bool {
 }
 
 pub(super) fn open_loupe(state: &App) {
-    let Some(at) = state.grid.wall.selected().first().copied() else {
+    let selected = state.grid.wall.selected();
+    let Some(at) = selected.first().copied() else {
         state.toast("Select a photo first");
         return;
     };
+    if selected.len() > 1 {
+        state.loupe.few.borrow_mut().selection = selected;
+    }
     show_loupe(state, at);
 }
 
@@ -733,10 +737,24 @@ pub(super) fn close_loupe(state: &App) {
     state.loupe.reveal.set_reveal_child(false);
 
     let back_to_grid = state.stack.visible_child_name().as_deref() == Some("library");
+
+    let selection = std::mem::take(&mut state.loupe.few.borrow_mut().selection);
+    let among: Vec<i64> = selection.into_iter().filter_map(|index| id_at(state, index)).collect();
     if was_open && back_to_grid && state.grid.stale.replace(false) {
         reload_grid(state);
     }
-    state.loupe.scope.take();
+
+    if was_open && back_to_grid && !among.is_empty() && !rapid::is_on(state) {
+        let (indices, cursor) = {
+            let lazy = state.grid.lazy.borrow();
+            let indices: Vec<usize> = lazy.iter().enumerate().filter(|(_, card)| among.contains(&card.id)).map(|(index, _)| index).collect();
+            (indices, looked_at.and_then(|id| lazy.iter().position(|card| card.id == id)))
+        };
+        if let Some(cursor) = cursor.or(indices.first().copied()) {
+            state.grid.wall.select_these(&indices, cursor);
+        }
+    }
+    state.loupe.few.take();
 
     if was_open && rapid::is_on(state) {
 
@@ -761,7 +779,7 @@ fn cull(state: &App, flag: Flag) {
     refresh_loupe_bar(state);
 
     if beside(state, at, 1).is_none() {
-        state.toast(match state.loupe.scope.borrow().is_empty() {
+        state.toast(match state.loupe.few.borrow().stack.is_empty() {
             true => "Last photograph — Space goes back to the grid",
             false => "Last of the burst — Space when you have picked",
         });
@@ -804,7 +822,8 @@ pub(super) fn step_loupe(state: &App, forward: bool) {
 }
 
 fn arrive(state: &App, from: usize, to: usize) -> usize {
-    if !state.loupe.scope.borrow().is_empty() {
+
+    if !state.loupe.few.borrow().cards().is_empty() {
         return to;
     }
     let run = burst_run(state, to);
@@ -821,12 +840,36 @@ pub(super) fn go_to(state: &App, index: usize) {
 }
 
 fn beside(state: &App, at: usize, by: isize) -> Option<usize> {
-    let scope = state.loupe.scope.borrow();
-    if scope.is_empty() {
+    let few = state.loupe.few.borrow();
+    let few = few.cards();
+    if few.is_empty() {
         return at.checked_add_signed(by).filter(|index| *index < state.grid.lazy.borrow().len());
     }
-    let here = scope.iter().position(|index| *index == at)?;
-    scope.get(here.checked_add_signed(by)?).copied()
+    let here = few.iter().position(|index| *index == at)?;
+    few.get(here.checked_add_signed(by)?).copied()
+}
+
+pub(super) fn in_reach(state: &App, index: usize) -> bool {
+    let selection = &state.loupe.few.borrow().selection;
+    selection.is_empty() || selection.contains(&index)
+}
+
+#[derive(Default)]
+pub(super) struct Few {
+
+    pub(super) stack: Vec<usize>,
+
+    pub(super) selection: Vec<usize>,
+}
+
+impl Few {
+
+    pub(super) fn cards(&self) -> &[usize] {
+        match self.stack.is_empty() {
+            true => &self.selection,
+            false => &self.stack,
+        }
+    }
 }
 
 pub(super) fn cull_only(state: &App, ids: &[i64]) {
@@ -840,7 +883,7 @@ pub(super) fn cull_only(state: &App, ids: &[i64]) {
         let cards = state.grid.cards.borrow();
         indices.iter().copied().find(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|photo| photo.best_of_burst))
     };
-    *state.loupe.scope.borrow_mut() = indices;
+    state.loupe.few.borrow_mut().stack = indices;
     go_to(state, best.unwrap_or(first));
 }
 
@@ -896,9 +939,10 @@ pub(super) fn leave_visit(state: &App) {
 fn step_burst(state: &App, forward: bool) {
     let Some(at) = state.loupe.at.get() else { return };
     let here = burst_run(state, at);
+    let count = state.grid.lazy.borrow().len();
     let next = match forward {
-        true => Some(here.end).filter(|next| *next < state.grid.lazy.borrow().len()),
-        false => here.start.checked_sub(1),
+        true => (here.end..count).find(|index| in_reach(state, *index)),
+        false => (0..here.start).rev().find(|index| in_reach(state, *index)),
     };
     let Some(next) = next else {
         state.toast(match forward {
@@ -908,13 +952,18 @@ fn step_burst(state: &App, forward: bool) {
         return;
     };
     let there = burst_run(state, next);
-    go_to(state, best_in(state, there.clone()).unwrap_or(there.start));
+    let on_selection = !state.loupe.few.borrow().selection.is_empty();
+
+    go_to(state, match on_selection {
+        true => next,
+        false => best_in(state, there.clone()).unwrap_or(there.start),
+    });
 }
 
 fn reject_rest(state: &App) {
     let Some(at) = state.loupe.at.get() else { return };
 
-    let few = state.loupe.scope.borrow().clone();
+    let few = state.loupe.few.borrow().stack.clone();
     if !few.is_empty() {
         let unmarked: Vec<i64> = {
             let cards = state.grid.cards.borrow();
@@ -933,7 +982,8 @@ fn reject_rest(state: &App) {
     }
     let unmarked: Vec<i64> = {
         let cards = state.grid.cards.borrow();
-        run.filter_map(|index| id_at(state, index))
+        run.filter(|index| in_reach(state, *index))
+            .filter_map(|index| id_at(state, index))
             .filter(|id| cards.get(id).is_some_and(|photo| photo.flag == Flag::None))
             .collect()
     };
@@ -1123,7 +1173,7 @@ pub(super) struct State {
 
     pub(super) at: Rc<Cell<Option<usize>>>,
 
-    pub(super) scope: Rc<RefCell<Vec<usize>>>,
+    pub(super) few: Rc<RefCell<Few>>,
 
     pub(super) undo: Rc<RefCell<Vec<Vec<(i64, u8, Flag)>>>>,
 }
@@ -1159,7 +1209,7 @@ impl State {
             visit: Rc::new(Cell::new(None)),
             restoring: Rc::new(Cell::new(false)),
             at: Rc::new(Cell::new(None)),
-            scope: Rc::default(),
+            few: Rc::default(),
             undo: Rc::new(RefCell::new(Vec::new())),
         }
     }

@@ -45,7 +45,9 @@ pub(super) fn refresh_picker(state: &App) {
     });
     let libraries = state.libraries.all.borrow().clone();
 
-    let everywhere = libraries.len() > 1;
+    let (at_home, here): (Vec<Library>, Vec<Library>) = libraries.iter().cloned().partition(|library| home_sync::is_home(state, library.id));
+
+    let everywhere = here.len() > 1;
     {
         let mut filter = state.libraries.filter.borrow_mut();
         if filter.person.as_ref().is_some_and(|person| !names.iter().any(|name| name.eq_ignore_ascii_case(person))) {
@@ -61,15 +63,15 @@ pub(super) fn refresh_picker(state: &App) {
     let mut places = Vec::new();
     let mut sections: Vec<(String, Vec<String>)> = Vec::new();
 
-    let (mut loose, mut grouped) = shelve_libraries(&libraries);
+    let (mut loose, mut grouped) = shelve_libraries(&here);
 
     places::in_order(state, &mut loose);
-    grouped.iter_mut().for_each(|(_, shelf)| places::in_order(state, shelf));
+    places::shelves_in_order(state, &mut grouped);
 
     let mut top = Vec::new();
     if everywhere {
         places.push(Place::Everywhere);
-        top.push("All Libraries".to_string());
+        top.push(places::everywhere_label(state).to_string());
     }
     for library in &loose {
         places.push(Place::Library((*library).clone()));
@@ -84,6 +86,12 @@ pub(super) fn refresh_picker(state: &App) {
             labels.push(library.label());
         }
         sections.push((parent.clone(), labels));
+    }
+    let mut at_home: Vec<&Library> = at_home.iter().collect();
+    places::in_order(state, &mut at_home);
+    if !at_home.is_empty() {
+        places.extend(at_home.iter().map(|library| Place::Library((*library).clone())));
+        sections.push((home::NUMA_HOME.to_string(), at_home.iter().map(|library| library.label()).collect()));
     }
 
     places.extend(albums.iter().map(|(key, _)| Place::Album(key.clone())));

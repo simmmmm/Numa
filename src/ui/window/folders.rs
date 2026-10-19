@@ -41,7 +41,7 @@ pub(super) fn show_folders(state: &App) {
     let (at_home, here): (Vec<Library>, Vec<Library>) = libraries.iter().cloned().partition(|library| home_sync::is_home(state, library.id));
     let (mut loose, mut grouped) = shelve_libraries(&here);
     places::in_order(state, &mut loose);
-    grouped.iter_mut().for_each(|(_, shelf)| places::in_order(state, shelf));
+    places::shelves_in_order(state, &mut grouped);
 
     if !state.catalog.recall::<bool>(INVITED_HOME).unwrap_or(false) {
         if home::account(state).signed_in() {
@@ -51,7 +51,7 @@ pub(super) fn show_folders(state: &App) {
         }
     }
     let mut first: Vec<Place> = Vec::new();
-    if libraries.len() > 1 {
+    if here.len() > 1 {
         first.push(Place::Everywhere);
     }
     first.extend(loose.into_iter().map(|library| Place::Library(library.clone())));
@@ -200,11 +200,10 @@ fn two_lines(caption: &str) -> String {
 fn folder(state: &App, place: &Place) -> gtk::Button {
     let read = places::row(state, place);
     let fan = places::fan(TILE);
-    fan.set_halign(gtk::Align::Center);
     places::show_covers(&fan, &read.covers, TILE);
 
     let name = gtk::Label::new(Some(&match place {
-        Place::Everywhere => "All Libraries".to_string(),
+        Place::Everywhere => places::everywhere_label(state).to_string(),
         Place::Library(library) => library.label(),
 
         Place::Album(key) => state
@@ -220,6 +219,17 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     name.set_max_width_chars(22);
 
     let at_home = matches!(place, Place::Library(library) if home_sync::is_home(state, library.id));
+    let stack = gtk::Overlay::new();
+    stack.set_halign(gtk::Align::Center);
+    stack.set_child(Some(&fan));
+    if at_home {
+        let house = gtk::Image::from_icon_name("go-home-symbolic");
+        house.add_css_class("home-badge");
+        house.set_halign(gtk::Align::End);
+        house.set_valign(gtk::Align::End);
+        house.set_tooltip_text(Some(home::NUMA_HOME));
+        stack.add_overlay(&house);
+    }
     let prefix = format!("{} \u{b7} ", home::NUMA_HOME);
     let caption = read.subtitle.strip_prefix(prefix.as_str()).filter(|_| at_home).unwrap_or(&read.subtitle).to_string();
 
@@ -240,27 +250,19 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     let inside = gtk::Box::new(gtk::Orientation::Vertical, 6);
     inside.set_margin_top(12);
     inside.set_margin_bottom(12);
-    inside.append(&fan);
+    inside.append(&stack);
     inside.append(&name);
-    match at_home {
+    match matches!(place, Place::Library(library) if at_home && home_sync::keeps_here(state, library.id)) {
+
         true => {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             line.set_halign(gtk::Align::Center);
-            let house = gtk::Image::from_icon_name("go-home-symbolic");
-            house.set_pixel_size(12);
-            house.add_css_class("dim-label");
-            house.set_valign(gtk::Align::Start);
-            house.set_tooltip_text(Some(home::NUMA_HOME));
-            line.append(&house);
-
-            if matches!(place, Place::Library(library) if home_sync::keeps_here(state, library.id)) {
-                let here = gtk::Image::from_icon_name("computer-symbolic");
-                here.set_pixel_size(12);
-                here.add_css_class("dim-label");
-                here.set_valign(gtk::Align::Start);
-                here.set_tooltip_text(Some("Kept on This Computer"));
-                line.append(&here);
-            }
+            let here = gtk::Image::from_icon_name("computer-symbolic");
+            here.set_pixel_size(12);
+            here.add_css_class("dim-label");
+            here.set_valign(gtk::Align::Start);
+            here.set_tooltip_text(Some("Kept on This Computer"));
+            line.append(&here);
             line.append(&under);
             inside.append(&line);
         }
@@ -275,9 +277,7 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
         _ => None,
     }.as_deref());
     if let Place::Library(library) = place {
-        if at_home {
-            keep_menu(state, &button, library.clone());
-        }
+        library_menu(state, &button, library.clone(), at_home);
     }
     let place = place.clone();
     button.connect_clicked(glib::clone!(
@@ -290,7 +290,7 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     button
 }
 
-fn keep_menu(state: &App, button: &gtk::Button, library: Library) {
+fn library_menu(state: &App, button: &gtk::Button, library: Library, at_home: bool) {
     let click = gtk::GestureClick::new();
     click.set_button(gtk::gdk::BUTTON_SECONDARY);
     click.connect_pressed(glib::clone!(
@@ -298,23 +298,46 @@ fn keep_menu(state: &App, button: &gtk::Button, library: Library) {
         #[weak] button,
         move |_, _, x, y| {
             let model = gio::Menu::new();
-            model.append(Some("Keep on This Computer"), Some("library.keep"));
-            let popover = gtk::PopoverMenu::from_model(Some(&model));
-            let keep = gio::SimpleAction::new_stateful("keep", None, &home_sync::keeps_here(&state, library.id).to_variant());
-            keep.connect_change_state(glib::clone!(
-                #[strong] state,
-                #[strong] library,
-                #[weak] popover,
-                move |_, value| {
-                    let Some(on) = value.and_then(|value| value.get::<bool>()) else { return };
-
-                    popover.popdown();
-                    let (state, library) = (state.clone(), library.clone());
-                    glib::idle_add_local_once(move || home_sync::keep_here(&state, &library, on));
-                }
-            ));
             let actions = gio::SimpleActionGroup::new();
-            actions.add_action(&keep);
+            let popover = gtk::PopoverMenu::from_model(Some(&model));
+            match at_home {
+                true => {
+                    model.append(Some("Keep on This Computer"), Some("library.keep"));
+                    let keep = gio::SimpleAction::new_stateful("keep", None, &home_sync::keeps_here(&state, library.id).to_variant());
+                    keep.connect_change_state(glib::clone!(
+                        #[strong] state,
+                        #[strong] library,
+                        #[weak] popover,
+                        move |_, value| {
+                            let Some(on) = value.and_then(|value| value.get::<bool>()) else { return };
+
+                            popover.popdown();
+                            let (state, library) = (state.clone(), library.clone());
+                            glib::idle_add_local_once(move || home_sync::keep_here(&state, &library, on));
+                        }
+                    ));
+                    actions.add_action(&keep);
+                }
+                false => {
+                    model.append(Some("Remove from Numa…"), Some("library.remove"));
+                    let remove = gio::SimpleAction::new("remove", None);
+                    remove.connect_activate(glib::clone!(
+                        #[strong] state,
+                        #[strong] library,
+                        #[weak] button,
+                        move |_, _| {
+                            let Some(window) = button.root().and_downcast::<adw::ApplicationWindow>() else { return };
+                            let count = state.catalog.photo_count(library.id).ok();
+                            let again = glib::clone!(
+                                #[strong] state,
+                                move || show_folders(&state)
+                            );
+                            confirm_remove_library(&state, &window, library.clone(), count, again);
+                        }
+                    ));
+                    actions.add_action(&remove);
+                }
+            }
             button.insert_action_group("library", Some(&actions));
             popover.set_parent(&button);
             popover.set_has_arrow(false);

@@ -519,8 +519,10 @@ impl RawImage {
   pub fn apply_scaling(&mut self) -> crate::Result<()> {
     let mut pixels = self.data.as_f32();
     match &self.photometric {
-      RawPhotometricInterpretation::BlackIsZero => todo!(),
-      RawPhotometricInterpretation::Cfa(_) => {
+      RawPhotometricInterpretation::BlackIsZero if self.cpp != 1 => todo!(),
+      // Numa: a monochrome sensor is one value a photosite, scaled as a
+      // mosaic is, its black level repeating the same way.
+      RawPhotometricInterpretation::Cfa(_) | RawPhotometricInterpretation::BlackIsZero => {
         correct_blacklevel_cfa(
           pixels.to_mut(),
           self.width,

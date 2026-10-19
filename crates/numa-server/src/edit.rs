@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use numa_core::document::Document;
+use numa_core::document::{schema_of, Document, SCHEMA};
 use numa_io::catalog::Photo;
 use numa_render::auto::{self, evidence::Refusal, plan, scene::Scene};
 use serde::Deserialize;
@@ -197,10 +197,15 @@ async fn with_scene<T: Send + 'static>(
     Ok((document, made))
 }
 
+pub(crate) fn newer() -> Fail {
+    Fail(StatusCode::CONFLICT, "This photograph was edited in a newer version of Numa than this Numa Home — update Numa Home to change it here.".into())
+}
+
 async fn document(server: &Server, photo: &Photo) -> Result<Document, Fail> {
     let id = photo.id;
     let kept = server.home.ask(move |catalog| catalog.edits_json(id)).await?.map_err(Fail::internal)?;
     let mut document = match kept {
+        Some(kept) if schema_of(&kept) > SCHEMA => return Err(newer()),
         Some(kept) => serde_json::from_str(&kept).map_err(Fail::internal)?,
         None => Document::new(String::new()),
     };

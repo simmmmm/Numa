@@ -17,6 +17,8 @@ pub struct Mosaic<'a> {
 
     pub xtrans: bool,
 
+    pub balance: [f32; 3],
+
     pub active: [usize; 4],
 
     pub crop: [usize; 4],
@@ -61,7 +63,7 @@ struct Params {
     roi: [u32; 4],
     crop: [u32; 4],
     levels: [u32; 4],
-    spare4: [u32; 4],
+    balance: [f32; 4],
     baseline: f32,
     fc_black: f32,
     factor: f32,
@@ -202,7 +204,8 @@ fn plan(gpu: &Gpu, job: &Job, budget: u64) -> Result<Plan, String> {
     if widest_box > 64 {
         return Err("a proxy too small for the card's boxes".into());
     }
-    let levels = level_tables(m, &mut table);
+    let balance = if m.xtrans { [1.0; 3] } else { m.balance };
+    let levels = level_tables(m, balance, &mut table);
 
     let tile = gpu.tile_pixels;
     let rows_of = |width: usize, cost: usize| (tile / (width * cost).max(1)).clamp(16, 4096);
@@ -234,8 +237,10 @@ fn plan(gpu: &Gpu, job: &Job, budget: u64) -> Result<Plan, String> {
             })
             .collect(),
         false => {
-            let mut steps = tiled(&mut records, "ppg_green", ah, rows_of(aw, 1), aw);
-            steps.extend(tiled(&mut records, "ppg_rb", ch, rows_of(cw, 1), cw));
+            let mut steps = tiled(&mut records, "rcd_direction", ah, rows_of(aw, 2), aw);
+            steps.extend(tiled(&mut records, "rcd_green", ah, rows_of(aw, 2), aw));
+            steps.extend(tiled(&mut records, "rcd_colour", ah, rows_of(aw, 4), aw));
+            steps.extend(tiled(&mut records, "rcd_out", ch, rows_of(cw, 2), cw));
             steps
         }
     });
@@ -263,7 +268,7 @@ fn plan(gpu: &Gpu, job: &Job, budget: u64) -> Result<Plan, String> {
         roi: [ax, ay, aw, ah].map(|v| v as u32),
         crop: [cx, cy, cw, ch].map(|v| v as u32),
         levels,
-        spare4: [0; 4],
+        balance: [balance[0], balance[2], 1.0 / balance[0], 1.0 / balance[2]],
         baseline: job.baseline,
         fc_black: job.false_colour.unwrap_or(0.0),
         factor: 1.0,
@@ -295,8 +300,9 @@ fn plan(gpu: &Gpu, job: &Job, budget: u64) -> Result<Plan, String> {
         mosaic: (m.width * m.height).div_ceil(2) as u64 * 4,
         sites: floats(aw * ah),
         work: floats(if m.xtrans { 12 * aw * band_rows } else { aw * ah }),
-        drv: floats(4 * aw * band_rows),
-        homo: floats(aw * band_rows),
+
+        drv: floats(if m.xtrans { 4 * aw * band_rows } else { aw * ah }),
+        homo: floats(if m.xtrans { aw * band_rows } else { aw * ah }),
         pixels: crop_n as u64,
         bent: bends || job.false_colour.is_some(),
         chunk,
@@ -608,18 +614,21 @@ fn lens_tables(lens: Option<&LensProfile>, table: &mut Vec<u32>) -> u32 {
     n as u32
 }
 
-fn level_tables(m: &Mosaic, table: &mut Vec<u32>) -> [u32; 4] {
+fn level_tables(m: &Mosaic, balance: [f32; 3], table: &mut Vec<u32>) -> [u32; 4] {
     let mut starts = [0u32; 4];
-    let mut made: Vec<([f32; 2], u32)> = Vec::new();
+    let mut made: Vec<([f32; 3], u32)> = Vec::new();
     for k in 0..4 {
         let (black, range) = (m.black[k], m.white[k] - m.black[k]);
-        starts[k] = match made.iter().find(|(levels, _)| *levels == [black, range]) {
+
+        let colour = m.cfa[(k / 2 + m.active[1]) % 2][(k % 2 + m.active[0]) % 2];
+        let factor = balance[colour as usize];
+        starts[k] = match made.iter().find(|(levels, _)| *levels == [black, range, factor]) {
             Some((_, start)) => *start,
             None => {
                 let start = table.len() as u32;
                 let clip = |v: f32| if v.is_sign_negative() { 0.0 } else { v };
-                table.extend((0..=u16::MAX).map(|count| (clip(count as f32 - black) / range).to_bits()));
-                made.push(([black, range], start));
+                table.extend((0..=u16::MAX).map(|count| ((clip(count as f32 - black) / range) * factor).to_bits()));
+                made.push(([black, range, factor], start));
                 start
             }
         };
@@ -738,6 +747,7 @@ mod tests {
                         white: [16383.0; 4],
                         cfa,
                         xtrans,
+                        balance: [2.0, 1.0, 1.5],
                         active: [4, 4, 512, 512],
                         crop: [0, 0, 512, 510],
                     },

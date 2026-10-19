@@ -201,7 +201,7 @@ fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, then
     round(state, library, link, photos, since, How::Import, then);
 }
 
-pub(super) fn adopt(state: &App) {
+pub(super) fn adopt(state: &App, catch_up: bool) {
     let account = account(state);
     if !account.signed_in() {
         return;
@@ -223,17 +223,29 @@ pub(super) fn adopt(state: &App) {
 
         let new = listed.into_iter().filter(|from| !links.iter().any(|link| link.library == from.id || (link.library.is_empty() && link.name == from.name)));
         let made: Vec<Library> = new.filter_map(|from| home_folder(&state, &from, &account).map_err(|err| log::info!("Numa Home: {err}")).ok()).collect();
+        if !made.is_empty() {
+            reload_libraries(&state);
+        }
+        let unfinished = |library: &Library| {
+            linked(&state, library.id).is_some_and(|link| api::same_server(&link.address, &account.address) && !link.library.is_empty() && !link.everything)
+        };
+        let made = match catch_up {
+            true => state.catalog.libraries().unwrap_or_default().into_iter().filter(unfinished).collect(),
+            false => made,
+        };
         if made.is_empty() {
             return;
         }
-        reload_libraries(&state);
-        for library in made {
-            round_over().await;
-            in_step(&state, library, How::Look);
-            round_over().await;
-        }
-        if state.stack.visible_child_name().as_deref() == Some("folders") {
-            show_folders(&state);
+
+        for how in [How::Glance, How::Look] {
+            for library in &made {
+                round_over().await;
+                in_step(&state, library.clone(), how);
+                round_over().await;
+            }
+            if state.stack.visible_child_name().as_deref() == Some("folders") {
+                show_folders(&state);
+            }
         }
     });
 }
@@ -297,14 +309,14 @@ async fn find(account: &Account, photo: &str) -> Result<(sync::Library, String, 
 pub(super) fn keep_in_step(state: &App) {
 
     offer(state);
-    adopt(state);
+    adopt(state, true);
     glib::timeout_add_seconds_local(
         EVERY,
         glib::clone!(
             #[strong] state,
             move || {
 
-                adopt(&state);
+                adopt(&state, false);
                 if !allowed(&state) {
                     QUIET.with(|quiet| quiet.borrow().as_ref().map(Cancel::stop));
                     return glib::ControlFlow::Continue;
@@ -443,6 +455,13 @@ enum How {
     ByHand,
     Quiet,
     Look,
+    Glance,
+}
+
+impl How {
+    fn looks(self) -> bool {
+        matches!(self, How::Look | How::Glance)
+    }
 }
 
 fn in_step(state: &App, library: Library, how: How) {
@@ -511,7 +530,8 @@ fn local_photos(state: &App, library: &Library) -> Vec<(i64, Local)> {
         .into_iter()
         .map(|photo| {
             let path = photo.path.strip_prefix(&library.path).unwrap_or(&photo.path).to_string_lossy().to_string();
-            let edits = state.catalog.own_edits(photo.id).ok().flatten().and_then(|document| serde_json::to_string(&document).ok());
+
+            let edits = state.catalog.own_edits_json(photo.id).ok().flatten();
             (photo.id, Local { path, edits, rating: photo.rating, flag: sync::flag_name(photo.flag).to_string() })
         })
         .collect()
@@ -535,17 +555,17 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
     let local: Vec<Local> = local_photos(state, &library).into_iter().map(|(_, photo)| photo).collect();
     let mut steps = sync::plan(&link, &remote, &local);
 
-    let whole = how != How::Look || steps.iter().all(|step| matches!(step, Step::Arrive(_)));
-    steps.retain(|step| how != How::Look || matches!(step, Step::Arrive(_)));
+    let whole = !how.looks() || steps.iter().all(|step| matches!(step, Step::Arrive(_)));
+    steps.retain(|step| !how.looks() || matches!(step, Step::Arrive(_)));
 
     let to_send = steps.iter().filter(|step| matches!(step, Step::Send(_)) || matches!(step, Step::Both { up, .. } if up.any())).count();
 
-    let keep_here = link.keep_here && how != How::Look;
+    let keep_here = link.keep_here && !how.looks();
     let to_bring = if keep_here { state.catalog.at_home(library.id).map_or(0, |at_home| at_home.len()) } else { 0 };
     let cancel = Cancel::default();
     let running = Running::default();
     let progress = (!steps.is_empty() || to_bring > 0).then(|| match how {
-        How::Quiet | How::Look => {
+        How::Quiet | How::Look | How::Glance => {
             QUIET.with(|quiet| quiet.replace(Some(cancel.clone())));
             quiet(state, &library)
         }
@@ -565,7 +585,7 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
     let state = state.clone();
     glib::spawn_future_local(async move {
         let shown = progress.as_ref().map(|(_, text, bar)| (text.clone(), bar.clone()));
-        let mut done = carry_out(&state, &library, &mut link, steps, shown, &cancel, &running).await;
+        let mut done = carry_out(&state, &library, &mut link, steps, shown, how == How::Glance, &cancel, &running).await;
         if keep_here && !done.cut {
             let say = |at: usize, of: usize| {
                 if let Some((_, text, bar)) = &progress {
@@ -583,7 +603,8 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
             }
         }
         let finished = !done.cut && done.failures.is_empty();
-        link.everything |= finished;
+
+        link.everything |= finished && how != How::Glance;
         if how == How::Import || (whole && finished) {
             link.since = since;
         }
@@ -641,7 +662,7 @@ fn round_said(done: &Done, how: How, cancel: &Cancel, to_send: usize, library: &
         }
 
         (Done { came: 0, .. }, false) => None,
-        _ if how == How::Look => None,
+        _ if how.looks() => None,
         (Done { came, .. }, false) => Some(format!("{} new from {NUMA_HOME} in {}", photographs(*came), library.label())),
     }
 }
@@ -651,12 +672,14 @@ fn quiet(state: &App, library: &Library) -> (adw::Toast, gtk::Label, Option<gtk:
     (toast, text, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn carry_out(
     state: &App,
     library: &Library,
     link: &mut Link,
     steps: Vec<Step>,
     shown: Option<(gtk::Label, Option<gtk::ProgressBar>)>,
+    covers_only: bool,
     cancel: &Cancel,
     running: &Running,
 ) -> Done {
@@ -713,7 +736,7 @@ async fn carry_out(
     let _ = std::fs::remove_dir_all(&folder);
     if !done.cut {
         let saying = |at: usize, of: usize| say(total, format!("{} of {} photos from {NUMA_HOME}", places::grouped(at as i64), places::grouped(of as i64)));
-        match pictures(state, &account, library, &here, &moved, running, saying).await {
+        match pictures(state, &account, library, (&here, covers_only), &moved, running, saying).await {
             Ok(came) => done.pictures = came,
             Err(failure) => {
                 stop(state, failure, &account, cancel, &mut done);
@@ -749,14 +772,19 @@ async fn pictures(
     state: &App,
     account: &Account,
     library: &Library,
-    here: &HashMap<String, (i64, Local)>,
+    (here, covers_only): (&HashMap<String, (i64, Local)>, bool),
     moved: &HashSet<String>,
     running: &Running,
     say: impl Fn(usize, usize),
 ) -> Result<usize, Failure> {
     let at_home = state.catalog.at_home(library.id).unwrap_or_default();
+    let covers: HashSet<PathBuf> = match covers_only {
+        true => state.catalog.glance(library.id, None, None).map(|glance| glance.covers.into_iter().take(places::FAN_SIZE).map(|(path, ..)| path).collect()).unwrap_or_default(),
+        false => HashSet::new(),
+    };
     let ids: Vec<String> = here
         .values()
+        .filter(|(_, ours)| !covers_only || covers.contains(&library.path.join(&ours.path)))
         .filter_map(|(id, ours)| {
             let (server, _) = at_home.get(id)?;
             (moved.contains(&ours.path) || !numa::io::catalog::home_thumb(&library.path, server).exists()).then(|| server.clone())
@@ -852,7 +880,7 @@ fn put_edits(state: &App, file: PathBuf, photo: i64, stack: Option<String>) -> R
 
     document.source.path = file;
     state.catalog.save_own_edits(photo, &document).map_err(Failure::Said)?;
-    Ok((!document.is_untouched()).then(|| serde_json::to_string(&document).unwrap_or_default()))
+    state.catalog.own_edits_json(photo).map_err(Failure::Said)
 }
 
 async fn send(state: &App, account: &Account, (root, folder): (&Path, &Path), (photo, ours): (i64, &Local), library: &str, running: &Running) -> Result<Kept, Failure> {

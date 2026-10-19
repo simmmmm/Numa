@@ -247,6 +247,9 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
 pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, body: Bytes) -> Result<Json<Value>, Fail> {
     let photo = server.home.photo(&me.name, id)?;
     let _one = server.editing.lock(id).await;
+    if numa_core::document::schema_of(&String::from_utf8_lossy(&body)) > numa_core::document::SCHEMA {
+        return Err(crate::edit::newer());
+    }
     let mut document = match body.iter().all(u8::is_ascii_whitespace) {
         true => numa_core::document::Document::new(String::new()),
         false => serde_json::from_slice::<numa_core::document::Document>(&body)

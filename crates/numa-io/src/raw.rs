@@ -17,6 +17,7 @@ use numa_core::space::ColourSpace;
 mod embedded;
 mod orf;
 mod proxy;
+pub mod rcd;
 pub mod region;
 
 const BASELINE_EV: f32 = 1.241;
@@ -374,6 +375,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_monochrome_sensor_develops_to_grey() {
+        let raws = Path::new("../raws-cc0/Pentax/K-3 Mark III Monochrome");
+        for file in [
+            "7081-Pentax - K-3 Mark III Monochrome - 14bit (3:2).DNG",
+            "7082-Pentax - K-3 Mark III Monochrome - 14bit (3:2).PEF",
+        ] {
+            let path = raws.join(file);
+            if !path.exists() {
+                eprintln!("skipped: {} is not on this computer", path.display());
+                continue;
+            }
+            let image = decode_linear_best(&path).unwrap();
+            assert!(image.width.max(image.height) > 6000, "{file}: {}x{}", image.width, image.height);
+            assert!(image.data.chunks_exact(3).all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]), "{file}: not grey");
+            let mean = image.data.iter().sum::<f32>() / image.data.len() as f32;
+            assert!(mean.is_finite() && mean > 0.01, "{file}: mean {mean}");
+
+            let row = image.width as usize * 3;
+            let top = image.data[..row].iter().sum::<f32>() / row as f32;
+            assert!(top > mean, "{file}: the top row is {top} against {mean}");
+        }
+    }
+
+    #[test]
     #[ignore]
     fn camera_fields_of_a_folder() {
         let Ok(dir) = std::env::var("FRAMES") else { return };
@@ -447,7 +472,7 @@ mod tests {
         let Intermediate::ThreeColor(rawlers) = RawDevelop::new_with(&steps).develop_intermediate(&raw).unwrap() else {
             panic!("a Bayer frame develops to three colours");
         };
-        let ours = ppg_develop(raw).unwrap().ok().expect("a Bayer frame is ours to develop");
+        let ours = bayer_develop(raw, Demosaic::Draft, [1.0; 3]).unwrap().ok().expect("a Bayer frame is ours to develop");
 
         assert_eq!(ours.dim(), rawlers.dim());
         assert!(flat(ours) == rawlers.into_flatten(), "the floats differ");
@@ -981,7 +1006,7 @@ fn decode_beside(
     let (mut camera_midtone, mut asked) = (Some(camera_midtone), None);
     let mut wanted = || *asked.get_or_insert_with(|| camera_midtone.take().and_then(|midtone| midtone()));
 
-    let (developed, profile, rendering, flips, film_mode, exposure, markesteijn, small) = {
+    let (developed, profile, rendering, flips, film_mode, exposure, markesteijn, grey, small) = {
         let source = rawler::rawsource::RawSource::new(path).map_err(|e| fail(e.to_string()))?;
         let decoder = rawler::get_decoder(&source).map_err(|e| fail(e.to_string()))?;
         laps.lap("read");
@@ -990,6 +1015,7 @@ fn decode_beside(
             .map_err(|e| fail(e.to_string()))?;
         laps.lap("decode");
         stopped()?;
+        let grey = monochrome(&raw);
 
         let mut profile = camera_profile(&raw);
 
@@ -1028,12 +1054,12 @@ fn decode_beside(
         let (developed, markesteijn_ran, small) = match proxy::develop(raw, path, demosaic, &mut laps) {
             Ok((pixels, full, samples)) => (pixels, false, Some((full, samples))),
             Err(raw) => {
-                let (developed, markesteijn_ran) = demosaic_on_processor(raw, path, demosaic)?;
+                let (developed, markesteijn_ran) = demosaic_on_processor(raw, path, demosaic, balance(profile.as_ref()))?;
                 laps.lap("demosaic");
                 (developed, markesteijn_ran, None)
             }
         };
-        (developed, profile, rendering, flips, film_mode, exposure, markesteijn_ran, small)
+        (developed, profile, rendering, flips, film_mode, exposure, markesteijn_ran, grey, small)
     };
     laps.lap("free raw");
     stopped()?;
@@ -1049,7 +1075,7 @@ fn decode_beside(
     stopped()?;
     let mut image = match &small {
         Some(_) => image,
-        None => undo_the_lens(image, path, markesteijn, baseline, &mut laps),
+        None => undo_the_lens(image, path, markesteijn, grey, baseline, &mut laps),
     };
     stopped()?;
 
@@ -1083,6 +1109,7 @@ fn demosaic_on_processor(
     raw: rawler::RawImage,
     path: &Path,
     demosaic: Demosaic,
+    balance: [f32; 3],
 ) -> Result<(rawler::pixarray::Color2D<f32, 3>, bool), String> {
     let fail = |err: String| format!("{}: {}", path.display(), err);
     let demosaiced = match demosaic {
@@ -1095,7 +1122,7 @@ fn demosaic_on_processor(
 
     let (demosaiced, raw) = match demosaiced {
         Some(pixels) => (Some(pixels), None),
-        None => match ppg_develop(raw).map_err(fail)? {
+        None => match bayer_develop(raw, demosaic, balance).map_err(fail)? {
             Ok(pixels) => (Some(pixels), None),
             Err(raw) => (None, Some(raw)),
         },
@@ -1113,12 +1140,23 @@ fn rawler_develop(raw: &rawler::RawImage) -> Result<rawler::pixarray::Color2D<f3
         .steps
         .into_iter()
         .filter(|step| !matches!(step, ProcessingStep::SRgb | ProcessingStep::Calibrate | ProcessingStep::WhiteBalance))
+
+        .filter(|step| !(monochrome(raw) && *step == ProcessingStep::Demosaic))
         .collect();
 
     match RawDevelop::new_with(&steps).develop_intermediate(raw).map_err(|e| e.to_string())? {
         Intermediate::ThreeColor(pixels) => Ok(pixels),
+
+        Intermediate::Monochrome(pixels) => {
+            let (width, height) = (pixels.width, pixels.height);
+            Ok(rawler::pixarray::Color2D::new_with(pixels.data.into_iter().map(|value| [value; 3]).collect(), width, height))
+        }
         _ => Err("unsupported sensor colour layout".to_string()),
     }
+}
+
+fn monochrome(raw: &rawler::RawImage) -> bool {
+    raw.cpp == 1 && !matches!(raw.photometric, rawler::rawimage::RawPhotometricInterpretation::Cfa(_))
 }
 
 fn flat(pixels: rawler::pixarray::Color2D<f32, 3>) -> Vec<f32> {
@@ -1128,8 +1166,10 @@ fn flat(pixels: rawler::pixarray::Color2D<f32, 3>) -> Vec<f32> {
     unsafe { Vec::from_raw_parts(at.cast::<f32>(), length * 3, capacity * 3) }
 }
 
-fn ppg_develop(
+fn bayer_develop(
     mut raw: rawler::RawImage,
+    demosaic: Demosaic,
+    balance: [f32; 3],
 ) -> Result<Result<rawler::pixarray::Color2D<f32, 3>, rawler::RawImage>, String> {
     use rawler::imgop::sensor::bayer::ppg::PPGDemosaic;
     use rawler::imgop::sensor::{Demosaic as _, SensorType};
@@ -1155,7 +1195,10 @@ fn ppg_develop(
 
     let pixels = PixF32::new_with(floats, width, height);
     let roi = active_area.unwrap_or_else(|| pixels.rect());
-    let rgb = PPGDemosaic::new().demosaic(&pixels, &config.cfa, &config.colors, roi);
+    let rgb = match demosaic {
+        Demosaic::Draft => PPGDemosaic::new().demosaic(&pixels, &config.cfa, &config.colors, roi),
+        Demosaic::Best | Demosaic::Proxy(_) => rcd::develop(pixels.pixels(), width, &config.cfa, roi, balance),
+    };
     drop(pixels);
 
     Ok(Ok(match crop_area.or(active_area) {
@@ -1242,10 +1285,11 @@ fn undo_the_lens(
     mut image: LinearImage,
     path: &Path,
     markesteijn: bool,
+    grey: bool,
     baseline: f32,
     laps: &mut Laps,
 ) -> LinearImage {
-    let lens = lens_profile(path);
+    let lens = lens_for(path, grey);
     laps.lap("lens lookup");
     if let Some(profile) = &lens {
         if !dump_without_vignetting() {
@@ -1340,9 +1384,22 @@ fn cropped_in_place(
     rawler::pixarray::Color2D::new_with(data, area.d.w, area.d.h)
 }
 
+pub(crate) fn balance(profile: Option<&CameraProfile>) -> [f32; 3] {
+    let Some([r, g, b]) = profile.map(|profile| profile.as_shot) else { return [1.0; 3] };
+    let balance = [r / g, 1.0, b / g];
+    match balance.iter().all(|v| v.is_finite() && *v > 0.0) {
+        true => balance,
+        false => [1.0; 3],
+    }
+}
+
 fn camera_profile(raw: &rawler::RawImage) -> Option<CameraProfile> {
     use rawler::imgop::matrix::{multiply, normalize, pseudo_inverse};
     use rawler::imgop::xyz::SRGB_TO_XYZ_D65;
+
+    if monochrome(raw) {
+        return None;
+    }
 
     use rawler::imgop::xyz::Illuminant;
 
@@ -1613,6 +1670,15 @@ pub(crate) fn is_raf(path: &Path) -> bool {
 
 pub fn lens_profile(path: &Path) -> Option<LensProfile> {
     fuji_lens_profile(path).or_else(|| lensfun_profile(path))
+}
+
+fn lens_for(path: &Path, grey: bool) -> Option<LensProfile> {
+    let mut lens = lens_profile(path)?;
+    if grey {
+        lens.red.fill(0.0);
+        lens.blue.fill(0.0);
+    }
+    Some(lens)
 }
 
 fn lensfun_profile(path: &Path) -> Option<LensProfile> {

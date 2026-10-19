@@ -45,6 +45,17 @@ fn a_change_on_one_side_goes_to_the_other() {
 }
 
 #[test]
+fn a_stack_as_stored_agrees_with_the_link_from_before() {
+    let stored = r#"{"source":{"path":"a.RAF"},"operations":[{"type":"Basic","exposure":1.0}]}"#;
+    let again = serde_json::to_string(&serde_json::from_str::<numa_core::document::Document>(stored).unwrap()).unwrap();
+    assert_ne!(stored, again, "an older stack's text is not what this build writes");
+    let kept = link(&[("1", &local("a.raf", Some(&again), 0), 50)]);
+    assert_eq!(plan(&kept, &[], &[local("a.raf", Some(stored), 0)]), vec![]);
+    let changed = stored.replace("1.0", "2.0");
+    assert_eq!(plan(&kept, &[], &[local("a.raf", Some(&changed), 0)]), vec![both("a.raf", "1", None, NONE, EDITS)]);
+}
+
+#[test]
 fn a_rating_here_and_an_edit_there_both_survive() {
     let a = local("a.raf", None, 0);
     let kept = link(&[("1", &a, 50)]);
@@ -183,7 +194,10 @@ fn home_thumbnails_come_in_one_curl_and_each_is_read() {
     let preview: Vec<String> = preview("nas", "8", Path::new("/c/p.jpg")).iter().map(|arg| arg.to_string_lossy().to_string()).collect();
     assert_eq!(preview.last().unwrap(), "http://nas:8283/api/v1/photos/8/preview");
     assert!(preview.windows(2).any(|pair| pair == ["--output", "/c/p.jpg"]) && preview.contains(&"--fail".to_string()));
-    assert_eq!(thumbnails_came("200\n404\n"), Ok(vec![true, false]));
+    assert!(text.contains(&"--parallel".to_string()));
+
+    let came = thumbnails_came("404 /lib/.numa/home/8.jpg.part\n200 /Numa Home/Aad & Wijn/.numa/home/7.jpg.part\n").unwrap();
+    assert_eq!(came, HashSet::from([PathBuf::from("/Numa Home/Aad & Wijn/.numa/home/7.jpg.part")]));
     assert_eq!(thumbnails_came("000\n000\n"), Err(Failure::Unreachable));
     assert_eq!(thumbnails_came(""), Err(Failure::Unreachable));
     assert!(matches!(thumbnails_came("401\n401\n"), Err(Failure::SignIn(_))));

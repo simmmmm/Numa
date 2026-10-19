@@ -290,9 +290,9 @@ pub(super) async fn thumbnails(account: &Account, root: &Path, ids: Vec<String>,
             .collect();
         let argv = sync::thumbnails(&account.address, &wanted.iter().map(|(id, part, _)| (id.clone(), part.clone())).collect::<Vec<_>>());
         let answered = sync::thumbnails_came(&curl(argv, account.header(), running).await);
-        let arrived = answered.as_deref().unwrap_or_default();
+        let arrived = answered.as_ref().ok();
         for (at, (_, part, to)) in wanted.iter().enumerate() {
-            match arrived.get(at).copied().unwrap_or(false) && std::fs::rename(part, to).is_ok() {
+            match arrived.is_some_and(|arrived| arrived.contains(part)) && std::fs::rename(part, to).is_ok() {
 
                 true => {
                     came += 1;

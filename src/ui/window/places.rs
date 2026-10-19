@@ -7,6 +7,8 @@ pub(super) const TILE: f32 = 36.0;
 
 const FAN: [(f32, f32); 3] = [(-8.0, -7.0), (6.0, 4.5), (0.0, 0.0)];
 
+pub(super) const FAN_SIZE: usize = FAN.len();
+
 const MARGIN: f32 = 10.0;
 
 fn card_edge(tile: f32) -> u32 {
@@ -76,11 +78,24 @@ fn shelves(state: &App) -> Rc<HashMap<i64, Glance>> {
 
 pub(super) fn in_order(state: &App, shelf: &mut [&Library]) {
     let shelves = shelves(state);
-    shelf.sort_by_key(|library| order_key(shelves.get(&library.id).and_then(|glance| glance.first)));
+    shelf.sort_by_key(|library| order_key(shelves.get(&library.id).and_then(|glance| glance.last)));
 }
 
-fn order_key(when: Option<i64>) -> (bool, Option<i64>) {
-    (when.is_none(), when)
+pub(super) fn shelves_in_order(state: &App, grouped: &mut [(String, Vec<&Library>)]) {
+    grouped.iter_mut().for_each(|(_, shelf)| in_order(state, shelf));
+    let shelves = shelves(state);
+    grouped.sort_by_key(|(_, shelf)| order_key(shelf.iter().filter_map(|library| shelves.get(&library.id)?.last).max()));
+}
+
+pub(super) fn everywhere_label(state: &App) -> &'static str {
+    match state.libraries.all.borrow().iter().any(|library| home_sync::is_home(state, library.id)) {
+        true => "This Computer",
+        false => "All Libraries",
+    }
+}
+
+fn order_key(when: Option<i64>) -> (bool, std::cmp::Reverse<Option<i64>>) {
+    (when.is_none(), std::cmp::Reverse(when))
 }
 
 pub(super) fn row(state: &App, place: &Place) -> Rc<Row> {
@@ -117,7 +132,7 @@ fn read_all(state: &App) {
         let glances: Vec<Glance> = match place {
             Place::Library(library) => each.get(&library.id).cloned().into_iter().collect(),
 
-            Place::Everywhere => libraries.iter().filter_map(|it| each.get(&it.id).cloned()).collect(),
+            Place::Everywhere => libraries.iter().filter(|it| !home_sync::is_home(state, it.id)).filter_map(|it| each.get(&it.id).cloned()).collect(),
             Place::Album(album) => {
                 libraries.iter().filter_map(|it| state.catalog.glance(it.id, Some(album), None).ok()).collect()
             }
@@ -370,6 +385,8 @@ pub(super) fn fan(tile: f32) -> gtk::Fixed {
     fan.set_size_request((tile + margin * 2.0) as i32, (tile + margin) as i32);
     fan.set_valign(gtk::Align::Center);
 
+    fan.set_overflow(gtk::Overflow::Visible);
+
     if tile >= 100.0 {
         fan.add_css_class("large-stack");
     }
@@ -413,11 +430,11 @@ mod tests {
     use super::{grouped, order_key, period, subtitle};
 
     #[test]
-    fn a_shelf_runs_oldest_first_and_ends_with_what_has_no_date() {
+    fn a_shelf_runs_newest_first_and_ends_with_what_has_no_date() {
 
-        let mut shelf = [Some(1663358713), None, Some(1652022408), Some(1657960247)];
+        let mut shelf = [Some(1657960247), None, Some(1652022408), Some(1663358713)];
         shelf.sort_by_key(|when| order_key(*when));
-        assert_eq!(shelf, [Some(1652022408), Some(1657960247), Some(1663358713), None]);
+        assert_eq!(shelf, [Some(1663358713), Some(1657960247), Some(1652022408), None]);
     }
 
     #[test]

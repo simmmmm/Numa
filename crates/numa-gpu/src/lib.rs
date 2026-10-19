@@ -173,7 +173,7 @@ impl Gpu {
 }
 
 const ENTRIES: &[&str] = &[
-    "scale", "ppg_green", "ppg_rb", "mk_green", "mk_solitary", "mk_rb", "mk_blocks", "mk_drv", "mk_homo", "mk_final",
+    "scale", "rcd_direction", "rcd_green", "rcd_colour", "rcd_out", "mk_green", "mk_solitary", "mk_rb", "mk_blocks", "mk_drv", "mk_homo", "mk_final",
     "geometry", "false_colour", "samples", "proxy", "full",
 ];
 
@@ -295,7 +295,7 @@ fn open(frugal: bool) -> Option<Gpu> {
 
 fn compile(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, half: bool) -> Option<Pipelines> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let source = concat!(include_str!("develop.wgsl"), include_str!("demosaic.wgsl"));
+    let source = concat!(include_str!("develop.wgsl"), include_str!("demosaic.wgsl"), include_str!("rcd.wgsl"));
     let source = match half {
         true => format!("enable f16;\n{}", source.replacen("alias Plane = f32;", "alias Plane = f16;", 1)),
         false => source.to_string(),

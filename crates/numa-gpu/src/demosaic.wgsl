@@ -1,155 +1,18 @@
 // SPDX-License-Identifier: LGPL-2.1
 //
-// RENDER-010: the two demosaics, on the card.
+// RENDER-010: the X-Trans demosaic, on the card (RENDER-027: Bayer's is RCD,
+// in rcd.wgsl; PPG's passes, which were here, went with it).
 //
-// PPG is Chuan-kai Lin's Patterned Pixel Grouping and Markesteijn Frank
-// Markesteijn's X-Trans interpolation, both as dcraw published them. What
-// these passes reproduce is rawler's port of the two (Copyright 2022-2026
-// Daniel Vogelbacher, LGPL-2.1), which is what Numa's processor path runs —
-// step for step, with its borders and its tile-width quirk, so that the card
-// and the processor tell the same picture apart only by rounding. A
-// translation that close is rawler's code in another language, so it keeps
-// rawler's licence rather than Numa's.
+// Markesteijn is Frank Markesteijn's X-Trans interpolation as dcraw
+// published it. What these passes reproduce is rawler's port (Copyright
+// 2022-2026 Daniel Vogelbacher, LGPL-2.1), which is what Numa's processor
+// path runs — step for step, with its borders and its tile-width quirk, so
+// that the card and the processor tell the same picture apart only by
+// rounding. A translation that close is rawler's code in another language,
+// so it keeps rawler's licence rather than Numa's.
 //
 // Everything here reads the mosaic through `mos` and writes the cropped frame
 // through `store_lin`, both in develop.wgsl.
-
-// ---- PPG (Bayer) -------------------------------------------------------
-
-fn ppg_border_rows(x: i32, y: i32) -> bool {
-    return x < 3 || y < 3 || x >= i32(P.roi_w) - 3 || y >= i32(P.roi_h) - 3;
-}
-
-// PPG's border: a missing channel is the mean of that colour in the 3x3
-// around, clipped to the frame; 0 when there is none.
-fn ppg_border(x: i32, y: i32, c: u32) -> f32 {
-    var sum = 0.0;
-    var count = 0u;
-    for (var yy = max(y - 1, 0); yy <= y + 1; yy++) {
-        for (var xx = max(x - 1, 0); xx <= x + 1; xx++) {
-            if (yy < i32(P.roi_h) && xx < i32(P.roi_w) && colour(xx, yy) == c) {
-                sum += mos(xx, yy);
-                count++;
-            }
-        }
-    }
-    if (count == 0u) {
-        return 0.0;
-    }
-    return sum / f32(count);
-}
-
-fn green_at(x: i32, y: i32) -> f32 {
-    return work[u32(y) * P.roi_w + u32(x)];
-}
-
-// Green everywhere, over the active area.
-@compute @workgroup_size(16, 16)
-fn ppg_green(@builtin(global_invocation_id) id: vec3<u32>) {
-    let row = band.y0 + id.y;
-    if (id.x >= P.roi_w || row >= band.y1) {
-        return;
-    }
-    let x = i32(id.x);
-    let y = i32(row);
-    let c = colour(x, y);
-    var g = 0.0;
-    if (c == 1u) {
-        g = mos(x, y);
-    } else if (ppg_border_rows(x, y)) {
-        g = ppg_border(x, y, 1u);
-    } else {
-        let v = mos(x, y);
-        let n_1 = mos(x, y - 1);
-        let n_2 = mos(x, y - 2);
-        let e_1 = mos(x + 1, y);
-        let e_2 = mos(x + 2, y);
-        let s_1 = mos(x, y + 1);
-        let s_2 = mos(x, y + 2);
-        let w_1 = mos(x - 1, y);
-        let w_2 = mos(x - 2, y);
-        let n = abs(v - n_2) * 2.0 + abs(n_1 - s_1);
-        let e = abs(v - e_2) * 2.0 + abs(w_1 - e_1);
-        let w = abs(v - w_2) * 2.0 + abs(w_1 - e_1);
-        let s = abs(v - s_2) * 2.0 + abs(n_1 - s_1);
-        var least = n;
-        if (e < least) { least = e; }
-        if (w < least) { least = w; }
-        if (s < least) { least = s; }
-        // `a * 3.0` written as `a + a + a`: the same rounding, since `a + a`
-        // is exact, and nothing a compiler may fuse with the addition after
-        // it. A fused multiply-add rounds once where the processor rounds
-        // twice, and one bit of green is enough to tip `ne < nw` below.
-        if (least == n) {
-            g = (n_1 + n_1 + n_1 + s_1 + v - n_2) / 4.0;
-        } else if (least == e) {
-            g = (e_1 + e_1 + e_1 + w_1 + v - e_2) / 4.0;
-        } else if (least == w) {
-            g = (w_1 + w_1 + w_1 + e_1 + v - w_2) / 4.0;
-        } else {
-            g = (s_1 + s_1 + s_1 + n_1 + v - s_2) / 4.0;
-        }
-    }
-    work[row * P.roi_w + id.x] = g;
-}
-
-fn hue_transit(l1: f32, l2: f32, l3: f32, v1: f32, v3: f32) -> f32 {
-    if ((l1 < l2 && l2 < l3) || (l1 > l2 && l2 > l3)) {
-        return v1 + (v3 - v1) * (l2 - l1) / (l3 - l1);
-    }
-    return (v1 + v3) / 2.0 + (l2 * 2.0 - l1 - l3) / 4.0;
-}
-
-// Red and blue, over the crop, and out.
-@compute @workgroup_size(16, 16)
-fn ppg_rb(@builtin(global_invocation_id) id: vec3<u32>) {
-    let row = band.y0 + id.y;
-    if (id.x >= P.crop_w || row >= band.y1) {
-        return;
-    }
-    let x = i32(id.x + P.crop_x);
-    let y = i32(row + P.crop_y);
-    let c = colour(x, y);
-    var rgb = vec3<f32>(0.0);
-    rgb[c] = mos(x, y);
-    rgb.y = green_at(x, y);
-    if (ppg_border_rows(x, y)) {
-        if (c != 0u) { rgb.x = ppg_border(x, y, 0u); }
-        if (c != 2u) { rgb.z = ppg_border(x, y, 2u); }
-    } else if (c == 1u) {
-        let h_ch = colour(x + 1, y);
-        let v_ch = colour(x, y + 1);
-        let g = rgb.y;
-        rgb[h_ch] = hue_transit(green_at(x - 1, y), g, green_at(x + 1, y), mos(x - 1, y), mos(x + 1, y));
-        rgb[v_ch] = hue_transit(green_at(x, y - 1), g, green_at(x, y + 1), mos(x, y - 1), mos(x, y + 1));
-    } else {
-        let y_ch = select(0u, 2u, c == 0u);
-        let x_center = rgb[c];
-        let g_center = rgb.y;
-        let y_ne_1 = mos(x + 1, y - 1);
-        let y_sw_1 = mos(x - 1, y + 1);
-        let x_ne_2 = mos(x + 2, y - 2);
-        let x_sw_2 = mos(x - 2, y + 2);
-        let g_ne_1 = green_at(x + 1, y - 1);
-        let g_sw_1 = green_at(x - 1, y + 1);
-        let y_nw_1 = mos(x - 1, y - 1);
-        let y_se_1 = mos(x + 1, y + 1);
-        let x_nw_2 = mos(x - 2, y - 2);
-        let x_se_2 = mos(x + 2, y + 2);
-        let g_nw_1 = green_at(x - 1, y - 1);
-        let g_se_1 = green_at(x + 1, y + 1);
-        let ne = abs(y_ne_1 - y_sw_1) + abs(x_ne_2 - x_center) + abs(x_center - x_sw_2)
-            + abs(g_ne_1 - g_center) + abs(g_center - g_sw_1);
-        let nw = abs(y_nw_1 - y_se_1) + abs(x_nw_2 - x_center) + abs(x_center - x_se_2)
-            + abs(g_nw_1 - g_center) + abs(g_center - g_se_1);
-        if (ne < nw) {
-            rgb[y_ch] = hue_transit(g_ne_1, g_center, g_sw_1, y_ne_1, y_sw_1);
-        } else {
-            rgb[y_ch] = hue_transit(g_nw_1, g_center, g_se_1, y_nw_1, y_se_1);
-        }
-    }
-    store_lin(id.x, row, rgb);
-}
 
 // ---- Markesteijn, one pass (X-Trans) -----------------------------------
 //

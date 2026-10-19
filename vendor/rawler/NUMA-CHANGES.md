@@ -186,3 +186,15 @@ Checked: the four FX2 frames of raw.pixls.us (8807–8810: uncompressed,
 compressed, lossless and lossless medium) decode, make their proxies and
 render; the renders of fifteen frames of bodies it knew (the ten test raws,
 two 7M4s, a 7CM2, an FX3 and an FX30) hash as before.
+
+### IO-036: a monochrome DNG is scaled (19 October 2026)
+
+- `rawimage.rs`: `apply_scaling` on a `BlackIsZero` frame of one sample a
+  photosite — a monochrome sensor's DNG (Leica Monochrom, Pentax K-3 III
+  Monochrome) — scales it as a mosaic is scaled, the black level repeating
+  the same way, where it reached a `todo!()` and panicked. A frame of more
+  samples still does. No other frame takes the new arm, so every frame that
+  decoded before decodes as before.
+
+Checked: the K-3 III Monochrome's DNG of raw.pixls.us (7081) develops, grey
+and cropped as its PEF (7082) does (`raw::tests::a_monochrome_sensor_develops_to_grey`).

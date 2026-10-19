@@ -17,7 +17,7 @@ pub(super) fn develop(
         Demosaic::Proxy(edge) => Some(edge),
         _ => None,
     };
-    let mosaic = mosaic(raw, demosaic)?;
+    let mosaic = mosaic(raw, demosaic, balance(profile))?;
     let xtrans = mosaic.xtrans;
     let lens = lens_profile(path);
     laps.lap("lens lookup");
@@ -56,7 +56,7 @@ pub(super) fn develop(
     }
 }
 
-fn mosaic(raw: &rawler::RawImage, demosaic: Demosaic) -> Option<numa_gpu::Mosaic<'_>> {
+fn mosaic(raw: &rawler::RawImage, demosaic: Demosaic, balance: [f32; 3]) -> Option<numa_gpu::Mosaic<'_>> {
     use rawler::imgop::sensor::SensorType;
     use rawler::rawimage::{RawImageData, RawPhotometricInterpretation};
 
@@ -94,6 +94,7 @@ fn mosaic(raw: &rawler::RawImage, demosaic: Demosaic) -> Option<numa_gpu::Mosaic
         white: raw.whitelevel.as_bayer_array(),
         cfa,
         xtrans,
+        balance,
         active: [active.p.x, active.p.y, active.d.w, active.d.h],
         crop: [crop.p.x, crop.p.y, crop.d.w, crop.d.h],
     })
@@ -186,7 +187,7 @@ mod tests {
     }
 
     fn on_processor(raw: &rawler::RawImage, path: &Path, lens: Option<&LensProfile>, stage: Stage, flips: (bool, bool, bool)) -> LinearImage {
-        let (developed, markesteijn) = demosaic_on_processor(raw.clone(), path, Demosaic::Best).unwrap();
+        let (developed, markesteijn) = demosaic_on_processor(raw.clone(), path, Demosaic::Best, balance(camera_profile(raw).as_ref())).unwrap();
         let baseline = 2.0f32.powf(BASELINE_EV);
         let dim = developed.dim();
         let mut data = flat(developed);
@@ -212,7 +213,7 @@ mod tests {
     }
 
     fn on_card(raw: &rawler::RawImage, lens: Option<&LensProfile>, stage: Stage, flips: (bool, bool, bool)) -> LinearImage {
-        let mosaic = mosaic(raw, Demosaic::Best).expect("a frame the card develops");
+        let mosaic = mosaic(raw, Demosaic::Best, balance(camera_profile(raw).as_ref())).expect("a frame the card develops");
         let baseline = 2.0f32.powf(BASELINE_EV);
         let job = numa_gpu::Job {
             false_colour: (mosaic.xtrans && stage >= Stage::FalseColour).then_some(BLACK_FLOOR * baseline),
@@ -274,7 +275,7 @@ mod tests {
         };
         for path in frames {
             let (raw, flips) = decoded(&path);
-            if mosaic(&raw, Demosaic::Best).is_none() {
+            if mosaic(&raw, Demosaic::Best, [1.0; 3]).is_none() {
                 println!("{}: not a frame the card develops; the processor does", path.display());
                 continue;
             }

@@ -154,7 +154,7 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
                             password.set_text("");
                             show(&account);
 
-                            home_sync::adopt(&state);
+                            home_sync::adopt(&state, true);
                         }
                         Err(Failure::SignIn(sentence)) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&sentence))),
                         Err(failure) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&said(failure, &account)))),

@@ -170,7 +170,7 @@ pub(super) fn build_retouch(state: &App) -> gtk::Box {
     }
 
     let finders = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    finders.set_halign(gtk::Align::End);
+    finders.set_halign(gtk::Align::Start);
     finders.set_margin_top(6);
     let people = gtk::Button::with_label("Remove People");
     people.set_tooltip_text(Some("Take out everyone but the subject — the passers-by behind"));

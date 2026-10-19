@@ -9,8 +9,8 @@ use numa_core::lens::{bilinear, geometry_fit, Centre, LensProfile};
 use numa_core::profile::DngProfile;
 
 use super::{
-    camera_midtone, camera_profile, canon_multi_exposure, demosaic_on_processor, dump_without_rendering,
-    dump_without_vignetting, film_mode, find_rendering, flat, lens_profile, match_camera_exposure, median_of_nine,
+    balance, camera_midtone, camera_profile, canon_multi_exposure, demosaic_on_processor, dump_without_rendering,
+    dump_without_vignetting, film_mode, find_rendering, flat, lens_for, match_camera_exposure, median_of_nine, monochrome,
     Demosaic, Laps, BASELINE_EV, BLACK_FLOOR, EXPOSURE_STRIDE,
 };
 
@@ -58,12 +58,13 @@ impl Regions {
         let (mut camera_midtone, mut asked) = (Some(camera_midtone), None);
         let mut wanted = || *asked.get_or_insert_with(|| camera_midtone.take().and_then(|midtone| midtone()));
 
-        let (developed, (width, height), profile, rendering, flips, film_mode, markesteijn) = {
+        let (developed, (width, height), profile, rendering, flips, film_mode, markesteijn, grey) = {
             let source = rawler::rawsource::RawSource::new(path).map_err(|e| fail(e.to_string()))?;
             let decoder = rawler::get_decoder(&source).map_err(|e| fail(e.to_string()))?;
             laps.lap("read");
             let raw = decoder.raw_image(&source, &RawDecodeParams::default(), false).map_err(|e| fail(e.to_string()))?;
             laps.lap("decode");
+            let grey = monochrome(&raw);
             let mut profile = camera_profile(&raw);
             if raw.camera.make == "Canon" && canon_multi_exposure(path) == Some(true) {
                 if let Some(profile) = profile.as_mut() {
@@ -90,12 +91,12 @@ impl Regions {
             }
             #[cfg(not(feature = "gpu"))]
             let _ = card;
-            let (developed, markesteijn) = demosaic_on_processor(raw, path, Demosaic::Best)?;
+            let (developed, markesteijn) = demosaic_on_processor(raw, path, Demosaic::Best, balance(profile.as_ref()))?;
             laps.lap("demosaic");
             let dim = developed.dim();
-            (flat(developed), (dim.w, dim.h), profile, rendering, flips, film_mode, markesteijn)
+            (flat(developed), (dim.w, dim.h), profile, rendering, flips, film_mode, markesteijn, grey)
         };
-        let lens = lens_profile(path);
+        let lens = lens_for(path, grey);
         laps.lap("lens lookup");
         let falloff = lens.is_some() && !dump_without_vignetting();
         let bends = lens.as_ref().is_some_and(LensProfile::bends_anything);

@@ -192,7 +192,7 @@ impl Buffers {
 pub(crate) fn part(entry: &str) -> usize {
     match entry {
         "scale" => 0,
-        _ if entry.starts_with("ppg_") || entry.starts_with("mk_") => 1,
+        _ if entry.starts_with("rcd_") || entry.starts_with("mk_") => 1,
         _ => 2,
     }
 }

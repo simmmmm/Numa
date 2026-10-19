@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use numa_core::document::Document;
+use numa_core::document::{schema_of, Document, SCHEMA};
 use numa_cull::people;
 use crate::raw;
 pub use crate::copy::{copy_into, Copied};
@@ -1640,6 +1640,10 @@ impl Catalog {
     pub fn photos_everywhere(&self, filter: &Filter) -> Result<Vec<Photo>, String> {
         let mut photos = Vec::new();
         for library in self.libraries()? {
+
+            if filter.all_libraries && self.library_setting(library.id, crate::home::sync::LINK).is_some() {
+                continue;
+            }
             match self.photos(library.id, filter) {
                 Ok(found) => photos.extend(found),
 
@@ -1902,16 +1906,17 @@ impl Catalog {
     }
 
     pub fn own_edits(&self, photo_id: i64) -> Result<Option<Document>, String> {
-        let (open, local) = self.photo(photo_id)?;
-        let json: Option<String> = open
-            .conn
-            .query_row("SELECT edits FROM photos WHERE id = ?1", params![local], |row| row.get(0))
-            .map_err(text)?;
-
-        match json {
+        match self.own_edits_json(photo_id)? {
             Some(text) => serde_json::from_str(&text).map(Some).map_err(|err| err.to_string()),
             None => Ok(None),
         }
+    }
+
+    pub fn own_edits_json(&self, photo_id: i64) -> Result<Option<String>, String> {
+        let (open, local) = self.photo(photo_id)?;
+        open.conn
+            .query_row("SELECT edits FROM photos WHERE id = ?1", params![local], |row| row.get(0))
+            .map_err(text)
     }
 
     pub fn load_history(&self, photo_id: i64) -> Result<Option<(Vec<Document>, usize)>, String> {
@@ -2038,6 +2043,19 @@ impl Catalog {
             true => None,
             false => Some(serde_json::to_string(document).map_err(text)?),
         };
+        let stored = self.own_edits_json(photo_id)?;
+
+        let unchanged = match stored.as_deref() {
+            None => json.is_none(),
+            Some(stored) => serde_json::from_str::<Document>(stored)
+                .is_ok_and(|read| (!read.is_untouched()).then(|| serde_json::to_string(&read).ok()).flatten() == json),
+        };
+        if unchanged {
+            return Ok(());
+        }
+        if document.schema > SCHEMA || stored.as_deref().is_some_and(|stored| schema_of(stored) > SCHEMA) {
+            return Err("This photograph was edited in a newer version of Numa — update Numa to change it here".to_string());
+        }
         let (open, local) = self.photo(photo_id)?;
         open.connected()?;
         open.conn.execute("UPDATE photos SET edits = ?1 WHERE id = ?2", params![json, local]).map_err(text)?;
@@ -2298,7 +2316,9 @@ mod tests {
 
         catalog.set_rating(id("a.RAF"), 4).unwrap();
         catalog.set_flag(id("b.RAF"), Flag::Picked).unwrap();
-        assert!(catalog.save_edits(id("a.RAF"), &Document::new("a".into())).is_err(), "no edits without the file");
+        let mut edited = Document::new("a".into());
+        edited.set_basic(Basic::with(|b| b.tone.exposure = 0.5));
+        assert!(catalog.save_edits(id("a.RAF"), &edited).is_err(), "no edits without the file");
         assert!(catalog.apply_scan(&library, &Scan::default()).is_err(), "and no rescan");
         let marks = home.parent().unwrap().join("offline").join(format!("{}-marks.db", library.id));
         assert!(marks.exists(), "the marks are kept at home");
@@ -2402,6 +2422,51 @@ mod tests {
 
         assert!(back[0].map.0.is_none());
         assert!(back[0].is_pending(), "and the mask knows it is waiting for them");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_newer_stack_is_kept_whole() {
+        use numa_core::document::SCHEMA;
+
+        let root = temp_dir("newer-stack");
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap().remove(0);
+        let store = |json: &str| {
+            let (open, local) = catalog.photo(photo.id).unwrap();
+            open.conn.execute("UPDATE photos SET edits = ?1 WHERE id = ?2", params![json, local]).unwrap();
+        };
+        let edited = |document: &mut Document| document.set_basic(Basic::with(|b| b.tone.exposure = 0.5));
+
+        store(r#"{"source":{"path":"a.RAF"},"operations":[{"type":"Basic","exposure":1.0}],"future_field":1}"#);
+        let opened = catalog.load_edits(photo.id).unwrap().unwrap();
+        catalog.save_edits(photo.id, &opened).unwrap();
+        assert!(catalog.own_edits_json(photo.id).unwrap().unwrap().contains("future_field"), "leaving it lost a field");
+
+        let mut changed = opened.clone();
+        edited(&mut changed);
+        catalog.save_edits(photo.id, &changed).unwrap();
+        assert!(!catalog.own_edits_json(photo.id).unwrap().unwrap().contains("future_field"));
+
+        let newer = format!(r#"{{"source":{{"path":"a.RAF"}},"operations":[{{"type":"Basic","exposure":1.0}}],"future_field":1,"schema":{}}}"#, SCHEMA + 1);
+        for stored in [newer.clone(), newer.replace(r#"{"type":"Basic","exposure":1.0}"#, r#"{"type":"FutureOp"}"#)] {
+            store(&stored);
+            if let Ok(Some(opened)) = catalog.load_edits(photo.id) {
+                catalog.save_edits(photo.id, &opened).expect("leaving it unchanged is not an error");
+            }
+            let mut mine = Document::new("a.RAF".into());
+            edited(&mut mine);
+            assert!(catalog.save_edits(photo.id, &mine).is_err(), "an edit here wrote over a newer stack");
+            assert!(catalog.save_edits(photo.id, &Document::new("a.RAF".into())).is_err(), "a reset here cleared it");
+            assert_eq!(catalog.own_edits_json(photo.id).unwrap().as_deref(), Some(stored.as_str()));
+        }
+
+        store(r#"{"source":{"path":"a.RAF"},"operations":[{"type":"Basic","exposure":2.0}]}"#);
+        let came: Document = serde_json::from_str(&newer).unwrap();
+        assert!(catalog.save_own_edits(photo.id, &came).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

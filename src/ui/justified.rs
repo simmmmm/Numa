@@ -340,6 +340,18 @@ impl Justified {
         self.scroll_to(index);
     }
 
+    pub fn select_these(&self, indices: &[usize], cursor: usize) {
+        let mut selection = vec![false; self.imp().selected.borrow().len()];
+        for index in indices {
+            if let Some(on) = selection.get_mut(*index) {
+                *on = true;
+            }
+        }
+        self.set_selection(selection);
+        self.imp().anchor.set(Some(cursor));
+        self.imp().cursor.set(Some(cursor));
+    }
+
     pub fn unselect_all(&self) {
         let count = self.imp().selected.borrow().len();
         self.set_selection(vec![false; count]);
