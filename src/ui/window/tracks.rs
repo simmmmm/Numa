@@ -42,7 +42,7 @@ pub(super) fn import_group(frames: Vec<PathBuf>, placed: Rc<RefCell<HashMap<Path
     group.set_title("Places");
     let row = adw::ActionRow::new();
     row.set_title("From a Track…");
-    row.set_subtitle("GPX, or your Google Timeline export \u{b7} matched by time");
+    row.set_subtitle("GPX, or a location history from your phone \u{b7} matched by time");
     let choose = gtk::Button::with_label("Choose…");
     choose.set_valign(gtk::Align::Center);
     choose.add_css_class("flat");

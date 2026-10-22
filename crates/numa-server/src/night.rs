@@ -86,11 +86,11 @@ fn save(server: &Server, report: &Report) {
     let _ = server.store.set_setting(REPORT, &serde_json::to_string(report).unwrap_or_default());
 }
 
-fn plural(n: usize, one: &str, more: &str) -> String {
+pub fn plural(n: usize, one: &str, more: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { more })
 }
 
-fn megabytes(bytes: u64) -> String {
+pub fn megabytes(bytes: u64) -> String {
     format!("{} MB", (bytes as f64 / 1e6).round())
 }
 
@@ -102,7 +102,7 @@ pub fn run(server: &Arc<Server>, failed: &mut HashSet<i64>) {
     save(server, &report);
     server.activity.plan(Kind::Night, 0, None);
     server.activity.start(Kind::Night);
-    let steps: [(&'static str, Step); 7] = [
+    let steps: [(&'static str, Step); 8] = [
         ("Trying again what failed", retry),
         ("Reading every library again in full", rescan),
         ("Checking that every file still reads", check),
@@ -110,6 +110,7 @@ pub fn run(server: &Arc<Server>, failed: &mut HashSet<i64>) {
         ("Preparing Tidy Up", tidy),
         ("Compacting the catalogs", vacuum),
         ("Pruning the thumbnail cache", prune),
+        ("Making the second copy", second_copy),
     ];
     for (stage, step) in steps {
         if stop(server, &mut report) {
@@ -273,6 +274,13 @@ fn vacuum(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bo
     let after = size(&files) + std::fs::metadata(server.data.join("server.db")).map_or(0, |meta| meta.len());
     report.done.push(format!("{} catalogs compacted, {} freed", files.len() + 1, megabytes(before.saturating_sub(after))));
     true
+}
+
+fn second_copy(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool {
+    let said = crate::copy::run(server, true, &mut || stop(server, report));
+    report.done.extend(said.done);
+    report.needs.extend(said.needs.into_iter().map(|text| Need { text, link: "#/safe".into() }));
+    said.finished
 }
 
 fn prune(_: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool {

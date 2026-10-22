@@ -19,7 +19,7 @@ The five fitted from raw.pixls.us beside the X-T5 on 27 September (EOS R5,
 D850, ILCE-7RM3, X-S10, X-T4) are gone since 29 September: each was held out on a frame of the same
 session it was fitted on. The ILCE-7RM3's, measured on a frame of another scene,
 did not beat the matrix; the other four have no second scene to measure on. The
-X-T5's, measured on two of the photographer's later frames and three CC0 ones,
+X-T5's, measured on two of the author's later frames and three CC0 ones,
 still does (0.0375 -> 0.0308, Adobe Standard 0.0372).
 
 The twenty beside the X-T5 were added on 29 September (RENDER-023), from up to
@@ -29,7 +29,7 @@ more than half an hour from every fitted frame). 220 bodies were fitted; most
 of the rest were held back because every raw of the body shows one scene, so
 no frame could be held out honestly.
 
-Numa X-T5.dcp            Fujifilm X-T5           0.0228 -> 0.0160 (3 held out)  the photographer's own, see below
+Numa X-T5.dcp            Fujifilm X-T5           0.0228 -> 0.0160 (3 held out)  the author's own, see below
 Numa ILCE-6300.dcp       Sony ILCE-6300          0.0260 -> 0.0258 (1 held out)  raws 783 979
 Numa ILCE-6400A.dcp      Sony ILCE-6400A         0.0839 -> 0.0761 (1 held out)  raws 7826 7895
 Numa ILCE-7M3.dcp        Sony ILCE-7M3           0.0333 -> 0.0271 (1 held out)  raws 2414 2415 2418
@@ -52,7 +52,7 @@ Numa K-S1.dcp            Pentax K-S1             0.0830 -> 0.0615 (1 held out)  
 Numa K20D.dcp            Pentax K20D             0.0421 -> 0.0339 (1 held out)  raws 1143 2879
 
 The X-T5 profile is the one exception to the raw.pixls.us rule: it was fitted
-from ten of the photographer's own X-T5 frames (Provia, Color 0) against the
+from ten of the author's own X-T5 frames (Provia, Color 0) against the
 JPEG each carries, three of them held out, on the cameras' tone curve
 (RENDER-004, 27 September). Against the camera's HEIF of the same frames the
 median colour difference (CIEDE2000) goes from 1.86 to 1.07, where Capture One's

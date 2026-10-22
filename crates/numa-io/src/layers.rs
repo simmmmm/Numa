@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use numa_core::color::{WhiteBalance, MAX_KELVIN, MIN_KELVIN};
+use numa_core::color::WhiteBalance;
 use numa_core::document::{Basic, Document};
 use numa_core::lut::LutChoice;
 use serde::de::DeserializeOwned;
@@ -8,11 +8,44 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::presets::{at_strength, Preset};
-use crate::workflows::{Did, Part, EVEN_MOST};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) enum Part {
+    Light,
+    Even,
+    Straighten,
+    Verticals,
+    Frame,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Did {
+
+    #[serde(default)]
+    pub light: Option<[f32; 6]>,
+
+    #[serde(default)]
+    pub warmth: Option<(f32, f32)>,
+
+    #[serde(default)]
+    pub even: Option<f32>,
+    #[serde(default)]
+    pub angle: Option<f32>,
+
+    #[serde(default)]
+    pub view: Option<[f32; 4]>,
+    #[serde(default)]
+    pub vertical: Option<f32>,
+
+    #[serde(default)]
+    pub size: Option<(f32, f32)>,
+    #[serde(default)]
+    pub off: Vec<Part>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Layers {
+pub(crate) struct Layers {
 
     pub even: bool,
 
@@ -59,7 +92,7 @@ impl Default for Layers {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Frame {
+pub(crate) struct Frame {
 
     pub at: i64,
 
@@ -69,7 +102,7 @@ pub struct Frame {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Key {
+pub(crate) struct Key {
     pub id: i64,
 
     pub stops: f32,
@@ -78,13 +111,13 @@ pub struct Key {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub struct Was {
+pub(crate) struct Was {
     pub tone: [f32; 6],
     pub balance: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Look {
+pub(crate) struct Look {
 
     pub name: String,
 
@@ -95,10 +128,6 @@ pub struct Look {
 }
 
 impl Look {
-
-    pub fn label(&self) -> &str {
-        self.name.rsplit('/').next().unwrap_or(&self.name)
-    }
 
     fn alone(&self, neutral: &Document) -> Document {
         match &self.preset {
@@ -214,7 +243,7 @@ fn balance((temperature, tint): (f32, f32)) -> WhiteBalance {
 
 impl Layers {
 
-    pub fn compose(&self, id: i64, own: &Document) -> Document {
+    pub(crate) fn compose(&self, id: i64, own: &Document) -> Document {
         let mut document = own.clone();
         if self.apart.contains(&id) {
             return document;
@@ -236,7 +265,7 @@ impl Layers {
         document
     }
 
-    pub fn decompose(&self, id: i64, document: &Document) -> Document {
+    pub(crate) fn decompose(&self, id: i64, document: &Document) -> Document {
         let mut own = document.clone();
         if self.apart.contains(&id) {
             return own;
@@ -257,7 +286,7 @@ impl Layers {
         own
     }
 
-    pub fn even_of(&self, id: i64) -> (f32, Option<(f32, f32)>) {
+    pub(crate) fn even_of(&self, id: i64) -> (f32, Option<(f32, f32)>) {
         let frame = self.frames.get(&id).copied().unwrap_or_default();
         let (ramp, ramped) = self.ramp(frame.at).map_or((0.0, None), |(stops, balance)| (stops, Some(balance)));
         let evening = if self.evening() { frame.stops } else { 0.0 };
@@ -280,11 +309,11 @@ impl Layers {
         }
     }
 
-    pub fn evening(&self) -> bool {
+    pub(crate) fn evening(&self) -> bool {
         self.numa.as_ref().is_none_or(|did| !did.off.contains(&Part::Even))
     }
 
-    pub fn ramp(&self, at: i64) -> Option<(f32, (f32, f32))> {
+    pub(crate) fn ramp(&self, at: i64) -> Option<(f32, (f32, f32))> {
         let mut keys: Vec<(i64, &Key)> = self.keys.iter().filter_map(|key| Some((self.frames.get(&key.id)?.at, key))).collect();
         keys.sort_by_key(|(at, _)| *at);
         let (first, last) = (keys.first()?, keys.last()?);
@@ -300,74 +329,6 @@ impl Layers {
         Some((ka.stops + (kb.stops - ka.stops) * t, (temperature, ka.balance.1 + (kb.balance.1 - ka.balance.1) * t)))
     }
 
-    pub fn link(&mut self, id: i64, at: i64) {
-        self.frames.entry(id).or_default().at = at;
-    }
-
-    pub fn has(&self, part: Part) -> bool {
-        match part {
-            Part::Light => self.numa.as_ref().is_some_and(|did| did.light.is_some() || did.warmth.is_some()),
-            Part::Even => self.frames.values().any(|frame| frame.stops != 0.0),
-            _ => false,
-        }
-    }
-
-    pub fn is_on(&self, part: Part) -> bool {
-        self.has(part) && self.numa.as_ref().is_none_or(|did| !did.off.contains(&part))
-    }
-
-    pub fn put_numa(&mut self, light: Option<[f32; 6]>, warmth: Option<(f32, f32)>) {
-        self.was = Some(Was { tone: self.tone, balance: self.balance });
-        if let Some(light) = light {
-            self.tone = light;
-        }
-        if warmth.is_some() {
-            self.balance = warmth;
-        }
-        self.numa = Some(Did { light, warmth, ..Did::default() });
-    }
-
-    pub fn switch(&mut self, part: Part, on: bool) {
-        let Some(did) = self.numa.as_mut() else {
-
-            if part == Part::Even {
-                self.numa = Some(Did { off: if on { vec![] } else { vec![Part::Even] }, ..Did::default() });
-            }
-            return;
-        };
-        did.off.retain(|off| *off != part);
-        if !on {
-            did.off.push(part);
-        }
-        let (light, warmth) = (did.light, did.warmth);
-        if part != Part::Light {
-            return;
-        }
-        let was = self.was.unwrap_or_default();
-        if let Some(light) = light {
-            for (at, now) in self.tone.iter_mut().enumerate() {
-                let (from, to) = if on { (was.tone[at], light[at]) } else { (light[at], was.tone[at]) };
-                if (*now - from).abs() < 1e-4 {
-                    *now = to;
-                }
-            }
-        }
-        if let Some(warmth) = warmth {
-            let (from, to) = if on { (was.balance, Some(warmth)) } else { (Some(warmth), was.balance) };
-            if near(self.balance, from) {
-                self.balance = to;
-            }
-        }
-    }
-
-    pub fn without_numa(&mut self) {
-        self.switch(Part::Light, false);
-        self.numa = None;
-        self.was = None;
-        for frame in self.frames.values_mut() {
-            frame.stops = 0.0;
-        }
-    }
 }
 
 fn snap(basic: &mut Basic) {
@@ -386,135 +347,6 @@ fn snap(basic: &mut Basic) {
         if (*value - rest).abs() < 1e-4 {
             *value = rest;
         }
-    }
-}
-
-fn sliders(basic: &Basic) -> [f32; 8] {
-    let tone = &basic.tone;
-    [tone.exposure, tone.contrast, tone.highlights, tone.shadows, tone.whites, tone.blacks, basic.presence.vibrance, basic.detail.denoise_luma]
-}
-
-fn most_common(values: &[f32]) -> f32 {
-    let mut best = (0, values.first().copied().unwrap_or(0.0));
-    for value in values {
-        let count = values.iter().filter(|other| (*other - value).abs() < 1e-3).count();
-        if count > best.0 {
-            best = (count, *value);
-        }
-    }
-    best.1
-}
-
-pub fn adopt(frames: &[(i64, i64, Document, Option<Did>)]) -> (Layers, Vec<Document>) {
-    let mut layers = Layers::default();
-    let mut owns: Vec<Document> = frames.iter().map(|(_, _, document, _)| document.clone()).collect();
-    let numa = frames.iter().find_map(|(_, _, _, did)| did.clone().filter(|did| did.has(Part::Light) || did.has(Part::Even)));
-    for ((id, at, _, did), own) in frames.iter().zip(owns.iter_mut()) {
-        let stops = did.as_ref().and_then(|did| did.even).unwrap_or(0.0);
-        if did.as_ref().is_some_and(|did| did.is_on(Part::Even)) {
-            let mut basic = own.basic();
-            basic.tone.exposure -= stops;
-            own.set_basic(basic);
-        }
-        layers.frames.insert(*id, Frame { at: *at, stops, balance: None });
-    }
-    let rest = sliders(&Basic::default());
-    let shared: Vec<f32> = (0..8).map(|at| most_common(&owns.iter().map(|own| sliders(&own.basic())[at]).collect::<Vec<_>>()) - rest[at]).collect();
-    for own in owns.iter_mut() {
-        let mut basic = own.basic();
-        let tone = &mut basic.tone;
-        for (value, by) in [&mut tone.exposure, &mut tone.contrast, &mut tone.highlights, &mut tone.shadows, &mut tone.whites, &mut tone.blacks, &mut basic.presence.vibrance, &mut basic.detail.denoise_luma].into_iter().zip(&shared) {
-            *value -= by;
-        }
-        snap(&mut basic);
-        own.set_basic(basic);
-    }
-    layers.tone.copy_from_slice(&shared[..6]);
-    (layers.vibrance, layers.noise) = (shared[6], shared[7]);
-    let balances: Vec<Option<(f32, f32)>> = owns.iter().map(|own| own.white_balance.map(|wb| (wb.temperature, wb.tint))).collect();
-    if let Some(Some(first)) = balances.first().copied().filter(|_| balances.iter().all(|other| near(*other, balances[0]))) {
-        layers.balance = Some(first);
-        for own in owns.iter_mut() {
-            own.white_balance = None;
-        }
-    }
-    if let Some(did) = numa {
-        let off = did.off.iter().copied().filter(|part| matches!(part, Part::Light | Part::Even)).collect();
-        layers.numa = Some(Did { light: did.light, warmth: did.warmth, off, ..Did::default() });
-
-        layers.was = Some(Was::default());
-    }
-    (layers, owns)
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Reading {
-    pub light: Option<(f32, bool)>,
-    pub grey: Option<(f32, f32)>,
-    pub body: Option<u64>,
-}
-
-pub fn body(xyz_to_cam: &[[f32; 3]; 3]) -> u64 {
-    xyz_to_cam.iter().flatten().fold(0u64, |hash, value| hash.rotate_left(7) ^ value.to_bits() as u64)
-}
-
-pub fn matched(reference: Reading, shown: (f32, f32), frames: &[Reading]) -> Vec<(f32, Option<(f32, f32)>)> {
-    let stop = |reading: Reading| reading.light.filter(|(light, flash)| !flash && *light > 0.0).map(|(light, _)| light.log2());
-
-    let overall = |body: Option<u64>| {
-        let greys: Vec<(f32, f32)> = frames.iter().filter(|frame| frame.body == body).filter_map(|frame| frame.grey).collect();
-        (!greys.is_empty()).then(|| {
-            let count = greys.len() as f32;
-            (greys.iter().map(|grey| mired(grey.0)).sum::<f32>() / count, greys.iter().map(|grey| grey.1).sum::<f32>() / count)
-        })
-    };
-    let reference_camera = overall(reference.body).or(reference.grey.map(|grey| (mired(grey.0), grey.1)));
-    frames
-        .iter()
-        .map(|frame| {
-            let stops = match (stop(reference), stop(*frame)) {
-                (Some(r), Some(f)) if (r - f).abs() >= 0.05 && (r - f).abs() <= EVEN_MOST => r - f,
-                _ => 0.0,
-            };
-            let balance = match (frame.body, overall(frame.body), reference_camera) {
-                (None, ..) => None,
-                _ if frame.body == reference.body => Some(shown),
-                (_, Some(camera), Some(reference_camera)) => {
-                    Some(((1e6 / (mired(shown.0) + camera.0 - reference_camera.0)).clamp(MIN_KELVIN, MAX_KELVIN), shown.1 + camera.1 - reference_camera.1))
-                }
-                _ => None,
-            };
-            (stops, balance)
-        })
-        .collect()
-}
-
-const NEAR_GREY: f32 = 0.2;
-
-pub fn average(pixels: &[f32], clip: f32, shot: [f32; 3]) -> Option<[f32; 3]> {
-    let (mut all, mut grey) = (([0.0f64; 3], 0usize), ([0.0f64; 3], 0usize));
-    let add = |(sum, count): &mut ([f64; 3], usize), pixel: &[f32]| {
-        for (total, value) in sum.iter_mut().zip(pixel) {
-            *total += *value as f64;
-        }
-        *count += 1;
-    };
-    for pixel in pixels.chunks_exact(3) {
-        if pixel.iter().any(|value| *value >= clip * 0.95 || *value <= clip * 0.01) {
-            continue;
-        }
-        add(&mut all, pixel);
-        let balanced = [pixel[0] * shot[0], pixel[1] * shot[1], pixel[2] * shot[2]];
-        let (high, low) = (balanced[0].max(balanced[1]).max(balanced[2]), balanced[0].min(balanced[1]).min(balanced[2]));
-        if high > 0.0 && (high - low) / high < NEAR_GREY {
-            add(&mut grey, pixel);
-        }
-    }
-    let mean = |(sum, count): ([f64; 3], usize)| sum.map(|total| (total / count as f64) as f32);
-    match (grey.1 >= 64 && grey.1 * 50 >= all.1, all.1 >= 64) {
-        (true, _) => Some(mean(grey)),
-        (false, true) => Some(mean(all)),
-        _ => None,
     }
 }
 
@@ -618,51 +450,10 @@ mod tests {
     }
 
     #[test]
-    fn numas_light_switches_only_what_is_still_numas() {
-        let mut layers = Layers::default();
-        layers.put_numa(Some([0.4, 10.0, -20.0, 0.0, 0.0, 0.0]), Some((4800.0, 2.0)));
-        assert_eq!(layers.tone[2], -20.0);
-        layers.tone[1] = 25.0;
-        layers.switch(Part::Light, false);
-        assert_eq!((layers.tone[0], layers.tone[1], layers.tone[2]), (0.0, 25.0, 0.0), "moved since, so kept");
-        assert_eq!(layers.balance, None);
-        layers.switch(Part::Light, true);
-        assert_eq!((layers.tone[0], layers.tone[2]), (0.4, -20.0));
-        assert!(layers.is_on(Part::Light) && !layers.has(Part::Even));
-        layers.frames.insert(1, Frame { at: 0, stops: 1.0, balance: None });
-        layers.switch(Part::Even, false);
-        assert_eq!(layers.even_of(1).0, 0.0, "the evening off");
-        layers.without_numa();
-        assert_eq!(layers.tone[0], 0.0);
-        assert!(!layers.has(Part::Even) && layers.numa.is_none());
-    }
-
-    #[test]
-    fn a_moment_from_before_layers_renders_the_same() {
-
-        let did = |even: f32| Some(Did { light: Some([0.4, 0.0, 0.0, 0.0, 0.0, 0.0]), even: Some(even), ..Did::default() });
-        let mut frames: Vec<(i64, i64, Document, Option<Did>)> = vec![(1, 100, with(1.4, 0.0), did(1.0)), (2, 110, with(-0.1, 0.0), did(-0.5)), (3, 120, with(0.7, 0.0), did(0.0)), (4, 130, with(0.4, 0.0), did(0.0))];
-        for (_, _, document, _) in frames.iter_mut() {
-            document.white_balance = Some(WhiteBalance { temperature: 5600.0, tint: 3.0 });
-        }
-        let (layers, owns) = adopt(&frames);
-        for ((id, _, before, _), own) in frames.iter().zip(&owns) {
-            let after = layers.compose(*id, own);
-            assert!(close(after.basic().tone.exposure, before.basic().tone.exposure), "{id}: {} against {}", after.basic().tone.exposure, before.basic().tone.exposure);
-            assert_eq!(after.white_balance, before.white_balance);
-        }
-        assert!(close(layers.tone[0], 0.4), "the light every frame shares is the moment's");
-        assert_eq!(layers.balance, Some((5600.0, 3.0)));
-        assert!(close(owns[2].basic().tone.exposure, 0.3), "the third keeps its own");
-        assert!(owns[0].white_balance.is_none() && owns[3].basic().is_identity());
-        assert!(layers.is_on(Part::Light) && layers.is_on(Part::Even));
-    }
-
-    #[test]
     fn key_frames_ramp_the_light_by_time() {
         let mut layers = Layers::default();
         for (id, at) in [(1, 0), (2, 50), (3, 100), (4, 200)] {
-            layers.link(id, at);
+            layers.frames.entry(id).or_default().at = at;
         }
         layers.keys = vec![Key { id: 3, stops: 1.0, balance: (3000.0, 10.0) }, Key { id: 1, stops: 0.0, balance: (6000.0, 0.0) }];
         let (stops, (kelvin, tint)) = layers.ramp(50).unwrap();
@@ -673,40 +464,5 @@ mod tests {
         assert_eq!(layers.even_of(4).1, Some((3000.0, 10.0)));
         layers.keys.clear();
         assert_eq!(layers.ramp(50), None);
-    }
-
-    #[test]
-    fn matching_gives_one_camera_one_balance_and_moves_another_by_its_own() {
-
-        let reference = Reading { light: Some((8.0, false)), grey: Some((5000.0, 0.0)), body: Some(1) };
-        let same = Reading { light: Some((4.0, false)), grey: Some((3000.0, 20.0)), body: Some(1) };
-        let other = Reading { light: Some((8.0, false)), grey: Some((4600.0, 15.0)), body: Some(2) };
-        let flash = Reading { light: Some((1.0, true)), grey: None, body: None };
-        let out = matched(reference, (4000.0, 2.0), &[reference, same, other, flash]);
-        assert!(close(out[0].0, 0.0) && near(out[0].1, Some((4000.0, 2.0))), "the reference stays as shown");
-        assert!(close(out[1].0, 1.0), "a stop less light, a stop more");
-        assert!(near(out[1].1, Some((4000.0, 2.0))), "its own camera: its balance, whatever the frame shows");
-
-        let first = (mired(5000.0) + mired(3000.0)) / 2.0;
-        let (kelvin, tint) = out[2].1.unwrap();
-        assert!((mired(kelvin) - mired(4000.0) - (mired(4600.0) - first)).abs() < 0.5, "{kelvin}");
-        assert!(close(tint, 2.0 + 15.0 - 10.0));
-        assert_eq!(out[3], (0.0, None), "the flash frame and an unread one are left");
-    }
-
-    #[test]
-    fn the_lights_colour_is_read_from_what_is_near_grey() {
-
-        let shot = [2.0, 1.0, 2.0];
-        let mut pixels = [0.2f32, 0.4, 0.2].repeat(100);
-        pixels.extend([0.45, 0.2, 0.05].repeat(400));
-        pixels.extend([1.0, 1.0, 1.0].repeat(100));
-        pixels.extend([0.0, 0.0, 0.0].repeat(100));
-        let light = average(&pixels, 1.0, shot).unwrap();
-        assert!(close(light[0], 0.2) && close(light[1], 0.4) && close(light[2], 0.2), "the flowers, the clipped and the black left out: {light:?}");
-
-        let flowers = average(&[0.45f32, 0.2, 0.05].repeat(100), 1.0, shot).unwrap();
-        assert!(close(flowers[0], 0.45));
-        assert_eq!(average(&[0.5; 30], 1.0, shot), None, "too little to read");
     }
 }

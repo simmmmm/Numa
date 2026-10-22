@@ -193,6 +193,8 @@ function chosenActions(ids, manage, own = {}) {
   };
   return {
     erase: manage ? erase : null,
+    rate: stars => marks({ rating: stars }),
+    flag,
     album: () => item(S.albumEll, () => albumDialog(ids)),
     downloads: () => downloadItems(`/api/v1/photos/zip?ids=${ids.join(',')}`, `/api/v1/photos/zip?ids=${ids.join(',')}&as=jpeg`),
     marks: () => [
@@ -327,6 +329,18 @@ document.addEventListener('keydown', event => {
     event.preventDefault();
     selectAll();
   }
+  // The loupe's keys on the grid, for what is chosen: 0-5 give stars, P picks, X rejects, U clears the flag.
+  else if (picked.ids.size && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const key = event.key.toLowerCase();
+    const flag = { p: 'pick', x: 'reject', u: 'none' }[key];
+    if (!flag && !/^[0-5]$/.test(key)) return;
+    event.preventDefault();
+    const ids = [...picked.ids];
+    mayManage(ids).then(manage => {
+      const actions = chosenActions(ids, manage);
+      if (flag) actions.flag(flag); else actions.rate(Number(key));
+    });
+  }
 });
 window.addEventListener('hashchange', () => { unpick(); unshelve(); });
 
@@ -388,6 +402,21 @@ async function albumDialog(ids) {
   const body = { ids, inside: !asked.out, ...(asked.album ? { album: asked.album } : { name: (asked.name || '').trim() }) };
   try { await api('photos/album', { method: 'POST', body: JSON.stringify(body) }); toast(asked.out ? S.outOfAlbum : S.inAlbum); } catch (error) { toast(error.message); }
 }
+
+// An album renamed or deleted, from its page's ⋯ and its right-click in the side
+// list. Deleting takes the album only, never its photographs.
+const albumItems = album => [
+  h('button', { onclick: async () => {
+    const asked = await dialog(S.renameAlbum, null, [h('input', { type: 'text', name: 'name', value: album.name, required: true, autocomplete: 'off' })], S.rename);
+    const name = (asked?.name || '').trim();
+    if (!name || name === album.name) return;
+    try { await api('albums/' + encodeURIComponent(album.key), { method: 'PUT', body: JSON.stringify({ name }) }); navLists.album = null; render(); } catch (error) { toast(error.message); }
+  } }, S.renameEll),
+  h('button', { onclick: async () => {
+    if (!await ask(phrase('deleteAlbumQ', { name: album.name }), S.deleteAlbumText, S.deleteAlbum)) return;
+    try { await api('albums/' + encodeURIComponent(album.key), { method: 'DELETE' }); navLists.album = null; go('/albums'); toast(S.albumDeleted); } catch (error) { toast(error.message); }
+  } }, S.deleteAlbumEll),
+];
 
 // New Album…: its name first, then the photographs for it, chosen on
 // Photos, and Add to puts them in and opens it. An album is never empty.

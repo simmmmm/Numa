@@ -12,6 +12,16 @@ pub const UNKNOWN_ASPECT: f32 = 1.5;
 
 const PAD: f32 = 12.0;
 
+const HEAD_LINE: f32 = 16.0;
+const HEAD: f32 = HEAD_LINE + 8.0;
+const ABOVE: f32 = 24.0;
+
+pub struct Section {
+    pub start: usize,
+    pub title: String,
+    pub caption: String,
+}
+
 #[derive(Clone, Copy, Default)]
 struct Rect {
     x: f32,
@@ -27,6 +37,8 @@ struct Layout {
     rects: Vec<Rect>,
 
     rows: Vec<usize>,
+
+    heads: Vec<f32>,
 }
 
 type Make = Box<dyn Fn() -> gtk::Widget>;
@@ -64,6 +76,12 @@ mod imp {
         pub(super) drag: glib::WeakRef<gtk::GestureDrag>,
         pub(super) row_height: Cell<f32>,
         pub(super) spacing: Cell<f32>,
+
+        pub(super) choosing: Cell<bool>,
+
+        pub(super) sections: RefCell<Vec<Section>>,
+        pub(super) heads: RefCell<Vec<(usize, gtk::Widget)>>,
+        pub(super) spare_heads: RefCell<Vec<gtk::Widget>>,
     }
 
     #[glib::object_subclass]
@@ -144,6 +162,8 @@ mod imp {
         fn dispose(&self) {
             self.live.take();
             self.spare.take();
+            self.heads.take();
+            self.spare_heads.take();
 
             while let Some(child) = self.obj().first_child() {
                 child.unparent();
@@ -227,9 +247,10 @@ impl Justified {
         *self.imp().bind.borrow_mut() = Some(Box::new(bind));
     }
 
-    pub fn fill(&self, aspects: Vec<f32>) {
+    pub fn fill(&self, aspects: Vec<f32>, sections: Vec<Section>) {
         let imp = self.imp();
-        let had_selection = imp.selected.borrow().contains(&true);
+
+        let had_selection = imp.selected.borrow().contains(&true) | imp.choosing.replace(false);
         let count = aspects.len();
         *imp.aspects.borrow_mut() = aspects;
         *imp.selected.borrow_mut() = vec![false; count];
@@ -242,6 +263,11 @@ impl Justified {
             card.set_child_visible(false);
         }
         imp.spare.borrow_mut().extend(live.into_iter().map(|(_, card)| card));
+        for (_, head) in imp.heads.take() {
+            head.set_child_visible(false);
+            imp.spare_heads.borrow_mut().push(head);
+        }
+        *imp.sections.borrow_mut() = sections;
 
         self.forget_layout();
         if had_selection {
@@ -250,7 +276,7 @@ impl Justified {
     }
 
     pub fn remove_all(&self) {
-        self.fill(Vec::new());
+        self.fill(Vec::new(), Vec::new());
     }
 
     pub fn len(&self) -> usize {
@@ -357,6 +383,31 @@ impl Justified {
         self.set_selection(vec![false; count]);
     }
 
+    pub fn select_all(&self) {
+        self.set_selection(vec![true; self.len()]);
+    }
+
+    pub fn set_choosing(&self, on: bool) {
+        match self.imp().choosing.replace(on) == on {
+            true => {}
+            false if on => self.emit_by_name::<()>("selection-changed", &[]),
+            false => self.unpick(),
+        }
+    }
+
+    pub fn choosing(&self) -> bool {
+        self.imp().choosing.get()
+    }
+
+    pub fn unpick(&self) {
+        let was = self.imp().choosing.replace(false);
+        if self.imp().selected.borrow().contains(&true) {
+            self.unselect_all();
+        } else if was {
+            self.emit_by_name::<()>("selection-changed", &[]);
+        }
+    }
+
     pub fn visible(&self) -> Option<(usize, usize)> {
         let (width, height) = (self.width(), self.height());
         if width <= 0 || height <= 0 || self.len() == 0 {
@@ -366,6 +417,27 @@ impl Justified {
         let top = self.offset() - PAD;
         let range = self.between(top, top + height as f32);
         (!range.is_empty()).then(|| (range.start, range.end - 1))
+    }
+
+    pub fn section_view(&self) -> Option<(usize, f32)> {
+        self.layout_for(self.inner_width(self.width()));
+        let layout = self.imp().layout.borrow();
+        let top = self.offset() - PAD + 1.0;
+        let at = layout.heads.partition_point(|y| *y <= top).checked_sub(1).or((!layout.heads.is_empty()).then_some(0))?;
+        let (from, to) = (layout.heads[at], layout.heads.get(at + 1).copied().unwrap_or(layout.height));
+        Some((at, ((top - from) / (to - from).max(1.0)).clamp(0.0, 1.0)))
+    }
+
+    pub fn show_section(&self, at: usize, into: f32) {
+        self.layout_for(self.inner_width(self.width()));
+        let Some((adjustment, ..)) = self.view() else { return };
+        let value = {
+            let layout = self.imp().layout.borrow();
+            let Some(from) = layout.heads.get(at).copied() else { return };
+            let to = layout.heads.get(at + 1).copied().unwrap_or(layout.height);
+            from + into.clamp(0.0, 1.0) * (to - from)
+        };
+        adjustment.set_value(value as f64);
     }
 
     pub fn connect_selection_changed<F: Fn(&Self) + 'static>(&self, f: F) {
@@ -431,7 +503,8 @@ impl Justified {
     fn justify(&self, width: i32) -> Layout {
         let imp = self.imp();
         let aspects: Vec<f32> = imp.aspects.borrow().iter().map(|aspect| aspect.max(0.1)).collect();
-        justify(&aspects, width as f32, imp.row_height.get(), imp.spacing.get())
+        let starts: Vec<usize> = imp.sections.borrow().iter().map(|section| section.start).collect();
+        justify(&aspects, width as f32, imp.row_height.get(), imp.spacing.get(), &starts)
     }
 
     fn make_card(&self) -> Option<gtk::Widget> {
@@ -487,6 +560,8 @@ impl Justified {
             imp.live.borrow_mut().push((index, card));
         }
 
+        self.place_heads(top - reach, top + height + reach);
+
         let layout = imp.layout.borrow();
         for (index, card) in imp.live.borrow().iter() {
             let Some(rect) = layout.rects.get(*index) else { continue };
@@ -502,6 +577,59 @@ impl Justified {
                 -1,
             );
         }
+    }
+
+    fn place_heads(&self, top: f32, bottom: f32) {
+        let imp = self.imp();
+        let wanted = {
+            let heads = &imp.layout.borrow().heads;
+            heads.partition_point(|y| y + HEAD <= top)..heads.partition_point(|y| *y < bottom)
+        };
+        let (kept, gone): (Vec<_>, Vec<_>) = imp.heads.take().into_iter().partition(|(at, _)| wanted.contains(at));
+        for (_, head) in gone {
+            head.set_child_visible(false);
+            imp.spare_heads.borrow_mut().push(head);
+        }
+        *imp.heads.borrow_mut() = kept;
+        for at in wanted {
+            if imp.heads.borrow().iter().any(|(bound, _)| *bound == at) {
+                continue;
+            }
+            let head = imp.spare_heads.borrow_mut().pop().unwrap_or_else(|| self.make_head());
+            if let Some(section) = imp.sections.borrow().get(at) {
+                if let Some(title) = head.first_child().and_downcast::<gtk::Label>() {
+                    title.set_text(&section.title);
+                }
+                if let Some(caption) = head.last_child().and_downcast::<gtk::Label>() {
+                    caption.set_text(&section.caption);
+                }
+            }
+            head.set_child_visible(true);
+            imp.heads.borrow_mut().push((at, head));
+        }
+
+        let (layout, offset) = (imp.layout.borrow(), self.offset());
+        let width = (self.width() - 2 * PAD as i32).max(1);
+        for (at, head) in imp.heads.borrow().iter() {
+            let Some(y) = layout.heads.get(*at) else { continue };
+            let height = head.measure(gtk::Orientation::Vertical, width).1.max(HEAD_LINE as i32);
+            let y = (y + PAD - offset + HEAD_LINE - height as f32).round() as i32;
+            head.size_allocate(&gtk::Allocation::new(PAD as i32, y, width, height), -1);
+        }
+    }
+
+    fn make_head(&self) -> gtk::Widget {
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let title = gtk::Label::new(None);
+        title.add_css_class("section-header");
+        let caption = gtk::Label::new(None);
+        caption.add_css_class("month-count");
+        for label in [&title, &caption] {
+            label.set_valign(gtk::Align::BaselineCenter);
+            head.append(label);
+        }
+        head.set_parent(self);
+        head.upcast()
     }
 
     fn index_at(&self, x: f32, y: f32) -> Option<usize> {
@@ -587,18 +715,19 @@ impl Justified {
                     modifiers.contains(gdk::ModifierType::CONTROL_MASK),
                     modifiers.contains(gdk::ModifierType::SHIFT_MASK),
                 );
+                let choosing = this.choosing();
                 let Some(index) = this.index_at_point(x, y) else {
-                    if !ctrl && !shift {
+                    if !ctrl && !shift && !choosing {
                         this.unselect_all();
                     }
                     return;
                 };
 
-                if presses == 2 {
+                if presses == 2 && !choosing {
                     this.activate_card(index);
                 } else if shift {
-                    this.select_run(index, ctrl);
-                } else if ctrl {
+                    this.select_run(index, ctrl || choosing);
+                } else if ctrl || choosing {
                     let mut selection = this.imp().selected.borrow().clone();
                     selection[index] = !selection[index];
                     this.set_selection(selection);
@@ -751,10 +880,14 @@ impl Justified {
 
         if ctrl && matches!(key, gdk::Key::a | gdk::Key::A) {
             if shift {
-                self.unselect_all();
+                self.unpick();
             } else {
-                self.set_selection(vec![true; count]);
+                self.select_all();
             }
+            return glib::Propagation::Stop;
+        }
+        if key == gdk::Key::Escape && (self.choosing() || imp.selected.borrow().contains(&true)) {
+            self.unpick();
             return glib::Propagation::Stop;
         }
 
@@ -810,43 +943,56 @@ impl Justified {
     }
 }
 
-fn justify(aspects: &[f32], width: f32, row_height: f32, spacing: f32) -> Layout {
+fn justify(aspects: &[f32], width: f32, row_height: f32, spacing: f32, starts: &[usize]) -> Layout {
     let height_for = |sum: f32, count: usize| (width - spacing * (count as f32 - 1.0)).max(1.0) / sum;
 
     let mut layout = Layout { rects: vec![Rect::default(); aspects.len()], ..Layout::default() };
     let mut y = 0.0;
-    let mut start = 0;
-    while start < aspects.len() {
-        let mut end = start;
-        let mut sum = 0.0;
-        let height = loop {
-            sum += aspects[end];
-            end += 1;
-            let height = height_for(sum, end - start);
-            if height <= row_height {
-                if end - start > 1 {
-                    let shorter = height_for(sum - aspects[end - 1], end - 1 - start);
-                    if shorter - row_height < row_height - height {
-                        end -= 1;
-                        break shorter;
-                    }
-                }
-                break height;
+    let ends = starts.iter().skip(1).copied().chain([aspects.len()]);
+    let runs: Vec<(usize, usize)> = match starts.is_empty() {
+        true => vec![(0, aspects.len())],
+        false => starts.iter().copied().zip(ends).collect(),
+    };
+    for (run, (mut start, stop)) in runs.into_iter().enumerate() {
+        if !starts.is_empty() {
+            if run > 0 {
+                y += (ABOVE - spacing).max(0.0);
             }
-            if end == aspects.len() {
-                break row_height;
-            }
-        };
-
-        let mut x = 0.0;
-        for index in start..end {
-            let card_width = aspects[index] * height;
-            layout.rects[index] = Rect { x, y, width: card_width, height };
-            x += card_width + spacing;
+            layout.heads.push(y);
+            y += HEAD;
         }
-        layout.rows.push(start);
-        y += height + spacing;
-        start = end;
+        while start < stop {
+            let mut end = start;
+            let mut sum = 0.0;
+            let height = loop {
+                sum += aspects[end];
+                end += 1;
+                let height = height_for(sum, end - start);
+                if height <= row_height {
+                    if end - start > 1 {
+                        let shorter = height_for(sum - aspects[end - 1], end - 1 - start);
+                        if shorter - row_height < row_height - height {
+                            end -= 1;
+                            break shorter;
+                        }
+                    }
+                    break height;
+                }
+                if end == stop {
+                    break row_height;
+                }
+            };
+
+            let mut x = 0.0;
+            for index in start..end {
+                let card_width = aspects[index] * height;
+                layout.rects[index] = Rect { x, y, width: card_width, height };
+                x += card_width + spacing;
+            }
+            layout.rows.push(start);
+            y += height + spacing;
+            start = end;
+        }
     }
     layout.height = (y - spacing).max(0.0);
     layout
@@ -860,7 +1006,7 @@ mod tests {
     fn rows_fill_the_width_keep_the_order_and_the_shapes() {
         let aspects = [1.5, 0.667, 1.5, 1.5, 3.0, 1.5, 0.667, 1.0, 1.5];
         let width = 1000.0;
-        let layout = justify(&aspects, width, ROW_HEIGHT, SPACING);
+        let layout = justify(&aspects, width, ROW_HEIGHT, SPACING, &[]);
 
         assert_eq!(layout.rows[0], 0);
         for (row, first) in layout.rows.iter().enumerate() {
@@ -882,8 +1028,25 @@ mod tests {
     }
 
     #[test]
+    fn a_month_starts_its_own_rows_under_its_header_and_its_last_row_is_not_stretched() {
+        let aspects = [1.5; 20];
+        let layout = justify(&aspects, 1000.0, ROW_HEIGHT, SPACING, &[0, 7]);
+        assert_eq!(layout.heads.len(), 2);
+
+        assert!(layout.rows.contains(&7));
+        assert_eq!(layout.rects[7].x, 0.0);
+        assert!(layout.rects[7].y >= layout.heads[1] + HEAD);
+        assert!(layout.heads[1] > layout.rects[6].y + layout.rects[6].height);
+
+        assert_eq!(layout.rects[6].height, ROW_HEIGHT);
+
+        let flat = justify(&aspects, 1000.0, ROW_HEIGHT, SPACING, &[]);
+        assert!(flat.heads.is_empty() && flat.rects[0].y == 0.0);
+    }
+
+    #[test]
     fn a_panorama_never_runs_past_the_window() {
-        let layout = justify(&[1.5, 12.0, 1.5], 800.0, ROW_HEIGHT, SPACING);
+        let layout = justify(&[1.5, 12.0, 1.5], 800.0, ROW_HEIGHT, SPACING, &[]);
         assert!(layout.rects.iter().all(|rect| rect.x + rect.width <= 800.5));
 
         assert!(layout.rects.iter().all(|rect| rect.height < 2.0 * ROW_HEIGHT));
@@ -892,8 +1055,8 @@ mod tests {
     #[test]
     fn a_bigger_size_puts_fewer_photographs_in_a_taller_row_and_the_space_is_kept() {
         let aspects = [1.5; 30];
-        let small = justify(&aspects, 1200.0, 120.0, 4.0);
-        let large = justify(&aspects, 1200.0, 360.0, 24.0);
+        let small = justify(&aspects, 1200.0, 120.0, 4.0, &[]);
+        let large = justify(&aspects, 1200.0, 360.0, 24.0, &[]);
         assert!(large.rows.len() > small.rows.len());
         assert!(large.rects[0].height > small.rects[0].height);
         let (first, second) = (large.rects[0], large.rects[1]);

@@ -240,6 +240,10 @@ fn index_of<'a>(state: &App, indexes: &'a mut HashMap<i64, Index>, library: i64)
     indexes.get_mut(&library)
 }
 
+pub(super) fn ranked(state: &App) -> bool {
+    state.libraries.words.query.borrow().as_ref().is_some_and(|(_, numbers)| numbers.as_ref().is_some_and(|numbers| !numbers.is_empty()))
+}
+
 pub(super) fn narrow(state: &App, photos: &mut Vec<Photo>) {
     let words = &state.libraries.words;
     let query = words.query.borrow().as_ref().and_then(|(_, numbers)| numbers.clone());

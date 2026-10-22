@@ -104,7 +104,7 @@ fn client_picks_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.set_content_width(600);
 
     let intro = gtk::Label::new(Some(
-        "Copy the list from the gallery (Pixieset, Pic-Time, Picdrop…) and paste it here. \
+        "Copy the list from the client's gallery and paste it here. \
          Names with or without extensions.",
     ));
     intro.set_wrap(true);

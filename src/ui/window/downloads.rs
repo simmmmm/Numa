@@ -624,9 +624,8 @@ pub(super) fn profiles_group(
         "A camera profile (.dcp) refines the colour of one camera model. Without one, \
          colour comes from the matrix inside the raw file, which is what every raw \
          developer falls back to. RawTherapee's profiles may be shipped and are included \
-         where the package allows; Adobe's may not, so profiles from Adobe DNG Converter \
-         have to be added here by you. Numa matches a profile on the camera model \
-         written inside it, so the file name does not matter.",
+         where the package allows; others you add here yourself. Numa matches a profile \
+         on the camera model written inside it, so the file name does not matter.",
     ));
     let (download, _) = download_row(
         &dialog,

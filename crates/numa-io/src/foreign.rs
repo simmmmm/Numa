@@ -202,7 +202,7 @@ fn lua_table_has_content(tokens: &[Token], open: usize) -> bool {
 
 fn read_xmp(text: &str) -> Result<(Settings, Option<String>, bool), String> {
     if !text.contains("camera-raw-settings") {
-        return Err("not a Camera Raw preset".to_string());
+        return Err("not a preset Numa can read".to_string());
     }
     let mut settings = Settings::new();
     let mut rest = text;

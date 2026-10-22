@@ -146,9 +146,9 @@ pub async fn link(State(server): State<Arc<Server>>, Signed(me): Signed, Json(li
 mod tests {
     #[test]
     fn an_artist_names_an_account_whole_or_by_its_first_words() {
-        let accounts = vec!["Amélie".to_string(), "Tijmen".to_string()];
+        let accounts = vec!["Amélie".to_string(), "Sam".to_string()];
         assert_eq!(super::named("AMELIE", &accounts).as_deref(), Some("Amélie"));
-        assert_eq!(super::named("Sam Jansen", &accounts).as_deref(), Some("Tijmen"));
+        assert_eq!(super::named("Sam Jansen", &accounts).as_deref(), Some("Sam"));
         assert_eq!(super::named("Samson", &accounts), None);
         assert_eq!(super::named("", &accounts), None);
     }

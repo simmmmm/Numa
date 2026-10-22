@@ -1,5 +1,5 @@
 use super::home::{account, curl, forget_token, said, scratch, sha256, sign_in_first, signed_out, Running, NUMA_HOME};
-use super::rapid::photos;
+use super::places::photos;
 use super::*;
 use numa::io::home::sync::{self, Kept, Link, Local, Pace, Remote, Step};
 use numa::io::home::{self as api, Account, Failure};

@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(groups, vec![vec!["Sam Jansen".to_string()], vec!["Amélie".to_string()]]);
         assert_eq!(rest, "");
 
-        let (groups, _) = split_names("tijmen", &names);
+        let (groups, _) = split_names("sam", &names);
         assert_eq!(groups, vec![vec!["Sam Jansen".to_string()]]);
         assert!(split_names("bride with bouquet", &names).0.is_empty());
     }

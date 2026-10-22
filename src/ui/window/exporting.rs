@@ -238,10 +238,7 @@ pub(super) fn run_export_then(
             let for_render = settings.clone();
             let job_source = job.source.clone();
             let to = job.to.clone();
-            let job_directory = match &job.subfolder {
-                Some(folder) => directory.join(folder),
-                None => directory.clone(),
-            };
+            let job_directory = directory.clone();
             let worker = work.clone();
             let develop = move || develop_one(job, &for_render, &worker);
             let result = match &progress {

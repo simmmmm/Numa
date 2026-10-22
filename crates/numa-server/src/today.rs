@@ -104,7 +104,15 @@ pub async fn today(State(server): State<Arc<Server>>, Signed(me): Signed, Query(
                 json!({ "year": taken, "ago": year - taken, "count": ids.len(), "ids": ids, "libraries": from.len(), "name": name, "mine": mine })
             })
             .collect();
-        let folders = if me.admin { crate::manage::new_folders(&server).len() } else { 0 };
+
+        let folders = match me.admin {
+            true => {
+                let left = server.store.left_out();
+                let photos = &server.home.photos;
+                crate::manage::new_folders(&server).iter().filter(|folder| !left.contains(&*folder.strip_prefix(photos).unwrap_or(folder).to_string_lossy())).count()
+            }
+            false => 0,
+        };
         json!({
             "date": date, "photos": photos, "on_this_day": on_this_day, "arrived": arrived,
             "waiting": { "tidy": crate::tidy::waiting(&server, &me, tidy.as_ref()), "faces": faces, "folders": folders },

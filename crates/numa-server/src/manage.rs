@@ -17,7 +17,7 @@ use crate::{Fail, Server};
 const KEEP_DAYS: i64 = 30;
 
 pub fn within(library: &Library, path: &FilePath) -> String {
-    path.strip_prefix(&library.path).unwrap_or(path).to_string_lossy().into_owned()
+    numa_io::tidy::within(library, path)
 }
 
 pub fn plain(name: &str) -> bool {
@@ -52,7 +52,7 @@ pub fn found(server: &Server) -> Vec<PathBuf> {
     crate::home::found_under(&server.home.photos).into_iter().filter(|folder| !out.contains(&relative(server, folder))).collect()
 }
 
-fn reshelve(server: &Arc<Server>) {
+pub fn reshelve(server: &Arc<Server>) {
     server.home.set_found(found(server));
     let home = server.clone();
     server.home.blocking(move |catalog| home.shelve(None, catalog));

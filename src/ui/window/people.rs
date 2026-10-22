@@ -132,7 +132,7 @@ fn named_group(
     group.set_description(Some("Rename someone here and it changes everywhere; give two people the same name and they become one."));
     for (name, photos) in everyone {
         let row = adw::EntryRow::new();
-        row.set_title(&super::rapid::photos(photos.len()));
+        row.set_title(&super::places::photos(photos.len()));
         row.set_text(name);
         row.set_show_apply_button(true);
         let face = faces

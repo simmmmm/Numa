@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn the_frames_that_panicked_take_the_mosaics_route() {
-        let raws = Path::new("../raws-cc0");
+        let raws = super::super::tests::cc0_raws();
         for (file, full) in [
             ("Panasonic/DC-GH5S/2603-Panasonic - DC-GH5S - 4:3.RW2", (3680, 2760)),
             ("Panasonic/DC-GH5S/2607-Panasonic - DC-GH5S - 4:3.RW2", (3680, 2760)),

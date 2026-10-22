@@ -147,6 +147,19 @@ main { padding: 0 var(--edge) 48px; }
 .tile .edited i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .tile .burst { right: var(--space-6); top: var(--space-6); }
 .tile .burst svg { stroke-width: 2.2; }
+.tile .rate { display: none; position: absolute; left: var(--space-6); bottom: var(--space-6); padding: 0 var(--space-4); border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surround-black) 62%, transparent); color: var(--ink); }
+.tile .rate i { display: inline-flex; padding: var(--space-4) var(--space-2); opacity: 0.45; }
+.tile .rate i.set { opacity: 1; }
+.tile .rate svg { width: 14px; height: 14px; fill: currentColor; }
+@media (hover: hover) {
+  .tile:hover .rate { display: inline-flex; }
+  .tile:hover .judged { display: none; }
+  body.picking .tile .rate { display: none; }
+  body.picking .tile:hover .judged { display: inline-flex; }
+  .tile .rate:hover i { opacity: 0.45; }
+  .tile .rate i:hover, .tile .rate:hover i:has(~ i:hover) { opacity: 1; }
+}
 .tile.rejected img.in { opacity: 0.35; }
 .tile.tiny .burst { display: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile, 150px), 1fr)); gap: 3px; padding-top: 12px; }
@@ -181,7 +194,8 @@ main { padding: 0 var(--edge) 48px; }
 /* Accounts. */
 .accounts { display: grid; gap: 30px; padding-top: 22px; max-width: 520px; }
 .accounts ul { list-style: none; margin: 8px 0 0; padding: 0; }
-.accounts li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.accounts li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-12); padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.accounts .acts { display: flex; align-items: center; gap: var(--space-12); }
 .accounts form { display: grid; gap: 10px; }
 .accounts label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 .accounts input[type=checkbox] { accent-color: var(--accent); }
@@ -612,7 +626,7 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 /* Boxes flow down three columns, so a short one fills under a short one. */
 .safe .boxes { columns: 300px 3; column-gap: 14px; }
 .safe .box { background: var(--ground-view); border-radius: 14px; padding: 16px 18px; display: grid; gap: 10px; break-inside: avoid; margin-bottom: 14px; }
-.safe .box > .chip { justify-self: start; }
+.safe .box > .chip, .safe > .primary { justify-self: start; }
 .safe ul { list-style: none; margin: 0; padding: 0; }
 .safe li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
 .safe li:last-child { border-bottom: 0; }
@@ -621,6 +635,8 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .safe .late { color: var(--attention); }
 .safe .big { font-size: 26px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .safe .disk { display: grid; gap: 4px; }
+.safe .copy-when { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.safe .copy-acts { display: flex; align-items: center; gap: var(--space-14); }
 .safe .disk .meter { height: 6px; border-radius: 3px; margin-top: 4px; }
 
 /* HOME-039: Today. The years on one shelf that scrolls; on a wide screen
@@ -701,6 +717,57 @@ dialog.ask .year { width: 80px; margin-left: auto; }
   /* Chosen: the check, at the top right (P2), over the count's corner. */
   .tile .check { left: auto; right: 6px; }
   body.picking .tile .burst { opacity: 0; }
+}
+
+/* HOME-034: the first start — one column, the steps along the top with the
+   current one white, Back and Skip grey, Continue the one white button. */
+.first-start { width: min(760px, 100%); margin: 0 auto; padding: var(--space-44) var(--edge); display: grid; gap: var(--space-20); align-content: start; }
+.first-start .top { display: flex; align-items: center; justify-content: space-between; gap: var(--gap); flex-wrap: wrap; margin-bottom: var(--space-10); }
+.first-start .top .mark { height: 30px; width: auto; display: block; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-20); }
+.steps li { display: flex; align-items: center; gap: var(--space-8); color: var(--label); font-weight: 600; }
+.steps .n { width: 24px; height: 24px; border-radius: 50%; background: var(--ground-chip); color: var(--name); display: grid; place-items: center; font-size: 12px; }
+.steps .done .n { background: var(--ground-raised); color: var(--ink); }
+.steps .on { color: var(--ink); }
+.steps .on .n { background: var(--accent); color: var(--on-accent); }
+.first-start h1 { font-size: 26px; line-height: 32px; font-weight: 700; margin: 0; }
+.first-start .body { max-width: none; margin: 0; }
+.first-start .step { display: grid; gap: var(--space-12); }
+.first-start .step .chip { justify-self: start; }
+.first-start .fields { display: grid; gap: var(--space-10); max-width: 340px; }
+.first-start .said { text-align: left; min-height: 0; margin: 0; }
+.first-start label.check { display: flex; gap: var(--space-8); align-items: center; color: var(--name); }
+.first-start input[type=checkbox] { accent-color: var(--accent); }
+.first-start .foot { display: flex; align-items: center; justify-content: space-between; gap: var(--gap); margin-top: var(--space-10); }
+.first-start .go { display: flex; align-items: center; gap: var(--space-8); }
+.first-start .go .note { margin-right: var(--space-4); }
+/* Each library a row: its tick, a small stack of three prints, its name and
+   facts, and when it was taken. One left out greys its prints. */
+.libs { display: grid; }
+.lib { display: flex; align-items: center; gap: var(--space-16); padding: var(--space-8) 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.lib input { width: 20px; height: 20px; margin: 0; flex: none; }
+.lib .stack { width: 78px; height: 58px; flex: none; transition: opacity var(--quick); }
+.lib .stack .print { left: 12px; top: 9px; width: 54px; height: 40px; border-radius: 4px; }
+.lib:has(input:not(:checked)) .stack { opacity: 0.4; }
+.lib .what { flex: 1; display: grid; gap: var(--space-2); min-width: 0; }
+.lib .name { font-size: 15px; line-height: 20px; font-weight: 600; }
+.lib .when { flex: none; }
+.estimate { background: var(--ground-view); border-radius: var(--radius-card); padding: var(--space-16) var(--space-20); display: grid; gap: var(--space-2); }
+.estimate b { font-weight: 600; }
+.estimate .caption { margin: 0; }
+.made { list-style: none; margin: 0; padding: 0; }
+.made li { display: flex; justify-content: space-between; align-items: center; padding: var(--space-10) 0; border-bottom: 1px solid var(--rule); }
+.phone { display: flex; gap: var(--space-30); align-items: center; flex-wrap: wrap; }
+.phone .qr { width: 240px; height: 240px; border-radius: var(--radius-card); display: block; }
+.phone .where { display: grid; gap: var(--space-6); }
+.phone .address { font-size: 20px; line-height: 25px; font-weight: 600; user-select: all; overflow-wrap: anywhere; }
+.phone .caption { margin: 0; }
+@media (max-width: 600px) {
+  .first-start { padding-top: var(--space-20); }
+  .steps { gap: var(--space-10); }
+  .steps li:not(.on) .label, .first-start .go .note { display: none; }
+  .first-start h1 { font-size: 20px; line-height: 25px; }
+  .phone .qr { width: 200px; height: 200px; }
 }
 
 /* Reduced motion (README, Motion): every movement is a 150 ms crossfade, and

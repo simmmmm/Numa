@@ -108,14 +108,10 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     let search = words::search_button(state);
     library_actions.append(&search);
 
-    let view = rapid::view_button(state);
-    view.set_margin_start(6);
-    library_actions.append(&view);
-
     let rating = build_loupe_rating(state);
     library_actions.append(&rating);
     state.loupe.reveal.bind_property("reveal-child", &rating, "visible").sync_create().build();
-    for button in [add.upcast_ref::<gtk::Widget>(), search.upcast_ref(), view.upcast_ref()] {
+    for button in [add.upcast_ref::<gtk::Widget>(), search.upcast_ref()] {
         state.loupe.reveal.bind_property("reveal-child", button, "visible").invert_boolean().sync_create().build();
     }
 

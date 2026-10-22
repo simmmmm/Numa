@@ -20,7 +20,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
 serde.workspace = true
 serde_json.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["backup"] }
 image.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -28,3 +28,4 @@ libc.workspace = true
 rayon.workspace = true
 zip.workspace = true
 flate2 = "1"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

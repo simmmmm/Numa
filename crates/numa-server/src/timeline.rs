@@ -4,7 +4,7 @@ use std::sync::{Arc, MutexGuard};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use numa_io::catalog::{library_of, Filter, Library, Photo};
+use numa_io::catalog::{library_of, Filter, Library, Photo, Sort};
 use numa_io::words::{self, Index};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -33,7 +33,26 @@ pub struct Wanted {
     place: Option<String>,
 
     date: Option<String>,
+
+    sort: Option<String>,
+
+    reversed: Option<String>,
 }
+
+impl Wanted {
+
+    fn sorted(&self) -> Option<Sort> {
+        match given(&self.sort).as_deref() {
+            Some("name") => Some(Sort::Name),
+            Some("rating") => Some(Sort::Rating),
+            Some("sharpness") => Some(Sort::Sharpness),
+            Some("suggestion") => Some(Sort::Suggested),
+            _ => None,
+        }
+    }
+}
+
+const EVERYTHING: &str = "all";
 
 fn given(text: &Option<String>) -> Option<String> {
     text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
@@ -55,8 +74,9 @@ pub async fn months(State(server): State<Arc<Server>>, Signed(me): Signed, Query
 
     type Month = (String, usize, Vec<(i64, usize)>);
     let mut months: Vec<Month> = Vec::new();
+    let flat = wanted.sorted().is_some();
     for photo in &photos {
-        let month = month_of(photo);
+        let month = if flat { EVERYTHING.to_string() } else { month_of(photo) };
         if months.last().is_none_or(|(last, ..)| *last != month) {
             months.push((month, 0, Vec::new()));
         }
@@ -82,11 +102,11 @@ pub async fn month(
     Path(month): Path<String>,
     Query(wanted): Query<Wanted>,
 ) -> Result<Json<Vec<Value>>, Fail> {
-    let shaped = month.len() == 7 && month.as_bytes()[4] == b'-' && month.chars().enumerate().all(|(at, c)| at == 4 || c.is_ascii_digit());
+    let shaped = month == EVERYTHING || month.len() == 7 && month.as_bytes()[4] == b'-' && month.chars().enumerate().all(|(at, c)| at == 4 || c.is_ascii_digit());
     if !shaped {
         return Err(Fail::bad("A month is written 2026-03."));
     }
-    let photos: Vec<Photo> = chosen(&server, &me.name, &wanted).await?.into_iter().filter(|photo| month_of(photo) == month).collect();
+    let photos: Vec<Photo> = chosen(&server, &me.name, &wanted).await?.into_iter().filter(|photo| month == EVERYTHING || month_of(photo) == month).collect();
     let marks = Marks::of(&server, &photos);
 
     let rows = tokio::task::spawn_blocking(move || {
@@ -147,8 +167,14 @@ pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted)
     let mut photos = server.home.photos(&ids);
     let tests = tests(server, &libraries, &photos, wanted).await?;
     photos.retain(|photo| tests.iter().all(|(_, test)| test(photo)));
-    let oldest_first = wanted.library.is_some() || given(&wanted.album).is_some();
-    photos.sort_by(|a, b| order(when(a), when(b), oldest_first).then_with(|| a.path.cmp(&b.path)));
+    let reversed = given(&wanted.reversed).is_some_and(|value| value == "1");
+    match wanted.sorted() {
+        Some(sort) => photos.sort_by(|a, b| sort.compare(reversed, a, b)),
+        None => {
+            let oldest_first = (wanted.library.is_some() || given(&wanted.album).is_some()) != reversed;
+            photos.sort_by(|a, b| order(when(a), when(b), oldest_first).then_with(|| a.path.cmp(&b.path)));
+        }
+    }
     Ok(photos)
 }
 
@@ -277,6 +303,32 @@ pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
         (count > 0).then(|| json!({ "key": key, "name": name, "count": count }))
     });
     Ok(Json(rows.collect()))
+}
+
+#[derive(Deserialize)]
+pub struct Renamed {
+    name: String,
+}
+
+async fn seen(server: &Arc<Server>, account: &str, key: &str) -> Result<(), Fail> {
+    let libraries: Vec<i64> = server.home.libraries(account).iter().map(|library| library.id).collect();
+    let shown: HashSet<i64> = server.home.photos(&libraries).iter().map(|photo| photo.id).collect();
+    let key = key.to_string();
+    let any = server.home.ask(move |catalog| in_album(catalog, &libraries, &key).iter().any(|id| shown.contains(id))).await?;
+    any.then_some(()).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such album.".into()))
+}
+
+pub async fn rename_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>, Json(renamed): Json<Renamed>) -> Result<Json<Value>, Fail> {
+    seen(&server, &me.name, &key).await?;
+    let (name, at) = (renamed.name.trim().to_string(), key.clone());
+    server.home.ask(move |catalog| catalog.rename_album(&at, &name)).await?.map_err(Fail::bad)?;
+    Ok(Json(json!({ "key": key, "name": renamed.name.trim() })))
+}
+
+pub async fn delete_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>) -> Result<Json<Value>, Fail> {
+    seen(&server, &me.name, &key).await?;
+    server.home.ask(move |catalog| catalog.delete_album(&key)).await?.map_err(Fail::bad)?;
+    Ok(Json(json!({ "deleted": true })))
 }
 
 pub async fn search(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
@@ -440,7 +492,7 @@ pub async fn in_step(
 
 #[cfg(test)]
 mod tests {
-    use super::order;
+    use super::{order, Sort, Wanted};
 
     #[test]
     fn a_day_reads_forward_with_the_newest_day_on_top() {
@@ -451,5 +503,12 @@ mod tests {
 
         times.sort_by(|a, b| order(*a, *b, true));
         assert_eq!(times, [day + 3, day + 10, 2 * day + 5, 2 * day + 9]);
+    }
+
+    #[test]
+    fn only_a_named_sort_is_a_sort() {
+        let sort = |name: &str| Wanted { sort: Some(name.into()), ..Wanted::default() }.sorted();
+        assert!(sort("date").is_none() && sort("").is_none() && sort("nonsense").is_none());
+        assert!(matches!(sort("name"), Some(Sort::Name)) && matches!(sort("suggestion"), Some(Sort::Suggested)));
     }
 }

@@ -744,7 +744,7 @@ pub(super) fn close_loupe(state: &App) {
         reload_grid(state);
     }
 
-    if was_open && back_to_grid && !among.is_empty() && !rapid::is_on(state) {
+    if was_open && back_to_grid && !among.is_empty() {
         let (indices, cursor) = {
             let lazy = state.grid.lazy.borrow();
             let indices: Vec<usize> = lazy.iter().enumerate().filter(|(_, card)| among.contains(&card.id)).map(|(index, _)| index).collect();
@@ -755,17 +755,6 @@ pub(super) fn close_loupe(state: &App) {
         }
     }
     state.loupe.few.take();
-
-    if was_open && rapid::is_on(state) {
-
-        state.grid.wall.unselect_all();
-        if back_to_grid {
-            rapid::rebuild(state);
-        }
-        if let Some(id) = looked_at {
-            rapid::keys_to(state, id);
-        }
-    }
 }
 
 fn cull(state: &App, flag: Flag) {
@@ -779,10 +768,7 @@ fn cull(state: &App, flag: Flag) {
     refresh_loupe_bar(state);
 
     if beside(state, at, 1).is_none() {
-        state.toast(match state.loupe.few.borrow().stack.is_empty() {
-            true => "Last photograph — Space goes back to the grid",
-            false => "Last of the burst — Space when you have picked",
-        });
+        state.toast("Last photograph — Space goes back to the grid");
         return;
     }
 
@@ -823,7 +809,7 @@ pub(super) fn step_loupe(state: &App, forward: bool) {
 
 fn arrive(state: &App, from: usize, to: usize) -> usize {
 
-    if !state.loupe.few.borrow().cards().is_empty() {
+    if !state.loupe.few.borrow().selection.is_empty() {
         return to;
     }
     let run = burst_run(state, to);
@@ -841,7 +827,7 @@ pub(super) fn go_to(state: &App, index: usize) {
 
 fn beside(state: &App, at: usize, by: isize) -> Option<usize> {
     let few = state.loupe.few.borrow();
-    let few = few.cards();
+    let few = &few.selection;
     if few.is_empty() {
         return at.checked_add_signed(by).filter(|index| *index < state.grid.lazy.borrow().len());
     }
@@ -857,34 +843,7 @@ pub(super) fn in_reach(state: &App, index: usize) -> bool {
 #[derive(Default)]
 pub(super) struct Few {
 
-    pub(super) stack: Vec<usize>,
-
     pub(super) selection: Vec<usize>,
-}
-
-impl Few {
-
-    pub(super) fn cards(&self) -> &[usize] {
-        match self.stack.is_empty() {
-            true => &self.selection,
-            false => &self.stack,
-        }
-    }
-}
-
-pub(super) fn cull_only(state: &App, ids: &[i64]) {
-    let indices: Vec<usize> = {
-        let lazy = state.grid.lazy.borrow();
-        ids.iter().filter_map(|id| lazy.iter().position(|card| card.id == *id)).collect()
-    };
-    let Some(first) = indices.first().copied() else { return };
-
-    let best = {
-        let cards = state.grid.cards.borrow();
-        indices.iter().copied().find(|index| id_at(state, *index).and_then(|id| cards.get(&id)).is_some_and(|photo| photo.best_of_burst))
-    };
-    state.loupe.few.borrow_mut().stack = indices;
-    go_to(state, best.unwrap_or(first));
 }
 
 pub(super) fn id_at(state: &App, at: usize) -> Option<i64> {
@@ -962,19 +921,6 @@ fn step_burst(state: &App, forward: bool) {
 
 fn reject_rest(state: &App) {
     let Some(at) = state.loupe.at.get() else { return };
-
-    let few = state.loupe.few.borrow().stack.clone();
-    if !few.is_empty() {
-        let unmarked: Vec<i64> = {
-            let cards = state.grid.cards.borrow();
-            few.iter().filter_map(|index| id_at(state, *index)).filter(|id| cards.get(id).is_some_and(|photo| photo.flag == Flag::None)).collect()
-        };
-        if !unmarked.is_empty() {
-            apply_to_ids(state, &unmarked, Action::Flag(Flag::Rejected));
-        }
-        close_loupe(state);
-        return;
-    }
     let run = burst_run(state, at);
     if run.len() < 2 {
         cull(state, Flag::Rejected);

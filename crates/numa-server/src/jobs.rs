@@ -85,11 +85,13 @@ fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
     let mut failed: HashSet<i64> = HashSet::new();
     let mut scanned: Option<Instant> = None;
     loop {
-        if !server.activity.paused() && crate::night::due(server) {
+
+        let reading = !server.activity.paused() && crate::start::may_read(server);
+        if reading && crate::night::due(server) {
             crate::night::run(server, &mut failed);
             scanned = Some(Instant::now());
         }
-        if !server.activity.paused() && scanned.is_none_or(|at| at.elapsed() >= EVERY) {
+        if reading && scanned.is_none_or(|at| at.elapsed() >= EVERY) {
             scan(server, false);
             scanned = Some(Instant::now());
         }
@@ -102,7 +104,7 @@ fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
         }
         let done = pool.install(|| {
             ahead(server, plan.thumbnails, &mut failed) && analyse(server, plan.analyse, &mut failed) && read_words(server, plan.words) && see_things(server)
-        });
+        }) && crate::copy::by_day(server);
         if done {
             let next = EVERY.saturating_sub(scanned.map_or(Duration::ZERO, |at| at.elapsed()));
             server.jobs.wait(next);
@@ -263,7 +265,7 @@ fn missing_thumbnails(server: &Arc<Server>, photos: Vec<Photo>) -> Vec<(Photo, O
         .collect()
 }
 
-fn stop(server: &Server) -> bool {
+pub fn stop(server: &Server) -> bool {
     server.jobs.pending() || server.activity.paused()
 }
 

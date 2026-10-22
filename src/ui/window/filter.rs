@@ -25,7 +25,7 @@ const EVERY_FACET: [Facet; 8] = [
 ];
 
 const FLAGS: [(&str, Option<Flag>); 4] =
-    [("All", None), ("Picked", Some(Flag::Picked)), ("Unflagged", Some(Flag::None)), ("Rejected", Some(Flag::Rejected))];
+    [("All", None), ("Picked", Some(Flag::Picked)), ("Rejected", Some(Flag::Rejected)), ("No Flag", Some(Flag::None))];
 
 const TYPES: [(&str, FileType); 3] =
     [("All Files", FileType::Any), ("RAW Only", FileType::Raw), ("JPEG and Others", FileType::NotRaw)];
@@ -86,19 +86,6 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     end.append(&analyse);
     end.append(&button);
     end.append(&group);
-
-    let deliver = rapid::deliver_button(state);
-    deliver.set_visible(false);
-    end.append(&deliver);
-    rapid::of(state).views.connect_visible_child_name_notify(glib::clone!(
-        #[weak] group,
-        #[weak] deliver,
-        move |views| {
-            let page = views.visible_child_name();
-            group.set_visible(!matches!(page.as_deref(), Some("rapid" | "check")));
-            deliver.set_visible(page.as_deref() == Some("rapid"));
-        }
-    ));
     cullbar::keep_focus(end.upcast_ref());
 
     state.grid.welcome.bind_property("visible", end, "visible").invert_boolean().sync_create().build();
@@ -275,11 +262,33 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
     let (order, direction) = order_buttons();
     bar.append(&order);
     bar.append(&direction);
+    bar.append(&select_toggle(state));
     let chips = gtk::Revealer::new();
     chips.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     chips.set_child(Some(&bar));
     chips.set_reveal_child(true);
     (chips, chip_row, quick, count, order, direction)
+}
+
+fn select_toggle(state: &App) -> gtk::Box {
+    let select = gtk::ToggleButton::with_label("Select");
+    select.set_focus_on_click(false);
+    select.set_tooltip_text(Some("Choose photographs with a click (Esc to stop)"));
+    select.connect_toggled(glib::clone!(
+        #[strong] state,
+        move |select| {
+            state.grid.wall.set_choosing(select.is_active());
+
+            state.grid.wall.grab_focus();
+        }
+    ));
+    state.grid.wall.connect_selection_changed(glib::clone!(
+        #[weak] select,
+        move |wall| select.set_active(wall.choosing())
+    ));
+    let row = chip_row();
+    row.append(&select);
+    row
 }
 
 fn order_buttons() -> (gtk::MenuButton, gtk::Button) {
@@ -299,6 +308,10 @@ fn order_buttons() -> (gtk::MenuButton, gtk::Button) {
     direction.set_action_name(Some("win.sort-reversed"));
     direction.set_focus_on_click(false);
     (order, direction)
+}
+
+pub(super) fn sort_name(sort: Sort) -> &'static str {
+    SORTS.iter().find(|(_, _, known)| *known == sort).map_or("Date", |(_, label, _)| *label)
 }
 
 fn direction_words(sort: Sort, reversed: bool) -> (&'static str, &'static str) {
@@ -333,12 +346,7 @@ fn show_filter(state: &App, shown: &Shown) {
         };
         action.set_state(&value);
     }
-    let name = SORTS.iter().find(|(_, _, sort)| *sort == filter.sort).map_or("Date", |(_, label, _)| *label);
-    shown.order.set_label(name);
-
-    let grid = !rapid::is_on(state);
-    shown.order.set_visible(grid);
-    shown.direction.set_visible(grid);
+    shown.order.set_label(sort_name(filter.sort));
     let (now, other) = direction_words(filter.sort, filter.reversed);
     shown.direction.set_label(now);
     shown.direction.set_tooltip_text(Some(&format!("{now} — click for {}", other.to_lowercase())));
@@ -572,10 +580,6 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
         row.append(scale);
         panel.append(&row);
     }
-
-    let options = rapid::view_options(state);
-    panel.append(&options);
-
     let syncing = Rc::new(Cell::new(false));
     for scale in [&size, &gap] {
         scale.connect_value_changed(glib::clone!(
@@ -586,10 +590,6 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
             move |_| {
                 let sizes = (size.value() as f32, gap.value() as f32);
                 if syncing.get() {
-                    return;
-                }
-                if rapid::is_on(&state) {
-                    rapid::set_sizes(&state, sizes);
                     return;
                 }
                 state.grid.wall.set_sizes(sizes.0, sizes.1);
@@ -609,13 +609,8 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
         #[strong] state,
         #[weak] size,
         #[weak] gap,
-        #[weak] options,
         move |_| {
-            options.set_visible(rapid::is_on(&state));
-            let (height, spacing) = match rapid::is_on(&state) {
-                true => rapid::sizes(&state),
-                false => state.catalog.recall::<(f32, f32)>(GRID_SIZES).unwrap_or((justified::ROW_HEIGHT, justified::SPACING)),
-            };
+            let (height, spacing) = state.catalog.recall::<(f32, f32)>(GRID_SIZES).unwrap_or((justified::ROW_HEIGHT, justified::SPACING));
             syncing.set(true);
             size.set_value(height as f64);
             gap.set_value(spacing as f64);
@@ -624,7 +619,7 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
     ));
     let sizes = gtk::MenuButton::new();
     sizes.set_icon_name("numa-sliders-symbolic");
-    sizes.set_tooltip_text(Some("Size of the photographs and the space between them; in Moments, how they are grouped and shown"));
+    sizes.set_tooltip_text(Some("Size of the photographs and the space between them"));
     sizes.set_popover(Some(&popover));
     sizes
 }

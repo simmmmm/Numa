@@ -53,6 +53,8 @@ pub async fn show(State(server): State<Arc<Server>>, Signed(me): Signed, headers
             attention.push(json!({ "text": format!("Only {} left on the disk of {}", size(*free), names.join(" and ")), "link": "#/safe" }));
         }
     }
+
+    attention.extend(crate::copy::attention(&server, now).into_iter().map(|text| json!({ "text": text, "link": "#/safe" })));
     let accounts = server.store.accounts().unwrap_or_default();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -60,10 +62,11 @@ pub async fn show(State(server): State<Arc<Server>>, Signed(me): Signed, headers
         "devices": devices,
         "disks": disks.iter().map(|(names, total, free)| json!({ "names": names, "total": total, "free": free })).collect::<Vec<_>>(),
         "attention": attention,
+        "copy": crate::copy::status(&server),
     }))
 }
 
-fn label(account: &str, device: &str) -> String {
+pub fn label(account: &str, device: &str) -> String {
     match device.trim() {
         "" => format!("{account}'s device"),
         device if device.to_lowercase().contains(&account.to_lowercase()) => device.to_string(),
@@ -91,7 +94,7 @@ fn late(quiet: i64) -> bool {
     quiet > LATE && quiet < GONE
 }
 
-fn size(bytes: u64) -> String {
+pub fn size(bytes: u64) -> String {
     let gigabytes = bytes as f64 / 1e9;
     match gigabytes >= 1000.0 {
         true => format!("{:.1} TB", gigabytes / 1000.0),
@@ -108,7 +111,7 @@ fn disks(folders: &[(&str, &Path)]) -> Vec<(Vec<String>, u64, u64)> {
     found.into_values().collect()
 }
 
-fn space(path: &Path) -> Option<(u64, u64)> {
+pub fn space(path: &Path) -> Option<(u64, u64)> {
     let path = CString::new(path.as_os_str().as_bytes()).ok()?;
 
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -134,7 +137,7 @@ mod tests {
         let here = disks(&[("Photos", Path::new("/")), ("Sent Home", Path::new("/"))]);
         assert_eq!(here.len(), 1);
         assert_eq!(here[0].0, ["Photos", "Sent Home"]);
-        let one = |name: &str, admin, manage| Account { name: name.into(), admin, manage };
+        let one = |name: &str, admin, manage| Account { name: name.into(), admin, manage, must_change: false };
         let house = [one("Anna", true, false), one("Tom", false, true), one("Ella", false, false)];
         assert_eq!(role(&house[2], &house), "You can add, rate and edit photographs. Moving and deleting: Anna and Tom.");
         assert_eq!(role(&house[1], &house), "You can add, rate, edit, move and delete photographs. Making accounts: Anna.");

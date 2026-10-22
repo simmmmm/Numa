@@ -412,8 +412,6 @@ pub(super) fn copy_into_library(state: &App, library: Library, dropped: Vec<Path
 
 #[derive(Clone)]
 pub(super) struct State {
-
-    pub(super) rapid: rapid::State,
     pub(super) current: Rc<RefCell<Option<Library>>>,
     pub(super) all: Rc<RefCell<Vec<Library>>>,
     pub(super) filter: Rc<RefCell<Filter>>,
@@ -452,7 +450,6 @@ pub(super) struct State {
 impl State {
     pub(super) fn new() -> Self {
         Self {
-            rapid: rapid::State::new(),
             current: Rc::new(RefCell::new(None)),
             all: Rc::new(RefCell::new(Vec::new())),
             filter: Rc::new(RefCell::new(Filter::default())),

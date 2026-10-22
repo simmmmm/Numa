@@ -30,7 +30,6 @@ layout	20	src/ui/window/mask_toolbar.rs
 layout	12	src/ui/window/filter.rs
 layout	11	src/ui/window/editor_page.rs
 layout	9	src/ui/window/crop.rs
-layout	8	src/ui/window/rapid.rs
 layout	6	src/ui/window/loupe.rs
 layout	5	src/ui/window/client_picks.rs
 layout	5	src/ui/window/clocks.rs
@@ -43,8 +42,6 @@ layout	5	src/ui/window/presets.rs
 layout	5	src/ui/window/retouch.rs
 layout	4	src/ui/window/icons.rs
 layout	4	src/ui/window/kit.rs
-layout	4	src/ui/window/rapid_layers.rs
-layout	4	src/ui/window/rapid_panel.rs
 layout	3	src/ui/window/auto_plan.rs
 layout	3	src/ui/window/cullbar.rs
 layout	3	src/ui/window/folders.rs
@@ -67,7 +64,4 @@ layout	1	src/ui/window/grid.rs
 layout	1	src/ui/window/lut.rs
 layout	1	src/ui/window/overlays.rs
 layout	1	src/ui/window/preferences.rs
-layout	1	src/ui/window/rapid_chapters.rs
-layout	1	src/ui/window/rapid_numa.rs
-layout	1	src/ui/window/rapid_pages.rs
 layout	1	src/ui/window/slider.rs

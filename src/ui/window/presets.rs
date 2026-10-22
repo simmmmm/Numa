@@ -129,7 +129,7 @@ pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static
     if names.is_empty() {
         let empty = adw::StatusPage::new();
         empty.set_title("No Presets Yet");
-        empty.set_description(Some("Save the settings of a photograph, or import presets from Lightroom or Capture One."));
+        empty.set_description(Some("Save the settings of a photograph, or import presets from another raw developer."));
         empty.set_vexpand(true);
         column.append(&empty);
     } else {
@@ -328,7 +328,7 @@ pub(super) fn install_preset_actions(state: &App, window: &adw::ApplicationWindo
             dialog.set_title("Import Presets");
             start_in_downloads(&dialog);
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Presets — Numa, Lightroom, Capture One"));
+            filter.set_name(Some("Presets"));
             for suffix in ["json", "xmp", "lrtemplate", "costyle", "costylepack"] {
                 filter.add_suffix(suffix);
             }

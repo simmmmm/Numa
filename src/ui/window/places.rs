@@ -205,6 +205,13 @@ fn subtitle(photos: i64, first: Option<i64>, last: Option<i64>) -> String {
     }
 }
 
+pub(super) fn photos(count: usize) -> String {
+    match count {
+        1 => "1 photo".to_string(),
+        n => format!("{} photos", grouped(n as i64)),
+    }
+}
+
 pub(super) fn grouped(number: i64) -> String {
     let digits = number.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);

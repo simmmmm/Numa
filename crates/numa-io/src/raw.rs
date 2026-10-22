@@ -374,9 +374,13 @@ pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
 mod tests {
     use super::*;
 
+    pub(crate) fn cc0_raws() -> std::path::PathBuf {
+        std::env::var_os("NUMA_CC0_RAWS").map_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../raws-cc0"), std::path::PathBuf::from)
+    }
+
     #[test]
     fn a_monochrome_sensor_develops_to_grey() {
-        let raws = Path::new("../raws-cc0/Pentax/K-3 Mark III Monochrome");
+        let raws = cc0_raws().join("Pentax/K-3 Mark III Monochrome");
         for file in [
             "7081-Pentax - K-3 Mark III Monochrome - 14bit (3:2).DNG",
             "7082-Pentax - K-3 Mark III Monochrome - 14bit (3:2).PEF",
@@ -757,8 +761,7 @@ mod tests {
 
     #[test]
     fn a_canon_multiple_exposure_is_not_white_balanced_twice() {
-        let raws = Path::new("../raws");
-        let double = raws.join("Canon EOS 5D Mark IV/986.CR2");
+        let double = cc0_raws().join("Canon/EOS 5D Mark IV/986-Canon - EOS 5D Mark IV - RAW (3:2).CR2");
         if !double.exists() {
             eprintln!("skipped: {} is not on this computer", double.display());
             return;
@@ -767,8 +770,8 @@ mod tests {
         let profile = decode_linear(&double).unwrap().profile.expect("a matrix");
         assert_eq!(profile.as_shot, [1.0, 1.0, 1.0]);
 
-        for single in ["Canon EOS 5DS/2083.CR2", "Canon EOS R5/4692.CR3"] {
-            let single = raws.join(single);
+        for single in ["Canon/EOS 5DS R/2974-Canon - EOS 5DS R - RAW (3:2).CR2", "Canon/EOS R5/4692-Canon - EOS R5 - 3:2.CR3"] {
+            let single = cc0_raws().join(single);
             if single.exists() {
                 assert_eq!(canon_multi_exposure(&single), Some(false), "{}", single.display());
             }
@@ -1868,19 +1871,6 @@ fn settings_exif(path: &Path) -> Option<::exif::Exif> {
         let file = std::fs::File::open(path).ok()?;
         ::exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok()
     }
-}
-
-pub fn camera_exposure(path: &Path) -> Option<(f32, bool)> {
-    use ::exif::{In, Tag, Value};
-    let exif = settings_exif(path)?;
-    let ratio = |tag| match &exif.get_field(tag, In::PRIMARY)?.value {
-        Value::Rational(values) => Some(values.first()?.to_f64() as f32),
-        _ => None,
-    };
-    let (shutter, aperture) = (ratio(Tag::ExposureTime)?, ratio(Tag::FNumber)?);
-    let iso = exif.get_field(Tag::PhotographicSensitivity, In::PRIMARY)?.value.get_uint(0)? as f32;
-    let flash = exif.get_field(Tag::Flash, In::PRIMARY).and_then(|field| field.value.get_uint(0)).is_some_and(|flash| flash & 1 == 1);
-    (shutter > 0.0 && aperture > 0.0 && iso > 0.0).then_some((shutter * iso / (aperture * aperture), flash))
 }
 
 pub fn shot(path: &Path) -> Option<(f32, f32)> {

@@ -183,6 +183,18 @@ CREATE TABLE IF NOT EXISTS albums (
     key  TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE
 );
+
+-- HOME-019 in the apps: Tidy Up's sets settled, never asked again, and each
+-- file's xxh3-128 where two files of one size had to be compared — what
+-- Numa Home keeps in its server.db (`tidy::Ledger`). Tables an older Numa
+-- does not read, so nothing of its own is changed for it.
+CREATE TABLE IF NOT EXISTS tidy_settled (key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS tidy_hashes (
+    path  TEXT PRIMARY KEY,
+    mtime INTEGER NOT NULL,
+    size  INTEGER NOT NULL,
+    hash  TEXT NOT NULL
+);
 "#;
 
 pub(super) const LIBRARY_SCHEMA: &str = r#"

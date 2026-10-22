@@ -5,8 +5,6 @@ pub(super) struct ExportJob {
     pub(super) document: Document,
 
     pub(super) to: Option<PathBuf>,
-
-    pub(super) subfolder: Option<String>,
 }
 
 pub(super) fn open_job(state: &App) -> Option<ExportJob> {
@@ -14,7 +12,6 @@ pub(super) fn open_job(state: &App) -> Option<ExportJob> {
         source: photo.source.clone(),
         document: photo.document.clone(),
         to: None,
-        subfolder: None,
     })
 }
 
@@ -125,7 +122,7 @@ pub(super) fn photo_jobs(state: &App, photos: impl IntoIterator<Item = (i64, Pat
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| Document::new(path.to_string_lossy().to_string()));
-            ExportJob { source: Source::Photo { id, path }, document, to: None, subfolder: None }
+            ExportJob { source: Source::Photo { id, path }, document, to: None }
         })
         .collect()
 }

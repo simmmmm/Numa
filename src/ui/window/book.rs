@@ -55,7 +55,7 @@ fn book_dialog(state: &App, window: &adw::ApplicationWindow) {
     let page = adw::PreferencesPage::new();
     page.set_description(
         "The photographs in the order they happened, a numbered folder per chapter, sized for the printer. \
-         Open the folder in CEWE, Albelli or Popsa and the book is half laid out. Numa never moves or changes the originals.",
+         Open the folder in the book maker and the book is half laid out. Numa never moves or changes the originals.",
     );
     view.set_content(Some(&page));
 
@@ -256,7 +256,6 @@ fn make_folders(state: &App, chapters: &[Chapter], paths: &HashMap<i64, PathBuf>
                 source: Source::Photo { id: *id, path: path.clone() },
                 document,
                 to: Some(folder.join(book::file(number + 1, path))),
-                subfolder: None,
             });
         }
     }

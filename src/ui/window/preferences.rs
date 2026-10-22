@@ -309,7 +309,7 @@ fn colour_group(state: &App) -> adw::PreferencesGroup {
 const AUTOMATIC_PROFILE: &str = "automatic-camera-profile";
 const AUTOMATIC_CHOICES: [(dcp::Automatic, &str, &str); 3] = [
     (dcp::Automatic::Numa, "numa", "Numa's own"),
-    (dcp::Automatic::Standard, "standard", "RawTherapee or Adobe"),
+    (dcp::Automatic::Standard, "standard", "RawTherapee or yours"),
     (dcp::Automatic::Matrix, "matrix", "Camera matrix"),
 ];
 
@@ -449,7 +449,7 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     library_group.add(&row("Let the frames chosen on the tape go", "Escape"));
     library_group.add(&row("Compare the selection side by side", "C"));
     library_group.add(&row("Select all", "Ctrl+A"));
-    library_group.add(&row("Clear the selection", "Ctrl+Shift+A"));
+    library_group.add(&row("Clear the selection and stop choosing", "Escape / Ctrl+Shift+A"));
     library_group.add(&row("Rescan the library", "F5"));
     library_group.add(&row("Search the library by what is in the photographs", "Ctrl+F"));
     library_group.add(&row("Rate the selection 0–5 stars", "0–5"));
@@ -459,19 +459,6 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     library_group.add(&row("Paste copied edits onto the selection", "Ctrl+V"));
     library_group.add(&row("Move the selection to the trash, after asking", "Delete"));
     page.add(&library_group);
-
-    let rapid_group = adw::PreferencesGroup::new();
-    rapid_group.set_title("Moments");
-    rapid_group.add(&row("Pick, reject or clear the photograph and go on", "P / X / U"));
-    rapid_group.add(&row("Look at it in the loupe, a stack side by side", "Space"));
-    rapid_group.add(&row("A stack — a burst — side by side", "Enter or a click"));
-    rapid_group.add(&row("Start a new moment here", "S"));
-    rapid_group.add(&row("Merge the moment with the one before", "M"));
-    rapid_group.add(&row("The next moment not yet seen", "Page Down"));
-    rapid_group.add(&row("Where the photographs clip, on or off", "J"));
-    rapid_group.add(&row("A note in your own words", "N"));
-    rapid_group.add(&row("In First Look, into the teaser or out", "P"));
-    page.add(&rapid_group);
 
     let editor_group = adw::PreferencesGroup::new();
     editor_group.set_title("Editor");

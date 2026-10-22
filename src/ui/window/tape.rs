@@ -267,7 +267,7 @@ pub(super) fn rebuild(state: &App) {
         let cards = state.grid.cards.borrow();
         let photos: Vec<Option<&Photo>> = lazy.iter().map(|card| cards.get(&card.id)).collect();
 
-        let few: std::collections::HashSet<usize> = state.loupe.few.borrow().cards().iter().copied().collect();
+        let few: std::collections::HashSet<usize> = state.loupe.few.borrow().selection.iter().copied().collect();
         let shown = |at: &usize| few.is_empty() || few.contains(at);
         let index: HashMap<i64, usize> = lazy.iter().enumerate().filter(|(at, _)| shown(at)).map(|(at, card)| (card.id, at)).collect();
         let twins = numa::io::analysis::twins(photos.iter().flatten().map(|photo| (photo.id, photo.path.as_path(), photo.taken)), raw::is_raw);

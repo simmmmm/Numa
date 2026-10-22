@@ -331,7 +331,7 @@ fn start_tethering(state: &App, place: Place, same_edit: bool) {
     });
     let told = move |event: Event| glib::MainContext::default().invoke(move || heard(generation, event));
     let Some(session) = numa::tether::start(library.path.clone(), told) else {
-        state.toast("Tethering needs libgphoto2, which is not installed");
+        state.toast("Tethering needs a camera library that is not installed");
         return;
     };
     release_camera();

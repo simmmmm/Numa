@@ -38,11 +38,11 @@ pub mod receipt;
 pub mod stand_in;
 pub mod style;
 pub mod thumbs;
+pub mod tidy;
 pub mod track;
 pub mod update;
 pub mod upscale;
 pub mod words;
-pub mod workflows;
 pub mod xmp;
 
 use numa_core::paths::NAME;

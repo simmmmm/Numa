@@ -202,16 +202,6 @@ pub(super) fn bind_card(state: &App, card: &gtk::Widget, index: usize) {
     mark_card(state, card, &parts, photo, burst.map(|size| size as usize));
 }
 
-pub(super) fn mark_photo_card(state: &App, card: &gtk::Widget, photo: &Photo, burst: Option<usize>) {
-    if let Some(parts) = CardParts::of(card) {
-        mark_card(state, card, &parts, photo, burst.map(|size| size as usize));
-    }
-}
-
-pub(super) fn card_picture(card: &gtk::Widget) -> Option<gtk::Picture> {
-    part(card, "picture")
-}
-
 fn mark_card(state: &App, card: &gtk::Widget, parts: &CardParts, photo: &Photo, burst: Option<usize>) {
     parts.name.set_text(&photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
     parts.stars.set_markup(&hover_stars(photo.rating));

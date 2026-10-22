@@ -4,6 +4,7 @@ mod book;
 mod auth;
 mod by;
 mod cards;
+mod copy;
 mod edit;
 mod faces;
 mod home;
@@ -17,18 +18,20 @@ mod photos;
 mod places;
 mod selection;
 mod send;
+mod start;
 mod store;
 mod tidy;
 mod timeline;
 mod today;
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 
 pub struct Server {
@@ -57,6 +60,8 @@ pub struct Server {
     pub tidy: tidy::Tidy,
 
     pub editing: edit::Editing,
+
+    pub limit: auth::Limit,
 }
 
 impl Server {
@@ -131,6 +136,7 @@ fn main() -> Result<(), String> {
         renders: tokio::sync::Semaphore::new(1),
         tidy: tidy::Tidy::default(),
         editing: Default::default(),
+        limit: Default::default(),
     });
     jobs::start(server.clone());
     cards::watch(server.clone(), path_from("NUMA_HOME_CARDS", "/cards"));
@@ -139,7 +145,8 @@ fn main() -> Result<(), String> {
     runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.map_err(|err| err.to_string())?;
         log::info!("Numa Home {} on port {port}", env!("CARGO_PKG_VERSION"));
-        axum::serve(listener, router(server)).with_graceful_shutdown(stopped()).await.map_err(|err| err.to_string())
+        let app = router(server).into_make_service_with_connect_info::<SocketAddr>();
+        axum::serve(listener, app).with_graceful_shutdown(stopped()).await.map_err(|err| err.to_string())
     })
 }
 
@@ -155,11 +162,21 @@ fn router(server: Arc<Server>) -> Router {
     Router::new()
         .route("/api/v1/status", get(accounts::status))
         .route("/api/v1/setup", post(accounts::setup))
+        .route("/api/v1/start", put(start::moved))
+        .route("/api/v1/start/libraries", get(start::libraries))
+        .route("/api/v1/start/count", get(start::count))
+        .route("/api/v1/start/thumb", get(start::thumb))
+        .route("/api/v1/start/qr", get(start::qr))
         .route("/api/v1/login", post(accounts::login))
         .route("/api/v1/logout", post(accounts::logout))
         .route("/api/v1/me", get(accounts::me).put(accounts::set_start))
+        .route("/api/v1/me/password", put(accounts::change_password))
+        .route("/api/v1/sessions", get(accounts::sessions))
+        .route("/api/v1/sessions/others", post(accounts::end_others))
+        .route("/api/v1/sessions/{id}", delete(accounts::end_session))
         .route("/api/v1/users", get(accounts::users).post(accounts::add_user))
         .route("/api/v1/users/{name}", put(accounts::set_user))
+        .route("/api/v1/users/{name}/password", put(accounts::give_password))
         .route("/api/v1/libraries", get(timeline::libraries).post(manage::add))
         .route("/api/v1/libraries/folders", get(manage::folders))
         .route("/api/v1/libraries/{id}", put(manage::rename))
@@ -186,9 +203,11 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/timeline/{month}", get(timeline::month))
         .route("/api/v1/people", get(timeline::people))
         .route("/api/v1/albums", get(timeline::albums))
+        .route("/api/v1/albums/{key}", put(timeline::rename_album).delete(timeline::delete_album))
 
         .route("/api/v1/background", get(activity::status))
         .route("/api/v1/safe", get(safe::show))
+        .route("/api/v1/copy", post(copy::now_please))
         .route("/api/v1/background/pause", post(activity::pause))
         .route("/api/v1/background/resume", post(activity::resume))
         .route("/api/v1/tidy", get(tidy::list))
@@ -220,5 +239,16 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/send/{name}", put(send::send).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/{*rest}", axum::routing::any(|| async { Fail(StatusCode::NOT_FOUND, "There is no such address in the API.".into()) }))
         .merge(pages::routes())
+        .layer(axum::middleware::map_response(guarded))
         .with_state(server)
+}
+
+const POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+async fn guarded(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(POLICY));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("same-origin"));
+    response
 }

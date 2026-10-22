@@ -5,12 +5,11 @@ pub struct Product {
     pub long_mm: f32,
 }
 
-pub const PRODUCTS: [Product; 5] = [
-    Product { name: "CEWE 21 × 28 cm", long_mm: 280.0 },
-    Product { name: "CEWE 30 × 30 cm", long_mm: 300.0 },
-    Product { name: "Albelli 30 × 30 cm", long_mm: 300.0 },
-    Product { name: "Popsa 21 × 21 cm", long_mm: 210.0 },
-    Product { name: "Blurb Large Landscape 33 × 28 cm", long_mm: 330.2 },
+pub const PRODUCTS: [Product; 4] = [
+    Product { name: "21 × 28 cm", long_mm: 280.0 },
+    Product { name: "30 × 30 cm", long_mm: 300.0 },
+    Product { name: "21 × 21 cm", long_mm: 210.0 },
+    Product { name: "33 × 28 cm", long_mm: 330.2 },
 ];
 
 pub fn long_edge(mm: f32) -> u32 {

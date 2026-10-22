@@ -22,15 +22,18 @@ pub enum Kind {
     Things,
 
     Night,
+
+    Copy,
 }
 
-const TEXTS: [(&str, &str, &str, &str); 6] = [
+const TEXTS: [(&str, &str, &str, &str); 7] = [
     ("scan", "Looking for Photographs", "Looking for new and changed photographs", "Every library looked through"),
     ("thumbnails", "Thumbnails", "Making thumbnails, edits applied", "Every photograph has its thumbnails"),
     ("analyse", "Faces, Sharpness and Bursts", "Finding faces and measuring sharpness", "Every photograph analysed"),
     ("words", "Search in Words", "Reading what is in each photograph", "Every photograph read for words"),
     ("things", "Things Numa Saw", "Seeing which everyday things each photograph has", "Every photograph looked at"),
     ("night", "The Night's Round", "Tidying up while the house sleeps", "Done for tonight"),
+    ("copy", "Second Copy", "Copying new and changed photographs to the second disk", "Made every night"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -67,7 +70,7 @@ pub struct Download {
 #[derive(Default)]
 pub struct Activity {
     paused: AtomicBool,
-    jobs: Mutex<[Job; 6]>,
+    jobs: Mutex<[Job; 7]>,
     downloads: Mutex<Vec<Download>>,
 }
 
@@ -105,7 +108,7 @@ impl Activity {
 
     pub fn start(&self, kind: Kind) {
         self.job(kind, |job| {
-            if job.is != Is::Idle || matches!(kind, Kind::Scan | Kind::Night) {
+            if job.is != Is::Idle || matches!(kind, Kind::Scan | Kind::Night | Kind::Copy) {
                 (job.is, job.started) = (Is::Running, Some(Instant::now()));
             }
         })
@@ -117,6 +120,10 @@ impl Activity {
 
     pub fn stage(&self, kind: Kind, stage: &'static str) {
         self.job(kind, |job| (job.library, job.stage) = (None, Some(stage)))
+    }
+
+    pub fn running(&self, kind: Kind) -> bool {
+        self.job(kind, |job| job.is == Is::Running)
     }
 
     pub fn add(&self, kind: Kind, done: usize) {
@@ -151,9 +158,12 @@ pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Js
     let seen = server.home.libraries(&me.name);
     let paused = server.activity.paused();
     let jobs = server.activity.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let copying = crate::copy::root().is_dir();
     let mut rows: Vec<Value> = jobs
         .iter()
         .zip(TEXTS)
+        .filter(|(job, (key, ..))| *key != "copy" || copying || job.is != Is::Idle)
         .map(|(job, (key, name, running, idle))| {
             let (state, doing) = match job.is {
                 Is::Idle => ("idle", idle.to_string()),

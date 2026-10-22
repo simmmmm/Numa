@@ -6,10 +6,10 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
 
     let clear = gtk::Button::from_icon_name("edit-clear-all-symbolic");
     clear.add_css_class("flat");
-    clear.set_tooltip_text(Some("Clear Selection (Ctrl+Shift+A)"));
+    clear.set_tooltip_text(Some("Clear (Esc)"));
     clear.connect_clicked(glib::clone!(
         #[strong] state,
-        move |_| state.grid.wall.unselect_all()
+        move |_| state.grid.wall.unpick()
     ));
     let count = gtk::Label::new(None);
     count.add_css_class("heading");
@@ -19,9 +19,24 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     bar.pack_start(&clear);
     bar.pack_start(&count);
 
+    let everything = gtk::Button::with_label("Select All");
+    everything.set_tooltip_text(Some("Select All (Ctrl+A)"));
+    everything.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| state.grid.wall.select_all()
+    ));
+    let chip = chip_row();
+    chip.set_valign(gtk::Align::Center);
+    chip.set_margin_end(4);
+    chip.append(&everything);
+    bar.pack_start(&chip);
+
+    let mut acts: Vec<gtk::Widget> = Vec::new();
+
     let rate = rate_button("win.photo-rate");
     back_to_grid(state, &rate);
     bar.pack_start(&rate);
+    acts.push(rate.upcast());
     for (label, icon, tip, flag) in [
         ("Pick", "emoji-flags-symbolic", "Pick (P), again to clear", Flag::Picked),
         ("Reject", "window-close-symbolic", "Reject (X), again to clear", Flag::Rejected),
@@ -35,11 +50,13 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
             move |_| apply_to_selection(&state, toggled(&state, &selected_ids(&state), Action::Flag(flag)))
         ));
         bar.pack_start(&button);
+        acts.push(button.upcast());
     }
     let line = gtk::Separator::new(gtk::Orientation::Vertical);
     line.set_margin_start(6);
     line.set_margin_end(6);
     bar.pack_start(&line);
+    acts.push(line.upcast());
 
     let paste = gtk::Button::with_label("Paste Settings");
     paste.add_css_class("flat");
@@ -52,6 +69,7 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     let album = album_button(state);
     back_to_grid(state, &album);
     bar.pack_start(&album);
+    acts.extend([paste.upcast(), album.upcast()]);
 
     let merge = gtk::Button::with_label("Merge…");
     merge.add_css_class("flat");
@@ -82,6 +100,7 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     more.set_tooltip_text(Some("More"));
     back_to_grid(state, &more);
     bar.pack_end(&more);
+    acts.extend([merge.clone().upcast(), export.clone().upcast(), more.upcast()]);
 
     let update = Rc::new(glib::clone!(
         #[weak] bar,
@@ -92,22 +111,21 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         move || {
             let chosen = state.grid.wall.selected().len();
             let number = places::grouped(chosen as i64);
-            count.set_text(&format!("{number} Selected"));
+            count.set_text(&match chosen {
+                0 => "Choose photographs".to_string(),
+                _ => format!("{number} chosen"),
+            });
+            for act in &acts {
+                act.set_visible(chosen > 0);
+            }
             merge.set_sensitive(chosen >= 2);
             export.set_label(&format!("Export {number}…"));
 
-            bar.set_revealed(chosen > 0 && !state.loupe.reveal.reveals_child() && !rapid::choosing(&state));
+            let open = chosen > 0 || state.grid.wall.choosing();
+            bar.set_revealed(open && !state.loupe.reveal.reveals_child());
         }
     ));
     state.grid.wall.connect_selection_changed(glib::clone!(
-        #[strong] update,
-        move |_| update()
-    ));
-    rapid::deliver_button(state).connect_sensitive_notify(glib::clone!(
-        #[strong] update,
-        move |_| update()
-    ));
-    rapid::of(state).views.connect_visible_child_name_notify(glib::clone!(
         #[strong] update,
         move |_| update()
     ));

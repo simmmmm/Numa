@@ -66,12 +66,7 @@ pub(super) fn build_pill(state: &App) -> gtk::Label {
 
 fn members(state: &App, at: usize) -> Option<Vec<usize>> {
 
-    let scope = state.loupe.few.borrow().stack.clone();
-
-    let all: Vec<usize> = match scope.contains(&at) {
-        true => scope,
-        false => burst_run(state, at).filter(|index| in_reach(state, *index)).collect(),
-    };
+    let all: Vec<usize> = burst_run(state, at).filter(|index| in_reach(state, *index)).collect();
     if all.len() < 2 {
         return None;
     }

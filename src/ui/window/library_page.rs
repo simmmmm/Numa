@@ -79,7 +79,12 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
 
     let over = gtk::Overlay::new();
 
-    over.set_child(Some(&rapid::build(state, &scroller)));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.append(&scroller);
+    row.append(&state.grid.scrubber.area);
+    over.set_child(Some(&row));
+    over.add_overlay(&state.grid.scrubber.pill);
+    scrubber::install(state);
     over.add_overlay(&build_loupe(state));
 
     over.add_overlay(&build_compare(state));

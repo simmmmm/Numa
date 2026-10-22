@@ -22,7 +22,7 @@ function share(activity) {
 }
 
 // The ring's word: what runs, short enough for the navigation.
-const SHORT = { scan: S.scanning, thumbnails: S.thumbnails, analyse: S.faces, words: S.words, things: S.things, night: S.night, import: S.importing };
+const SHORT = { scan: S.scanning, thumbnails: S.thumbnails, analyse: S.faces, words: S.words, things: S.things, night: S.night, import: S.importing, copy: S.copying };
 function badgeWord(activity) {
   if (activity.paused) return S.paused;
   const running = activity.jobs.find(job => job.state === 'running');
@@ -154,9 +154,10 @@ function lastNight(night) {
 // HOME-035: Safe at Home — whether everything that should come home did,
 // room for it, and last night. Accounts, Cameras and Activity are its tabs,
 // a chip row under its title.
-const SAFE = ['/safe', '/accounts', '/cameras', '/activity'];
+const SAFE = ['/safe', '/accounts', '/devices', '/cameras', '/activity'];
 function safeHead(path) {
-  const tabs = [[S.overview, '/safe'], state.me.admin && [S.accounts, '/accounts'], state.me.admin && [S.cameras, '/cameras'], [S.activity, '/activity']].filter(Boolean);
+  const tabs = [[S.overview, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'],
+    [S.activity, '/activity']].filter(Boolean);
   if (!tabs.some(([, to]) => to === path)) return null;
   return h('div', { class: 'safe-head' }, h('h1', {}, S.safeAtHome),
     h('div', { class: 'chips' }, tabs.map(([label, to]) => h('button', { class: 'chip' + (to === path ? ' chosen' : ''),
@@ -197,10 +198,68 @@ async function safePage(main) {
       ? h('ul', {}, safe.devices.map(device))
       : h('p', { class: 'body' }, S.devicesEmpty)),
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.storage), safe.disks.map(disk)),
+    secondCopy(safe.copy),
     night && h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.lastNight),
       h('ul', { class: 'done' }, night.done.slice(0, 4).map(line => h('li', {}, line))),
       h('button', { class: 'chip', onclick: () => go('/activity') }, S.activity)),
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.numaHome), h('div', { class: 'big' }, safe.version),
       // The licences, where the version is (and where an Updates tab will hold them): P15, a visible route.
       h('a', { class: 'caption', href: '/licences', target: '_blank', rel: 'noopener' }, S.licences))));
+}
+
+// HOME-036: the second copy — when it was last made whole, what it holds
+// and where, the database's nightly copies, Copy Now (an admin's; greyed and
+// saying so for the rest, P14) and how to put things back, in the guide.
+const GUIDE_RESTORE = 'https://guide.numa.photo/numa-home#restore';
+function secondCopy(copy) {
+  const amount = bytes => bytes >= 1e9 ? diskSize(bytes) : megabytes(bytes);
+  const clock = seconds => Date.now() / 1000 - seconds < 36 * 3600
+    ? new Date(seconds * 1000).toLocaleTimeString(S.locale, { hour: '2-digit', minute: '2-digit' })
+    : new Date(seconds * 1000).toLocaleDateString(S.locale, { day: 'numeric', month: 'short' });
+  const holds = `${grouped(copy.files)} ${copy.files === 1 ? S.file : S.files}, ${amount(copy.bytes)}`;
+  const when = copy.exists && h('div', { class: 'copy-when' },
+    h('span', { class: 'big' }, copy.last ? clock(copy.last) : S.notYet),
+    h('span', { class: 'caption' }, copy.running ? S.copyingNow : copy.last ? `${ago(copy.last)} · ${holds}` : S.copyTonight));
+  const disk = copy.exists && h('li', {}, h('div', {}, h('div', { class: 'name' }, copy.where),
+    h('div', { class: 'caption' }, [copy.total && phrase('freeShort', { free: diskSize(copy.free), total: diskSize(copy.total) }), S.onlyAdds].filter(Boolean).join(' · '))));
+  const databases = h('li', {}, h('div', {}, h('div', { class: 'name' }, S.databaseCopies),
+    h('div', { class: 'caption' }, copy.databases.newest ? phrase(copy.databases.count === 1 ? 'nightlyCopy' : 'nightlyCopies', { n: copy.databases.count, when: clock(copy.databases.newest) }) : S.databasesTonight)));
+  const problems = [!copy.complete && copy.exists && copy.problem, copy.databases.problem].filter(Boolean);
+  const now = state.me.admin
+    ? h('button', { class: 'chip', onclick: async () => { try { await api('copy', { method: 'POST' }); toast(S.copyStarts); } catch (error) { toast(error.message); } } }, S.copyNow)
+    : h('button', { class: 'chip', 'aria-disabled': 'true', title: S.copyRefused, onclick: () => toast(S.copyRefused) }, S.copyNow);
+  return h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.secondCopy),
+    when || h('p', { class: 'body' }, S.noCopyDisk),
+    h('ul', {}, disk, databases),
+    problems.map(problem => h('p', { class: 'caption' }, problem)),
+    h('div', { class: 'copy-acts' }, now, h('a', { class: 'caption', href: GUIDE_RESTORE, target: '_blank', rel: 'noopener' }, S.howToRestore)));
+}
+
+// HOME-037: Safe at Home › Devices — every device signed in to this account
+// (an admin: to every account), when it signed in, was last seen and last
+// sent home, and from where; Sign Out for each, and Sign Out Everywhere Else.
+async function devicesPage(main) {
+  const page = h('div', { class: 'safe devices' }, h('p', { class: 'body' }, S.loading));
+  main.append(page);
+  const list = await api('sessions').catch(error => (page.replaceChildren(fault(error.message)), null));
+  if (!list) return;
+  const day = seconds => new Date(seconds * 1000).toLocaleDateString(S.locale, { day: 'numeric', month: 'long', year: 'numeric' });
+  const mine = one => one.account.toLowerCase() === state.me.name.toLowerCase();
+  const out = async one => {
+    try { await api(`sessions/${one.id}`, { method: 'DELETE' }); } catch (error) { return toast(error.message); }
+    if (one.this) return signIn();
+    toast(phrase('signedOutOf', { device: one.label }));
+    render();
+  };
+  const row = one => h('li', {},
+    h('div', {}, h('div', { class: 'name' }, one.label, one.this && h('span', { class: 'caption' }, ` · ${S.thisDevice}`)),
+      h('div', { class: 'caption' }, [phrase('signedInOn', { day: day(one.made) }), !one.this && phrase('seenAgo', { ago: ago(one.seen) }),
+        one.sent && phrase('sentAgo', { ago: ago(one.sent) }), one.address].filter(Boolean).join(' · '))),
+    h('button', { class: 'chip', onclick: () => out(one) }, S.signOut));
+  const others = list.filter(one => mine(one) && !one.this).length;
+  const elsewhere = others > 0 && h('button', { class: 'primary', onclick: async () => {
+    try { await api('sessions/others', { method: 'POST' }); toast(S.signedOutElsewhere); render(); } catch (error) { toast(error.message); }
+  } }, S.signOutElsewhere);
+  page.replaceChildren(h('p', { class: 'body role' }, state.me.admin ? S.devicesAdminText : S.devicesText),
+    h('section', { class: 'box' }, h('ul', {}, [...list.filter(one => one.this), ...list.filter(one => !one.this)].map(row))), elsewhere);
 }

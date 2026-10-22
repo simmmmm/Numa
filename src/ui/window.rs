@@ -88,6 +88,7 @@ mod picker;
 mod albums;
 mod client_picks;
 mod grid;
+mod scrubber;
 mod merge;
 mod loupe;
 mod loupe_zoom;
@@ -118,14 +119,6 @@ mod zooming;
 mod geometry;
 mod auto_plan;
 mod overlays;
-
-mod rapid;
-mod rapid_numa;
-mod rapid_pages;
-mod rapid_panel;
-mod rapid_layers;
-mod rapid_rows;
-mod rapid_chapters;
 mod info;
 mod open;
 mod prefetch;
@@ -485,7 +478,10 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
     window.set_content(Some(&state.toasts));
 
     install_rating_shortcuts(state, window);
-    rapid::install(state, window);
+
+    for key in ["library-view", "rapid-clipping"] {
+        state.catalog.forget(key);
+    }
 
     name_icon_buttons(view.upcast_ref());
     startup::fill_the_window(state, window);

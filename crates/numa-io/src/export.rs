@@ -946,7 +946,7 @@ mod tests {
         let keywords = exif.fields().find(|field| field.tag.number() == 0x9C9E).expect("XPKeywords");
         let ::exif::Value::Byte(bytes) = &keywords.value else { panic!("{:?}", keywords.value) };
         let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
-        assert_eq!(String::from_utf16_lossy(&units), "Anna;Beach best\0");
+        assert_eq!(String::from_utf16_lossy(&units), "Alex;Beach best\0");
 
         let bare = ExportSettings { keywords: false, ..ExportSettings::default() };
         assert!(described_exif(&bare, None, &about).is_none());

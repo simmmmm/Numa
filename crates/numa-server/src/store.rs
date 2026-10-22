@@ -12,6 +12,27 @@ pub struct Account {
     pub admin: bool,
 
     pub manage: bool,
+
+    pub must_change: bool,
+}
+
+pub const IDLE: i64 = 90 * 86_400;
+
+const SEEN_EVERY: i64 = 60;
+
+pub fn idle(seen: i64, now: i64) -> bool {
+    now - seen > IDLE
+}
+
+pub struct Session {
+    pub id: i64,
+    pub digest: String,
+    pub account: String,
+    pub device: String,
+    pub made: i64,
+    pub seen: i64,
+    pub sent: Option<i64>,
+    pub address: Option<String>,
 }
 
 impl Store {
@@ -46,6 +67,12 @@ impl Store {
         let _ = conn.execute("ALTER TABLE accounts ADD COLUMN manage INTEGER NOT NULL DEFAULT 0", []);
 
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN sent INTEGER", []);
+
+        if conn.execute("ALTER TABLE sessions ADD COLUMN seen INTEGER", []).is_ok() {
+            conn.execute("UPDATE sessions SET seen = ?1", [now()]).map_err(|err| err.to_string())?;
+        }
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN address TEXT", []);
+        let _ = conn.execute("ALTER TABLE accounts ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0", []);
         Ok(Self(Mutex::new(conn)))
     }
 
@@ -64,8 +91,8 @@ impl Store {
 
     pub fn accounts(&self) -> Result<Vec<Account>, String> {
         self.with(|conn| {
-            let mut statement = conn.prepare("SELECT name, admin, manage FROM accounts ORDER BY name COLLATE NOCASE")?;
-            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)? }))?;
+            let mut statement = conn.prepare("SELECT name, admin, manage, must_change FROM accounts ORDER BY name COLLATE NOCASE")?;
+            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)? }))?;
             rows.collect()
         })
     }
@@ -87,23 +114,75 @@ impl Store {
         .flatten()
     }
 
-    pub fn add_session(&self, digest: &str, name: &str, device: Option<&str>) -> Result<(), String> {
+    pub fn add_session(&self, digest: &str, name: &str, device: Option<&str>, address: &str) -> Result<(), String> {
         let now = now();
-        self.with(|conn| conn.execute("INSERT INTO sessions (token, name, device, made) VALUES (?1, ?2, ?3, ?4)", params![digest, name, device, now]))
-            .map(drop)
+        self.with(|conn| {
+            conn.execute("DELETE FROM sessions WHERE COALESCE(seen, made) < ?1", [now - IDLE])?;
+            conn.execute(
+                "INSERT INTO sessions (token, name, device, made, seen, address) VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![digest, name, device, now, address],
+            )
+        })
+        .map(drop)
     }
 
     pub fn session(&self, digest: &str) -> Option<Account> {
+        let now = now();
         self.with(|conn| {
-            conn.query_row(
-                "SELECT a.name, a.admin, a.manage FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1",
-                [digest],
-                |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)? }),
-            )
-            .optional()
+            let sql = "SELECT a.name, a.admin, a.manage, a.must_change, COALESCE(s.seen, s.made) FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1";
+            let found = conn
+                .query_row(sql, [digest], |row| {
+                    Ok((Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)? }, row.get::<_, i64>(4)?))
+                })
+                .optional()?;
+            let Some((account, seen)) = found else { return Ok(None) };
+            if idle(seen, now) {
+                conn.execute("DELETE FROM sessions WHERE token = ?1", [digest])?;
+                return Ok(None);
+            }
+            if now - seen >= SEEN_EVERY {
+                conn.execute("UPDATE sessions SET seen = ?2 WHERE token = ?1", params![digest, now])?;
+            }
+            Ok(Some(account))
         })
         .ok()
         .flatten()
+    }
+
+    pub fn sessions(&self, account: Option<&str>) -> Vec<Session> {
+        self.with(|conn| {
+            let sql = "SELECT rowid, token, name, COALESCE(device, ''), made, COALESCE(seen, made), sent, address FROM sessions
+                       WHERE ?1 IS NULL OR name = ?1 ORDER BY 6 DESC";
+            let mut statement = conn.prepare(sql)?;
+            let rows = statement.query_map([account], |row| {
+                Ok(Session {
+                    id: row.get(0)?,
+                    digest: row.get(1)?,
+                    account: row.get(2)?,
+                    device: row.get(3)?,
+                    made: row.get(4)?,
+                    seen: row.get(5)?,
+                    sent: row.get(6)?,
+                    address: row.get(7)?,
+                })
+            })?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn end_session_id(&self, id: i64, account: Option<&str>) -> bool {
+        self.with(|conn| conn.execute("DELETE FROM sessions WHERE rowid = ?1 AND (?2 IS NULL OR name = ?2)", params![id, account]))
+            .is_ok_and(|ended| ended == 1)
+    }
+
+    pub fn end_sessions(&self, account: &str, keep: Option<&str>) -> usize {
+        self.with(|conn| conn.execute("DELETE FROM sessions WHERE name = ?1 AND token IS NOT ?2", params![account, keep])).unwrap_or(0)
+    }
+
+    pub fn set_password(&self, name: &str, hash: &str, must_change: bool) -> Result<bool, String> {
+        self.with(|conn| conn.execute("UPDATE accounts SET hash = ?2, must_change = ?3 WHERE name = ?1", params![name, hash, must_change]))
+            .map(|changed| changed == 1)
     }
 
     pub fn note_arrival(&self, digest: &str) {
@@ -325,8 +404,8 @@ impl Store {
     }
 }
 
-impl Store {
-    pub fn settled(&self) -> std::collections::HashSet<String> {
+impl numa_io::tidy::Ledger for Store {
+    fn settled(&self) -> std::collections::HashSet<String> {
         self.with(|conn| {
             let mut statement = conn.prepare("SELECT key FROM settled")?;
             let rows = statement.query_map([], |row| row.get(0))?;
@@ -335,7 +414,7 @@ impl Store {
         .unwrap_or_default()
     }
 
-    pub fn settle(&self, keys: &[String]) {
+    fn settle(&self, keys: &[String]) {
         let _ = self.with(|conn| {
             let tx = conn.unchecked_transaction()?;
             for key in keys {
@@ -345,7 +424,7 @@ impl Store {
         });
     }
 
-    pub fn hashes(&self) -> HashMap<String, (i64, u64, String)> {
+    fn hashes(&self) -> HashMap<String, (i64, u64, String)> {
         self.with(|conn| {
             let mut statement = conn.prepare("SELECT path, mtime, size, hash FROM hashes")?;
             let rows = statement.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get::<_, i64>(2)? as u64, row.get(3)?))))?;
@@ -354,9 +433,16 @@ impl Store {
         .unwrap_or_default()
     }
 
-    pub fn note_hash(&self, path: &str, mtime: i64, size: u64, hash: &str) {
+    fn note_hash(&self, path: &str, mtime: i64, size: u64, hash: &str) {
         let sql = "INSERT OR REPLACE INTO hashes (path, mtime, size, hash) VALUES (?1, ?2, ?3, ?4)";
         let _ = self.with(|conn| conn.execute(sql, params![path, mtime, size as i64, hash]));
+    }
+}
+
+impl Store {
+
+    pub fn back_up(&self, to: &Path) -> Result<(), String> {
+        self.with(|conn| crate::copy::sqlite(conn, to))
     }
 
     pub fn vacuum(&self) -> Result<(), String> {
@@ -366,4 +452,42 @@ impl Store {
 
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_end_when_idle() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(store.add_account("Anna", "hash", true, true).unwrap());
+        for digest in ["laptop", "phone", "old"] {
+            store.add_session(digest, "Anna", Some(digest), "192.168.1.20").unwrap();
+        }
+        let set_seen = |digest: &str, seen: i64| store.with(|conn| conn.execute("UPDATE sessions SET seen = ?2 WHERE token = ?1", params![digest, seen])).unwrap();
+        let seen = |digest: &str| store.with(|conn| conn.query_row("SELECT seen FROM sessions WHERE token = ?1", [digest], |row| row.get::<_, i64>(0))).unwrap();
+
+        set_seen("old", now() - IDLE - 10);
+        assert!(store.session("old").is_none(), "90 days unseen is signed out");
+        assert_eq!(store.sessions(None).len(), 2, "and its row is gone");
+
+        set_seen("phone", now() - 30);
+        assert_eq!(store.session("phone").unwrap().name, "Anna");
+        assert_eq!(seen("phone"), now() - 30, "seen half a minute ago is not written again");
+        set_seen("phone", now() - IDLE + 100);
+        assert!(store.session("phone").is_some(), "89 days and a bit is still signed in");
+        assert!(now() - seen("phone") < 5, "and is seen now");
+
+        assert_eq!(store.end_sessions("Anna", Some("laptop")), 1);
+        assert!(store.session("laptop").is_some() && store.session("phone").is_none());
+        let laptop = store.sessions(Some("anna")).pop().unwrap();
+        assert!(!store.end_session_id(laptop.id, Some("Tom")), "only the account's own, or an admin's");
+        assert!(store.end_session_id(laptop.id, None));
+        assert!(store.sessions(None).is_empty());
+
+        assert!(idle(0, IDLE + 1) && !idle(0, IDLE));
+        assert!(store.set_password("anna", "new", true).unwrap());
+        assert!(store.accounts().unwrap()[0].must_change);
+    }
 }

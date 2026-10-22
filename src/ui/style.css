@@ -1478,42 +1478,10 @@ listview.filmstrip-frames > row { margin: 0; }
     font-feature-settings: "tnum";
 }
 
-/* FLOW-018: Rapid — the library by its moments, the moment's few sliders on
-   the right. Its photographs are the grid's own cards (`.grid-card` in
-   `.photo-rows`), selected and marked as the grid's are. */
-.rapid-list { padding: 16px 24px 24px; }
-/* FLOW-018: a burst as a stack — two frames' edges behind the one on top. */
-.photo-rows > overlay.grid-card.rapid-stack { box-shadow: 4px -4px 0 -1px @numa_thumb_rest, 8px -8px 0 -2px @numa_track_hover; }
-.rapid-side { background: @window_bg_color; border-left: 1px solid alpha(currentColor, 0.1); }
-.rapid-panel { padding: 16px; }
-.rapid-bar { padding: 8px 24px 0; }
-.rapid-page .rapid-bar { padding: 8px 16px; }
-/* FLOW-019: the moment's layers, top first as they lie — Look, This Photo,
-   Even — each under a hairline, numbered in a small chip as in the sketch. */
-.rapid-layer { padding: 12px 0 8px; border-top: 1px solid @numa_rule; }
-.rapid-layer:first-child { margin-top: 8px; }
-.rapid-layer-title { font-size: 13px; font-weight: 600; }
-.rapid-layer-about { font-size: 12px; color: @numa_name; }
-.rapid-layer-hint { font-size: 12px; color: @numa_label; margin: 8px 0 12px; }
-.rapid-count { font-size: 12px; color: @numa_name; font-feature-settings: "tnum"; }
-/* "Numa did": each part's name, and its switch's row dimmed when off. */
-.rapid-part { padding: 8px 0; }
-.rapid-part.off label { opacity: 0.45; }
-.rapid-part-name { font-size: 13px; font-weight: 600; }
-/* Chapters: a heading per chapter, their bar over the list, the one being
-   scrolled through kept at the top, and where to start one. */
-.rapid-chapter { padding-bottom: 4px; border-bottom: 1px solid @numa_rule; }
-.rapid-chapter-name { font-size: 20px; font-weight: 700; padding: 0 4px; }
-.rapid-sticky { background: @view_bg_color; padding: 4px 16px; border-bottom: 1px solid @numa_rule; }
-.rapid-sticky > menubutton > button { font-size: 15px; font-weight: 700; }
-/* The chosen moment: a quiet fill, not an outline (an outline doubled the
-   ring of a selected photograph). The shadow extends the fill 8px, so
-   choosing a moment moves nothing. */
-.rapid-moment.chosen { background: alpha(@window_fg_color, 0.06); box-shadow: 0 0 0 8px alpha(@window_fg_color, 0.06); border-radius: 8px; }
-.rapid-handle:hover > label { text-decoration: underline; }
-.rapid-moment .rapid-start { opacity: 0; transition: opacity 120ms ease; }
-.rapid-moment:hover .rapid-start, .rapid-start:checked { opacity: 1; }
-.rapid-offer { padding: 4px 0; border-top: 1px dashed @numa_thumb_rest; }
-/* The frames Numa would keep, in a burst seen whole. */
-.photo-rows > overlay.grid-card.rapid-numa { outline: 2px dashed @numa_rest_tick; outline-offset: 4px; }
-.photo-rows > overlay.grid-card.rapid-numa:selected { outline: 3px solid @numa_accent; outline-offset: 1px; }
+/* LIB-035: a month's count beside its label over the grid, as Numa Home's
+   caption. */
+.month-count {
+    font-size: 12px;
+    color: @numa_label;
+    font-feature-settings: "tnum";
+}

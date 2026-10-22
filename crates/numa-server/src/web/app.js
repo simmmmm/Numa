@@ -151,37 +151,70 @@ async function start() {
     setTimeout(start, 5000);
     return;
   }
-  if (status.setup) return setup();
+  // HOME-034: no account yet, so the first start begins.
+  if (status.setup) return firstStart('account');
   try { state.me = await api('me'); } catch (_) { return; }
+  if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
 }
 
 function gate(text, button, submit) {
-  titled(button);
   const name = h('input', { type: 'text', autocomplete: 'username', placeholder: S.name, required: true, autocapitalize: 'words' });
   const password = h('input', {
     type: 'password', placeholder: S.password, required: true,
     autocomplete: button === S.signIn ? 'current-password' : 'new-password',
   });
+  gateOf(S.numaHome, text, [name, password], button, () => submit(name.value.trim(), password.value));
+}
+
+// The page before any other: the mark, a heading, a sentence, the fields and
+// one button; what went wrong under it.
+function gateOf(heading, text, fields, button, submit) {
+  titled(button);
   const said = h('p', { class: 'said', role: 'status' });
   const form = h('form', {
     onsubmit: async event => {
       event.preventDefault();
       said.textContent = '';
-      try { await submit(name.value.trim(), password.value); } catch (error) { said.textContent = error.message; }
+      try { await submit(); } catch (error) { said.textContent = error.message; }
     },
-  }, h('img', { class: 'mark', src: '/mark.png', alt: '' }), h('h1', {}, S.numaHome), h('p', { class: 'body' }, text),
-  name, password, h('button', { class: 'primary', type: 'submit' }, button), said);
+  }, h('img', { class: 'mark', src: '/mark.png', alt: '' }), h('h1', {}, heading), h('p', { class: 'body' }, text),
+  fields, h('button', { class: 'primary', type: 'submit' }, button), said);
   app.replaceChildren(h('div', { class: 'gate' }, form));
-  name.focus();
+  fields[0].focus();
 }
 
-function setup() {
-  gate(S.makeFirst, S.makeAccount, async (name, password) => {
-    await api('setup', { method: 'POST', body: JSON.stringify({ name, password }) });
-    await signInAs(name, password);
+// HOME-037: an admin gave this account its password, so it chooses its own
+// before anything else.
+const newPasswordField = (name, placeholder) => h('input', { type: 'password', name, placeholder, required: true, minlength: 8, autocomplete: 'new-password' });
+function renewGate() {
+  const fresh = newPasswordField('new', S.newPasswordHint), again = newPasswordField('again', S.passwordAgain);
+  gateOf(S.newPassword, S.newPasswordText, [fresh, again], S.savePassword, async () => {
+    if (fresh.value !== again.value) throw new Error(S.passwordsDiffer);
+    await api('me/password', { method: 'PUT', body: JSON.stringify({ new: fresh.value }) });
+    state.me.must_change = false;
+    if (!location.hash) history.replaceState(null, '', '#' + startPage());
+    render();
   });
+}
+
+// HOME-037: the account's own password, from the menu under its name. Its
+// other devices are signed out.
+async function changePassword() {
+  const old = h('input', { type: 'password', name: 'old', placeholder: S.currentPassword, required: true, autocomplete: 'current-password' });
+  const asked = await dialog(S.changePassword, S.changePasswordText, [old, newPasswordField('new', S.newPasswordHint), newPasswordField('again', S.passwordAgain)], S.change);
+  if (!asked) return;
+  if (asked.new !== asked.again) return toast(S.passwordsDiffer);
+  try { await api('me/password', { method: 'PUT', body: JSON.stringify({ old: asked.old, new: asked.new }) }); toast(S.passwordChanged); } catch (error) { toast(error.message); }
+}
+
+// HOME-037: what Safe at Home › Devices calls this browser, "Firefox on Mac".
+function browserName() {
+  const agent = navigator.userAgent;
+  const browser = [['Edg/', 'Edge'], ['Firefox/', 'Firefox'], ['Chrome/', 'Chrome'], ['Safari/', 'Safari']].find(([mark]) => agent.includes(mark))?.[1] || S.browser;
+  const system = [['iPhone', 'iPhone'], ['iPad', 'iPad'], ['Android', 'Android'], ['Mac OS X', 'Mac'], ['Windows', 'Windows'], ['Linux', 'Linux']].find(([mark]) => agent.includes(mark))?.[1];
+  return system ? phrase('browserOn', { browser, system }) : browser;
 }
 
 function signIn() {
@@ -191,9 +224,10 @@ function signIn() {
 }
 
 async function signInAs(name, password) {
-  const me = await api('login', { method: 'POST', body: JSON.stringify({ name, password, device: 'Browser' }) });
-  state.me = await api('me').catch(() => ({ name: me.name, admin: me.admin, manage: false }));
+  const me = await api('login', { method: 'POST', body: JSON.stringify({ name, password, device: browserName() }) });
+  state.me = await api('me').catch(() => ({ name: me.name, admin: me.admin, manage: false, must_change: me.must_change }));
   state.libraries = null;
+  if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
 }
@@ -209,7 +243,7 @@ window.addEventListener('hashchange', () => { if (state.me) render(); });
 // One title per page, so a tab, the history and a screen reader say where you
 // are: "Photos · Numa Home".
 const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash,
-  '/safe': S.safeAtHome, '/activity': S.safeAtHome, '/accounts': S.safeAtHome, '/cameras': S.safeAtHome };
+  '/safe': S.safeAtHome, '/activity': S.safeAtHome, '/accounts': S.safeAtHome, '/devices': S.safeAtHome, '/cameras': S.safeAtHome };
 const titled = page => { document.title = page ? `${page} · ${S.numaHome}` : S.numaHome; };
 function pageTitle(path, params) {
   if (['/accounts', '/cameras'].includes(path) && !state.me.admin) path = '/';
@@ -220,6 +254,7 @@ function pageTitle(path, params) {
 }
 
 function render() {
+  if (state.me.first_start) return firstStart(state.me.first_start);
   const { path, params } = route();
   closeViewer(false);
   titled(pageTitle(path, params));
@@ -239,6 +274,7 @@ function render() {
   if (path === '/albums') return albums(main);
   if (path === '/libraries') return shelves(main);
   if (path === '/accounts' && state.me.admin) return accounts(main);
+  if (path === '/devices') return devicesPage(main);
   if (path === '/cameras' && state.me.admin) return cameras(main);
   if (params.get('q')) return search(main, params);
   return timeline(main, params);
@@ -256,6 +292,7 @@ function header(path, params) {
         const start = startPage() === '/today' ? 'photos' : 'today';
         try { await api('me', { method: 'PUT', body: JSON.stringify({ start }) }); state.me.start = start; } catch (error) { toast(error.message); }
       } }, startPage() === '/today' ? S.startOnPhotos : S.startOnToday),
+      h('button', { onclick: changePassword }, S.changePasswordEll),
       h('button', { onclick: async () => { await api('logout', { method: 'POST' }).catch(() => {}); signIn(); } }, S.signOut),
     ]);
   } }, state.me.name);
@@ -293,6 +330,7 @@ function placesNav(path, params) {
         : h('i', { class: 'tint', style: { background: key === 'library' ? `var(--library-tint-${look})` : null } });
       const entry = h('button', { class: 'place-entry' + (chosen ? ' chosen' : ''), 'aria-current': chosen ? 'page' : null,
         onclick: () => go('/', { [key]: value }) }, look, h('span', { class: 'name' }, name), h('span', { class: 'caption' }, grouped(count)));
+      if (key === 'album') entry.addEventListener('contextmenu', event => { event.preventDefault(); menuAt(event.clientX, event.clientY, albumItems({ key: value, name })); });
       peekOn(entry, `${key}=${encodeURIComponent(value)}`, name, count);
       return entry;
     }), ...(key === 'album' ? [h('button', { class: 'place-entry new', onclick: newAlbum }, h('i', { class: 'plus' }, icon('plus')), h('span', { class: 'name' }, S.newAlbumEll))] : []));
@@ -460,6 +498,16 @@ function empty(title, text, failed) {
 const SIZE = { min: 120, max: 440, step: 40, rest: 200 };
 let photoSize = SIZE.rest;
 try { photoSize = Number(localStorage.getItem('numa-photo-size')) || SIZE.rest; } catch (_) { /* a private window */ }
+// The order of the photographs, as Numa's Sort By: kept in this browser. A date
+// runs as the page does (a library oldest first, Photos newest first) until turned round.
+const SORTS = {
+  date: [S.sortDate, S.oldestFirst, S.newestFirst], name: [S.sortName, S.aToZ, S.zToA], rating: [S.sortRating, S.highestFirst, S.lowestFirst],
+  sharpness: [S.sortSharpness, S.sharpestFirst, S.softestFirst], suggestion: [S.sortSuggestion, S.bestFirst, S.weakestFirst],
+};
+let viewSort = { sort: 'date', reversed: false };
+try { Object.assign(viewSort, JSON.parse(localStorage.getItem('numa-sort') || '{}')); } catch (_) { /* a private window */ }
+if (!SORTS[viewSort.sort]) viewSort = { sort: 'date', reversed: false };
+const sortQuery = () => [viewSort.sort !== 'date' && ['sort', viewSort.sort], viewSort.reversed && ['reversed', '1']].filter(Boolean);
 const rowHeight = () => innerWidth < 720 ? 110 : photoSize;
 // A search's grid: tiles about as wide as a row of that height.
 const tileWide = () => innerWidth < 720 ? 150 : Math.round(photoSize * 0.75);
@@ -470,7 +518,7 @@ const GAP = 3;
 // comes near the screen, its rows justified to the width.
 async function timeline(main, params) {
   const narrowed = narrowedBy(params);
-  const query = new URLSearchParams(narrowed).toString();
+  const query = new URLSearchParams([...narrowed, ...sortQuery()]).toString();
   // The months asked at once, beside the filters, not after them.
   const asked = api('timeline' + (query ? '?' + query : '')).then(months => ({ months }), error => ({ error }));
   const filters = await filterRow(params, narrowed);
@@ -482,7 +530,7 @@ async function timeline(main, params) {
   }
   if (!main.isConnected) return;
   filters.count.textContent = counted(months.reduce((sum, month) => sum + month.count, 0));
-  if (months.length) filters.dates.textContent = spanOf(months);
+  if (months.length && months[0].month !== 'all') filters.dates.textContent = spanOf(months);
   if (!months.length) {
     main.append(narrowed.length
       ? empty(S.nothingHere, S.noFilterMatch)
@@ -557,7 +605,7 @@ async function filterRow(params, narrowed) {
     preset(S.all, !flag && !rating, { flag: null, rating: null }),
     preset(S.picks, flag === 'pick', { flag: flag === 'pick' ? null : 'pick' }),
     preset(rated(3), rating === '3', { rating: rating === '3' ? null : 3 }, ratedSaid(3)),
-    active, count, sizeSlider());
+    active, count, !params.get('q') && sortButton(params), sizeSlider());
   // HOME-023: a trip is a library or an album; its picks make the book.
   const book = (params.get('library') || params.get('album')) &&
     h('button', { class: 'chip', title: S.bookTip, onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, S.forABook);
@@ -569,8 +617,39 @@ async function filterRow(params, narrowed) {
       // HOME-019: a library's own Tidy Up, beside its book.
       owner === 'library' && library && tidyEntry(library),
       owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'chip', onclick: () => renameLibrary(library) }, S.renameEll),
+      owner === 'album' && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {
+        event.stopPropagation();
+        const at = event.currentTarget.getBoundingClientRect();
+        menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album }));
+      } }, icon('more')),
       selectToggle()));
   return { head, row, count, dates };
+}
+
+// The direction's words: the date's depend on the page (a library or an album
+// reads oldest first), the others are fixed.
+const sortSaid = sort => SORTS[sort][0];
+function sortButton(params) {
+  const oldest = !!(params.get('library') || params.get('album'));
+  const words = sort => { const [name, ahead, back] = SORTS[sort]; return sort === 'date' && !oldest ? [name, back, ahead] : [name, ahead, back]; };
+  const set = change => {
+    Object.assign(viewSort, change);
+    try { localStorage.setItem('numa-sort', JSON.stringify(viewSort)); } catch (_) { /* a private window */ }
+    render();
+  };
+  const [name, ahead, back] = words(viewSort.sort);
+  return h('button', { class: 'chip' + (viewSort.sort !== 'date' || viewSort.reversed ? ' chosen' : ''), 'aria-haspopup': 'menu', title: S.sortBy, onclick: event => {
+    event.stopPropagation();
+    const at = event.currentTarget.getBoundingClientRect();
+    const item = (label, on, change) => h('button', { class: on ? 'chosen' : null, onclick: () => set(change) }, label);
+    menuAt(at.left, at.bottom + 6, [
+      h('div', { class: 'section-label' }, S.sortBy),
+      Object.keys(SORTS).map(sort => item(SORTS[sort][0], viewSort.sort === sort, { sort })),
+      h('div', { class: 'rule' }),
+      item(ahead, !viewSort.reversed, { reversed: false }),
+      item(back, viewSort.reversed, { reversed: true }),
+    ]);
+  } }, `${name} · ${viewSort.reversed ? back : ahead}`);
 }
 
 // HOME-054: smaller to larger; a double click puts it back.
@@ -670,7 +749,7 @@ function monthSection(month, query) {
   const rows = h('div', { class: 'rows' });
   const caption = h('span', { class: 'caption' }, counted(month.count));
   const el = h('section', { class: 'month' },
-    h('div', { class: 'head' }, h('span', { class: 'section-label' }, monthName(month.month)), caption),
+    h('div', { class: 'head' }, h('span', { class: 'section-label' }, month.month === 'all' ? sortSaid(viewSort.sort) : monthName(month.month)), caption),
     rows);
   const section = { el, rows, count: month.count, photos: null, loading: null };
   requestAnimationFrame(() => { if (!section.photos) rows.style.height = estimate(month.count, rows.clientWidth || innerWidth) + 'px'; });
@@ -725,8 +804,27 @@ function tile(section, photo, style, height, wide = 150) {
   const look = ['tile', picked.ids.has(photo.id) && 'picked', photo.flag === 'reject' && 'rejected', wide < 120 && 'small', wide < 72 && 'tiny'];
   // HOME-017: a click chooses once something is chosen (`pick`).
   return holdToChoose(h('button', { class: look.filter(Boolean).join(' '), style, 'data-id': photo.id, 'aria-label': tileName(photo),
-    onclick: event => pick(event, photo.id) || openViewer(section, section.photos.indexOf(photo)) },
-  image, h('span', { class: 'check', 'aria-hidden': 'true' }), tileMarks(photo)), photo.id);
+    onclick: event => rateStar(event, photo) || pick(event, photo.id) || openViewer(section, section.photos.indexOf(photo)) },
+  image, h('span', { class: 'check', 'aria-hidden': 'true' }), tileMarks(photo), wide >= 120 && hoverStars(photo)), photo.id);
+}
+
+// LIB-025 as on the desktop: with a mouse over a tile, five stars show at its
+// foot and a click on one gives that many (the same again takes them off).
+// Shown by CSS for pointers that hover, and not while photographs are chosen.
+function hoverStars(photo) {
+  return h('span', { class: 'rate', 'aria-hidden': 'true' }, [1, 2, 3, 4, 5].map(n =>
+    h('i', { 'data-n': n, class: n <= (photo.rating || 0) ? 'set' : '' }, icon('star'))));
+}
+function rateStar(event, photo) {
+  const star = event.target.closest?.('.rate i');
+  if (!star || document.body.classList.contains('picking')) return false;
+  const stars = Number(star.dataset.n) === photo.rating ? 0 : Number(star.dataset.n);
+  api('photos/marks', { method: 'POST', body: JSON.stringify({ ids: [photo.id], rating: stars }) }).then(() => {
+    photo.rating = stars;
+    remark([photo.id]);
+    toast(phrase('saidCount', { said: markSaid({ rating: stars }), photos: counted(1) }));
+  }, error => toast(error.message));
+  return true;
 }
 
 // UX-081: what has been set on a photograph, said on its tile as every
@@ -754,6 +852,7 @@ function remark(ids) {
       tile.append(...tileMarks(photo));
       tile.classList.toggle('rejected', photo.flag === 'reject');
       tile.setAttribute('aria-label', tileName(photo));
+      tile.querySelectorAll('.rate i').forEach((star, at) => star.classList.toggle('set', at < (photo.rating || 0)));
     }
   }
 }
@@ -888,6 +987,19 @@ function rights(user, said) {
   return h('label', { class: 'check' }, box, S.canDelete);
 }
 
+// HOME-037: an admin gives an account a password, to pass on; it is signed
+// out everywhere and chooses its own at the next sign-in.
+async function givePassword(user) {
+  const field = h('input', { type: 'text', name: 'password', placeholder: S.passwordHint, required: true, minlength: 8, autocomplete: 'off', spellcheck: 'false' });
+  const asked = await dialog(phrase('givePasswordQ', { name: user.name }), phrase('givePasswordText', { name: user.name }), [field], S.givePassword);
+  if (!asked) return;
+  try {
+    await api(`users/${encodeURIComponent(user.name)}/password`, { method: 'PUT', body: JSON.stringify(asked) });
+    toast(phrase('passwordGiven', { name: user.name }));
+    render();
+  } catch (error) { toast(error.message); }
+}
+
 async function accounts(main) {
   const users = await api('users').catch(error => (main.append(empty(S.accounts, error.message, true)), null));
   if (!users) return;
@@ -905,7 +1017,9 @@ async function accounts(main) {
   h('label', { class: 'check' }, admin, S.canMake), h('button', { class: 'primary', type: 'submit' }, S.makeAccount), said);
   main.append(h('div', { class: 'accounts' },
     h('div', {}, h('div', { class: 'section-label' }, S.accounts),
-      h('ul', {}, users.map(user => h('li', {}, h('span', {}, user.name), user.admin ? h('span', { class: 'caption' }, S.admin) : rights(user, said))))),
+      h('ul', {}, users.map(user => h('li', {}, h('span', {}, user.name, user.must_change && h('span', { class: 'caption' }, ` · ${S.mustChange}`)),
+        h('div', { class: 'acts' }, user.admin ? h('span', { class: 'caption' }, S.admin) : rights(user, said),
+          user.name.toLowerCase() !== state.me.name.toLowerCase() && h('button', { class: 'chip', onclick: () => givePassword(user) }, S.givePasswordEll)))))),
     form,
     h('p', { class: 'body' }, S.accountsText)));
 }
@@ -928,8 +1042,8 @@ function openViewer(section, at) {
   const noticed = h('div', { class: 'noticed', hidden: true });
   const infoButton = h('button', { class: 'round', 'aria-label': S.info, title: S.infoTip, onclick: () => toggleInfo() }, icon('info'));
   const editButton = h('button', { class: 'round', 'aria-label': S.edit, title: S.editTip, onclick: () => toggleEdit() }, icon('edit'));
-  // HOME-013: the photograph in Numa on this computer or device, through
-  // the link both clients take (docs/PLAN_HOME.md). No Numa on Android.
+  // Open the photograph in Numa on this computer or device, through the
+  // numa:// link the apps register. There is no Numa for Android.
   const inNuma = !/Android/i.test(navigator.userAgent) && h('a', {
     class: 'chip open-in-numa', title: S.openTip,
   }, S.openInNuma);

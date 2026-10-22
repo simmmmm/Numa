@@ -27,6 +27,8 @@ pub use burst::{burst_of, sharper_in_burst};
 mod found;
 
 mod at_home;
+
+mod tidy;
 pub use at_home::{home_preview, home_thumb, AtHome};
 use schema::{migrate, HOME_SCHEMA, LEGACY_SCHEMA, LIBRARY_SCHEMA};
 
@@ -242,7 +244,7 @@ impl Sort {
         }
     }
 
-    fn compare(self, reversed: bool, a: &Photo, b: &Photo) -> std::cmp::Ordering {
+    pub fn compare(self, reversed: bool, a: &Photo, b: &Photo) -> std::cmp::Ordering {
 
         let best = |a: Option<f32>, b: Option<f32>| match (a, b) {
             (Some(a), Some(b)) => b.total_cmp(&a),
@@ -1351,6 +1353,12 @@ impl Catalog {
         tx.execute("DELETE FROM people WHERE id NOT IN (SELECT person_id FROM named_faces)", [])
             .map_err(text)?;
         tx.commit().map_err(text)
+    }
+
+    pub fn forget(&self, key: &str) {
+        if let Err(err) = self.home.execute("DELETE FROM settings WHERE key = ?1", params![key]) {
+            log::warn!("could not forget {key}: {err}");
+        }
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
@@ -2830,60 +2838,6 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_of_shoot_is_kept_with_its_library() {
-        let root = temp_dir("kind");
-        std::fs::write(root.join("a.RAF"), b"x").unwrap();
-        let catalog = Catalog::in_memory().unwrap();
-        let library = catalog.add_library(&root).unwrap();
-        assert_eq!(catalog.kind(library.id), None);
-        catalog.set_kind(library.id, Some(crate::workflows::Kind::Sports)).unwrap();
-        let again = Catalog::in_memory().unwrap();
-        let reopened = again.add_library(&root).unwrap();
-        assert_eq!(again.kind(reopened.id), Some(crate::workflows::Kind::Sports));
-        catalog.set_kind(library.id, None).unwrap();
-        assert_eq!(catalog.kind(library.id), None);
-    }
-
-    #[test]
-    fn numas_work_is_kept_with_its_library_and_taken_back() {
-        let root = temp_dir("numa-work");
-        std::fs::write(root.join("a.RAF"), b"x").unwrap();
-        std::fs::write(root.join("b.RAF"), b"x").unwrap();
-        let catalog = Catalog::in_memory().unwrap();
-        let library = catalog.add_library(&root).unwrap();
-        catalog.sync_library(&library).unwrap();
-        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
-        let (a, b) = (photos[0].id, photos[1].id);
-
-        let first = Document::new(photos[0].path.to_string_lossy().to_string());
-        let mut later = first.clone();
-        later.set_crop([0.1, 0.1, 0.5, 0.5], 0.0);
-        catalog.keep_before_numa(a, &first).unwrap();
-        catalog.keep_before_numa(a, &later).unwrap();
-        catalog.keep_numa_flags(&[b], Flag::Rejected).unwrap();
-
-        let again = Catalog::in_memory().unwrap();
-        let reopened = again.add_library(&root).unwrap();
-        let (before, flags) = again.numas_work(reopened.id);
-        assert_eq!(before.len(), 1);
-        assert!(before[0].1.crop().is_none(), "the first before is the one kept");
-        assert_eq!(flags.len(), 1);
-        assert_eq!(flags[0].1, Flag::Rejected);
-
-        let did = crate::workflows::Did { angle: Some(1.5), ..Default::default() };
-        catalog.keep_numa_did(a, &did).unwrap();
-        assert_eq!(again.numa_did(a), Some(did));
-        assert!(again.before_numa(a).is_some_and(|document| document.crop().is_none()));
-        catalog.set_library_setting(library.id, "teaser", Some("[1,2]")).unwrap();
-        assert_eq!(again.library_setting(reopened.id, "teaser").as_deref(), Some("[1,2]"));
-
-        catalog.forget_numa(&[a, b]).unwrap();
-        let (before, flags) = catalog.numas_work(library.id);
-        assert!(before.is_empty() && flags.is_empty());
-        assert_eq!(catalog.numa_did(a), None, "what Numa did goes with its before");
-    }
-
-    #[test]
     fn a_frame_reads_with_its_moments_layers_and_writes_back_its_own() {
         let root = temp_dir("numa-layers");
         std::fs::write(root.join("a.RAF"), b"x").unwrap();
@@ -2895,7 +2849,7 @@ mod tests {
 
         let mut layers = crate::layers::Layers::default();
         layers.tone[0] = 0.5;
-        catalog.keep_layers(library.id, 9, &layers).unwrap();
+        catalog.set_library_setting(library.id, "moment-layers/9", Some(&serde_json::to_string(&layers).unwrap())).unwrap();
         let mut own = Document::new("a.RAF".to_string());
         own.moment = Some(9);
         catalog.save_own_edits(a, &own).unwrap();
@@ -2909,9 +2863,8 @@ mod tests {
         catalog.save_edits(a, &whole).unwrap();
         assert!((catalog.own_edits(a).unwrap().unwrap().basic().tone.exposure - 0.2).abs() < 1e-5);
         layers.tone[0] = 1.0;
-        catalog.keep_layers(library.id, 9, &layers).unwrap();
+        catalog.set_library_setting(library.id, "moment-layers/9", Some(&serde_json::to_string(&layers).unwrap())).unwrap();
         assert!((catalog.load_edits(a).unwrap().unwrap().basic().tone.exposure - 1.2).abs() < 1e-5, "the moment changed, the frame with it");
-        assert_eq!(catalog.all_layers(library.id).len(), 1);
         assert!(untouched.is_none(), "a frame on its own reads as it is stored");
     }
 
@@ -3174,10 +3127,8 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         catalog.set_positions(&[(a.id, 35.0, 135.8)]).unwrap();
         assert_eq!(catalog.positions(&[a.id]).unwrap().len(), 1, "and a place can be written");
 
-        catalog.set_kind(library.id, Some(crate::workflows::Kind::Sports)).unwrap();
-        assert_eq!(catalog.kind(library.id), Some(crate::workflows::Kind::Sports));
-        catalog.keep_layers(library.id, 1, &crate::layers::Layers::default()).unwrap();
-        assert_eq!(catalog.all_layers(library.id).len(), 1);
+        catalog.set_library_setting(library.id, "moment-layers/1", Some("{}")).unwrap();
+        assert_eq!(catalog.library_setting(library.id, "moment-layers/1").as_deref(), Some("{}"));
         let _ = std::fs::remove_dir_all(&here);
         let _ = std::fs::remove_dir_all(&home);
     }
