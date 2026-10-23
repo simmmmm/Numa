@@ -18,7 +18,11 @@ use crate::{Fail, Server};
 pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
     let photo = server.home.photo(&me.name, id)?;
     let path = photo.path.clone();
-    let summary = tokio::task::spawn_blocking(move || numa_io::raw::summary(&path)).await.map_err(Fail::internal)?;
+
+    let (summary, spot) = {
+        let (server, photo) = (server.clone(), photo.clone());
+        tokio::task::spawn_blocking(move || (numa_io::raw::summary(&path), crate::map::spot_of(&server, &photo))).await.map_err(Fail::internal)?
+    };
     let (people, albums) = server
         .home
         .ask(move |catalog| {
@@ -43,7 +47,7 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
     .flatten()
     .collect();
     let size = summary.map(|summary| summary.sensor).filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| format!("{w} × {h}"));
-    Ok(Json(json!({
+    let mut said = json!({
         "id": id,
         "name": photo.path.file_name().map(|name| name.to_string_lossy()),
         "taken": when(&photo),
@@ -61,7 +65,9 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         "chosen": chosen,
         "sharpness": sharpness(&server, &photo),
         "measured": photo.sharpness.is_some(),
-    })))
+    });
+    said.as_object_mut().expect("an object").extend(crate::map::said(spot).as_object().cloned().unwrap_or_default());
+    Ok(Json(said))
 }
 
 fn sharpness(server: &Server, photo: &Photo) -> Option<String> {

@@ -21,11 +21,11 @@ DEB_BUILD='mkdir /t && PATH=/usr/lib/obs-build:$PATH debtransform /in /in/numa.d
     dpkg-source -x numa_*.dsc src && cd src && dpkg-buildpackage -b -uc -us &&
     cp ../*.deb /out/ && dpkg -i /out/*.deb'
 declare -A DEPS=(
-    [fedora]='dnf -y install rpm-build dnf-plugins-core vulkan-loader && dnf -y builddep /in/numa.spec'
+    [fedora]='dnf -y install rpm-build dnf-plugins-core vulkan-loader libglvnd-gles && dnf -y builddep /in/numa.spec'
     [tumbleweed]='zypper -n in rpm-build rpmlint libvulkan1 && zypper -n in $(rpmspec -q --buildrequires /in/numa.spec | sed "s/ .*//")'
     [debian]="$DEB_DEPS"
     [ubuntu]="$DEB_DEPS"
-    [arch]='pacman -Syu --noconfirm --needed base-devel rust openssl gtk4 libadwaita vulkan-icd-loader hicolor-icon-theme'
+    [arch]='pacman -Syu --noconfirm --needed base-devel rust openssl gtk4 libadwaita libshumate vulkan-icd-loader hicolor-icon-theme'
 )
 declare -A BUILD=(
     [fedora]="$RPM_BUILD"

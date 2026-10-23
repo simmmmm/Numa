@@ -4,10 +4,6 @@ use numa::io::words::{self as seen, Index, THINGS};
 
 const WANTED: &str = "words-wanted";
 
-const THINGS_HIDDEN: &str = "things-numa-saw-hidden";
-
-const THINGS_SHOWN: usize = 30;
-
 #[derive(Clone)]
 pub(super) struct State {
 
@@ -399,122 +395,55 @@ async fn read_library(state: App, library: Library, pending: Vec<(PathBuf, i64)>
     keep_reading(&state);
 }
 
-pub(super) fn things_section(state: &App, popover: &gtk::Popover) -> gtk::Box {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    heading.set_margin_top(6);
-    let label = gtk::Label::new(Some("THINGS NUMA SAW"));
-    label.add_css_class("section-header");
-    label.set_xalign(0.0);
-    label.set_hexpand(true);
-    label.set_tooltip_text(Some("What Numa found in the photographs on this computer — never written into your keywords or exported"));
-    let hide = gtk::Button::with_label("Hide");
-    hide.add_css_class("flat");
-    hide.add_css_class("caption");
-    heading.append(&label);
-    heading.append(&hide);
-    let chips = gtk::FlowBox::new();
-    chips.add_css_class("saw-chips");
-    chips.set_selection_mode(gtk::SelectionMode::None);
-    chips.set_column_spacing(4);
-    chips.set_row_spacing(4);
-
-    chips.set_max_children_per_line(4);
-    section.append(&heading);
-    section.append(&chips);
-    section.set_visible(false);
-
-    let fill = Rc::new(glib::clone!(
-        #[strong] state,
-        #[weak] section,
-        #[weak] chips,
-        #[weak] hide,
-        move || fill_things(&state, &section, &chips, &hide)
-    ));
-    popover.connect_show(glib::clone!(
-        #[strong] fill,
-        move |_| fill()
-    ));
-    hide.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| {
-            let hidden = !state.catalog.recall::<bool>(THINGS_HIDDEN).unwrap_or(false);
-            state.catalog.remember(THINGS_HIDDEN, &hidden);
-            if hidden && state.libraries.words.thing.take().is_some() {
-                reload_grid(&state);
-            }
-            fill();
-        }
-    ));
-    section
-}
-
-fn fill_things(state: &App, section: &gtk::Box, chips: &gtk::FlowBox, hide: &gtk::Button) {
-    chips.remove_all();
+pub(super) fn seen_in(state: &App, photos: &[Photo], ready: impl Fn() + 'static) -> Option<HashMap<i64, Vec<usize>>> {
+    if !seen::installed() {
+        return None;
+    }
     let words = &state.libraries.words;
-    let Some(library) = state.libraries.current.borrow().clone().filter(|_| seen::installed()) else {
-        section.set_visible(false);
-        return;
-    };
-    let spans = state.libraries.filter.borrow().spans_libraries();
-    let mut indexes = words.indexes.borrow_mut();
-    let empty = index_of(state, &mut indexes, library.id).is_none_or(|index| index.is_empty());
-    section.set_visible(!empty);
-    let hidden = state.catalog.recall::<bool>(THINGS_HIDDEN).unwrap_or(false);
-    hide.set_label(if hidden { "Show" } else { "Hide" });
-    chips.set_visible(!hidden);
-    if empty || hidden {
-        return;
-    }
     let Some(things) = words.things.borrow().clone() else {
-        drop(indexes);
-        make_things(state, section, chips, hide);
-        return;
+        make_things(state, ready);
+        return None;
     };
-    let mut counts = vec![0usize; THINGS.len()];
-    for (_, index) in indexes.iter_mut().filter(|(id, _)| spans || **id == library.id) {
-        index.see(&things);
-        for seen in index.seen() {
-            for thing in seen {
-                counts[*thing] += 1;
-            }
+    let mut indexes = words.indexes.borrow_mut();
+    let libraries: std::collections::HashSet<i64> = photos.iter().map(|photo| numa::io::catalog::library_of(photo.id)).collect();
+    for library in libraries {
+        if let Some(index) = index_of(state, &mut indexes, library) {
+            index.see(&things);
         }
     }
-    let mut found: Vec<(usize, usize)> = counts.into_iter().enumerate().filter(|(_, count)| *count > 0).collect();
-    found.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    for (thing, count) in found.into_iter().take(THINGS_SHOWN) {
-        let chip = gtk::ToggleButton::with_label(THINGS[thing]);
-        chip.set_tooltip_text(Some(&format!("{} {}", places::grouped(count as i64), if count == 1 { "photo" } else { "photos" })));
-        chip.set_focus_on_click(false);
-        chip.set_active(words.thing.get() == Some(thing));
-        chip.connect_toggled(glib::clone!(
-            #[strong] state,
-            move |chip| {
-                let words = &state.libraries.words;
-                match chip.is_active() {
-                    true => words.thing.set(Some(thing)),
-                    false if words.thing.get() == Some(thing) => words.thing.set(None),
-                    false => return,
-                }
-                reload_grid(&state);
-            }
-        ));
-        chips.append(&chip);
-    }
+    let saw: HashMap<i64, Vec<usize>> = photos
+        .iter()
+        .filter_map(|photo| Some((photo.id, indexes.get(&numa::io::catalog::library_of(photo.id))?.saw(&photo.path, photo.mtime)?.to_vec())))
+        .collect();
+    (!saw.is_empty()).then_some(saw)
 }
 
-fn make_things(state: &App, section: &gtk::Box, chips: &gtk::FlowBox, hide: &gtk::Button) {
+pub(super) fn thing(state: &App) -> Option<usize> {
+    state.libraries.words.thing.get()
+}
+
+pub(super) fn set_thing(state: &App, thing: Option<usize>) {
+    state.libraries.words.thing.set(thing);
+}
+
+pub(super) fn narrow_but_thing(state: &App, photos: &mut Vec<Photo>) {
+    let thing = state.libraries.words.thing.take();
+    narrow(state, photos);
+    state.libraries.words.thing.set(thing);
+}
+
+fn make_things(state: &App, ready: impl Fn() + 'static) {
     if state.libraries.words.making.replace(true) {
         return;
     }
-    let (state, section, chips, hide) = (state.clone(), section.clone(), chips.clone(), hide.clone());
+    let state = state.clone();
     glib::spawn_future_local(async move {
         let made = gio::spawn_blocking(seen::things).await;
         state.libraries.words.making.set(false);
         match made {
             Ok(Ok(things)) => {
                 state.libraries.words.things.replace(Some(Rc::new(things)));
-                fill_things(&state, &section, &chips, &hide);
+                ready();
             }
             Ok(Err(err)) => log::warn!("things numa saw: {err}"),
             Err(_) => {}

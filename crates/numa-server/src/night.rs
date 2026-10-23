@@ -102,12 +102,13 @@ pub fn run(server: &Arc<Server>, failed: &mut HashSet<i64>) {
     save(server, &report);
     server.activity.plan(Kind::Night, 0, None);
     server.activity.start(Kind::Night);
-    let steps: [(&'static str, Step); 8] = [
+    let steps: [(&'static str, Step); 9] = [
         ("Trying again what failed", retry),
         ("Reading every library again in full", rescan),
         ("Checking that every file still reads", check),
         ("Emptying the trash's oldest", trash),
         ("Preparing Tidy Up", tidy),
+        ("Bringing the map up to date", map),
         ("Compacting the catalogs", vacuum),
         ("Pruning the thumbnail cache", prune),
         ("Making the second copy", second_copy),
@@ -140,7 +141,7 @@ fn retry(server: &Arc<Server>, report: &mut Report, failed: &mut HashSet<i64>) -
         report.done.push(format!("Tried again: {} whose thumbnails or analysis failed by day", plural(failed.len(), "photograph", "photographs")));
         failed.clear();
     }
-    let missing = server.activity.downloads().iter().filter(|download| download.state == "failed").count();
+    let missing = server.activity.downloads().iter().filter(|download| download.state == "failed" && download.name != crate::map::NAME).count();
     if missing > 0 {
         crate::models::fetch(server);
         numa_infer::release_all();
@@ -251,6 +252,11 @@ fn tidy(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool
     if total > 0 {
         report.needs.push(Need { text: format!("{} in Tidy Up {} for a choice", plural(total, "set", "sets"), if total == 1 { "waits" } else { "wait" }), link: "#/tidy?everyone=1".into() });
     }
+    true
+}
+
+fn map(server: &Arc<Server>, report: &mut Report, _: &mut HashSet<i64>) -> bool {
+    crate::map::night(server, report);
     true
 }
 

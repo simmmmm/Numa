@@ -37,6 +37,7 @@ const ICONS = {
   turn: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  minus: '<path d="M5 12h14"/>',
   upload: '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
   filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
   image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
@@ -132,7 +133,8 @@ const when = seconds => new Date(seconds * 1000).toLocaleString(S.locale, {
 
 // Routes live in the hash: #/ (photos, narrowed by ?library=&person=&album=&q=),
 // #/today (HOME-039), #/libraries, #/people, #/albums, #/accounts, #/activity,
-// #/cameras, #/trash, #/import, #/tidy (?kind=). No route at all opens the
+// #/cameras, #/trash, #/import, #/tidy (?kind=), #/places (HOME-041, ?at=lat,lon
+// and the timeline's filters). No route at all opens the
 // account's start page.
 function route() {
   const [path, query] = (location.hash.slice(1) || '/').split('?');
@@ -242,7 +244,7 @@ window.addEventListener('hashchange', () => { if (state.me) render(); });
 
 // One title per page, so a tab, the history and a screen reader say where you
 // are: "Photos · Numa Home".
-const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash,
+const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/places': S.places, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash,
   '/safe': S.safeAtHome, '/activity': S.safeAtHome, '/accounts': S.safeAtHome, '/devices': S.safeAtHome, '/cameras': S.safeAtHome };
 const titled = page => { document.title = page ? `${page} · ${S.numaHome}` : S.numaHome; };
 function pageTitle(path, params) {
@@ -272,6 +274,7 @@ function render() {
   if (path === '/tidy') return tidyPage(main, params);
   if (path === '/people') return people(main);
   if (path === '/albums') return albums(main);
+  if (path === '/places') return placesPage(main, params);
   if (path === '/libraries') return shelves(main);
   if (path === '/accounts' && state.me.admin) return accounts(main);
   if (path === '/devices') return devicesPage(main);
@@ -361,12 +364,21 @@ function placesNav(path, params) {
   // Albums goes under More.
   const albums = group(S.albums, '/albums', 'album');
   albums.classList.add('extra');
+  // HOME-041: Places, with how many towns; under More on a phone.
+  const places = place(S.places, '/places', true);
+  const towns = h('span', { class: 'caption' }, navLists.places != null ? grouped(navLists.places) : '');
+  places.append(towns);
+  places.classList.add('counted');
+  if (navLists.places == null) api('places?count=1', { quiet: true }).then(found => {
+    towns.textContent = grouped(found.count);
+    if (!found.looking) navLists.places = found.count;
+  }, () => {});
   const nav = h('nav', { class: 'places-nav', 'aria-label': S.places },
-    place(S.today, '/today'), place(S.photosPage, '/'), group(S.libraries, '/libraries', 'library'), group(S.people, '/people', 'person'), albums, rest);
-  const extras = ['/albums', '/import', '/tidy', '/trash', '/safe'];
+    place(S.today, '/today'), place(S.photosPage, '/'), group(S.libraries, '/libraries', 'library'), group(S.people, '/people', 'person'), albums, places, rest);
+  const extras = ['/albums', '/places', '/import', '/tidy', '/trash', '/safe'];
   nav.append(h('button', { class: 'place-link more' + (extras.includes(here) ? ' chosen' : ''), 'aria-haspopup': 'menu', onclick: event => {
     event.stopPropagation();
-    menu(nav, [place(S.albums, '/albums'), ...rest].filter(Boolean).map(one => one.tagName === 'BUTTON'
+    menu(nav, [place(S.albums, '/albums'), place(S.places, '/places'), ...rest].filter(Boolean).map(one => one.tagName === 'BUTTON'
       ? h('button', { class: one.classList.contains('chosen') ? 'chosen' : null, onclick: () => one.click() }, one.textContent)
       : h('div', { class: 'section-label' }, one.textContent)));
   } }, S.more));
@@ -557,7 +569,7 @@ async function timeline(main, params) {
 
 // UX-081: what narrows a page of photographs, in the order its chips stand,
 // and the page's filters with `change` made (a value of null takes one off).
-const FILTERS = ['library', 'album', 'person', 'place', 'camera', 'date', 'by', 'thing', 'flag', 'rating', 'q'];
+const FILTERS = ['library', 'album', 'person', 'place', 'region', 'camera', 'date', 'by', 'thing', 'flag', 'rating', 'q'];
 const narrowedBy = params => FILTERS.filter(key => params.get(key)).map(key => [key, params.get(key)]);
 const narrow = (params, change) => go('/', { ...Object.fromEntries(narrowedBy(params)), ...change });
 // A flag as a filter says it; the loupe's FLAGS are what a button does.
@@ -1551,6 +1563,10 @@ async function fillInfo() {
     label(S.by), by,
     library && label(S.library),
     library && h('div', {}, libraryName(library)),
+    // HOME-041: where it was taken, on a small map.
+    photo.position && label(S.placeLabel),
+    photo.place && h('div', {}, photo.place),
+    photo.position && infoMap(photo.position),
     photo.edited && h('div', { class: 'caption', style: { marginTop: '14px' } }, S.shownWithEdits),
   ].filter(Boolean));
 }

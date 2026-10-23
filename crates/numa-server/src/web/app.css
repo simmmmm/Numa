@@ -770,6 +770,84 @@ dialog.ask .year { width: 80px; margin-left: auto; }
   .phone .qr { width: 200px; height: 200px; }
 }
 
+/* HOME-041: Places. The list of countries beside the map on a wide screen,
+   with the side list's rows and folds; on a phone the map fills the page and
+   the list is a sheet over it. On the map, each place a small stack of its
+   prints with its count; chosen, the count is white and a card with Show N
+   stands over it, on the photograph's HUD ground. */
+main.map-page { padding: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); height: calc(100vh - var(--head)); height: calc(100dvh - var(--head)); overflow: hidden; }
+.place-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--rule); background: var(--ground-page); }
+.place-list .list-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); padding: var(--space-20) var(--space-16) var(--space-10) var(--space-20);
+  border: 0; background: none; color: inherit; text-align: left; cursor: default; }
+.place-list h1 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; }
+.place-list .rows { flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: var(--space-2); padding: 0 var(--space-8) var(--space-16) var(--space-12);
+  scrollbar-width: thin; scrollbar-color: var(--ground-raised) transparent; }
+.place-list .rows > .body { padding: 0 var(--space-8); }
+.place-list .place-link, .place-list .place-entry { display: flex; align-items: center; gap: var(--space-10); min-width: 0; }
+.place-list .place-link .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.place-list .place-link .caption { transition: color var(--quick); }
+.place-list .place-link.chosen .caption, .place-list .place-entry.chosen .caption { color: inherit; }
+.place-list .place-head .place-link { padding-right: var(--space-44); }
+.place-list .place-head .place-entry { padding-right: var(--space-44); }
+.place-list .place-head .place-entry + .place-fold { top: 1px; }
+.place-list .place-head { background: var(--ground-page); }
+.place-list .place-group .place-group .place-head { position: relative; }
+.place-list .place-entries .rail .rail { margin-left: var(--space-12); }
+.place-list .none { margin: 0; padding: var(--space-14) var(--space-20); border-top: 1px solid var(--rule); }
+.map-stage { position: relative; isolation: isolate; min-width: 0; min-height: 0; overflow: hidden; background: var(--map-water); }
+.map-stage .map { position: absolute; inset: 0; z-index: 0; }
+.map-stage .map:focus-visible { outline-offset: -2px; }
+.map-stage .map-chips { position: absolute; top: var(--edge); left: var(--edge); right: var(--edge); z-index: 2; padding: 0; pointer-events: none; }
+.map-stage .map-chips > * { pointer-events: auto; }
+.map-stage .zoom { position: absolute; right: var(--edge); bottom: var(--space-30); z-index: 2; display: grid; gap: var(--space-8); }
+.map-stage .credit { position: absolute; right: var(--edge); bottom: var(--space-8); z-index: 2; padding: var(--space-2) var(--space-6); border-radius: var(--radius-pill);
+  background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); font-size: 10px; line-height: 14px; color: var(--name); }
+.map-stage .credit a { color: inherit; text-decoration: none; }
+.map-stage .note { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--edge); }
+.pin { position: relative; width: 56px; height: 50px; padding: 0; border: 0; background: none; cursor: pointer; }
+.pin .stack { transform: scale(0.4); transform-origin: 0 0; pointer-events: none; }
+.pin .count { position: absolute; right: -12px; top: -8px; min-width: 24px; padding: var(--space-2) var(--space-6); border-radius: var(--radius-pill); text-align: center;
+  background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); color: var(--ink); font-size: 11px; line-height: 14px; font-weight: 600;
+  font-variant-numeric: tabular-nums; transition: background var(--quick), color var(--quick); }
+.pin.chosen .count { background: var(--accent); color: var(--on-accent); }
+.pin:focus-visible { outline-offset: 4px; border-radius: var(--radius-print); }
+.map-pop { position: absolute; z-index: 3; width: 300px; display: grid; gap: var(--space-10); padding: var(--space-14); border-radius: var(--radius-photo-card);
+  background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: var(--shadow-print-front); animation: peek var(--standard); }
+.map-pop .head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
+.map-pop .name { font-size: 15px; line-height: 20px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-pop .caption { color: var(--name); white-space: nowrap; }
+.map-pop .strip img { flex: 1; min-width: 0; height: 64px; object-fit: cover; border-radius: var(--radius-histogram); }
+.map-pop .primary { justify-self: start; }
+.mini-map-box { display: grid; gap: var(--space-4); margin-top: var(--space-6); }
+.mini-map-link { display: block; width: 100%; height: 160px; padding: 0; border: 0; border-radius: var(--radius-card); overflow: hidden; background: var(--map-water); cursor: pointer; }
+.mini-map { width: 100%; height: 100%; }
+.mini-map-box .caption { font-size: 10px; line-height: 14px; }
+.map-here { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: var(--shadow-badge); }
+@media (min-width: 900px) {
+  main.map-page { padding-left: var(--side); }
+  .places-nav .place-link.counted { display: flex; align-items: center; gap: var(--space-10); }
+  .places-nav .place-link.counted .caption { margin-left: auto; transition: color var(--quick); }
+  .places-nav .place-link.counted.chosen .caption { color: inherit; }
+}
+@media (max-width: 899px) {
+  main.map-page { height: calc(100vh - var(--head) - var(--foot)); height: calc(100dvh - var(--head) - var(--foot)); padding: 0; }
+  /* The side list's rows, not the foot's tabs. */
+  .place-list .place-link { text-align: left; padding: 0 var(--space-14); font-size: 13px; }
+}
+@media (max-width: 720px) {
+  main.map-page { grid-template-columns: minmax(0, 1fr); position: relative; }
+  .place-list { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; max-height: 62%; border: 0; border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+    background: var(--ground-sheet); box-shadow: var(--shadow-print-front); }
+  .place-list .list-head { cursor: pointer; padding: var(--space-16) var(--space-20); }
+  .place-list .list-head h1 { font-size: 17px; line-height: 22px; }
+  .place-list:not(.open) .rows, .place-list:not(.open) .none { display: none; }
+  .place-list .place-group, .place-list .place-head { display: grid; }
+  .place-list .place-head { background: var(--ground-sheet); }
+  .map-stage .zoom { bottom: calc(var(--space-44) + var(--space-44) + var(--space-8)); }
+  .map-stage .credit { bottom: calc(var(--space-44) + var(--space-30)); }
+  .map-pop { width: min(300px, calc(100% - var(--space-16))); }
+}
+
 /* Reduced motion (README, Motion): every movement is a 150 ms crossfade, and
    a spinner is the word it already carries, Working… or Loading…. */
 @media (prefers-reduced-motion: reduce) {

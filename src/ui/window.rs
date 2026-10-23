@@ -41,6 +41,7 @@ mod colour;
 mod own_profile;
 mod effects;
 mod filter;
+mod filter_menu;
 mod grade;
 mod retouch;
 mod crop;
@@ -104,6 +105,13 @@ mod tracks;
 mod tonight;
 mod tethering;
 mod folders;
+mod sidebar;
+mod today;
+mod tidy;
+mod spots;
+mod map_view;
+mod places_page;
+mod library_bar;
 mod compare;
 mod badges;
 mod rating;
@@ -449,7 +457,18 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
     state.stack.set_transition_duration(300);
     state.stack.add_named(&build_library_page(state, window), Some("library"));
 
-    state.stack.add_named(&build_folders_page(state), Some("folders"));
+    for (column, name) in [
+        (&state.libraries.today, "today"),
+        (&state.libraries.albums, "albums"),
+        (&state.libraries.people, "people"),
+        (&state.libraries.tidy, "tidy"),
+    ] {
+        state.stack.add_named(&build_page(column), Some(name));
+    }
+
+    state.stack.add_named(&places_page::build(state), Some("places"));
+
+    state.stack.add_named(&library_bar::page(state, &build_page(&state.libraries.shelves)), Some("libraries"));
     state.stack.set_visible_child_name("library");
 
     state.stack.connect_visible_child_name_notify(glib::clone!(
@@ -474,7 +493,7 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
     view.append(&banners(state));
     view.append(&state.stack);
 
-    state.toasts.set_child(Some(&view));
+    state.toasts.set_child(Some(&sidebar::build(state, window, &view)));
     window.set_content(Some(&state.toasts));
 
     install_rating_shortcuts(state, window);

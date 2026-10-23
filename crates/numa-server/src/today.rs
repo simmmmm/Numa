@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::Json;
-use numa_io::catalog::{library_of, Flag};
+use numa_io::catalog::library_of;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -22,29 +22,6 @@ const STRIP: usize = 6;
 pub struct Asked {
 
     day: Option<String>,
-}
-
-fn on_this_day(photos: impl IntoIterator<Item = (i64, i64, u8, Flag)>, today: &str) -> Vec<(i64, Vec<i64>)> {
-    let (year, month_day) = today.split_at(today.len() - 6);
-    let year: i64 = year.parse().unwrap_or(0);
-    let mut years: BTreeMap<i64, Vec<(bool, i64, i64)>> = BTreeMap::new();
-    for (id, at, rating, flag) in photos {
-        let day = numa_io::import::day(at, 0);
-        let (taken, on) = day.split_at(day.len() - 6);
-        let Ok(taken) = taken.parse::<i64>() else { continue };
-        if on == month_day && taken < year && flag != Flag::Rejected {
-            years.entry(taken).or_default().push((flag != Flag::Picked && rating < 3, at, id));
-        }
-    }
-    years
-        .into_iter()
-        .rev()
-        .take(YEARS)
-        .map(|(year, mut photos)| {
-            photos.sort_unstable();
-            (year, photos.into_iter().map(|(.., id)| id).collect())
-        })
-        .collect()
 }
 
 fn valid(day: &str) -> bool {
@@ -90,7 +67,7 @@ pub async fn today(State(server): State<Arc<Server>>, Signed(me): Signed, Query(
             })
             .collect();
         let year: i64 = date[..4].parse().unwrap_or(0);
-        let on_this_day: Vec<Value> = on_this_day(taken, &date)
+        let on_this_day: Vec<Value> = numa_io::import::on_this_day(taken, &date, YEARS)
             .into_iter()
             .map(|(taken, ids)| {
                 let mut from: Vec<i64> = ids.iter().map(|id| library_of(*id)).collect();
@@ -128,25 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn on_this_day_is_earlier_years_newest_first_the_best_first() {
-        let at = |text: &str| numa_io::track::iso(text).unwrap();
-        let mut photos = vec![
-            (1, at("2024-10-18T09:00:00Z"), 0, Flag::None),
-            (2, at("2024-10-18T18:00:00Z"), 4, Flag::None),
-            (3, at("2024-10-18T12:00:00Z"), 0, Flag::Picked),
-            (4, at("2024-10-18T13:00:00Z"), 5, Flag::Rejected),
-            (5, at("2024-10-19T12:00:00Z"), 5, Flag::Picked),
-            (6, at("2026-10-18T08:00:00Z"), 5, Flag::Picked),
-            (7, at("2021-10-18T23:59:00Z"), 0, Flag::None),
-        ];
-
-        photos.extend((2010..2018).map(|year| (100 + year, at(&format!("{year}-10-18T12:00:00Z")), 0, Flag::None)));
-        let found = on_this_day(photos, "2026-10-18");
-
-        assert_eq!(found[0], (2024, vec![3, 2, 1]));
-        assert_eq!(found[1], (2021, vec![7]));
-        let years: Vec<i64> = found.iter().map(|(year, _)| *year).collect();
-        assert_eq!(years, [2024, 2021, 2017, 2016, 2015, 2014]);
+    fn a_day_is_its_month_and_day() {
         assert!(valid("02-29") && !valid("2-29") && !valid("1-018") && !valid("13-01") && !valid("10-18x"));
     }
 }

@@ -69,7 +69,8 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     let album = album_button(state);
     back_to_grid(state, &album);
     bar.pack_start(&album);
-    acts.extend([paste.upcast(), album.upcast()]);
+
+    acts.push(paste.upcast());
 
     let merge = gtk::Button::with_label("Merge…");
     merge.add_css_class("flat");
@@ -87,36 +88,46 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         move |button| export_selection(&state, button)
     ));
     bar.pack_end(&export);
-
-    let more_menu = gio::Menu::new();
-    more_menu.append(Some("Tonight…"), Some("win.tonight"));
-    more_menu.append(Some("For a Book…"), Some("win.book"));
-
-    more_menu.append(Some("Copy File Names"), Some("win.copy-names"));
-    let more = gtk::MenuButton::new();
-    more.set_icon_name("view-more-symbolic");
-    more.set_has_frame(false);
-    more.set_menu_model(Some(&more_menu));
-    more.set_tooltip_text(Some("More"));
-    back_to_grid(state, &more);
+    let more = more_button(state);
     bar.pack_end(&more);
     acts.extend([merge.clone().upcast(), export.clone().upcast(), more.upcast()]);
+
+    let into = primary_button("Add to");
+    into.set_visible(false);
+    into.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| into_new_album(&state)
+    ));
+    bar.pack_end(&into);
 
     let update = Rc::new(glib::clone!(
         #[weak] bar,
         #[weak] count,
         #[weak] merge,
         #[weak] export,
+        #[weak] album,
+        #[weak] into,
         #[strong] state,
         move || {
             let chosen = state.grid.wall.selected().len();
             let number = places::grouped(chosen as i64);
-            count.set_text(&match chosen {
-                0 => "Choose photographs".to_string(),
+
+            if !state.grid.wall.choosing() {
+                state.libraries.new_album.replace(None);
+            }
+            let making = state.libraries.new_album.borrow().clone();
+            count.set_text(&match (chosen, &making) {
+                (0, Some(name)) => format!("Choose photographs for {name}"),
+                (0, None) => "Choose photographs".to_string(),
                 _ => format!("{number} chosen"),
             });
             for act in &acts {
                 act.set_visible(chosen > 0);
+            }
+            album.set_visible(chosen > 0 && making.is_none());
+            into.set_visible(chosen > 0 && making.is_some());
+            if let Some(name) = &making {
+                into.set_label(&format!("Add to {name}"));
             }
             merge.set_sensitive(chosen >= 2);
             export.set_label(&format!("Export {number}…"));
@@ -132,6 +143,21 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     state.loupe.reveal.connect_reveal_child_notify(move |_| update());
     keep_focus(bar.upcast_ref());
     bar
+}
+
+fn more_button(state: &App) -> gtk::MenuButton {
+    let more_menu = gio::Menu::new();
+    more_menu.append(Some("Tonight…"), Some("win.tonight"));
+    more_menu.append(Some("For a Book…"), Some("win.book"));
+
+    more_menu.append(Some("Copy File Names"), Some("win.copy-names"));
+    let more = gtk::MenuButton::new();
+    more.set_icon_name("view-more-symbolic");
+    more.set_has_frame(false);
+    more.set_menu_model(Some(&more_menu));
+    more.set_tooltip_text(Some("More"));
+    back_to_grid(state, &more);
+    more
 }
 
 pub(super) fn back_to_grid(state: &App, button: &gtk::MenuButton) {

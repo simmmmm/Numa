@@ -54,7 +54,7 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
                 }
                 match state.catalog.create_album(&name.text()) {
                     Ok(key) => {
-                        refresh_picker(&state);
+                        refresh_places(&state);
                         add_selection_to_album(&state, &key);
                     }
                     Err(err) => state.toast(&err),
@@ -80,6 +80,14 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
     ));
     window.add_action(&remove);
 
+    let name_first = gio::SimpleAction::new("new-album", None);
+    name_first.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] window,
+        move |_, _| new_album(&state, &window)
+    ));
+    window.add_action(&name_first);
+
     let manage = gio::SimpleAction::new("albums", None);
     manage.connect_activate(glib::clone!(
         #[strong] state,
@@ -87,6 +95,54 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
         move |_, _| albums_dialog(&state, &window)
     ));
     window.add_action(&manage);
+}
+
+pub(super) fn new_album(state: &App, window: &adw::ApplicationWindow) {
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("Name of the album"));
+    entry.set_activates_default(true);
+    let ask = adw::AlertDialog::new(Some("New Album"), None);
+    ask.set_extra_child(Some(&entry));
+    ask.add_response("cancel", "Cancel");
+    ask.add_response("choose", "Choose Photographs");
+    ask.set_default_response(Some("choose"));
+    ask.set_close_response("cancel");
+    ask.set_response_enabled("choose", false);
+    entry.connect_changed(glib::clone!(
+        #[weak] ask,
+        move |entry| ask.set_response_enabled("choose", !entry.text().trim().is_empty())
+    ));
+    let (state, typed) = (state.clone(), entry.clone());
+    ask.connect_response(None, move |_, response| {
+        let name = typed.text().trim().to_string();
+        if response != "choose" || name.is_empty() {
+            return;
+        }
+
+        show_place(&state, Place::Everywhere);
+        state.libraries.new_album.replace(Some(name));
+        state.grid.wall.set_choosing(true);
+        state.grid.wall.grab_focus();
+    });
+    ask.present(Some(window));
+    entry.grab_focus();
+}
+
+pub(super) fn into_new_album(state: &App) {
+    let Some(name) = state.libraries.new_album.borrow().clone() else { return };
+    let ids = selected_ids(state);
+    if ids.is_empty() {
+        return;
+    }
+    let made = state.catalog.create_album(&name).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key));
+    match made {
+        Ok(key) => {
+            state.libraries.new_album.replace(None);
+            state.grid.wall.unpick();
+            show_place(state, Place::Album(key));
+        }
+        Err(err) => state.toast(&err),
+    }
 }
 
 pub(super) fn add_selection_to_album(state: &App, key: &str) {
@@ -97,7 +153,11 @@ pub(super) fn add_selection_to_album(state: &App, key: &str) {
     }
     let name = state.catalog.albums().unwrap_or_default().into_iter().find(|(have, _)| have == key);
     match state.catalog.set_in_album(key, &ids, true) {
-        Ok(()) => state.toast(&format!("Added {} to {}", ids.len(), name.map(|(_, name)| name).unwrap_or_default())),
+        Ok(()) => {
+            state.toast(&format!("Added {} to {}", ids.len(), name.map(|(_, name)| name).unwrap_or_default()));
+
+            sidebar::fill(state);
+        }
         Err(err) => state.toast(&format!("Could not add to the album: {err}")),
     }
 }
@@ -137,7 +197,7 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
             #[strong] state,
             #[strong] key,
             move |row| match state.catalog.rename_album(&key, &row.text()) {
-                Ok(()) => refresh_picker(&state),
+                Ok(()) => refresh_places(&state),
                 Err(err) => state.toast(&err),
             }
         ));

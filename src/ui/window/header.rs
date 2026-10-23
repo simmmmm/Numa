@@ -3,23 +3,11 @@ use super::*;
 pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw::HeaderBar {
     let header = adw::HeaderBar::new();
 
+    header.pack_start(&state.libraries.side.toggle);
     let start = build_header_start(state, window);
     header.pack_start(&start);
 
-    places::centre(state, &header);
-    state.libraries.picker.connect_selected_notify(glib::clone!(
-        #[strong] state,
-        move |picker| {
-            if state.libraries.switching.get() {
-                return;
-            }
-            let Some(place) = state.libraries.places.borrow().get(picker.selected() as usize).cloned() else {
-                return;
-            };
-            choose_place(&state, place);
-        }
-    ));
-    let title = build_header_title(state);
+    let (title, named) = build_header_title(state);
     header.set_title_widget(Some(&title));
 
     install_header_actions(state, window);
@@ -50,10 +38,23 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
 
     state.stack.connect_visible_child_name_notify(move |stack| {
         if let Some(name) = stack.visible_child_name() {
-            title.set_visible_child_name(&name);
-            start.set_visible_child_name(&name);
-            end.set_visible_child_name(&name);
-            menu_button.set_menu_model(Some(match name.as_str() {
+
+            named.set_title(match name.as_str() {
+                "libraries" => "Libraries",
+                "albums" => "Albums",
+                "people" => "People",
+                "tidy" => "Tidy Up",
+                "places" => "Places",
+                _ => "",
+            });
+            let name = match name.as_str() {
+                "library" | "editor" => name.as_str(),
+                _ => "folders",
+            };
+            title.set_visible_child_name(name);
+            start.set_visible_child_name(name);
+            end.set_visible_child_name(name);
+            menu_button.set_menu_model(Some(match name {
                 "editor" => &editor_menu,
                 "library" => &library_menu,
                 _ => &main_menu,
@@ -171,81 +172,27 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     start
 }
 
-fn build_header_title(state: &App) -> gtk::Stack {
-
+fn build_header_title(state: &App) -> (gtk::Stack, adw::WindowTitle) {
     let title = gtk::Stack::new();
     title.set_transition_type(gtk::StackTransitionType::Crossfade);
     title.set_transition_duration(300);
-
-    let picker_holder = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-
-    let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    picker_holder.append(&balance);
-    picker_holder.append(&libraries_crumb(state));
-    let arrow = crumb_arrow();
-    arrow.add_css_class("dim-label");
-
-    state.libraries.picker.bind_property("visible", &arrow, "visible").sync_create().build();
-    picker_holder.append(&arrow);
-    picker_holder.append(&state.libraries.picker);
-    let mut child = state.libraries.picker.first_child();
-    while let Some(widget) = child {
-        if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
-            button.add_css_class("flat");
-            arrow_on_hover(button);
-            balance_picker(button, &balance);
-        }
-        child = widget.next_sibling();
-    }
-    title.add_named(&picker_holder, Some("library"));
-    title.add_named(&adw::WindowTitle::new("Libraries", ""), Some("folders"));
+    let named = adw::WindowTitle::new("", "");
+    title.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("library"));
+    title.add_named(&named, Some("folders"));
     title.add_named(&build_crumbs(state), Some("editor"));
     title.set_visible_child_name("library");
-    title
-}
-
-fn arrow_on_hover(button: &gtk::ToggleButton) {
-
-    let Some(arrow) = button.child().and_then(|inner| inner.last_child()) else {
-        return;
-    };
-    arrow.set_opacity(0.0);
-    let shown = |yes: bool| if yes { 1.0 } else { 0.0 };
-    let motion = gtk::EventControllerMotion::new();
-    motion.connect_contains_pointer_notify(glib::clone!(
-        #[weak] arrow,
-        #[weak] button,
-        move |motion| arrow.set_opacity(shown(motion.contains_pointer() || button.is_active()))
-    ));
-    button.connect_active_notify(glib::clone!(
-        #[weak] arrow,
-        #[weak] motion,
-        move |button| arrow.set_opacity(shown(motion.contains_pointer() || button.is_active()))
-    ));
-    button.add_controller(motion);
-}
-
-fn balance_picker(button: &gtk::ToggleButton, balance: &gtk::Box) {
-    button.connect_map(glib::clone!(
-        #[weak] balance,
-        move |button| {
-            let (button, balance) = (button.clone(), balance.clone());
-            glib::idle_add_local_once(move || {
-                let Some(inner) = button.child() else { return };
-                let Some(shown) = inner.last_child().and_then(|arrow| arrow.prev_sibling()) else { return };
-                let Some(bounds) = shown.compute_bounds(&inner) else { return };
-
-                let room = inner.width() - (bounds.x() + bounds.width()).round() as i32 - 4;
-                if room > 0 {
-                    balance.set_width_request(room);
-                }
-            });
-        }
-    ));
+    (title, named)
 }
 
 fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
 
+    let add = gio::SimpleAction::new("add-folder", None);
+    add.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] window,
+        move |_, _| add_library_dialog(&state, &window)
+    ));
+    window.add_action(&add);
     let manage = gio::SimpleAction::new("libraries", None);
     manage.connect_activate(glib::clone!(
         #[strong] state,
@@ -363,8 +310,7 @@ fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
     let people = gio::SimpleAction::new("people", None);
     people.connect_activate(glib::clone!(
         #[strong] state,
-        #[weak] window,
-        move |_, _| people_dialog(&state, &window)
+        move |_, _| show_people(&state)
     ));
     window.add_action(&people);
     install_clock_action(state, window);
@@ -695,6 +641,21 @@ fn add_legal_sections(about: &adw::AboutDialog) {
         Some("RawTherapee's DCP profiles, most by Maciej Dworak · downloaded separately"),
         gtk::License::Gpl30,
         None,
+    );
+
+    about.add_legal_section(
+        "GeoNames places",
+        Some("GeoNames"),
+        gtk::License::Custom,
+        Some("Creative Commons Attribution 4.0. <a href=\"https://creativecommons.org/licenses/by/4.0/\">Read the licence</a>"),
+    );
+
+    about.add_legal_section("libshumate", Some("The GNOME Project"), gtk::License::Lgpl21, None);
+    about.add_legal_section(
+        "OpenStreetMap",
+        Some("OpenStreetMap contributors, as Protomaps builds it · downloaded separately"),
+        gtk::License::Custom,
+        Some("Open Database License (ODbL). <a href=\"https://www.openstreetmap.org/copyright\">Read about it</a>"),
     );
 
     for (name, description, _) in numa::io::models::MODELS {

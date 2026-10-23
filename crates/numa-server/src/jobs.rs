@@ -61,6 +61,8 @@ pub fn start(server: Arc<Server>) {
         numa_infer::release_all();
 
         fetching.jobs.nudge();
+
+        crate::map::start(&fetching);
     });
     let _ = std::thread::Builder::new().name("numa-jobs".into()).spawn(move || {
         lower_priority();

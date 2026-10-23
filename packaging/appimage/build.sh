@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${1:-$ROOT/dist}"
 
 mkdir -p "$OUT"
-docker build -t numa-appimage -f "$ROOT/packaging/appimage/Dockerfile" \
+docker build -t numa-appimage:22.04 -f "$ROOT/packaging/appimage/Dockerfile" \
     "$ROOT/packaging/appimage"
 
 docker run --rm \
@@ -14,7 +14,7 @@ docker run --rm \
     --tmpfs /root/.cargo/git:rw,exec,size=1g \
     -v "$ROOT":/src:ro \
     -v "$OUT":/build \
-    numa-appimage /src/packaging/appimage/bundle.sh
+    numa-appimage:22.04 /src/packaging/appimage/bundle.sh
 
 echo
 echo "AppImage in $OUT"

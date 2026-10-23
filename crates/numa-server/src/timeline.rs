@@ -32,6 +32,8 @@ pub struct Wanted {
 
     place: Option<String>,
 
+    region: Option<String>,
+
     date: Option<String>,
 
     sort: Option<String>,
@@ -234,8 +236,16 @@ async fn tests(server: &Arc<Server>, libraries: &[Library], photos: &[Photo], wa
     }
     if let Some(place) = given(&wanted.place) {
         let (known, _) = crate::places::known(server, photos);
-        let at = move |photo: &Photo| known.get(&photo.id).is_some_and(|(town, country)| town.eq_ignore_ascii_case(&place) || country.eq_ignore_ascii_case(&place));
+
+        let mapped = crate::map::taken_in(server, photos, &place, false);
+        let at = move |photo: &Photo| {
+            mapped.contains(&photo.id) || known.get(&photo.id).is_some_and(|(town, country)| town.eq_ignore_ascii_case(&place) || country.eq_ignore_ascii_case(&place))
+        };
         tests.push(("place", Box::new(at)));
+    }
+    if let Some(region) = given(&wanted.region) {
+        let keep = crate::map::taken_in(server, photos, &region, true);
+        tests.push(("region", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
     Ok(tests)
 }

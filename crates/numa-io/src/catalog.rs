@@ -206,7 +206,7 @@ pub enum FileType {
 }
 
 impl FileType {
-    fn admits(self, path: &Path) -> bool {
+    pub fn admits(self, path: &Path) -> bool {
         match self {
             FileType::Any => true,
             FileType::Raw => crate::raw::is_raw(path),

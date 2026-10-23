@@ -437,7 +437,90 @@ fn append_photo_groups(state: &App, photo: &OpenPhoto) {
         }
         state.info.page.append(&frame);
     }
+    if let Source::Photo { path, .. } = &photo.source {
+        if let Some(group) = place_group(state, path) {
+            state.info.page.append(&group);
+        }
+    }
 }
+
+fn place_group(state: &App, path: &Path) -> Option<adw::PreferencesGroup> {
+    use libshumate::prelude::*;
+    let spot = spots::now(path)?;
+    let (latitude, longitude) = (f64::from(spot.at.0), f64::from(spot.at.1));
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Place");
+    let said = match spot.town {
+        Some(town) => format!("{}, {}", town.name, town.country),
+        None => format!("{latitude:.4}, {longitude:.4}"),
+    };
+    group.add(&fact_row("Taken in", &said));
+    if !numa::io::map::ready(&map_view::file()) {
+        return Some(group);
+    }
+    let Some((frame, map, dot)) = mini_map(state) else { return Some(group) };
+    if let Some(parent) = frame.parent() {
+        frame.unparent();
+        parent.queue_resize();
+    }
+    map.center_on(latitude, longitude);
+    dot.set_location(latitude, longitude);
+    AT.set((latitude, longitude));
+    let credit = gtk::Label::new(Some("\u{a9} OpenStreetMap"));
+    credit.set_xalign(0.0);
+    credit.add_css_class("caption");
+    credit.add_css_class("dim-label");
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    column.set_margin_top(8);
+    column.append(&frame);
+    column.append(&credit);
+    group.add(&column);
+    Some(group)
+}
+
+thread_local! {
+
+    static MINI: RefCell<Option<(gtk::Overlay, libshumate::Map, libshumate::Marker)>> = const { RefCell::new(None) };
+
+    static AT: Cell<(f64, f64)> = const { Cell::new((0.0, 0.0)) };
+}
+
+fn mini_map(state: &App) -> Option<(gtk::Overlay, libshumate::Map, libshumate::Marker)> {
+    if let Some(made) = MINI.with(|mini| mini.borrow().clone()) {
+        return Some(made);
+    }
+    use libshumate::prelude::*;
+    let (map, markers) = map_view::new_map()?;
+    map.set_can_target(false);
+    map.set_size_request(-1, MINI_HEIGHT);
+    map.viewport()?.set_zoom_level(13.0);
+    map.add_css_class("mini-map");
+    map.set_overflow(gtk::Overflow::Hidden);
+    let here = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    here.add_css_class("map-here");
+    let dot = libshumate::Marker::new();
+    dot.set_child(Some(&here));
+    markers.add_marker(&dot);
+    let frame = gtk::Overlay::new();
+    frame.set_child(Some(&map));
+    frame.set_tooltip_text(Some("Show on Map"));
+    frame.set_cursor_from_name(Some("pointer"));
+    let click = gtk::GestureClick::new();
+    click.connect_released(glib::clone!(
+        #[strong] state,
+        move |_, _, _, _| {
+            let (latitude, longitude) = AT.get();
+            close_editor(&state);
+            places_page::show_at(&state, latitude, longitude);
+        }
+    ));
+    frame.add_controller(click);
+    let made = (frame, map, dot);
+    MINI.with(|mini| mini.replace(Some(made.clone())));
+    Some(made)
+}
+
+const MINI_HEIGHT: i32 = 160;
 
 pub(super) fn refresh_render_info(state: &App) {
     let open = state.open.borrow();

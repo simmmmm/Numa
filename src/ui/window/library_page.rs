@@ -5,6 +5,10 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
 
     page.append(&words::build_search_bar(state));
     words::install_search_action(state, window);
+
+    let head = build_head(state);
+    state.grid.welcome.bind_property("visible", &head, "visible").invert_boolean().sync_create().build();
+    page.append(&head);
     let bar = build_filter_bar(state, window);
 
     state.grid.welcome.bind_property("visible", &bar, "visible").invert_boolean().sync_create().build();
@@ -30,9 +34,11 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
         #[strong] state,
         #[weak] bar,
         #[weak] hint,
+        #[weak] head,
         move |reveal| {
             let choosing = reveal.reveals_child();
             bar.set_reveal_child(!choosing);
+            head.set_visible(!choosing && !state.grid.welcome.is_visible());
             hint.set_visible(!choosing && !state.grid.welcome.is_visible());
 
             state.grid.header_end.set_visible(!choosing && !state.grid.welcome.is_visible());
@@ -119,6 +125,112 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     install_photo_menu(state, window);
 
     page
+}
+
+#[derive(Clone)]
+pub(super) struct Head {
+    back: gtk::Button,
+    title: gtk::Label,
+    caption: gtk::Label,
+    book: gtk::Button,
+    tidy: gtk::Button,
+    rename: gtk::Button,
+
+    owner: Rc<Cell<&'static str>>,
+}
+
+impl Head {
+    pub(super) fn new() -> Self {
+        let back = gtk::Button::from_icon_name("go-previous-symbolic");
+        back.add_css_class("flat");
+        back.add_css_class("circular");
+        back.set_valign(gtk::Align::Center);
+        let title = gtk::Label::new(None);
+        title.set_xalign(0.0);
+        title.add_css_class("title-2");
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let caption = gtk::Label::new(None);
+        caption.set_xalign(0.0);
+        caption.add_css_class("caption");
+        caption.add_css_class("dim-label");
+        caption.add_css_class("numeric");
+        let book = gtk::Button::with_label("For a Book…");
+        book.set_valign(gtk::Align::Center);
+        book.set_action_name(Some("win.book"));
+        book.set_tooltip_text(Some("The picks here, as a photo book's chapter folders"));
+        let tidy = gtk::Button::with_label("Tidy Up");
+        tidy.set_valign(gtk::Align::Center);
+        tidy.set_tooltip_text(Some("Copies, runs of the same frame and photographs past use, in this library"));
+        let rename = gtk::Button::with_label("Rename…");
+        rename.set_valign(gtk::Align::Center);
+        Self { back, title, caption, book, tidy, rename, owner: Rc::new(Cell::new("libraries")) }
+    }
+}
+
+fn build_head(state: &App) -> gtk::Box {
+    let head = &state.libraries.head;
+    head.back.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| match state.libraries.head.owner.get() {
+            "albums" => show_albums(&state),
+            "people" => show_people(&state),
+            _ => show_folders(&state),
+        }
+    ));
+    let titles = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    titles.set_hexpand(true);
+    titles.set_valign(gtk::Align::Center);
+    titles.append(&head.title);
+    titles.append(&head.caption);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.add_css_class("place-head");
+    row.append(&head.back);
+    row.append(&titles);
+    row.append(&head.book);
+    head.tidy.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Place::Library(library) = current_place(&state) {
+                tidy::show_library(&state, library.id);
+            }
+        }
+    ));
+    row.append(&head.tidy);
+    head.rename.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Place::Library(library) = current_place(&state) {
+                library_bar::rename_library(&state, &library);
+            }
+        }
+    ));
+    row.append(&head.rename);
+    cullbar::keep_focus(row.upcast_ref());
+    row
+}
+
+pub(super) fn show_head(state: &App) {
+    let head = &state.libraries.head;
+    let place = current_place(state);
+    let read = places::row(state, &place);
+    head.title.set_label(&places::name_of(state, &place));
+    head.caption.set_label(&match places::period(read.first, read.last) {
+        Some(period) => format!("{period} \u{b7} {}", places::photos(read.count as usize)),
+        None => places::photos(read.count as usize),
+    });
+    let (owner, back) = match place {
+        Place::Everywhere => ("", ""),
+        Place::Library(_) => ("libraries", "Libraries"),
+        Place::Album(_) => ("albums", "Albums"),
+        Place::Person(_) => ("people", "People"),
+    };
+    head.owner.set(owner);
+    head.back.set_visible(!owner.is_empty());
+    head.back.set_tooltip_text(Some(back));
+    head.book.set_visible(matches!(place, Place::Library(_) | Place::Album(_)));
+    let here = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
+    head.tidy.set_visible(here);
+    head.rename.set_visible(here);
 }
 
 pub(super) fn mark_texture() -> Option<gtk::gdk::Texture> {

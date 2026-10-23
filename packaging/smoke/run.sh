@@ -33,6 +33,10 @@ run() {
         fail README "no sh block under $heading"
         return 1
     fi
+    if [[ -n "${REPLACE:-}" ]]; then
+        read -r from to <<< "$REPLACE"
+        sed -i "s/$from/$to/g" "$out/readme.sh"
+    fi
     if [[ "$how" == readme ]]; then
         dir=$(grep -m 1 -oE 'home:/Numa/[^/ ]+' "$out/readme.sh" | cut -d/ -f3)
         deadline=$((SECONDS + wait_minutes * 60))

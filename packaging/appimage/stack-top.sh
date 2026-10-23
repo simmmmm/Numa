@@ -20,6 +20,15 @@ build() {
 }
 
 case "${1:?which package}" in
+vulkan-headers)
+    dir=/tmp/vulkan-headers
+    rm -rf "$dir" && mkdir -p "$dir"
+    curl -sSfL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.275.tar.gz \
+        | tar -xz -C "$dir" --strip-components=1
+    cmake -S "$dir" -B "$dir/build" -DCMAKE_INSTALL_PREFIX="$PREFIX"
+    cmake --install "$dir/build"
+    rm -rf "$dir"
+    ;;
 gtk)
     build https://download.gnome.org/sources/gtk/4.22/gtk-4.22.4.tar.xz \
         -Dintrospection=disabled -Ddocumentation=false -Dman-pages=false \

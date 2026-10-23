@@ -13,6 +13,11 @@ the source folder instead, each build would copy the last one's output in.
 Needs `org.flatpak.Builder`, `org.gnome.Sdk//50` and
 `org.freedesktop.Sdk.Extension.rust-stable//25.08`, all from Flathub.
 
+Besides the app, the manifest builds what the runtime lacks: libgphoto2 for
+tethering, RawTherapee's camera profiles, and for Places' map libshumate 1.7
+(GNOME's map widget) with protobuf-c, the library its vector renderer reads
+tiles with.
+
 ## Why this and not only the AppImage
 
 The AppImage has to carry GTK and libadwaita, so it carries whatever the build

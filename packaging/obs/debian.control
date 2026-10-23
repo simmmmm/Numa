@@ -2,7 +2,7 @@ Source: numa
 Section: graphics
 Priority: optional
 Maintainer: Tijmen <38768749+simmmmm@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.92), gcc, pkgconf, libgtk-4-dev (>= 4.14), libadwaita-1-dev (>= 1.5), libssl-dev
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.92), gcc, pkgconf, libgtk-4-dev (>= 4.14), libadwaita-1-dev (>= 1.5), libshumate-dev (>= 1.2), libssl-dev
 Standards-Version: 4.7.0
 Homepage: https://github.com/simmmmm/Numa
 Rules-Requires-Root: no

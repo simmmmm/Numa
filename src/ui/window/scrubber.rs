@@ -11,7 +11,7 @@ const THUMB_END: f64 = 8.0;
 const YEARS_END: f64 = 32.0;
 
 const FLOOR: f64 = 0.006;
-const TINTS: usize = 8;
+use super::sidebar::TINTS;
 
 pub(super) struct Month {
     pub(super) name: String,
@@ -75,7 +75,7 @@ impl Scrubber {
         }
     }
 
-    pub(super) fn show(&self, scroller: &gtk::ScrolledWindow, months: Vec<Month>, mixed: bool) {
+    pub(super) fn show(&self, scroller: &gtk::ScrolledWindow, months: Vec<Month>, tints: Option<HashMap<i64, usize>>) {
         let total = months.iter().map(|month| month.count).sum::<usize>().max(1) as f64;
         let shares: Vec<f64> = months.iter().map(|month| (month.count as f64 / total).max(FLOOR)).collect();
         let sum: f64 = shares.iter().sum();
@@ -88,14 +88,7 @@ impl Scrubber {
                 span
             })
             .collect();
-        let mut tints = HashMap::new();
-        if mixed {
-            for (library, _) in months.iter().flat_map(|month| &month.libraries) {
-                let next = tints.len() % TINTS;
-                tints.entry(*library).or_insert(next);
-            }
-        }
-        *self.tints.borrow_mut() = tints;
+        *self.tints.borrow_mut() = tints.unwrap_or_default();
         let shown = months.len() > 1;
         *self.months.borrow_mut() = months;
         self.area.set_visible(shown);

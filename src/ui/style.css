@@ -409,7 +409,8 @@ scale.numa-slider:hover slider {
     padding: 0;
 }
 
-.filter-chips .saw-chip label {
+.filter-chips .saw-chip label,
+.filter-menu .saw-choice label {
     font-style: italic;
 }
 
@@ -611,6 +612,7 @@ listview.filmstrip-frames > row {
    TOOL-002: tight padding, so four aspects fit a 240-pixel panel rather than
    making the panel as wide as the row. */
 .chip-row > button,
+.chip-row > menubutton > button,
 .found-chips > flowboxchild > button {
     border-radius: 999px;
     padding-left: 8px;
@@ -629,6 +631,7 @@ listview.filmstrip-frames > row {
 }
 
 .chip-row > button:hover:not(:checked),
+.chip-row > menubutton > button:hover,
 .found-chips > flowboxchild > button:hover {
     background: alpha(currentColor, 0.12);
 }
@@ -1033,9 +1036,159 @@ button.numa-primary:disabled {
     padding: 4px;
 }
 
-/* LIB-014: a face beside its name. */
+/* LIB-014, LIB-038: a face, round as Numa Home draws one. */
 .face-portrait {
-  border-radius: 6px;
+  border-radius: 999px;
+}
+
+/* LIB-037: the side list's entries — a library's tint (8 px, where this
+   computer's libraries mix in Photos), a person's face — as Numa Home's. */
+.library-tint {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 999px;
+    background: @numa_label;
+}
+.library-tint.tint-0 { background: @numa_library_tint_0; }
+.library-tint.tint-1 { background: @numa_library_tint_1; }
+.library-tint.tint-2 { background: @numa_library_tint_2; }
+.library-tint.tint-3 { background: @numa_library_tint_3; }
+.library-tint.tint-4 { background: @numa_library_tint_4; }
+.library-tint.tint-5 { background: @numa_library_tint_5; }
+.library-tint.tint-6 { background: @numa_library_tint_6; }
+.library-tint.tint-7 { background: @numa_library_tint_7; }
+
+.side-face {
+    border-radius: 999px;
+    background: @numa_ground_raised;
+}
+
+.side-fold {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+}
+
+/* LIB-044: an entry's peek beside the side list, as Home's. */
+.side-peek > contents {
+    padding: 16px;
+}
+
+/* LIB-059: Places, as Numa Home's — the list beside the map; over the map
+   the chips, the zoom and the credit; each place a stack with its count. */
+.place-list-head {
+    padding: 16px 16px 8px 16px;
+}
+
+.place-list-foot {
+    padding: 12px 16px;
+}
+
+.map-chips,
+.map-zoom {
+    margin: 12px;
+}
+
+.map-zoom {
+    margin-bottom: 32px;
+}
+
+.map-credit {
+    margin: 8px 12px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: alpha(@window_bg_color, 0.8);
+}
+
+.map-pin {
+    padding: 0;
+    background: none;
+}
+
+.map-pin.chosen .print-front {
+    box-shadow: 0 0 0 2px @numa_accent;
+}
+
+.map-count {
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: @numa_ground_hud;
+    color: @numa_photo_ink;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+/* LIB-060: a photograph's small map in its info, and the dot of its spot. */
+.mini-map {
+    border-radius: 8px;
+}
+
+.map-here {
+    min-width: 12px;
+    min-height: 12px;
+    border-radius: 999px;
+    background: @numa_accent;
+    box-shadow: 0 0 0 2px @numa_ground_hud;
+}
+
+/* LIB-039: a place's head over its photographs, above the chip row. */
+.place-head {
+    padding: 12px 16px 0 12px;
+}
+
+/* LIB-040: Just Arrived's strip — prints, pressed to open. */
+.strip-photo {
+    padding: 0;
+}
+
+/* LIB-041: Tidy Up's frames, as Numa Home's: what is kept has Numa's ring
+   and a tick; what goes is dimmed, as a reject is; Numa's pick in a pill. */
+.tidy-frame,
+.tidy-frame:hover,
+.tidy-frame:checked {
+    padding: 0;
+    border-radius: 6px;
+    background: @numa_ground_raised;
+}
+
+.tidy-frame picture {
+    opacity: 0.35;
+}
+
+.tidy-frame:checked picture {
+    opacity: 1;
+}
+
+.tidy-frames > flowboxchild,
+.tidy-frames > flowboxchild:hover {
+    padding: 0;
+    background: none;
+}
+
+.tidy-frame:checked {
+    outline: 3px solid @numa_accent;
+    outline-offset: 1px;
+}
+
+/* LIB-041, LIB-043: a tick on what is kept or chosen — a frame of a set,
+   a library's stack. */
+.chosen-tick {
+    margin: 8px;
+    padding: 4px;
+    border-radius: 999px;
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.tidy-best {
+    margin: 8px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: @numa_accent;
+    color: @numa_on_accent;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 /* PANEL_PLAN P1: the rail. 66 px, a hairline on its right, and 54x54 tabs

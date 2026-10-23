@@ -5,7 +5,7 @@ export CARGO_TARGET_DIR=/tmp/target
 export PATH="/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0:$PATH"
 
 cd /src
-cargo build --profile dist
+ORT_LIB_PATH=/opt/onnxruntime/lib ORT_PREFER_DYNAMIC_LINK=1 cargo build --profile dist
 
 APPDIR=/tmp/AppDir
 rm -rf "$APPDIR"
@@ -44,15 +44,15 @@ install -Dm644 -t "$APPDIR/usr/share/icons/hicolor/scalable/actions" \
 ICONS="$APPDIR/usr/share/icons/hicolor"
 install -Dm644 /usr/share/icons/hicolor/index.theme "$ICONS/index.theme"
 for name in $(grep -rhoE '"[a-z0-9-]+-symbolic"' /src/src | tr -d '"' | sort -u); do
-    found="$(find /usr/share/icons/Adwaita -name "$name.svg" -path '*symbolic*' | head -1)"
+    found="$(find /opt/adwaita/Adwaita -name "$name.svg" -path '*symbolic*' | head -1)"
     if [[ -n "$found" ]]; then
         install -Dm644 "$found" "$ICONS/scalable/actions/$name.svg"
     elif [[ ! -e "$ICONS/scalable/actions/$name.svg" ]]; then
         echo "no icon named $name in Adwaita" >&2
     fi
 done
-install -Dm644 /usr/share/doc/adwaita-icon-theme/copyright \
-        "$APPDIR/usr/share/doc/adwaita-icon-theme/copyright"
+install -Dm644 -t "$APPDIR/usr/share/doc/adwaita-icon-theme" \
+        /opt/adwaita/COPYING /opt/adwaita/COPYING_CCBYSA3 /opt/adwaita/COPYING_LGPL
 echo "bundled $(ls "$ICONS/scalable/actions" | wc -l) symbolic icons"
 
 EXTRA=()
@@ -90,7 +90,7 @@ cp -r "$GTK4_MODULES" "$APPDIR/usr/lib/x86_64-linux-gnu/"
 
 export APPIMAGE_EXTRACT_AND_RUN=1
 export DEPLOY_GTK_VERSION=4
-export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/opt/onnxruntime/lib:${LD_LIBRARY_PATH:-}"
 
 cd /build
 /opt/tools/linuxdeploy-x86_64.AppImage \
@@ -151,10 +151,17 @@ fetch_licence harfbuzz-10.4.0 \
     https://raw.githubusercontent.com/harfbuzz/harfbuzz/10.4.0/COPYING
 fetch_licence wayland-1.24.0 \
     https://gitlab.freedesktop.org/wayland/wayland/-/raw/1.24.0/COPYING
+fetch_licence libshumate-1.7.0 \
+    https://gitlab.gnome.org/GNOME/libshumate/-/raw/1.7.0/COPYING
 
-echo "licences for $(ls "$DOCS" | grep -cE '^(glib|gtk|pango|libadwaita|cairo|harfbuzz|wayland)-') source-built libraries"
+echo "licences for $(ls "$DOCS" | grep -cE '^(glib|gtk|pango|libadwaita|cairo|harfbuzz|wayland|libshumate)-') source-built libraries"
 
 ARCH=x86_64 /opt/tools/appimagetool-x86_64.AppImage \
+    -u "gh-releases-zsync|simmmmm|Numa|latest|Numa-*-x86_64.AppImage.zsync" \
     "$APPDIR" "/build/Numa-$VERSION-x86_64.AppImage"
+if [[ ! -s "/build/Numa-$VERSION-x86_64.AppImage.zsync" ]]; then
+    echo "no .zsync beside the AppImage" >&2
+    exit 1
+fi
 
 rm -rf "$APPDIR"

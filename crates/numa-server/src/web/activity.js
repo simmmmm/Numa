@@ -27,7 +27,8 @@ function badgeWord(activity) {
   if (activity.paused) return S.paused;
   const running = activity.jobs.find(job => job.state === 'running');
   if (running) return SHORT[running.job] || running.name;
-  if (activity.downloads.some(item => item.state === 'fetching')) return S.models;
+  const fetching = activity.downloads.find(item => item.state === 'fetching');
+  if (fetching) return fetching.name === S.map ? S.map : S.models;
   return S.waiting;
 }
 

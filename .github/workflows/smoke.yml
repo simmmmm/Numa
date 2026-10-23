@@ -27,11 +27,11 @@ jobs:
           - { name: "Fedora 44", image: "fedora:44", how: readme, heading: "**Fedora 44**" }
           - { name: "openSUSE Tumbleweed", image: "opensuse/tumbleweed", how: readme, heading: "**openSUSE Tumbleweed**" }
           - { name: "Ubuntu 26.04 (nl_NL)", image: "ubuntu:26.04", how: readme, heading: "**Ubuntu 26.04**", locale: nl_NL.UTF-8 }
-          - { name: "Debian Testing", image: "debian:testing", how: readme, heading: "**Debian Testing**" }
+          - { name: "Debian Testing", image: "debian:testing", how: readme, heading: "**Ubuntu 26.04**", replace: "xUbuntu_26.04 Debian_Testing" }
           - { name: "Arch", image: "archlinux:latest", how: readme, heading: "**Arch, CachyOS, EndeavourOS**" }
-          - { name: "AppImage on Ubuntu 24.04", image: "ubuntu:24.04", how: appimage, heading: "**AppImage.**" }
-          - { name: "AppImage on Debian 13", image: "debian:13", how: appimage, heading: "**AppImage.**" }
-          - { name: "Flatpak", image: "ubuntu:24.04", how: flatpak, heading: "**Flatpak.**" }
+          - { name: "AppImage on Ubuntu 24.04", image: "ubuntu:24.04", how: appimage, heading: "**AppImage**" }
+          - { name: "AppImage on Debian 13", image: "debian:13", how: appimage, heading: "**AppImage**" }
+          - { name: "Flatpak", image: "ubuntu:24.04", how: flatpak, heading: "**Flatpak**" }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/cache@v6
@@ -50,6 +50,7 @@ jobs:
       - name: ${{ matrix.name }}
         env:
           LOCALE: ${{ matrix.locale }}
+          REPLACE: ${{ matrix.replace }}
           REPOSITORY: ${{ github.repository }}
           OUT: ${{ runner.temp }}/smoke
         run: packaging/smoke/run.sh "${{ matrix.name }}" "${{ matrix.image }}" "${{ matrix.how }}" "${{ matrix.heading }}" "${{ steps.version.outputs.number }}"

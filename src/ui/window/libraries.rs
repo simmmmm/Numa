@@ -78,26 +78,7 @@ pub(super) fn refresh_folders(state: &App, library: &Library, photos: &[Photo]) 
         }
     }
     let folders: Vec<PathBuf> = folders.into_iter().collect();
-    if *state.libraries.folders.borrow() == folders && !folders.is_empty() {
-        return;
-    }
-    let labels: Vec<String> = std::iter::once("All Folders".to_string())
-        .chain(folders.iter().map(|folder| {
-            let depth = folder.components().count().saturating_sub(1);
-            let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-            format!("{}{name}", "    ".repeat(depth))
-        }))
-        .collect();
-    let chosen = state.libraries.folder.borrow().clone();
-    let selected = chosen.and_then(|chosen| folders.iter().position(|folder| *folder == chosen)).map_or(0, |index| index + 1);
-
-    state.applying.set(true);
-    let picker = &state.libraries.folder_picker;
-    picker.set_model(Some(&gtk::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>())));
-    picker.set_selected(selected as u32);
-    picker.set_visible(!folders.is_empty());
-    state.applying.set(false);
-    if selected == 0 {
+    if state.libraries.folder.borrow().as_ref().is_some_and(|chosen| !folders.contains(chosen)) {
         state.libraries.folder.replace(None);
     }
     *state.libraries.folders.borrow_mut() = folders;
@@ -318,11 +299,8 @@ pub(super) fn reload_libraries(state: &App) {
         .as_ref()
         .map(|library| library.id)
         .or_else(|| state.catalog.setting(LAST_LIBRARY)?.parse().ok());
-    let is_empty = libraries.is_empty();
 
     *state.libraries.all.borrow_mut() = libraries;
-
-    state.libraries.picker.set_visible(!is_empty);
 
     match previous {
         Some(id) => select_library(state, id),
@@ -355,6 +333,7 @@ pub(super) fn select_library_index(state: &App, index: u32) {
 
     if state.libraries.current.borrow().as_ref().map(|library| library.id) != selected.as_ref().map(|library| library.id) {
         state.libraries.folder.replace(None);
+        state.libraries.narrow.replace(Default::default());
     }
     *state.libraries.current.borrow_mut() = selected;
 
@@ -420,13 +399,13 @@ pub(super) struct State {
     pub(super) show_filter: Rc<RefCell<Option<Box<dyn Fn()>>>>,
 
     pub(super) places: Rc<RefCell<Vec<Place>>>,
-    pub(super) picker: gtk::DropDown,
+
+    pub(super) side: sidebar::State,
 
     pub(super) folder: Rc<RefCell<Option<PathBuf>>>,
-    pub(super) folder_picker: gtk::DropDown,
     pub(super) folders: Rc<RefCell<Vec<PathBuf>>>,
 
-    pub(super) switching: Rc<Cell<bool>>,
+    pub(super) narrow: Rc<RefCell<filter_menu::Narrow>>,
 
     pub(super) scanning: Rc<Cell<bool>>,
 
@@ -443,6 +422,17 @@ pub(super) struct State {
     pub(super) analyse_button: Rc<RefCell<Option<gtk::Button>>>,
 
     pub(super) shelves: gtk::Box,
+    pub(super) albums: gtk::Box,
+    pub(super) people: gtk::Box,
+    pub(super) today: gtk::Box,
+
+    pub(super) tidy: gtk::Box,
+
+    pub(super) bar: library_bar::Bar,
+
+    pub(super) head: library_page::Head,
+
+    pub(super) new_album: Rc<RefCell<Option<String>>>,
 
     pub(super) words: words::State,
 }
@@ -457,12 +447,18 @@ impl State {
             show_filter: Rc::default(),
             places: Rc::new(RefCell::new(Vec::new())),
             shelves: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            albums: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            people: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            today: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            tidy: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            head: library_page::Head::new(),
+            bar: library_bar::Bar::new(),
+            new_album: Rc::default(),
             words: words::State::new(),
-            picker: gtk::DropDown::from_strings(&[]),
+            side: sidebar::State::new(),
             folder: Rc::default(),
-            folder_picker: gtk::DropDown::from_strings(&["All Folders"]),
+            narrow: Rc::default(),
             folders: Rc::default(),
-            switching: Rc::new(Cell::new(false)),
             scanning: Rc::new(Cell::new(false)),
             scanned: Rc::default(),
             walked: Rc::default(),

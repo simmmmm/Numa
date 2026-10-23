@@ -2,7 +2,7 @@ use gtk::{glib, prelude::*};
 
 use super::{
     build_editor_page, consider_update_check, downloads, integrate_appimage, key_toast, offer_crash_report,
-    open_requested, reload_libraries, report_panel, request_render, watch_cards, App,
+    open_requested, reload_libraries, report_panel, request_render, show_place, watch_cards, App, Place,
 };
 
 pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
@@ -16,6 +16,17 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
         std::thread::spawn(numa::io::lensfun::warm);
     }
     reload_libraries(state);
+
+    match super::sidebar::starts_on_photos(state) {
+        true => show_place(state, Place::Everywhere),
+        false => {
+            state.stack.set_visible_child_name("today");
+            glib::idle_add_local_once(glib::clone!(
+                #[strong] state,
+                move || super::today::show(&state)
+            ));
+        }
+    }
 
     if !state.grid.welcome.get_visible() {
         state.grid.wall.grab_focus();

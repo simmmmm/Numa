@@ -46,6 +46,7 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
     page.set_icon_name(Some("emblem-system-symbolic"));
 
     page.add(&colour_group(state));
+    page.add(&start_group(state));
     page.add(&opening_group(dialog));
 
     let imports = adw::PreferencesGroup::new();
@@ -257,6 +258,21 @@ fn show_previews(state: &App, row: &adw::ActionRow) {
             });
         }
     ));
+}
+
+fn start_group(state: &App) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Starting");
+    let row = adw::SwitchRow::new();
+    row.set_title("Start on Photos");
+    row.set_subtitle("Numa opens on every photograph rather than on Today. The mark at the top of the side list goes there too.");
+    row.set_active(sidebar::starts_on_photos(state));
+    row.connect_active_notify(glib::clone!(
+        #[strong] state,
+        move |row| state.catalog.remember(sidebar::START_ON_PHOTOS, &row.is_active())
+    ));
+    group.add(&row);
+    group
 }
 
 fn opening_group(dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {

@@ -51,6 +51,13 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.45.1" date="2026-10-23">
+      <description>
+        <p>The library is laid out as Numa Home's. A side list leads to Today, Photos, Libraries, People, Albums and Places, each a page of its own. Today opens first, with On This Day, what has just arrived and what waits for you; Preferences can start on Photos instead.</p>
+        <p>Tidy Up finds exact copies, frames taken twice and unusable photographs, and suggests which to keep. The Filter menu shows how many photographs each choice keeps, and filters by place. Libraries can be chosen on their page, to open, rename, remove from Numa or move to the trash.</p>
+        <p>Places shows where the photographs were taken, by country, region and town, on a map; a photograph's info has a small map too. The map is fetched once, the first time Places opens, and kept on this computer.</p>
+      </description>
+    </release>
     <release version="0.45.0" date="2026-10-22">
       <description>
         <p>The library works as Numa Home's does. Select turns a click into choosing, with Select All beside the count and Esc to clear; the photographs are grouped by month, each month with its count; and a scrubber along the right edge runs through the years and months, in each library's colour where libraries mix. The flag filter reads Picked, Rejected and No Flag.</p>

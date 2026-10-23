@@ -38,14 +38,13 @@ pub(super) fn reload_grid(state: &App) {
     state.grid.cards.borrow_mut().clear();
     state.grid.lazy.borrow_mut().clear();
 
+    refresh_places(state);
     let Some(library) = state.libraries.current.borrow().clone() else {
         state.grid.empty.set_visible(false);
         state.grid.welcome.set_visible(true);
         return;
     };
     state.grid.welcome.set_visible(false);
-
-    refresh_picker(state);
     filter_of_this_place(state, &library);
 
     let offline = state.catalog.is_offline(library.id) && !state.libraries.filter.borrow().spans_libraries();
@@ -82,6 +81,8 @@ pub(super) fn reload_grid(state: &App) {
         photos.retain(|photo| photo.path.starts_with(&root));
     }
 
+    filter_menu::narrow(state, &mut photos);
+
     words::keep_reading(state);
     words::narrow(state, &mut photos);
     state.grid.empty.set_text(words::empty_text(state).unwrap_or("No photographs answer these filters."));
@@ -113,7 +114,7 @@ pub(super) fn reload_grid(state: &App) {
     let (sections, months) = sections_of(state, &photos, filter.sort);
     *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
     state.grid.wall.fill(aspects, sections);
-    state.grid.scrubber.show(&state.grid.scroller, months, across_libraries);
+    state.grid.scrubber.show(&state.grid.scroller, months, across_libraries.then(|| sidebar::tints(state)));
     if timing() {
         eprintln!(
             "x-data: reload_grid {} cards: query+aspects {aspects_at:?}, cards {:?}",

@@ -7,6 +7,7 @@ older one it is not the lesser build any more.
 
 ```sh
 ./packaging/appimage/build.sh          # writes dist/Numa-<version>-x86_64.AppImage
+                                       # and its .zsync
 ```
 
 Needs Docker. Takes a few minutes; most of it is the release build
@@ -14,35 +15,49 @@ Needs Docker. Takes a few minutes; most of it is the release build
 
 ## Why it builds in a container
 
-glibc is backwards compatible and not forwards. A binary linked against this
-machine's 2.44 refuses to start on anything older, and in 2026 that is almost
-every machine you would hand a test build to — Ubuntu 24.04 is on 2.39, Fedora
-42 on 2.41. Building on Ubuntu 24.04 sets the floor there instead.
+glibc is backwards compatible and not forwards. A binary linked against a
+current distribution's glibc refuses to start on anything older. The build runs
+on Ubuntu 22.04, the oldest Ubuntu LTS still in standard support, so every ELF
+file in the AppImage needs glibc 2.35 at most.
 
-**Runs on:** anything with glibc 2.39 or newer and a graphical session. Ubuntu
-24.04+, Fedora 40+, Debian 13+, any current rolling release.
+**Runs on:** anything with glibc 2.35 or newer and a graphical session: Ubuntu
+22.04+, Debian 12+, Fedora 36+, any current rolling release.
+
+From the host it takes glibc, libstdc++, fontconfig and freetype, the display
+stack (X11, XCB, Wayland, EGL/GL), and FUSE to mount itself (`fusermount3`).
+Everything else is in the file.
 
 ## Why the GNOME stack is built from source
 
-Ubuntu 24.04 carries libadwaita 1.5, so the first version of this wore a
-stylesheet three years older than the one the application was designed against
-— the Flatpak looked current and this did not.
+Ubuntu 22.04 carries libadwaita 1.1 and GTK 4.6; built against those, the
+application would wear a stylesheet years older than the one it was designed
+against, and the Flatpak would look current while this did not.
 
-That looked like a trade against reach and is not one. glibc is the only thing
-that has to be old, and it comes from the base image; everything above it can
-be built and carried along. `stack.sh` builds libadwaita 1.9.3 and what it needs
-into `/usr/local`, where pkg-config finds it first. What 24.04 is short of,
-measured rather than assumed:
+glibc is the only thing that has to be old, and it comes from the base image;
+everything above it can be built and carried along. `stack.sh` builds
+libadwaita 1.9.3 and what it needs into `/usr/local`, where pkg-config finds it
+first. What 22.04 is short of:
 
 | | distribution | built |
 |---|---|---|
-| wayland | 1.22 | 1.24.0 |
-| glib | 2.80 | 2.84.4 |
-| cairo | 1.18.0 | 1.18.4 |
-| harfbuzz | 8.3 | 10.4.0 |
-| pango | 1.52 | 1.56.4 |
-| gtk4 | 4.14 | 4.22.4 |
-| libadwaita | 1.5 | 1.9.3 |
+| wayland | 1.20 | 1.24.0 |
+| wayland-protocols | 1.25 | 1.45 (build only) |
+| glib | 2.72 | 2.84.4 |
+| cairo | 1.16.0 | 1.18.4 |
+| harfbuzz | 2.7.4 | 10.4.0 |
+| pango | 1.50 | 1.56.4 |
+| gtk4 | 4.6 | 4.22.4 |
+| libadwaita | 1.1 | 1.9.3 |
+| libshumate | none | 1.7.0 (Places' map; libsoup 3, json-glib, protobuf-c are 22.04's) |
+| Vulkan headers | 1.3.204 | 1.3.275 (build only) |
+| glslc (shaderc) | none | 2026.4 (build only) |
+
+pango 1.56 asks for fontconfig 2.15 for two property names, `FC_ORDER` and
+`FC_FONT_WRAPPER`, which are strings in a header rather than functions. 22.04
+has fontconfig 2.13, and fontconfig is the host's at run time, so `stack.sh`
+defines the two names and lets pango build against 2.13. A newer host's
+fontconfig knows them and pango uses them; on 2.13 they match nothing, as for
+pango before 1.56.
 
 One package per Docker layer, on purpose: the first version was a single script,
 libadwaita failed at the end of it, and a `RUN` that fails caches nothing — so
@@ -70,8 +85,9 @@ own.
 
 GTK's Vulkan renderer compiles its own shaders and wants shaderc's `glslc` —
 `glslang-tools` is a different compiler under a different name and does not
-satisfy the check. It is installed in a layer above the stack, so finding that
-out cost two layers rather than the whole thing.
+satisfy the check. Ubuntu 22.04 does not package it, so `stack.sh` builds the
+compiler alone (glslang, SPIRV-Tools and SPIRV-Headers at the revisions shaderc
+pins). It is a build tool and does not ship.
 
 Printing is off because the application cannot print; that leaves GTK with no
 modules at all and therefore no `$libdir/gtk-4.0`, which linuxdeploy's plugin
@@ -99,11 +115,22 @@ it, measured on a Wayland session: native, and no crash.
 ## What is bundled, and what deliberately is not
 
 GTK4, libadwaita, pango, the GSettings schemas, the gdk-pixbuf loaders and the
-icon theme are all in there — that is the GTK plugin's job and the reason the
-file is 47 MB. The schemas are copied from `/usr/local/share` as well as
-`/usr/share` before the plugin runs, because the plugin looks in the usual
-places and this stack is not in them. GTK reads `org.gtk.Settings.*` at startup
+icon theme are all in there — that is the GTK plugin's job.
+
+The symbolic icons Numa names are copied from Adwaita 46, fetched as source in
+the Dockerfile rather than taken from 22.04's package (version 41, in which
+nearly all of them are drawn differently). They go into hicolor, so a desktop
+whose icon theme is not Adwaita still finds them.
+
+The schemas are copied from `/usr/local/share` as well as `/usr/share` before
+the plugin runs, because the plugin looks in the usual places and this stack is
+not in them. GTK reads `org.gtk.Settings.*` at startup
 and aborts when they are not registered.
+
+ONNX Runtime is Microsoft's release (1.28.0), linked as a shared library and
+carried in `usr/lib`, as the distribution packages do (`packaging/obs`). The
+static library the `ort` crate downloads by itself needs glibc 2.38 and GCC 13's
+libstdc++ and does not link on 22.04; Microsoft's needs glibc 2.27.
 
 Two libraries are added past linuxdeploy's exclude list: `libfribidi` and
 `libharfbuzz`. Pure text shaping, no configuration, nothing coupled to the
@@ -168,6 +195,14 @@ Adobe's. Put your own in `~/.local/share/numa/profiles`, which is
 searched first. Without any profile the panel says "No camera profile — colour
 matrix only" and the colour is visibly flatter.
 
+## Updates
+
+The AppImage carries update information,
+`gh-releases-zsync|simmmmm|Numa|latest|Numa-*-x86_64.AppImage.zsync`, and
+`appimagetool` writes `Numa-<version>-x86_64.AppImage.zsync` beside it.
+Each GitHub release carries both. AppImage updaters read the newest release's
+`.zsync` and download only the blocks that changed.
+
 ## What a tester still needs
 
 Nothing to run it. Optionally **the face model** for CULL-003, via
@@ -183,9 +218,10 @@ Starting it on the machine that built it proves very little — that machine has
 GTK4 already. What the two useful checks are:
 
 ```sh
-# 1. Does it run where nothing is installed? "Failed to open display" is the
-#    pass: every library loaded and GTK got as far as looking for a screen.
-docker run --rm -v "$PWD/dist":/img:ro ubuntu:24.04 bash -c '
+# 1. Does it run where nothing is installed, on the oldest system it is for?
+#    "Failed to open display" is the pass: every library loaded and GTK got as
+#    far as looking for a screen.
+docker run --rm -v "$PWD/dist":/img:ro ubuntu:22.04 bash -c '
   apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     libx11-6 libxcb1 libwayland-client0 libfontconfig1 libfreetype6 fontconfig-config
   cd /tmp && cp /img/*.AppImage . && chmod +x *.AppImage
@@ -195,3 +231,12 @@ docker run --rm -v "$PWD/dist":/img:ro ubuntu:24.04 bash -c '
 #    caught the fontconfig problem.
 ./dist/Numa-*-x86_64.AppImage
 ```
+
+AppImageHub's test (`code/worker.sh` in AppImage/appimage.github.io) is
+stricter than check 1. On the oldest Ubuntu LTS in standard support, it starts
+the AppImage without network under Xvfb (800×600, X11, `LANG=C`, no dark-mode
+preference) and needs a window within 30 seconds that is not empty, shows no
+error text, is English and is light. It also runs `desktop-file-validate`,
+`appdir-lint.sh` and `appstreamcli validate` on the AppDir, and reads the
+newest glibc symbol any ELF file in the AppImage needs. The main window it
+photographs is the listing's screenshot.

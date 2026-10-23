@@ -1,324 +1,340 @@
 use super::*;
+use numa::io::catalog::StoredFace;
 
-pub(super) fn people_dialog(state: &App, window: &adw::ApplicationWindow) {
+pub(super) fn show_people(state: &App) {
 
     if first_time(state, "explained-faces") {
-        let alert = adw::AlertDialog::new(
-            Some("Faces stay on this computer"),
-            Some(
-                "Numa finds and recognises faces with models that run here. Nothing is \
-                 uploaded, and nothing leaves this computer.\n\nThe names you give are kept \
-                 in the library's own .numa folder — so they travel with the folder when it \
-                 is copied or shared.",
-            ),
-        );
-        alert.add_response("ok", "Continue");
-        let (state, parent) = (state.clone(), window.clone());
-        alert.connect_response(None, move |_, _| {
-            mark_seen(&state, "explained-faces");
-            people_dialog(&state, &parent);
-        });
-        alert.present(Some(window));
-        return;
+        mark_seen(state, "explained-faces");
+        if let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() {
+            let alert = adw::AlertDialog::new(
+                Some("Faces stay on this computer"),
+                Some(
+                    "Numa finds and recognises faces with models that run here. Nothing is \
+                     uploaded, and nothing leaves this computer.\n\nThe names you give are kept \
+                     in the library's own .numa folder — so they travel with the folder when it \
+                     is copied or shared.",
+                ),
+            );
+            alert.add_response("ok", "Continue");
+            alert.present(Some(&window));
+        }
     }
-    let dialog = adw::Dialog::new();
-    dialog.set_title("People");
-    dialog.set_content_width(560);
-    dialog.set_content_height(640);
-
-    let holder = adw::Bin::new();
-    let bar = adw::ToolbarView::new();
-    bar.add_top_bar(&adw::HeaderBar::new());
-    bar.set_content(Some(&holder));
-    dialog.set_child(Some(&bar));
-    fill_people(state, &dialog, &holder, true);
-    dialog.present(Some(window));
+    fill_people(state, true);
+    state.stack.set_visible_child_name("people");
 }
 
-pub(super) fn fill_people(state: &App, dialog: &adw::Dialog, holder: &adw::Bin, fetch: bool) {
-    let Some(library) = state.libraries.current.borrow().clone() else { return };
-    let faces = state.catalog.faces(library.id).unwrap_or_else(|err| {
-        log::warn!("could not read the faces: {err}");
-        Vec::new()
-    });
-    if faces.is_empty() {
-        let empty = adw::StatusPage::new();
-        empty.set_icon_name(Some("avatar-default-symbolic"));
-        empty.set_title("No Faces Yet");
-        empty.set_description(Some("Analyse the library to find the people in it."));
-        holder.set_child(Some(&empty));
-        return;
-    }
+struct Faces {
+
+    each: Vec<(Vec<StoredFace>, Vec<Option<String>>)>,
+    aside: i64,
+}
+
+fn read_faces(state: &App) -> Faces {
 
     let named = state.catalog.named_faces().unwrap_or_default();
     let known = state.catalog.known_from(&named).unwrap_or_default();
-    let everyone = state.catalog.people_among(library.id, &named, &known).unwrap_or_default();
-
-    let names: Vec<Option<String>> = faces
-        .iter()
-        .map(|face| cull::people::recognise(&face.embedding, &known).map(|(name, _)| name.to_string()))
-        .collect();
-
-    let mut wanted: Vec<numa::io::catalog::StoredFace> = Vec::new();
-
-    let page = adw::PreferencesPage::new();
-
-    if !everyone.is_empty() {
-        let group = named_group(state, dialog, holder, &faces, &names, &everyone, &mut wanted);
-        page.add(&group);
+    let mut each = Vec::new();
+    let mut aside = 0;
+    for library in state.libraries.all.borrow().iter() {
+        let Ok(faces) = state.catalog.faces(library.id) else { continue };
+        aside += state.catalog.ignored_count(library.id).unwrap_or(0);
+        let names = faces.iter().map(|face| cull::people::recognise(&face.embedding, &known).map(|(name, _)| name.to_string())).collect();
+        each.push((faces, names));
     }
+    Faces { each, aside }
+}
 
-    let group = unnamed_group(state, dialog, holder, &faces, &names, &mut wanted);
-    page.add(&group);
+pub(super) fn fill_people(state: &App, fetch: bool) {
 
-    let ignored = state.catalog.ignored_count(library.id).unwrap_or(0);
-    if ignored > 0 {
-        let aside = adw::PreferencesGroup::new();
-        let row = adw::ActionRow::new();
-        row.set_title(&format!("{ignored} face(s) set aside as nobody to name"));
+    today::faces_changed();
+    let column = &state.libraries.people;
+    clear(column);
+    let read = read_faces(state);
+    let names = state.catalog.names().unwrap_or_default();
+    let mut groups: Vec<(Vec<StoredFace>, usize)> = Vec::new();
+    for (faces, who) in &read.each {
+        for (members, photos) in numa::io::analysis::unnamed_groups(faces, who).0 {
+            groups.push((members.iter().map(|&at| faces[at].clone()).collect(), photos.len()));
+        }
+    }
+    groups.sort_by_key(|(_, photos)| std::cmp::Reverse(*photos));
+    if names.is_empty() && groups.is_empty() {
+        let empty = adw::StatusPage::new();
+        empty.set_title("No People Yet");
+        empty.set_description(Some("People show here once Analyse has found the faces in the photographs."));
+        column.append(&empty);
+        return;
+    }
+    let mut wanted: Vec<StoredFace> = Vec::new();
+    if !names.is_empty() {
+        let flow = gtk::FlowBox::new();
+        flow.set_selection_mode(gtk::SelectionMode::None);
+        flow.set_homogeneous(true);
+        flow.set_column_spacing(12);
+        flow.set_row_spacing(12);
+        flow.set_max_children_per_line(12);
+        for name in &names {
+
+            let theirs: Vec<&StoredFace> = read
+                .each
+                .iter()
+                .flat_map(|(faces, who)| faces.iter().zip(who).filter(|(_, who)| who.as_deref().is_some_and(|who| who.eq_ignore_ascii_case(name))).map(|(face, _)| face))
+                .collect();
+            let face = theirs.iter().find(|face| face.portrait.is_some()).or(theirs.first()).copied();
+            if let Some(face) = face.filter(|face| face.portrait.is_none()) {
+                wanted.push(face.clone());
+            }
+            flow.append(&person(state, name, face));
+        }
+        column.append(&flow);
+    }
+    if !groups.is_empty() {
+        let label = section_header("Not named yet");
+        label.set_margin_top(32);
+        label.set_margin_bottom(12);
+        column.append(&label);
+        for (members, photos) in &groups {
+            wanted.extend(members.iter().take(3).filter(|face| face.portrait.is_none()).cloned());
+            column.append(&name_row(state, members, *photos));
+        }
+    }
+    if read.aside > 0 {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        line.set_margin_top(24);
+        let said = gtk::Label::new(Some(&format!("{} set aside as nobody to name", match read.aside {
+            1 => "1 face".to_string(),
+            n => format!("{} faces", places::grouped(n)),
+        })));
+        said.add_css_class("dim-label");
         let back = gtk::Button::with_label("Ask Again");
-        back.set_valign(gtk::Align::Center);
         back.connect_clicked(glib::clone!(
             #[strong] state,
-            #[weak] dialog,
-            #[weak] holder,
             move |_| {
-                if let Some(library) = state.libraries.current.borrow().clone() {
+                for library in state.libraries.all.borrow().iter() {
                     if let Err(err) = state.catalog.unignore_all(library.id) {
-                        state.toast(&format!("Could not bring them back: {err}"));
+                        log::warn!("could not bring the faces back: {err}");
                     }
                 }
-                fill_people(&state, &dialog, &holder, false);
+                fill_people(&state, false);
             }
         ));
-        row.add_suffix(&back);
-        aside.add(&row);
-        page.add(&aside);
+        line.append(&said);
+        line.append(&back);
+        column.append(&line);
     }
-    holder.set_child(Some(&page));
-
     if fetch && !wanted.is_empty() {
-        fetch_portraits(state, dialog, holder, library.id, wanted);
+        fetch_portraits(state, wanted);
     }
 }
 
-fn picture(face: &numa::io::catalog::StoredFace) -> gtk::Widget {
+fn picture(face: Option<&StoredFace>, size: i32) -> gtk::Image {
     let texture = face
-        .portrait
-        .as_ref()
+        .and_then(|face| face.portrait.as_ref())
         .and_then(|bytes| gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok());
 
     let image = match texture {
         Some(texture) => gtk::Image::from_paintable(Some(&texture)),
         None => gtk::Image::from_icon_name("avatar-default-symbolic"),
     };
-    image.set_pixel_size(44);
+    image.set_pixel_size(size);
     image.set_valign(gtk::Align::Center);
+    image.set_overflow(gtk::Overflow::Hidden);
     image.add_css_class("face-portrait");
-    image.upcast()
+    image
 }
 
-fn named_group(
-    state: &App,
-    dialog: &adw::Dialog,
-    holder: &adw::Bin,
-    faces: &[numa::io::catalog::StoredFace],
-    names: &[Option<String>],
-    everyone: &[(String, Vec<i64>)],
-    wanted: &mut Vec<numa::io::catalog::StoredFace>,
-) -> adw::PreferencesGroup {
-    let group = adw::PreferencesGroup::new();
-    group.set_title("Named");
-    group.set_description(Some("Rename someone here and it changes everywhere; give two people the same name and they become one."));
-    for (name, photos) in everyone {
-        let row = adw::EntryRow::new();
-        row.set_title(&super::places::photos(photos.len()));
-        row.set_text(name);
-        row.set_show_apply_button(true);
-        let face = faces
-            .iter()
-            .zip(names)
-            .filter(|(_, face_name)| face_name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)))
-            .map(|(face, _)| face)
-            .find(|face| face.portrait.is_some())
-            .or_else(|| {
-                faces.iter().zip(names).find(|(_, n)| n.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name))).map(|(f, _)| f)
+fn person(state: &App, name: &str, face: Option<&StoredFace>) -> gtk::Button {
+    let count = places::row(state, &Place::Person(name.to_string())).count;
+    let inside = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    inside.set_margin_top(12);
+    inside.set_margin_bottom(12);
+    let picture = picture(face, 120);
+    picture.set_halign(gtk::Align::Center);
+    picture.set_margin_bottom(4);
+    let title = gtk::Label::new(Some(name));
+    title.add_css_class("heading");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let caption = gtk::Label::new(Some(&places::photos(count as usize)));
+    caption.add_css_class("caption");
+    caption.add_css_class("dim-label");
+    inside.append(&picture);
+    inside.append(&title);
+    inside.append(&caption);
+    let button = gtk::Button::new();
+    button.add_css_class("flat");
+    button.set_child(Some(&inside));
+    let name = name.to_string();
+    button.connect_clicked(glib::clone!(
+        #[strong] state,
+        #[strong] name,
+        move |_| show_place(&state, Place::Person(name.clone()))
+    ));
+    person_menu(state, &button, name);
+    button
+}
+
+fn person_menu(state: &App, button: &gtk::Button, name: String) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.connect_pressed(glib::clone!(
+        #[strong] state,
+        #[weak] button,
+        move |_, _, x, y| {
+            let model = gio::Menu::new();
+            model.append(Some("Rename…"), Some("person.rename"));
+            model.append(Some("Forget Name"), Some("person.forget"));
+            let actions = gio::SimpleActionGroup::new();
+            let rename = gio::SimpleAction::new("rename", None);
+            rename.connect_activate(glib::clone!(
+                #[strong] state,
+                #[strong] name,
+                move |_, _| rename_person(&state, &name)
+            ));
+
+            let forget = gio::SimpleAction::new("forget", None);
+            forget.connect_activate(glib::clone!(
+                #[strong] state,
+                #[strong] name,
+                move |_, _| match state.catalog.rename_person(&name, "") {
+                    Ok(()) => renamed(&state),
+                    Err(err) => state.toast(&format!("Could not forget the name: {err}")),
+                }
+            ));
+            actions.add_action(&rename);
+            actions.add_action(&forget);
+            button.insert_action_group("person", Some(&actions));
+            let popover = gtk::PopoverMenu::from_model(Some(&model));
+            popover.set_parent(&button);
+            popover.set_has_arrow(false);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.connect_closed(|popover| {
+                let popover = popover.clone();
+                glib::idle_add_local_once(move || popover.unparent());
             });
-        if let Some(face) = face {
-            if face.portrait.is_none() {
-                wanted.push(face.clone());
-            }
-            row.add_prefix(&picture(face));
+            popover.popup();
         }
-
-        let show = gtk::Button::with_label("Show");
-        show.set_valign(gtk::Align::Center);
-        show.add_css_class("flat");
-        show.set_tooltip_text(Some("Only the photographs this person is in"));
-        show.connect_clicked(glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            #[strong] name,
-            move |_| {
-                state.libraries.filter.borrow_mut().in_one_library();
-                state.libraries.filter.borrow_mut().person = Some(name.clone());
-                reload_grid(&state);
-                dialog.close();
-            }
-        ));
-        row.add_suffix(&show);
-
-        let forget = gtk::Button::from_icon_name("user-trash-symbolic");
-        forget.set_valign(gtk::Align::Center);
-        forget.add_css_class("flat");
-        forget.set_tooltip_text(Some("Forget this name"));
-        forget.connect_clicked(glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            #[weak] holder,
-            #[strong] name,
-            move |_| {
-                if let Err(err) = state.catalog.rename_person(&name, "") {
-                    state.toast(&format!("Could not forget the name: {err}"));
-                    return;
-                }
-                reload_grid(&state);
-                fill_people(&state, &dialog, &holder, false);
-            }
-        ));
-        row.add_suffix(&forget);
-
-        row.connect_apply(glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            #[weak] holder,
-            #[strong] name,
-            move |row| {
-                if let Err(err) = state.catalog.rename_person(&name, &row.text()) {
-                    state.toast(&format!("Could not rename: {err}"));
-                    return;
-                }
-                let state = state.clone();
-                glib::idle_add_local_once(move || {
-                    reload_grid(&state);
-                    fill_people(&state, &dialog, &holder, false);
-                });
-            }
-        ));
-        group.add(&row);
-    }
-    group
+    ));
+    button.add_controller(click);
 }
 
-fn unnamed_group(
-    state: &App,
-    dialog: &adw::Dialog,
-    holder: &adw::Bin,
-    faces: &[numa::io::catalog::StoredFace],
-    names: &[Option<String>],
-    wanted: &mut Vec<numa::io::catalog::StoredFace>,
-) -> adw::PreferencesGroup {
-
-    let (groups, once) = numa::io::analysis::unnamed_groups(faces, names);
-    let group = adw::PreferencesGroup::new();
-    group.set_title("Not Named Yet");
-    for (members, photos) in groups {
-        let members: Vec<&numa::io::catalog::StoredFace> = members.iter().map(|&at| &faces[at]).collect();
-
-        let row = adw::EntryRow::new();
-        row.set_title(&format!("In {} photographs — who is this?", photos.len()));
-        row.set_show_apply_button(true);
-        let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        for face in members.iter().take(3) {
-            if face.portrait.is_none() {
-                wanted.push((*face).clone());
-            }
-            pictures.append(&picture(face));
+fn rename_person(state: &App, name: &str) {
+    let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() else { return };
+    let entry = gtk::Entry::new();
+    entry.set_text(name);
+    entry.set_activates_default(true);
+    let ask = adw::AlertDialog::new(
+        Some("Rename"),
+        Some("It changes everywhere; give two people the same name and they become one."),
+    );
+    ask.set_extra_child(Some(&entry));
+    ask.add_response("cancel", "Cancel");
+    ask.add_response("rename", "Rename");
+    ask.set_default_response(Some("rename"));
+    ask.set_close_response("cancel");
+    let (state, name, typed) = (state.clone(), name.to_string(), entry.clone());
+    ask.connect_response(None, move |_, response| {
+        let to = typed.text().trim().to_string();
+        if response != "rename" || to.is_empty() || to == name {
+            return;
         }
-        row.add_prefix(&pictures);
-
-        let faces: Vec<(i64, [f32; cull::people::LENGTH])> =
-            members.iter().map(|face| (face.photo_id, face.embedding)).collect();
-
-        let ignore = gtk::Button::from_icon_name("user-trash-symbolic");
-        ignore.set_valign(gtk::Align::Center);
-        ignore.add_css_class("flat");
-        ignore.set_tooltip_text(Some("Nobody to name — stop asking about these faces"));
-        ignore.connect_clicked(glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            #[weak] holder,
-            #[strong] faces,
-            move |_| {
-                if let Err(err) = state.catalog.ignore_faces(&faces) {
-                    state.toast(&format!("Could not set them aside: {err}"));
-                    return;
-                }
-                fill_people(&state, &dialog, &holder, false);
-            }
-        ));
-        row.add_suffix(&ignore);
-
-        let name_them = glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            #[weak] holder,
-            move |row: &adw::EntryRow| {
-                let text = row.text().to_string();
-                if text.trim().is_empty() {
-                    return;
-                }
-                for (photo, embedding) in &faces {
-                    if let Err(err) = state.catalog.name_face(*photo, embedding, &text) {
-                        state.toast(&format!("Could not save the name: {err}"));
-                        return;
-                    }
-                }
-                let state = state.clone();
-                glib::idle_add_local_once(move || {
-                    reload_grid(&state);
-                    fill_people(&state, &dialog, &holder, false);
-                });
-            }
-        );
-        row.connect_apply(name_them.clone());
-        row.connect_entry_activated(name_them);
-        group.add(&row);
-    }
-    if once > 0 {
-        group.set_description(Some(&format!(
-            "{once} face(s) seen in only one photograph are left out — name those from the photograph's info page."
-        )));
-    }
-    group
+        match state.catalog.rename_person(&name, &to) {
+            Ok(()) => renamed(&state),
+            Err(err) => state.toast(&format!("Could not rename: {err}")),
+        }
+    });
+    ask.present(Some(&window));
+    entry.grab_focus();
 }
 
-pub(super) fn fetch_portraits(
-    state: &App,
-    dialog: &adw::Dialog,
-    holder: &adw::Bin,
-    library_id: i64,
-    wanted: Vec<numa::io::catalog::StoredFace>,
-) {
-    let paths: HashMap<i64, PathBuf> = state
-        .catalog
-        .photos(library_id, &Filter::default())
-        .unwrap_or_default()
+fn renamed(state: &App) {
+    let state = state.clone();
+    glib::idle_add_local_once(move || {
+        reload_grid(&state);
+        fill_people(&state, false);
+    });
+}
+
+fn name_row(state: &App, members: &[StoredFace], photos: usize) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.set_margin_bottom(12);
+    let faces = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    for face in members.iter().take(3) {
+        faces.append(&picture(Some(face), 48));
+    }
+    let ask = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    ask.set_hexpand(true);
+    ask.set_valign(gtk::Align::Center);
+    let caption = gtk::Label::new(Some(&format!("In {}", places::photos(photos))));
+    caption.set_xalign(0.0);
+    caption.add_css_class("caption");
+    caption.add_css_class("dim-label");
+    let field = gtk::Entry::new();
+    field.set_placeholder_text(Some("Who is this?"));
+    ask.append(&caption);
+    ask.append(&field);
+    let name = gtk::Button::with_label("Name");
+    name.set_valign(gtk::Align::Center);
+
+    let nobody = gtk::Button::with_label("Nobody");
+    nobody.set_valign(gtk::Align::Center);
+    nobody.set_tooltip_text(Some("Nobody to name — stop asking about these faces"));
+    let faces_of: Vec<(i64, [f32; cull::people::LENGTH])> = members.iter().map(|face| (face.photo_id, face.embedding)).collect();
+    nobody.connect_clicked(glib::clone!(
+        #[strong] state,
+        #[strong] faces_of,
+        move |_| match state.catalog.ignore_faces(&faces_of) {
+            Ok(()) => fill_people(&state, false),
+            Err(err) => state.toast(&format!("Could not set them aside: {err}")),
+        }
+    ));
+    let name_them = glib::clone!(
+        #[strong] state,
+        #[weak] field,
+        move || {
+            let text = field.text().trim().to_string();
+            if text.is_empty() {
+                return;
+            }
+            for (photo, embedding) in &faces_of {
+                if let Err(err) = state.catalog.name_face(*photo, embedding, &text) {
+                    state.toast(&format!("Could not save the name: {err}"));
+                    return;
+                }
+            }
+            renamed(&state);
+        }
+    );
+    field.connect_activate(glib::clone!(
+        #[strong] name_them,
+        move |_| name_them()
+    ));
+    name.connect_clicked(move |_| name_them());
+    row.append(&faces);
+    row.append(&ask);
+    row.append(&name);
+    row.append(&nobody);
+    row
+}
+
+fn fetch_portraits(state: &App, wanted: Vec<StoredFace>) {
+    let mut libraries: Vec<i64> = wanted.iter().map(|face| numa::io::catalog::library_of(face.photo_id)).collect();
+    libraries.sort_unstable();
+    libraries.dedup();
+    let paths: HashMap<i64, PathBuf> = libraries
         .into_iter()
+        .flat_map(|library| state.catalog.photos(library, &Filter::default()).unwrap_or_default())
         .map(|photo| (photo.id, photo.path))
         .collect();
-    let mut by_photo: HashMap<i64, Vec<numa::io::catalog::StoredFace>> = HashMap::new();
+    let mut by_photo: HashMap<i64, Vec<StoredFace>> = HashMap::new();
     for face in wanted {
         by_photo.entry(face.photo_id).or_default().push(face);
     }
-    let work: Vec<(PathBuf, Vec<numa::io::catalog::StoredFace>)> = by_photo
+    let work: Vec<(PathBuf, Vec<StoredFace>)> = by_photo
         .into_iter()
         .filter_map(|(photo, faces)| Some((paths.get(&photo)?.clone(), faces)))
         .collect();
 
     let state = state.clone();
-    let dialog = dialog.clone();
-    let holder = holder.clone();
     glib::spawn_future_local(async move {
         let found = gtk::gio::spawn_blocking(move || {
             use rayon::prelude::*;
@@ -353,8 +369,8 @@ pub(super) fn fetch_portraits(
             }
         }
 
-        if !found.is_empty() && dialog.parent().is_some() {
-            fill_people(&state, &dialog, &holder, false);
+        if !found.is_empty() && state.stack.visible_child_name().as_deref() == Some("people") {
+            fill_people(&state, false);
         }
     });
 }

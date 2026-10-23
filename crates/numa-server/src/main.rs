@@ -10,6 +10,7 @@ mod faces;
 mod home;
 mod jobs;
 mod manage;
+mod map;
 mod models;
 mod night;
 mod pages;
@@ -49,6 +50,8 @@ pub struct Server {
     pub artists: by::Artists,
 
     pub places: places::Known,
+
+    pub map: map::Map,
 
     pub cards: cards::Cards,
 
@@ -125,6 +128,7 @@ fn main() -> Result<(), String> {
         things: Default::default(),
         artists: Default::default(),
         places: Default::default(),
+        map: Default::default(),
         store,
         home: home::Home::start(photos, sent)?,
         data,
@@ -220,6 +224,8 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/card/thumb/{n}", get(cards::thumb))
         .route("/api/v1/card/names", get(cards::names))
         .route("/api/v1/libraries/{id}/names", get(places::library))
+        .route("/api/v1/places", get(map::places))
+        .route("/api/v1/map/{z}/{x}/{y}", get(map::tile))
         .route("/api/v1/faces", get(faces::unnamed))
         .route("/api/v1/faces/{id}/portrait", get(faces::portrait))
         .route("/api/v1/faces/name", post(faces::name))

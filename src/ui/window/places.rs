@@ -30,6 +30,10 @@ thread_local! {
 pub(super) struct Row {
     pub(super) subtitle: String,
 
+    pub(super) count: i64,
+    pub(super) first: Option<i64>,
+    pub(super) last: Option<i64>,
+
     pub(super) covers: Vec<(PathBuf, i64, Option<String>)>,
 }
 
@@ -39,15 +43,16 @@ fn stamp(state: &App) -> i64 {
         let db = library.path.join(".numa").join("catalog.db");
         for path in [db.clone(), db.with_extension("db-wal")] {
             if let Ok(when) = std::fs::metadata(&path).and_then(|meta| meta.modified()) {
-                let secs = when.duration_since(std::time::UNIX_EPOCH).map(|since| since.as_secs() as i64);
-                newest = newest.max(secs.unwrap_or(0));
+
+                let at = when.duration_since(std::time::UNIX_EPOCH).map(|since| since.as_nanos() as i64);
+                newest = newest.max(at.unwrap_or(0));
             }
         }
     }
     newest
 }
 
-fn key(place: &Place) -> String {
+pub(super) fn key(place: &Place) -> String {
     match place {
         Place::Everywhere => "*".to_string(),
         Place::Library(library) => format!("l{}", library.id),
@@ -71,7 +76,7 @@ fn shelves(state: &App) -> Rc<HashMap<i64, Glance>> {
         .filter_map(|library| Some((library.id, state.catalog.glance(library.id, None, None).ok()?)))
         .collect::<HashMap<_, _>>()
         .into();
-    log::debug!("picker read {} libraries in {:.1} ms", read.len(), started.elapsed().as_secs_f64() * 1000.0);
+    log::debug!("places read {} libraries in {:.1} ms", read.len(), started.elapsed().as_secs_f64() * 1000.0);
     SHELVES.with(|shelves| *shelves.borrow_mut() = (now, read.clone()));
     read
 }
@@ -87,10 +92,18 @@ pub(super) fn shelves_in_order(state: &App, grouped: &mut [(String, Vec<&Library
     grouped.sort_by_key(|(_, shelf)| order_key(shelf.iter().filter_map(|library| shelves.get(&library.id)?.last).max()));
 }
 
-pub(super) fn everywhere_label(state: &App) -> &'static str {
-    match state.libraries.all.borrow().iter().any(|library| home_sync::is_home(state, library.id)) {
-        true => "This Computer",
-        false => "All Libraries",
+pub(super) fn name_of(state: &App, place: &Place) -> String {
+    match place {
+        Place::Everywhere => "Photos".to_string(),
+        Place::Library(library) => library.label(),
+
+        Place::Album(key) => state
+            .catalog
+            .albums()
+            .ok()
+            .and_then(|albums| albums.into_iter().find(|(album, _)| album == key).map(|(_, name)| name))
+            .unwrap_or_else(|| key.clone()),
+        Place::Person(person) => person.clone(),
     }
 }
 
@@ -150,7 +163,7 @@ fn read_all(state: &App) {
 
         let row = match place {
             Place::Library(library) if glances.is_empty() && !library.path.exists() => {
-                Row { subtitle: "Not connected".to_string(), covers: Vec::new() }
+                Row { subtitle: "Not connected".to_string(), ..Row::default() }
             }
 
             Place::Library(library) if !library.path.exists() => {
@@ -169,7 +182,7 @@ fn read_all(state: &App) {
         rows.insert(key(place), Rc::new(row));
     }
 
-    log::debug!("picker read {} rows in {:.1} ms", rows.len(), started.elapsed().as_secs_f64() * 1000.0);
+    log::debug!("places read {} rows in {:.1} ms", rows.len(), started.elapsed().as_secs_f64() * 1000.0);
     GLANCES.with(|glances| *glances.borrow_mut() = (now, rows));
 }
 
@@ -190,7 +203,7 @@ fn assemble(glances: &[Glance]) -> Row {
             }
         }
     }
-    Row { subtitle: subtitle(photos, first, last), covers }
+    Row { subtitle: subtitle(photos, first, last), count: photos, first, last, covers }
 }
 
 fn subtitle(photos: i64, first: Option<i64>, last: Option<i64>) -> String {
@@ -227,7 +240,7 @@ pub(super) fn grouped(number: i64) -> String {
 const MONTHS: [&str; 12] =
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-fn period(first: Option<i64>, last: Option<i64>) -> Option<String> {
+pub(super) fn period(first: Option<i64>, last: Option<i64>) -> Option<String> {
     let month = |when: i64| {
         let at = glib::DateTime::from_unix_local(when).ok()?;
         Some(format!("{} {}", MONTHS[(at.month() as usize).clamp(1, 12) - 1], at.year()))
@@ -237,7 +250,7 @@ fn period(first: Option<i64>, last: Option<i64>) -> Option<String> {
     Some(if from == to { from } else { format!("{from}\u{2009}\u{2013}\u{2009}{to}") })
 }
 
-fn texture(photo: &(PathBuf, i64, Option<String>), edge: u32) -> Option<gtk::gdk::Texture> {
+pub(super) fn texture(photo: &(PathBuf, i64, Option<String>), edge: u32) -> Option<gtk::gdk::Texture> {
     let (path, mtime, edits) = photo;
     TEXTURES.with(|textures| {
         textures
@@ -263,29 +276,6 @@ fn texture(photo: &(PathBuf, i64, Option<String>), edge: u32) -> Option<gtk::gdk
     })
 }
 
-pub(super) fn headers(model: &crate::ui::sections::Sections) -> gtk::SignalListItemFactory {
-    let headers = gtk::SignalListItemFactory::new();
-    headers.connect_setup(|_, header| {
-
-        let label = gtk::Label::builder()
-            .xalign(0.0)
-            .margin_start(18)
-            .margin_end(18)
-            .margin_bottom(3)
-            .css_classes(["caption-heading", "dim-label"])
-            .build();
-        header.downcast_ref::<gtk::ListHeader>().unwrap().set_child(Some(&label));
-    });
-    let model = model.downgrade();
-    headers.connect_bind(move |_, header| {
-        let header = header.downcast_ref::<gtk::ListHeader>().unwrap();
-        if let (Some(label), Some(model)) = (header.child().and_downcast::<gtk::Label>(), model.upgrade()) {
-            label.set_label(&model.title(header.start()));
-        }
-    });
-    headers
-}
-
 fn lean(index: usize, tile: f32) -> gsk::Transform {
     let (angle, slide) = FAN[index];
     let (scale, middle) = (tile / TILE, tile / 2.0);
@@ -295,94 +285,6 @@ fn lean(index: usize, tile: f32) -> gsk::Transform {
         .translate(&graphene::Point::new(middle, middle))
         .rotate(angle)
         .translate(&graphene::Point::new(-middle, -middle))
-}
-
-pub(super) fn centre(state: &App, header: &adw::HeaderBar) {
-    header.set_centering_policy(adw::CenteringPolicy::Loose);
-    state.libraries.picker.set_factory(Some(&name_gives_way()));
-    state.libraries.picker.set_tooltip_text(Some("Library, album or person"));
-    state.libraries.picker.set_hexpand(false);
-    state.libraries.picker.set_halign(gtk::Align::Center);
-
-    let mut child = state.libraries.picker.first_child();
-    while let Some(widget) = child {
-        if let Some(popup) = widget.downcast_ref::<gtk::Popover>() {
-            popup.set_halign(gtk::Align::Center);
-        }
-        child = widget.next_sibling();
-    }
-}
-
-pub(super) fn dress(state: &App) {
-    glib::idle_add_local_once(glib::clone!(
-        #[strong]
-        state,
-        move || state.libraries.picker.set_list_factory(Some(&rows(&state)))
-    ));
-}
-
-fn name_gives_way() -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-        let name = gtk::Label::builder().xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build();
-        whole_on_hover(&name);
-        item.set_child(Some(&name));
-    });
-    factory.connect_bind(|_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-        let Some(name) = item.child().and_downcast::<gtk::Label>() else { return };
-        name.set_label(&item.item().and_downcast::<gtk::StringObject>().map(|it| it.string()).unwrap_or_default());
-        keep_whole(&name, LIBRARY_NAME_LEAST);
-    });
-    factory
-}
-
-fn rows(state: &App) -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-        let fan = fan(TILE);
-        fan.set_halign(gtk::Align::Start);
-
-        let name = gtk::Label::builder().xalign(0.0).build();
-        let under = gtk::Label::builder().xalign(0.0).css_classes(["caption", "dim-label"]).build();
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        text.set_valign(gtk::Align::Center);
-
-        text.set_hexpand(true);
-        text.set_halign(gtk::Align::Start);
-        text.append(&name);
-        text.append(&under);
-
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.append(&fan);
-        row.append(&text);
-        item.set_child(Some(&row));
-    });
-
-    factory.connect_bind(glib::clone!(
-        #[strong]
-        state,
-        move |_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-            let Some(widget) = item.child().and_downcast::<gtk::Box>() else { return };
-            let Some(fan) = widget.first_child().and_downcast::<gtk::Fixed>() else { return };
-            let Some(name) = fan.next_sibling().and_then(|text| text.first_child()).and_downcast::<gtk::Label>() else {
-                return;
-            };
-            let Some(under) = name.next_sibling().and_downcast::<gtk::Label>() else { return };
-
-            name.set_label(&item.item().and_downcast::<gtk::StringObject>().map(|it| it.string()).unwrap_or_default());
-            let place = state.libraries.places.borrow().get(item.position() as usize).cloned();
-            let Some(place) = place else { return };
-            let read = row(&state, &place);
-            under.set_label(&read.subtitle);
-
-            show_covers(&fan, &read.covers, TILE);
-        }
-    ));
-    factory
 }
 
 pub(super) fn fan(tile: f32) -> gtk::Fixed {

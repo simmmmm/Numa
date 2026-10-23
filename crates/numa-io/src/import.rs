@@ -202,6 +202,30 @@ pub fn day(when: i64, offset: i64) -> String {
     format!("{year}-{month:02}-{day:02}")
 }
 
+pub fn on_this_day(photos: impl IntoIterator<Item = (i64, i64, u8, crate::catalog::Flag)>, today: &str, years: usize) -> Vec<(i64, Vec<i64>)> {
+    use crate::catalog::Flag;
+    let (year, month_day) = today.split_at(today.len() - 6);
+    let year: i64 = year.parse().unwrap_or(0);
+    let mut found: std::collections::BTreeMap<i64, Vec<(bool, i64, i64)>> = Default::default();
+    for (id, at, rating, flag) in photos {
+        let day = day(at, 0);
+        let (taken, on) = day.split_at(day.len() - 6);
+        let Ok(taken) = taken.parse::<i64>() else { continue };
+        if on == month_day && taken < year && flag != Flag::Rejected {
+            found.entry(taken).or_default().push((flag != Flag::Picked && rating < 3, at, id));
+        }
+    }
+    found
+        .into_iter()
+        .rev()
+        .take(years)
+        .map(|(year, mut photos)| {
+            photos.sort_unstable();
+            (year, photos.into_iter().map(|(.., id)| id).collect())
+        })
+        .collect()
+}
+
 pub(crate) fn civil(seconds: i64) -> (i64, u32, u32) {
     let days = seconds.div_euclid(86_400) + 719_468;
     let era = days.div_euclid(146_097);
@@ -410,5 +434,28 @@ mod tests {
         assert_eq!((again.landed.len(), again.existing.len()), (0, 1), "found as the -2 already there, and no -3 made");
         assert!(!library.join("DSCF0002-3.RAF").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn on_this_day_is_earlier_years_newest_first_the_best_first() {
+        use crate::catalog::Flag;
+        let at = |text: &str| crate::track::iso(text).unwrap();
+        let mut photos = vec![
+            (1, at("2024-10-18T09:00:00Z"), 0, Flag::None),
+            (2, at("2024-10-18T18:00:00Z"), 4, Flag::None),
+            (3, at("2024-10-18T12:00:00Z"), 0, Flag::Picked),
+            (4, at("2024-10-18T13:00:00Z"), 5, Flag::Rejected),
+            (5, at("2024-10-19T12:00:00Z"), 5, Flag::Picked),
+            (6, at("2026-10-18T08:00:00Z"), 5, Flag::Picked),
+            (7, at("2021-10-18T23:59:00Z"), 0, Flag::None),
+        ];
+
+        photos.extend((2010..2018).map(|year| (100 + year, at(&format!("{year}-10-18T12:00:00Z")), 0, Flag::None)));
+        let found = super::on_this_day(photos, "2026-10-18", 6);
+
+        assert_eq!(found[0], (2024, vec![3, 2, 1]));
+        assert_eq!(found[1], (2021, vec![7]));
+        let years: Vec<i64> = found.iter().map(|(year, _)| *year).collect();
+        assert_eq!(years, [2024, 2021, 2017, 2016, 2015, 2014]);
     }
 }

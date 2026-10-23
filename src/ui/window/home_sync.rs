@@ -243,7 +243,7 @@ pub(super) fn adopt(state: &App, catch_up: bool) {
                 in_step(&state, library.clone(), how);
                 round_over().await;
             }
-            if state.stack.visible_child_name().as_deref() == Some("folders") {
+            if state.stack.visible_child_name().as_deref() == Some("libraries") {
                 show_folders(&state);
             }
         }
@@ -379,7 +379,7 @@ pub(super) fn keep_here(state: &App, library: &Library, on: bool) {
     }
     keep(state, library.id, &Link { keep_here: on, ..link });
     offer(state);
-    if state.stack.visible_child_name().as_deref() == Some("folders") {
+    if state.stack.visible_child_name().as_deref() == Some("libraries") {
         show_folders(state);
     }
     if !on || state.catalog.at_home(library.id).map_or(true, |at_home| at_home.is_empty()) {

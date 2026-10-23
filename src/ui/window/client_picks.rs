@@ -328,7 +328,7 @@ fn mark_found(state: &App, ids: &[i64], frames: usize, how: MakeThem, album: &st
 
 fn album_changed(state: &App, key: &str, made: bool) {
     if made {
-        refresh_picker(state);
+        refresh_places(state);
     }
     if state.libraries.filter.borrow().album.as_deref() == Some(key) {
         reload_grid(state);

@@ -12,6 +12,8 @@ BuildRequires:  gcc
 BuildRequires:  hicolor-icon-theme
 BuildRequires:  pkgconfig(gtk4) >= 4.14
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
+# LIB-059: Places' map, GNOME's map widget and its vector renderer.
+BuildRequires:  pkgconfig(shumate-1.0) >= 1.2
 # ort-sys builds a downloader that is never run here (ORT_LIB_PATH); it
 # still links OpenSSL.
 BuildRequires:  pkgconfig(openssl)
