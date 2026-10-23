@@ -69,8 +69,25 @@ header {
 header .mark { height: 34px; width: auto; flex: none; display: block; }
 header .mark-link { flex: none; border-radius: 8px; }
 header .mark-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-header .search { flex: 1; max-width: 480px; margin-left: auto; }
-header .search input { width: 100%; }
+/* HOME-040: the field holds the page's filters as tokens, then the words;
+   under it what typing suggests, grouped as the Filter menu's sections. */
+header .search { flex: 1; max-width: 620px; margin-left: auto; position: relative; }
+header .field { display: flex; align-items: center; gap: var(--space-4); height: 36px; padding: 0 var(--space-4); border-radius: var(--radius-sheet); background: var(--ground-chip);
+  overflow-x: auto; scrollbar-width: none; }
+header .field::-webkit-scrollbar { display: none; }
+header .field:focus-within { outline: 2px solid var(--accent); }
+header .field input { flex: 1; min-width: 6em; height: 100%; border: 0; border-radius: 0; background: none; padding: 0 var(--space-8); }
+header .field input:focus, header .field input:focus-visible { outline: none; }
+.token { display: inline-flex; align-items: center; gap: var(--space-6); flex: none; background: var(--ground-raised); padding: 0 var(--space-4) 0 var(--space-10); cursor: default; }
+.token .kind { color: var(--label); font-weight: 500; }
+.token .x { position: relative; width: 20px; height: 20px; margin: 0; padding: 0; border: 0; border-radius: 10px; background: none; color: var(--name); opacity: 1; display: grid; place-items: center; cursor: pointer; }
+.menu.suggest { left: 0; right: auto; top: calc(100% + var(--space-6)); width: 100%; min-width: 360px; max-height: calc(100vh - var(--head) - var(--space-20)); overflow-y: auto; }
+.suggest [role=group] { display: grid; }
+.menu.suggest button { color: var(--name); }
+.menu.suggest b, .menu.suggest [aria-selected=true] { color: var(--ink); }
+.menu.suggest [aria-selected=true] { background: var(--ground-chip); }
+/* What a search was, under its count: "Anna · Portugal · 2025". */
+.searched { margin: var(--space-6) 0 var(--space-4); }
 header .who { flex: none; }
 header .add { flex: none; display: inline-flex; align-items: center; gap: 8px; }
 header .add svg { width: 16px; height: 16px; flex: none; }
@@ -114,8 +131,8 @@ main { padding: 0 var(--edge) 48px; }
 .rated { display: inline-flex; align-items: center; gap: var(--space-4); }
 .rated svg { width: 12px; height: 12px; fill: currentColor; }
 .filter-menu { min-width: 240px; }
-.filter-menu button { display: flex; align-items: center; gap: var(--space-12); }
-.filter-menu button .caption { margin-left: auto; }
+.filter-menu button, .suggest button { display: flex; align-items: center; gap: var(--space-12); }
+.filter-menu button .caption, .suggest button .caption { margin-left: auto; }
 .filter-menu button > svg { width: 14px; height: 14px; flex: none; color: var(--label); }
 .filter-menu .back { color: var(--name); }
 .filter-menu .back > svg { margin-left: calc(-1 * var(--space-4)); }
@@ -456,6 +473,13 @@ header { height: var(--head); }
   .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; }
   .filters .size { display: none; }
   .cardbar .meter { width: 120px; }
+  /* HOME-040: while searching, the field is the header's width and the
+     suggestions the screen's height under it. */
+  header:has(.search:focus-within) > :not(.search) { display: none; }
+  body:has(header .search:focus-within) .places-nav { display: none; }
+  header .search { position: static; max-width: none; }
+  .menu.suggest { top: 100%; left: 0; right: 0; width: auto; min-width: 0; height: calc(100dvh - 100%); max-height: none; align-content: start;
+    border-radius: 0; box-shadow: none; background: var(--ground-page); padding: var(--space-4) var(--space-8); }
 }
 
 /* Choosing on the grid: a ring in the corner on hover and while choosing; a
@@ -690,14 +714,16 @@ dialog.ask .year { width: 80px; margin-left: auto; }
    fields, rows and the two bars are simply that size. */
 @media (pointer: coarse) {
   :root { --head: 65px; }
-  .chip, .primary, .round, .mark-link, .safe-pill { position: relative; }
-  .chip::before, .primary::before, .round::before, .mark-link::before, .safe-pill::before { content: ''; position: absolute; left: 50%; top: 50%;
+  .chip, .primary, .round, .mark-link, .safe-pill, .token .x { position: relative; }
+  .chip::before, .primary::before, .round::before, .mark-link::before, .safe-pill::before, .token .x::before { content: ''; position: absolute; left: 50%; top: 50%;
     width: max(100%, var(--space-44)); height: max(100%, var(--space-44)); transform: translate(-50%, -50%); }
   input[type=text], input[type=password], input[type=search], select, .filters select, .info .by-pick { height: var(--space-44); }
   input[type=checkbox], .import-page .tick input { width: 22px; height: 22px; }
   label.check, .import-page .tick { min-height: var(--space-44); }
   .edit .slider input, .filters .size input { height: var(--space-44); }
   .menu button, .menu a { min-height: var(--space-44); display: flex; align-items: center; }
+  header .field { height: var(--space-44); border-radius: var(--radius-hud); }
+  .suggest .key { display: none; }
   .menu .star-row button { min-width: var(--space-44); justify-content: center; }
   .place-link, .place-entry { height: var(--space-44); border-radius: var(--radius-hud); }
   .place-fold { width: var(--space-44); height: var(--space-44); top: 0; right: 0; border-radius: var(--radius-hud); }
@@ -804,6 +830,16 @@ main.map-page { padding: 0; display: grid; grid-template-columns: 300px minmax(0
   background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); font-size: 10px; line-height: 14px; color: var(--name); }
 .map-stage .credit a { color: inherit; text-decoration: none; }
 .map-stage .note { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--edge); }
+/* The map's download: on the note while the world comes, the ring turning
+   until its size is known; the streets around new places quiet in a corner. */
+.map-stage .coming { display: grid; gap: var(--space-8); color: var(--label); font-variant-numeric: tabular-nums; }
+.map-stage .coming .line { display: flex; align-items: center; justify-content: center; gap: var(--space-8); }
+.map-stage .coming .ring { flex: none; animation: turning 0.9s linear infinite; }
+.map-stage .coming.world { width: 300px; max-width: 100%; }
+.map-stage .coming.streets { position: absolute; left: var(--edge); bottom: var(--space-8); z-index: 2; gap: var(--space-4); padding: var(--space-4) var(--space-10);
+  border-radius: var(--radius-pill); background: var(--ground-hud); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); font-size: 12px; line-height: 16px; color: var(--name); }
+.map-stage .coming.streets .line { justify-content: start; }
+.map-stage .coming.streets .ring { width: 14px; height: 14px; }
 .pin { position: relative; width: 56px; height: 50px; padding: 0; border: 0; background: none; cursor: pointer; }
 .pin .stack { transform: scale(0.4); transform-origin: 0 0; pointer-events: none; }
 .pin .count { position: absolute; right: -12px; top: -8px; min-width: 24px; padding: var(--space-2) var(--space-6); border-radius: var(--radius-pill); text-align: center;
@@ -845,6 +881,7 @@ main.map-page { padding: 0; display: grid; grid-template-columns: 300px minmax(0
   .place-list .place-head { background: var(--ground-sheet); }
   .map-stage .zoom { bottom: calc(var(--space-44) + var(--space-44) + var(--space-8)); }
   .map-stage .credit { bottom: calc(var(--space-44) + var(--space-30)); }
+  .map-stage .coming.streets { bottom: auto; top: calc(var(--edge) + var(--chip-height) + var(--space-8)); }
   .map-pop { width: min(300px, calc(100% - var(--space-16))); }
 }
 
@@ -853,6 +890,6 @@ main.map-page { padding: 0; display: grid; grid-template-columns: 300px minmax(0
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-property: opacity, color, background-color, border-color !important; transition-duration: 150ms !important;
     animation-duration: 150ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
-  .loader .ring { display: none; }
+  .loader .ring, .map-stage .coming .ring { display: none; }
   .loader { padding: 8px 16px; }
 }

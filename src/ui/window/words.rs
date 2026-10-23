@@ -26,7 +26,9 @@ pub(super) struct State {
 
     making: Rc<Cell<bool>>,
     pub(super) bar: gtk::SearchBar,
-    entry: gtk::SearchEntry,
+    pub(super) entry: gtk::SearchEntry,
+
+    pub(super) suggestions: tokens::Suggestions,
 }
 
 impl State {
@@ -44,6 +46,7 @@ impl State {
             making: Rc::default(),
             bar: gtk::SearchBar::new(),
             entry: gtk::SearchEntry::new(),
+            suggestions: tokens::Suggestions::new(),
         }
     }
 }
@@ -51,7 +54,7 @@ impl State {
 pub(super) fn build_search_bar(state: &App) -> gtk::SearchBar {
     let words = &state.libraries.words;
     let entry = &words.entry;
-    entry.set_placeholder_text(Some("Search by what is in the photographs"));
+    entry.set_placeholder_text(Some("Search by names or words"));
     entry.set_hexpand(true);
     entry.set_width_chars(36);
     let clamp = adw::Clamp::new();
@@ -60,35 +63,48 @@ pub(super) fn build_search_bar(state: &App) -> gtk::SearchBar {
     words.bar.set_child(Some(&clamp));
     words.bar.connect_entry(entry);
     words.bar.set_show_close_button(true);
+
+    tokens::install(state, entry);
     entry.connect_search_changed(glib::clone!(
         #[strong] state,
-        move |entry| search(&state, entry.text().trim())
+        move |entry| {
+            let text = entry.text();
+            let text = text.trim();
+            if text.is_empty() {
+                tokens::hide(&state);
+                stop_words(&state);
+            } else if query_text(&state).as_deref() != Some(text) {
+                tokens::show(&state, text);
+            }
+        }
     ));
-
     entry.connect_activate(glib::clone!(
         #[strong] state,
         move |_| {
-            if !seen::installed() {
-                offer(&state);
-            }
+            tokens::hide(&state);
+            search_now(&state);
         }
     ));
 
     words.bar.connect_search_mode_enabled_notify(glib::clone!(
         #[strong] state,
-        move |bar| match bar.is_search_mode() {
-
-            true if !seen::installed() && !state.libraries.words.asked.get() => {
-                glib::idle_add_local_once(glib::clone!(
-                    #[strong] state,
-                    move || offer(&state)
-                ));
+        move |bar| {
+            if !bar.is_search_mode() {
+                tokens::hide(&state);
+                stop_words(&state);
             }
-            true => {}
-            false => stop_words(&state),
         }
     ));
     words.bar.clone()
+}
+
+fn query_text(state: &App) -> Option<String> {
+    state.libraries.words.query.borrow().as_ref().map(|(text, _)| text.clone())
+}
+
+pub(super) fn search_now(state: &App) {
+    let text = state.libraries.words.entry.text();
+    search(state, text.trim());
 }
 
 pub(super) fn install_search_action(state: &App, window: &adw::ApplicationWindow) {
@@ -108,12 +124,13 @@ pub(super) fn install_search_action(state: &App, window: &adw::ApplicationWindow
     if let Some(app) = window.application() {
         app.set_accels_for_action("win.search-words", &["<primary>f"]);
     }
+    tokens::close_on_clicks(state, window);
 }
 
 pub(super) fn search_button(state: &App) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
     button.set_icon_name("system-search-symbolic");
-    button.set_tooltip_text(Some("Search by what is in the photographs (Ctrl+F)"));
+    button.set_tooltip_text(Some("Search by names or words (Ctrl+F)"));
     button.bind_property("active", &state.libraries.words.bar, "search-mode-enabled").bidirectional().sync_create().build();
     button
 }
@@ -127,6 +144,7 @@ fn search(state: &App, text: &str) {
 
     let (who, rest) = people_in(state, text);
     if !rest.is_empty() && !seen::installed() {
+        offer(state);
         return;
     }
     words.stopped.set(false);
@@ -187,7 +205,7 @@ pub(super) fn forget_thing(state: &App) {
 
 pub(super) fn chips(state: &App) -> (Option<String>, Option<&'static str>) {
     let words = &state.libraries.words;
-    let query = words.query.borrow().as_ref().filter(|(_, numbers)| numbers.is_some()).map(|(text, _)| format!("Words: {text}"));
+    let query = words.query.borrow().as_ref().filter(|(_, numbers)| numbers.is_some()).map(|(text, _)| text.clone());
     (query, words.thing.get().map(|at| THINGS[at]))
 }
 
@@ -323,7 +341,7 @@ pub(super) fn read_imported(state: &App, libraries: &[i64]) {
     keep_reading(state);
 }
 
-fn searching(state: &App) -> bool {
+pub(super) fn searching(state: &App) -> bool {
     let words = &state.libraries.words;
     words.query.borrow().as_ref().is_some_and(|(_, numbers)| numbers.is_some()) || words.thing.get().is_some()
 }

@@ -284,8 +284,8 @@ function render() {
 }
 
 function header(path, params) {
-  const field = h('input', { type: 'search', placeholder: S.searchHint, value: params.get('q') || '', enterkeyhint: 'search', 'aria-label': S.search });
-  const search = h('form', { class: 'search', role: 'search', onsubmit: event => { event.preventDefault(); go('/', { q: field.value.trim() }); } }, field);
+  // HOME-040: Photos' filters are its field's tokens; elsewhere it starts empty.
+  const search = searchField(path === '/' ? params : new URLSearchParams());
   const bar = h('header', {});
   const who = h('button', { class: 'chip who', 'aria-haspopup': 'menu', onclick: event => {
     event.stopPropagation();
@@ -534,7 +534,7 @@ async function timeline(main, params) {
   // The months asked at once, beside the filters, not after them.
   const asked = api('timeline' + (query ? '?' + query : '')).then(months => ({ months }), error => ({ error }));
   const filters = await filterRow(params, narrowed);
-  main.append(filters.head, filters.row);
+  main.append(filters.head, filters.row, filters.line);
   const { months, error } = await asked;
   if (error) {
     main.append(empty(S.nothingToShow, error.message, true));
@@ -635,7 +635,11 @@ async function filterRow(params, narrowed) {
         menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album }));
       } }, icon('more')),
       selectToggle()));
-  return { head, row, count, dates };
+  // HOME-040: what was searched, under the count: the tokens and the words.
+  const words = params.get('q'), tokens = tokensOf(params);
+  const line = h('p', { class: 'section-label searched', hidden: !words && !tokens.some(key => key !== owner) },
+    [...tokens.map(key => said(key, true)), words && `"${words}"`].filter(Boolean).join(' · '));
+  return { head, row, line, count, dates };
 }
 
 // The direction's words: the date's depend on the page (a library or an album
@@ -896,7 +900,7 @@ window.addEventListener('resize', () => {
 async function search(main, params) {
   const narrowed = narrowedBy(params);
   const filters = await filterRow(params, narrowed);
-  main.append(filters.head, filters.row);
+  main.append(filters.head, filters.row, filters.line);
   let found;
   try { found = await api('search?' + new URLSearchParams(narrowed)); } catch (error) {
     main.append(empty(S.searchWaits, error.message, true));
@@ -904,7 +908,7 @@ async function search(main, params) {
   }
   if (!main.isConnected) return;
   filters.count.textContent = counted(found.length);
-  if (!found.length) return main.append(empty(S.nothingFound, S.tryOther));
+  if (!found.length) return main.append(tokensOf(params).length ? empty(S.nothingHere, S.noFilterMatch) : empty(S.nothingFound, S.tryOther));
   const section = { photos: found, load: async () => section.photos };
   state.sections = [section];
   main.append(h('div', { class: 'grid' }, found.map(photo => tile(section, photo, null, tileWide()))));

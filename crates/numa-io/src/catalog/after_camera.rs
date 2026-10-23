@@ -69,33 +69,78 @@ impl Catalog {
     }
 
     pub fn set_positions(&self, placed: &[(i64, f64, f64)]) -> Result<(), String> {
-        self.each_library(placed, |tx, (local, latitude, longitude)| {
+        let rows: Vec<(i64, (f64, f64))> = placed.iter().map(|&(id, latitude, longitude)| (id, (latitude, longitude))).collect();
+        self.each_library(&rows, |tx, local, (latitude, longitude)| {
             tx.execute("INSERT OR REPLACE INTO positions VALUES (?1, ?2, ?3)", params![local, latitude, longitude]).map(|_| ())
         })
     }
 
     pub fn clear_positions(&self, photo_ids: &[i64]) -> Result<(), String> {
-        let rows: Vec<(i64, f64, f64)> = photo_ids.iter().map(|&id| (id, 0.0, 0.0)).collect();
-        self.each_library(&rows, |tx, (local, _, _)| tx.execute("DELETE FROM positions WHERE photo_id = ?1", [local]).map(|_| ()))
+        let rows: Vec<(i64, ())> = photo_ids.iter().map(|&id| (id, ())).collect();
+        self.each_library(&rows, |tx, local, ()| tx.execute("DELETE FROM positions WHERE photo_id = ?1", [local]).map(|_| ()))
     }
 
-    fn each_library(&self, rows: &[(i64, f64, f64)], write: impl Fn(&rusqlite::Transaction, (i64, f64, f64)) -> rusqlite::Result<()>) -> Result<(), String> {
-        let mut by_library: HashMap<i64, Vec<(i64, f64, f64)>> = HashMap::new();
-        for &(id, latitude, longitude) in rows {
+    pub fn where_taken(&self, photos: &[Photo]) -> Result<(HashMap<i64, (f64, f64)>, Vec<Photo>), String> {
+        type Row = (Option<f64>, Option<f64>, Option<i64>, Option<f64>, Option<f64>);
+        let (mut found, mut unread) = (HashMap::new(), Vec::new());
+        for photo in photos {
+            let Ok((open, local)) = self.photo(photo.id) else { continue };
+            if open.offline {
+                continue;
+            }
+            let row: Option<Row> = open
+                .conn
+                .prepare_cached(
+                    "SELECT g.latitude, g.longitude, f.mtime, f.latitude, f.longitude FROM photos p \
+                     LEFT JOIN positions g ON g.photo_id = p.id LEFT JOIN file_positions f ON f.photo_id = p.id WHERE p.id = ?1",
+                )
+                .and_then(|mut statement| statement.query_row([local], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).optional())
+                .map_err(text)?;
+            match row {
+                None => {}
+                Some((Some(latitude), Some(longitude), ..)) => drop(found.insert(photo.id, (latitude, longitude))),
+                Some((_, _, Some(mtime), latitude, longitude)) if mtime == photo.mtime => {
+                    if let (Some(latitude), Some(longitude)) = (latitude, longitude) {
+                        found.insert(photo.id, (latitude, longitude));
+                    }
+                }
+                Some(_) => unread.push(photo.clone()),
+            }
+        }
+        Ok((found, unread))
+    }
+
+    pub fn keep_where(&self, read: &[(i64, i64, Option<(f64, f64)>)]) -> Result<(), String> {
+        let rows: Vec<(i64, (i64, Option<(f64, f64)>))> = read.iter().map(|&(id, mtime, at)| (id, (mtime, at))).collect();
+        self.each_library(&rows, |tx, local, (mtime, at)| {
+
+            tx.prepare_cached("INSERT OR REPLACE INTO file_positions SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM photos WHERE id = ?1)")?
+                .execute(params![local, mtime, at.map(|at| at.0), at.map(|at| at.1)])
+                .map(|_| ())
+        })
+    }
+
+    fn each_library<T: Copy>(&self, rows: &[(i64, T)], write: impl Fn(&rusqlite::Transaction, i64, T) -> rusqlite::Result<()>) -> Result<(), String> {
+        let mut by_library: HashMap<i64, Vec<(i64, T)>> = HashMap::new();
+        for &(id, value) in rows {
             let (library, local) = split_id(id);
-            by_library.entry(library).or_default().push((local, latitude, longitude));
+            by_library.entry(library).or_default().push((local, value));
         }
         for (library, rows) in by_library {
             let open = self.library(library)?;
             open.connected()?;
             let tx = open.conn.unchecked_transaction().map_err(text)?;
-            for row in rows {
-                write(&tx, row).map_err(text)?;
+            for (local, value) in rows {
+                write(&tx, local, value).map_err(text)?;
             }
             tx.commit().map_err(text)?;
         }
         Ok(())
     }
+}
+
+pub fn read_where(photos: &[Photo]) -> Vec<(i64, i64, Option<(f64, f64)>)> {
+    photos.iter().map(|photo| (photo.id, photo.mtime, crate::exif::position(&photo.path))).collect()
 }
 
 #[cfg(test)]
@@ -153,6 +198,35 @@ mod tests {
 
         catalog.clear_positions(&[raw]).unwrap();
         assert!(!catalog.positions(&[raw]).unwrap().contains_key(&raw));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn where_it_was_taken_is_kept() {
+        let (catalog, library, dir) = catalog_with(&["A.JPG", "B.JPG", "C.JPG", "D.JPG"]);
+        let (a, b) = (id_of(&catalog, &library, "A.JPG"), id_of(&catalog, &library, "B.JPG"));
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let (found, unread) = catalog.where_taken(&photos).unwrap();
+        assert_eq!((found.len(), unread.len()), (0, 4), "nothing read yet");
+
+        let mut read = read_where(&unread);
+        read.iter_mut().filter(|(id, ..)| *id == a).for_each(|(_, _, at)| *at = Some((35.0, 135.0)));
+        catalog.keep_where(&read).unwrap();
+
+        drop(catalog);
+        let catalog = Catalog::open(&dir.join("home.db")).unwrap();
+        let (found, unread) = catalog.where_taken(&photos).unwrap();
+        assert_eq!((found, unread.len()), (HashMap::from([(a, (35.0, 135.0))]), 0), "kept, GPS and none alike");
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(dir.join("lib/B.JPG")).unwrap().set_modified(later).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        let (_, unread) = catalog.where_taken(&photos).unwrap();
+        assert_eq!(unread.iter().map(|photo| photo.id).collect::<Vec<_>>(), [b], "a changed file is read again");
+
+        catalog.set_positions(&[(a, 50.85, 5.69)]).unwrap();
+        assert_eq!(catalog.where_taken(&photos).unwrap().0[&a], (50.85, 5.69), "a place given wins");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

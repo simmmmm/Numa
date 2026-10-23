@@ -417,15 +417,27 @@ pub fn newest_of(list: &[u8]) -> Result<(String, String), String> {
 }
 
 #[cfg(not(target_os = "ios"))]
-pub fn bring(dir: &Path, positions: &[(f32, f32)], started: impl FnOnce(u64, &Path)) -> Result<(usize, u64), String> {
+pub fn bring(dir: &Path, positions: &[(f32, f32)], mut started: impl FnMut(u64, &Path)) -> Result<(usize, u64), String> {
     std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    if positions.is_empty() || ready(&dir.join("tiles.db")) {
+        return bring_once(dir, positions, &mut started);
+    }
+    let (tiles, bytes) = bring_once(dir, &[], &mut started)?;
+    started(0, &dir.join("tiles.part"));
+    let (more, more_bytes) = bring_once(dir, positions, &mut started)?;
+    Ok((tiles + more, bytes + more_bytes))
+}
+
+#[cfg(not(target_os = "ios"))]
+fn bring_once(dir: &Path, positions: &[(f32, f32)], started: &mut dyn FnMut(u64, &Path)) -> Result<(usize, u64), String> {
+    let part = dir.join("tiles.part");
     let mut db = open(&dir.join("tiles.db"))?;
     let have = have(&db)?;
     let mut missing: Vec<u64> = wanted(positions).into_iter().filter(|id| !have.contains(id)).collect();
     if missing.is_empty() {
         return Ok((0, 0));
     }
-    let out = std::process::Command::new("curl").args(["--fail", "--location", "--silent", "--show-error", "--max-time", "60", BUILDS]).output().map_err(|err| err.to_string())?;
+    let out = std::process::Command::new("curl").args(["--fail", "--location", "--silent", "--show-error", "--max-time", "60", BUILDS]).output().map_err(|err| format!("curl would not start: {err}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
@@ -434,15 +446,30 @@ pub fn bring(dir: &Path, positions: &[(f32, f32)], started: impl FnOnce(u64, &Pa
         db.execute_batch("DELETE FROM tiles; DELETE FROM about;").map_err(|err| err.to_string())?;
         missing = wanted(positions).into_iter().collect();
     }
-    let part = dir.join("tiles.part");
     let _ = std::fs::remove_file(&part);
-    let fetched = fetch(&mut db, &missing, &mut ranges(&format!("{BUILD}{build}"), &part), |total| started(total, &part));
+
+    let fetched = fetch(&mut db, &missing, &mut ranges(&format!("{BUILD}{build}"), &part), |total| {
+        started(total + std::fs::metadata(&part).map_or(0, |meta| meta.len()), &part)
+    });
     let _ = std::fs::remove_file(&part);
     let fetched = fetched?;
     for (key, value) in [("build", build.as_str()), ("version", version.as_str())] {
         db.execute("INSERT OR REPLACE INTO about (key, value) VALUES (?1, ?2)", params![key, value]).map_err(|err| err.to_string())?;
     }
     Ok(fetched)
+}
+
+pub fn plainly(err: &str) -> String {
+    let curl = err.strip_prefix("curl: (").and_then(|rest| rest.split_once(')')).and_then(|(code, _)| code.parse::<u32>().ok());
+    match curl {
+        Some(5..=7) => "Could not reach the map's server. Check the internet connection.".into(),
+        Some(28) => "The map's server stopped answering.".into(),
+        Some(22) => "The map's server would not give the map.".into(),
+        Some(_) => "The map's download broke off.".into(),
+        None if err.contains("No space left") => "The disk is full.".into(),
+        None if err.starts_with("curl would not start") => "curl is missing, and the map comes with it.".into(),
+        None => format!("The map could not be brought: {err}."),
+    }
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -622,5 +649,14 @@ mod tests {
         let list = br#"[{"key":"20261021.pmtiles","version":"4.15.2"},{"key":"20261022.pmtiles","version":"4.15.2"},{"key":"x.pmtiles","version":"9"}]"#;
         assert_eq!(newest_of(list).unwrap(), ("20261022.pmtiles".to_string(), "4.15.2".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_stopped_the_map_is_said_plainly() {
+        assert!(plainly("curl: (6) Could not resolve host: build.protomaps.com").starts_with("Could not reach"));
+        assert_eq!(plainly("curl: (28) Operation timed out after 60001 milliseconds"), "The map's server stopped answering.");
+        assert_eq!(plainly("curl: (56) Recv failure: Connection reset by peer"), "The map's download broke off.");
+        assert_eq!(plainly("No space left on device (os error 28)"), "The disk is full.");
+        assert_eq!(plainly("the map's server sent other than was asked"), "The map could not be brought: the map's server sent other than was asked.");
     }
 }

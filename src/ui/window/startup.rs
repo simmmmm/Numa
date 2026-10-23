@@ -28,6 +28,11 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
         }
     }
 
+    glib::idle_add_local_once(glib::clone!(
+        #[strong] state,
+        move || super::places_page::count_at_start(&state)
+    ));
+
     if !state.grid.welcome.get_visible() {
         state.grid.wall.grab_focus();
     }

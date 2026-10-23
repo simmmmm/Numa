@@ -141,7 +141,10 @@ async function placesPage(main, params) {
   } }, h('h1', {}, S.places), h('span', { class: 'caption' }));
   const rows = h('div', { class: 'rows' });
   const list = h('div', { class: 'place-list' }, head, rows);
-  const stage = h('div', { class: 'map-stage' }, view.box, mapChips(params),
+  view.streets = coming('streets');
+  view.streets.box.hidden = view.row?.state !== 'fetching';
+  drawComing(view.streets, view.row, S.mapStreets);
+  const stage = h('div', { class: 'map-stage' }, view.box, mapChips(params), view.streets.box,
     h('div', { class: 'zoom' },
       h('button', { class: 'round', 'aria-label': S.zoomIn, title: S.zoomIn, onclick: () => view.map?.zoomIn() }, icon('plus')),
       h('button', { class: 'round', 'aria-label': S.zoomOut, title: S.zoomOut, onclick: () => view.map?.zoomOut() }, icon('minus'))),
@@ -166,9 +169,10 @@ async function placesPage(main, params) {
   // Still reading where the photographs were taken: asked again in a moment.
   if (found.looking) setTimeout(() => { if (main.isConnected && route().path === '/places') render(); }, 4000);
   if (found.map !== 'ready') {
-    stage.replaceChildren(h('div', { class: 'note' }, empty(S.places, found.map === 'fetching' ? S.mapComing : S.mapMissing)));
+    stage.replaceChildren(h('div', { class: 'note' }, mapNote(view, found)));
     return;
   }
+  view.total = 0;
   let lib;
   try { lib = await loadMapLibre(); } catch (error) {
     stage.replaceChildren(h('div', { class: 'note' }, empty(S.places, error.message, true)));
@@ -208,6 +212,65 @@ async function placesPage(main, params) {
   for (const marker of view.markers.values()) marker.remove();
   view.markers.clear();
   placeStacks(view);
+}
+
+// What stands in the map's place until it has come: how far its download is,
+// or what stopped it and Try Again, which has Numa Home fetch it now.
+function mapNote(view, found) {
+  if (found.map === 'fetching') {
+    view.note = coming('world');
+    drawComing(view.note, view.row, S.mapBringing);
+    return h('div', { class: 'empty' }, h('h2', {}, S.places), h('p', { class: 'body' }, S.mapOnce), view.note.box);
+  }
+  view.note = null;
+  view.total = 0;
+  const box = empty(S.places, found.why || S.mapMissing, Boolean(found.why));
+  box.append(h('button', { class: 'primary', onclick: () => api('map/bring', { method: 'POST' }).then(render, error => toast(error.message)) }, S.tryAgain));
+  return box;
+}
+
+// A download of the map: what comes and how far, the activity ring turning
+// until its size is known, then its meter.
+function coming(kind) {
+  const turning = ring(0.25), said = h('span', {}), meter = h('div', { class: 'meter' }, h('div', { class: 'fill' }));
+  return { turning, said, meter, box: h('div', { class: 'coming ' + kind }, h('div', { class: 'line' }, turning, said), meter) };
+}
+
+function drawComing(block, row, lead) {
+  const total = row?.state === 'fetching' ? row.total : 0;
+  const megabytes = bytes => grouped(Math.round(bytes / 1e6));
+  block.said.textContent = total ? `${lead} ${phrase('ofTotal', { done: megabytes(row.done), total: `${megabytes(total)} MB` })}` : lead;
+  block.turning.toggleAttribute('hidden', Boolean(total));
+  block.meter.hidden = !total;
+  block.meter.firstChild.style.transform = filled(total ? row.done / total : 0).transform;
+}
+
+// The map's download as Activity reports it, asked every half second while
+// it comes (activityBadge). The world's on the note, the page drawn again
+// once that download is over — another one, the streets', begins only once
+// the world is here; the streets around new places in a caption over the
+// map, their tiles asked again once they have come.
+function mapProgress(activity) {
+  const row = activity.downloads.find(item => item.name === S.map);
+  const fetching = row?.state === 'fetching', view = mapView;
+  if (!view) return fetching;
+  view.row = row;
+  if (view.note?.box.isConnected) {
+    if (!fetching || (view.total && row.total !== view.total)) {
+      view.total = 0;
+      render();
+      return false;
+    }
+    view.total = row.total;
+    drawComing(view.note, row, S.mapBringing);
+    return true;
+  }
+  if (view.map && view.streets?.box.isConnected) {
+    if (!fetching && !view.streets.box.hidden) view.map.getSource('here')?.setTiles([`${location.origin}/api/v1/map/{z}/{x}/{y}`]);
+    view.streets.box.hidden = !fetching;
+    drawComing(view.streets, row, S.mapStreets);
+  }
+  return fetching;
 }
 
 // The places on the map as small stacks of their photographs, the count beside.

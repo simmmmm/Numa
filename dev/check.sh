@@ -8,6 +8,10 @@ python3 dev/style.py
 python3 dev/style_web.py
 python3 dev/tokens.py --check
 python3 dev/smoke-readme.py
+if ! diff <(sed -n 's/^Build-Depends: //p' packaging/obs/numa.dsc) <(sed -n 's/^Build-Depends: //p' packaging/obs/debian.control); then
+    echo "packaging/obs/numa.dsc and debian.control name other Build-Depends" >&2
+    exit 1
+fi
 
 for pair in numa:THIRD_PARTY_LICENSES numa-server:THIRD_PARTY_LICENSES-server; do
     crate=${pair%%:*} file=data/${pair#*:}.txt

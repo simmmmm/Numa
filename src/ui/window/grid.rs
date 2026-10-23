@@ -82,6 +82,7 @@ pub(super) fn reload_grid(state: &App) {
     }
 
     filter_menu::narrow(state, &mut photos);
+    tokens::recount(state);
 
     words::keep_reading(state);
     words::narrow(state, &mut photos);
@@ -176,13 +177,14 @@ fn sections_of(state: &App, photos: &[Photo], sort: Sort) -> (Vec<justified::Sec
     (sections, months)
 }
 
+pub(super) const MONTH_NAMES: [&str; 12] =
+    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
 fn month_name(when: i64) -> String {
-    const MONTHS: [&str; 12] =
-        ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     let day = numa::io::import::day(when, 0);
     let mut parts = day.split('-');
     let (year, month) = (parts.next().unwrap_or_default(), parts.next().and_then(|month| month.parse::<usize>().ok()));
-    format!("{} {year}", MONTHS[month.unwrap_or(1).clamp(1, 12) - 1])
+    format!("{} {year}", MONTH_NAMES[month.unwrap_or(1).clamp(1, 12) - 1])
 }
 
 fn aspects_of(state: &App, photos: &[Photo], edge: u32) -> Vec<f32> {

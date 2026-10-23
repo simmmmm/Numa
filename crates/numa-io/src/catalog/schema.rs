@@ -402,6 +402,17 @@ CREATE TABLE IF NOT EXISTS positions (
     longitude REAL NOT NULL
 );
 
+-- What each photograph's file said of where it was taken (`exif::position`)
+-- when it had this `mtime`, so a file is read again only once it changes;
+-- null for a file without GPS. A place above wins over it. Derived: dropping
+-- the table costs a read of every file, and no work.
+CREATE TABLE IF NOT EXISTS file_positions (
+    photo_id  INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    mtime     INTEGER NOT NULL,
+    latitude  REAL,
+    longitude REAL
+);
+
 -- HOME-051: photographs of a Numa Home library whose originals are not on
 -- this computer: each one's id on the server and the original's size. The
 -- row in `photos` is ordinary; this says its file is not meant to be there,

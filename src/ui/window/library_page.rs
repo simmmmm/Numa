@@ -132,6 +132,8 @@ pub(super) struct Head {
     back: gtk::Button,
     title: gtk::Label,
     caption: gtk::Label,
+
+    tokens: gtk::Label,
     book: gtk::Button,
     tidy: gtk::Button,
     rename: gtk::Button,
@@ -154,6 +156,10 @@ impl Head {
         caption.add_css_class("caption");
         caption.add_css_class("dim-label");
         caption.add_css_class("numeric");
+        let tokens = gtk::Label::new(None);
+        tokens.set_xalign(0.0);
+        tokens.add_css_class("section-header");
+        tokens.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let book = gtk::Button::with_label("For a Book…");
         book.set_valign(gtk::Align::Center);
         book.set_action_name(Some("win.book"));
@@ -163,7 +169,7 @@ impl Head {
         tidy.set_tooltip_text(Some("Copies, runs of the same frame and photographs past use, in this library"));
         let rename = gtk::Button::with_label("Rename…");
         rename.set_valign(gtk::Align::Center);
-        Self { back, title, caption, book, tidy, rename, owner: Rc::new(Cell::new("libraries")) }
+        Self { back, title, caption, tokens, book, tidy, rename, owner: Rc::new(Cell::new("libraries")) }
     }
 }
 
@@ -182,6 +188,7 @@ fn build_head(state: &App) -> gtk::Box {
     titles.set_valign(gtk::Align::Center);
     titles.append(&head.title);
     titles.append(&head.caption);
+    titles.append(&head.tokens);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("place-head");
     row.append(&head.back);
@@ -214,10 +221,14 @@ pub(super) fn show_head(state: &App) {
     let place = current_place(state);
     let read = places::row(state, &place);
     head.title.set_label(&places::name_of(state, &place));
+    let searched = filter::searched(state);
     head.caption.set_label(&match places::period(read.first, read.last) {
+        _ if searched.is_some() => places::photos(state.grid.wall.len()),
         Some(period) => format!("{period} \u{b7} {}", places::photos(read.count as usize)),
         None => places::photos(read.count as usize),
     });
+    head.tokens.set_visible(searched.is_some());
+    head.tokens.set_label(&searched.unwrap_or_default().to_uppercase());
     let (owner, back) = match place {
         Place::Everywhere => ("", ""),
         Place::Library(_) => ("libraries", "Libraries"),

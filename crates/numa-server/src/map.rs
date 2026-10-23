@@ -24,8 +24,8 @@ type Named = (&'static str, &'static str, &'static str);
 
 #[derive(Clone, Copy)]
 pub struct Spot {
-    at: (f32, f32),
-    place: Option<Named>,
+    pub at: (f32, f32),
+    pub place: Option<Named>,
 }
 
 #[derive(Default)]
@@ -33,29 +33,68 @@ pub struct Map {
     found: Mutex<HashMap<i64, (i64, Option<Spot>)>>,
     reading: AtomicBool,
     fetching: AtomicBool,
+
+    why: Mutex<Option<String>>,
 }
 
 fn found(server: &Server) -> MutexGuard<'_, HashMap<i64, (i64, Option<Spot>)>> {
     server.map.found.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn spot_at(path: &Path) -> Option<Spot> {
-    let (lat, lon) = numa_io::exif::position(path)?;
+fn why(server: &Server) -> MutexGuard<'_, Option<String>> {
+    server.map.why.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn known(found: &HashMap<i64, (i64, Option<Spot>)>, photo: &Photo) -> bool {
+    found.get(&photo.id).is_some_and(|(mtime, _)| *mtime == photo.mtime)
+}
+
+fn spot((lat, lon): (f64, f64), named: &mut HashMap<(u32, u32), Option<Named>>) -> Spot {
     let at = (lat as f32, lon as f32);
-    Some(Spot { at, place: crate::places::named(at) })
+    Spot { at, place: *named.entry((at.0.to_bits(), at.1.to_bits())).or_insert_with(|| crate::places::named(at)) }
+}
+
+fn keep(server: &Server, read: Vec<(i64, i64, Option<(f64, f64)>)>) {
+    let kept = read.clone();
+    if let Some(Err(err)) = server.home.blocking(move |catalog| catalog.keep_where(&kept)) {
+        log::warn!("places: {err}");
+    }
+    let mut named = HashMap::new();
+    let spots: Vec<(i64, (i64, Option<Spot>))> = read.into_iter().map(|(id, mtime, at)| (id, (mtime, at.map(|at| spot(at, &mut named))))).collect();
+    found(server).extend(spots);
+}
+
+pub fn kept(server: &Server, catalog: &numa_io::catalog::Catalog, ids: &[i64]) {
+    let photos: Vec<Photo> = ids.iter().filter_map(|&id| server.home.any_photo(id)).collect();
+    let photos: Vec<Photo> = {
+        let found = found(server);
+        photos.into_iter().filter(|photo| !known(&found, photo)).collect()
+    };
+    let (at, unread) = match catalog.where_taken(&photos) {
+        Ok(kept) => kept,
+        Err(err) => return log::warn!("places: {err}"),
+    };
+    let unread: HashSet<i64> = unread.iter().map(|photo| photo.id).collect();
+    let mut named = HashMap::new();
+    let spots: Vec<(i64, (i64, Option<Spot>))> = photos
+        .iter()
+        .filter(|photo| !unread.contains(&photo.id))
+        .map(|photo| (photo.id, (photo.mtime, at.get(&photo.id).map(|&at| spot(at, &mut named)))))
+        .collect();
+    found(server).extend(spots);
 }
 
 pub fn spots(server: &Arc<Server>, photos: &[Photo]) -> (HashMap<i64, Option<Spot>>, bool) {
-    let known = found(server);
+    let found = found(server);
     let mut spots = HashMap::new();
     let mut missing = false;
     for photo in photos {
-        match known.get(&photo.id).filter(|(mtime, _)| *mtime == photo.mtime) {
+        match found.get(&photo.id).filter(|(mtime, _)| *mtime == photo.mtime) {
             Some((_, spot)) => drop(spots.insert(photo.id, *spot)),
             None => missing = true,
         }
     }
-    drop(known);
+    drop(found);
     if missing && !server.map.reading.swap(true, Ordering::SeqCst) {
         let server = server.clone();
         std::thread::spawn(move || {
@@ -71,19 +110,16 @@ pub fn spots(server: &Arc<Server>, photos: &[Photo]) -> (HashMap<i64, Option<Spo
 
 fn read(server: &Server) {
     let everyone: Vec<i64> = server.home.all_libraries().iter().map(|library| library.id).collect();
-    let mut named: HashMap<(u32, u32), Option<Named>> = HashMap::new();
-    for photo in server.home.photos(&everyone) {
+    let photos = server.home.photos(&everyone);
+    let unread: Vec<Photo> = {
+        let found = found(server);
+        photos.into_iter().filter(|photo| !known(&found, photo)).collect()
+    };
+    for batch in unread.chunks(256) {
         if server.activity.paused() {
             return;
         }
-        if found(server).get(&photo.id).is_some_and(|(mtime, _)| *mtime == photo.mtime) {
-            continue;
-        }
-        let spot = numa_io::exif::position(&photo.path).map(|(lat, lon)| {
-            let at = (lat as f32, lon as f32);
-            Spot { at, place: *named.entry((at.0.to_bits(), at.1.to_bits())).or_insert_with(|| crate::places::named(at)) }
-        });
-        found(server).insert(photo.id, (photo.mtime, spot));
+        keep(server, numa_io::catalog::read_where(batch));
     }
 }
 
@@ -91,9 +127,8 @@ pub fn spot_of(server: &Server, photo: &Photo) -> Option<Spot> {
     if let Some((_, spot)) = found(server).get(&photo.id).filter(|(mtime, _)| *mtime == photo.mtime) {
         return *spot;
     }
-    let spot = spot_at(&photo.path);
-    found(server).insert(photo.id, (photo.mtime, spot));
-    spot
+    keep(server, numa_io::catalog::read_where(std::slice::from_ref(photo)));
+    found(server).get(&photo.id).and_then(|(_, spot)| *spot)
 }
 
 pub fn said(spot: Option<Spot>) -> Value {
@@ -125,13 +160,15 @@ pub async fn places(State(server): State<Arc<Server>>, Signed(me): Signed, Query
     if count.count.is_some() {
         return Ok(Json(json!({ "count": towns.len(), "looking": looking })));
     }
+    let why = why(&server).clone();
     let map = match numa_io::map::ready(&server.data.join(FILE)) {
         true => "ready",
         false if server.map.fetching.load(Ordering::SeqCst) => "fetching",
+        false if why.is_some() => "failed",
         false => "none",
     };
     let towns: Vec<[&str; 3]> = towns.into_iter().map(|(town, region, country)| [town, region, country]).collect();
-    Ok(Json(json!({ "looking": looking, "none": none, "map": map, "towns": towns, "points": points })))
+    Ok(Json(json!({ "looking": looking, "none": none, "map": map, "why": why, "towns": towns, "points": points })))
 }
 
 fn answer(photos: &[(i64, bool)], spots: &HashMap<i64, Option<Spot>>) -> (Vec<Named>, Vec<Value>, usize) {
@@ -184,30 +221,61 @@ pub fn night(server: &Server, report: &mut crate::night::Report) {
     }
 }
 
+pub async fn again(State(server): State<Arc<Server>>, Signed(_): Signed) -> Json<Value> {
+    if begin(&server) {
+        std::thread::spawn(move || brought(&server));
+    }
+    Json(json!({}))
+}
+
 fn bring(server: &Server) -> Result<(usize, u64), String> {
-    if server.map.fetching.swap(true, Ordering::SeqCst) {
+    if !begin(server) {
         return Ok((0, 0));
     }
-    let positions: Vec<(f32, f32)> = found(server).values().filter_map(|(_, spot)| spot.map(|spot| spot.at)).collect();
-    let started = std::time::Instant::now();
-    let shown = |total: u64, part: &Path, state: &'static str| {
-        let mut downloads = server.activity.downloads();
-        downloads.retain(|row| row.name != NAME);
-        downloads.push(Download { name: NAME.into(), total, parts: vec![part.to_path_buf()], state });
-    };
-    let mut coming = None;
-    let dir = server.data.join("map");
-    let brought = numa_io::map::bring(&dir, &positions, |total, part| {
-        coming = Some((total, part.to_path_buf()));
-        shown(total, part, "fetching");
-    });
-    if let Some((total, part)) = coming {
-        shown(total, &part, if brought.is_ok() { "done" } else { "failed" });
+    brought(server)
+}
+
+fn begin(server: &Server) -> bool {
+    if server.map.fetching.swap(true, Ordering::SeqCst) {
+        return false;
     }
+    why(server).take();
+    shown(server, 0, None, "fetching");
+    true
+}
+
+fn shown(server: &Server, total: u64, part: Option<&Path>, state: &'static str) {
+    let mut downloads = server.activity.downloads();
+    downloads.retain(|row| row.name != NAME);
+    downloads.push(Download { name: NAME.into(), total, parts: part.map(Path::to_path_buf).into_iter().collect(), state });
+}
+
+fn brought(server: &Server) -> Result<(usize, u64), String> {
+    let began = std::time::Instant::now();
+    let dir = server.data.join("map");
+    let mut coming = (0, None);
+    let mut started = |total, part: &Path| {
+        coming = (total, Some(part.to_path_buf()));
+        shown(server, total, Some(part), "fetching");
+    };
+
+    let brought = numa_io::map::bring(&dir, &[], &mut started).and_then(|(tiles, bytes)| {
+        if tiles > 0 {
+            started(0, &dir.join("tiles.part"));
+        }
+        let positions: Vec<(f32, f32)> = found(server).values().filter_map(|(_, spot)| spot.map(|spot| spot.at)).collect();
+        numa_io::map::bring(&dir, &positions, &mut started).map(|(more, more_bytes)| (tiles + more, bytes + more_bytes))
+    });
+    *why(server) = brought.as_ref().err().map(|err| numa_io::map::plainly(err));
     server.map.fetching.store(false, Ordering::SeqCst);
     match &brought {
+        Ok((0, _)) => server.activity.downloads().retain(|row| row.name != NAME),
+        Ok(_) => shown(server, coming.0, coming.1.as_deref(), "done"),
+        Err(_) => shown(server, coming.0, coming.1.as_deref(), "failed"),
+    }
+    match &brought {
         Ok((0, _)) => {}
-        Ok((tiles, bytes)) => log::info!("map: {tiles} tiles, {} MB in {:.0} s", bytes / 1_000_000, started.elapsed().as_secs_f32()),
+        Ok((tiles, bytes)) => log::info!("map: {tiles} tiles, {} MB in {:.0} s", bytes / 1_000_000, began.elapsed().as_secs_f32()),
         Err(err) => log::warn!("map: {err}; tried again tonight"),
     }
     brought

@@ -43,8 +43,6 @@ modules:
     config-opts:
       - --disable-static
       - --disable-protoc
-    post-install:
-      - install -Dm644 LICENSE /app/share/licenses/protobuf-c/LICENSE
     sources:
       - type: archive
         url: https://github.com/protobuf-c/protobuf-c/releases/download/v1.5.2/protobuf-c-1.5.2.tar.gz
@@ -62,8 +60,6 @@ modules:
       - -Dgtk_doc=false
       - -Ddemos=false
       - -Dsysprof=disabled
-    post-install:
-      - install -Dm644 COPYING /app/share/licenses/libshumate/COPYING
     sources:
       - type: archive
         url: https://download.gnome.org/sources/libshumate/1.7/libshumate-1.7.0.tar.xz

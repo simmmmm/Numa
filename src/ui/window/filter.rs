@@ -317,17 +317,36 @@ fn facets(filter: &Filter, folder: Option<&Path>, words: Option<&str>, thing: Op
         facets.push((Facet::Folder, folder.display().to_string()));
     }
     if let Some(words) = words {
-        facets.push((Facet::Words, words.to_string()));
+        facets.push((Facet::Words, format!("Words: {words}")));
     }
     if let Some(thing) = thing {
         facets.push((Facet::Thing, thing.to_string()));
     }
-    for (facet, said) in [(Facet::Person, &narrow.person), (Facet::Place, &narrow.place), (Facet::Camera, &narrow.camera), (Facet::Date, &narrow.year)] {
+    for (facet, said) in [(Facet::Person, &narrow.person), (Facet::Place, &narrow.place), (Facet::Camera, &narrow.camera)] {
         if let Some(said) = said {
             facets.push((facet, said.clone()));
         }
     }
+    if let Some(date) = &narrow.date {
+        facets.push((Facet::Date, tokens::date_label(date)));
+    }
     facets
+}
+
+pub(super) fn searched(state: &App) -> Option<String> {
+    let (words, thing) = words::chips(state);
+    let narrow = state.libraries.narrow.borrow().clone();
+    let mut said: Vec<String> = facets(&Filter::default(), None, None, thing, &narrow).into_iter().map(|(_, label)| label).collect();
+    said.extend(words.map(|words| format!("\u{201c}{words}\u{201d}")));
+    (!said.is_empty()).then(|| said.join(" \u{b7} "))
+}
+
+pub(super) fn drop_last_token(state: &App) {
+    let (_, thing) = words::chips(state);
+    let narrow = state.libraries.narrow.borrow().clone();
+    if let Some((facet, _)) = facets(&Filter::default(), None, None, thing, &narrow).pop() {
+        clear(state, &[facet]);
+    }
 }
 
 fn let_through(filter: &mut Filter, facet: Facet) {
@@ -362,7 +381,7 @@ fn clear(state: &App, facets: &[Facet]) {
                 Facet::Person => narrow.person = None,
                 Facet::Place => narrow.place = None,
                 Facet::Camera => narrow.camera = None,
-                Facet::Date => narrow.year = None,
+                Facet::Date => narrow.date = None,
                 _ => {}
             }
         }
@@ -514,12 +533,12 @@ mod tests {
         let none = filter_menu::Narrow::default();
         assert!(facets(&Filter::default(), None, None, None, &none).is_empty());
         let filter = Filter { min_rating: 3, flag: Some(Flag::Picked), best_of_burst: true, ..Filter::default() };
-        let narrow = filter_menu::Narrow { place: Some("Kyoto".into()), year: Some("2024".into()), ..none.clone() };
-        let chips: Vec<String> = facets(&filter, Some(Path::new("2024/Rome")), Some("Words: bride with bouquet"), Some("bouquet"), &narrow)
+        let narrow = filter_menu::Narrow { place: Some("Kyoto".into()), date: Some("2024-03".into()), ..none.clone() };
+        let chips: Vec<String> = facets(&filter, Some(Path::new("2024/Rome")), Some("bride with bouquet"), Some("bouquet"), &narrow)
             .into_iter()
             .map(|(_, label)| label)
             .collect();
-        assert_eq!(chips, ["★ 3+", "Picked", "Best of Each Burst", "2024/Rome", "Words: bride with bouquet", "bouquet", "Kyoto", "2024"]);
+        assert_eq!(chips, ["★ 3+", "Picked", "Best of Each Burst", "2024/Rome", "Words: bride with bouquet", "bouquet", "Kyoto", "March 2024"]);
         let mut cleared = filter.clone();
         for facet in EVERY_FACET {
             let_through(&mut cleared, facet);

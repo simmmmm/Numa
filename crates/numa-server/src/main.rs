@@ -49,8 +49,6 @@ pub struct Server {
 
     pub artists: by::Artists,
 
-    pub places: places::Known,
-
     pub map: map::Map,
 
     pub cards: cards::Cards,
@@ -70,7 +68,9 @@ pub struct Server {
 impl Server {
 
     pub fn shelve(&self, only: Option<i64>, catalog: &numa_io::catalog::Catalog) {
-        self.store.seen(&self.home.shelve(only, catalog));
+        let ids = self.home.shelve(only, catalog);
+        map::kept(self, catalog, &ids);
+        self.store.seen(&ids);
     }
 }
 
@@ -127,7 +127,6 @@ fn main() -> Result<(), String> {
         activity: activity::Activity::new(&store),
         things: Default::default(),
         artists: Default::default(),
-        places: Default::default(),
         map: Default::default(),
         store,
         home: home::Home::start(photos, sent)?,
@@ -225,6 +224,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/card/names", get(cards::names))
         .route("/api/v1/libraries/{id}/names", get(places::library))
         .route("/api/v1/places", get(map::places))
+        .route("/api/v1/map/bring", post(map::again))
         .route("/api/v1/map/{z}/{x}/{y}", get(map::tile))
         .route("/api/v1/faces", get(faces::unnamed))
         .route("/api/v1/faces/{id}/portrait", get(faces::portrait))

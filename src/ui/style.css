@@ -1100,6 +1100,19 @@ button.numa-primary:disabled {
     background: alpha(@window_bg_color, 0.8);
 }
 
+/* The streets around new places on their way, quiet in the map's corner. */
+.map-coming {
+    margin: 8px 12px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: alpha(@window_bg_color, 0.8);
+}
+
+.map-coming trough,
+.map-coming progress {
+    min-height: 4px;
+}
+
 .map-pin {
     padding: 0;
     background: none;

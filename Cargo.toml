@@ -3,7 +3,7 @@ members = ["crates/*"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.45.1"
+version = "0.46.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 

@@ -51,6 +51,12 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.46.0" date="2026-10-23">
+      <description>
+        <p>Search suggests while you type: things Numa saw, places, people, cameras, dates and libraries, each with how many photographs it keeps. A chosen suggestion becomes a filter chip, and Enter searches by words together with the chips. The date filter takes a month or a day as well as a year.</p>
+        <p>Numa reads where each photograph was taken once and keeps it in the library's catalog, so Places and its count are complete from the start; a place given from a track counts too. Places shows how far the map's download is, and offers Try Again when it stops.</p>
+      </description>
+    </release>
     <release version="0.45.1" date="2026-10-23">
       <description>
         <p>The library is laid out as Numa Home's. A side list leads to Today, Photos, Libraries, People, Albums and Places, each a page of its own. Today opens first, with On This Day, what has just arrived and what waits for you; Preferences can start on Photos instead.</p>

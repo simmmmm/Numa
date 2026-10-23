@@ -12,7 +12,7 @@ pub(super) struct Narrow {
     pub(super) place: Option<String>,
     pub(super) camera: Option<String>,
 
-    pub(super) year: Option<String>,
+    pub(super) date: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -94,8 +94,12 @@ fn cameras_of(state: &App, photos: &[Photo]) -> HashMap<i64, String> {
         .collect()
 }
 
-fn year_of(photo: &Photo) -> String {
-    numa::io::import::day(photo.taken.unwrap_or(photo.mtime), 0)[..4].to_string()
+fn day_of(photo: &Photo) -> String {
+    numa::io::import::day(photo.taken.unwrap_or(photo.mtime), 0)
+}
+
+fn dated(photo: &Photo, date: &str) -> bool {
+    day_of(photo).starts_with(date)
 }
 
 fn keeps(state: &App, seen: &Seen, photo: &Photo, own: Section) -> bool {
@@ -111,7 +115,7 @@ fn keeps(state: &App, seen: &Seen, photo: &Photo, own: Section) -> bool {
         (Section::People, narrow.person.as_ref().is_none_or(|person| seen.people.get(&photo.id).is_some_and(|names| names.iter().any(|name| same(name, person))))),
         (Section::Places, narrow.place.as_ref().is_none_or(|place| spots::town_of(photo).is_some_and(|town| spots::named(town, place)))),
         (Section::Cameras, narrow.camera.as_ref().is_none_or(|camera| seen.cameras.get(&photo.id).is_some_and(|name| same(name, camera)))),
-        (Section::Dates, narrow.year.as_ref().is_none_or(|year| year_of(photo) == *year)),
+        (Section::Dates, narrow.date.as_ref().is_none_or(|date| dated(photo, date))),
         (Section::Things, words::thing(state).is_none_or(|thing| seen.saw.as_ref().is_some_and(|saw| saw.get(&photo.id).is_some_and(|things| things.contains(&thing))))),
     ];
     tests.iter().all(|(section, passes)| *section == own || *passes)
@@ -129,8 +133,80 @@ pub(super) fn narrow(state: &App, photos: &mut Vec<Photo>) {
         narrow.person.as_ref().is_none_or(|person| people.get(&photo.id).is_some_and(|names| names.iter().any(|name| same(name, person))))
             && narrow.place.as_ref().is_none_or(|place| spots::town_of(photo).is_some_and(|town| spots::named(town, place)))
             && narrow.camera.as_ref().is_none_or(|camera| cameras.get(&photo.id).is_some_and(|name| same(name, camera)))
-            && narrow.year.as_ref().is_none_or(|year| year_of(photo) == *year)
+            && narrow.date.as_ref().is_none_or(|date| dated(photo, date))
     });
+}
+
+pub(super) fn suggestions(state: &App, ready: Rc<dyn Fn()>) -> Vec<tokens::Suggestion> {
+    use tokens::{Suggestion, Token};
+    let seen = {
+        let ready = ready.clone();
+        seen_now(state, move || ready())
+    };
+    spots::read(state, &seen.photos, move || ready());
+    let within = |section: Section| -> Vec<&Photo> { seen.photos.iter().filter(|photo| keeps(state, &seen, photo, section)).collect() };
+    let suggest = |token: Token, name: &str, aside: String, count: usize| Suggestion { token, name: name.to_string(), aside, count };
+    let mut all = Vec::new();
+    if let Some(saw) = &seen.saw {
+        let photos = within(Section::Things);
+        for (thing, n) in tally(photos.iter().flat_map(|photo| saw.get(&photo.id).into_iter().flatten().map(|at| numa::io::words::THINGS[*at]))) {
+            if let Some(at) = numa::io::words::THINGS.iter().position(|known| *known == thing) {
+                all.push(suggest(Token::Thing(at), thing, String::new(), n));
+            }
+        }
+    }
+
+    let mut places: HashMap<&str, (usize, &str)> = HashMap::new();
+    for town in within(Section::Places).into_iter().filter_map(spots::town_of) {
+        let mut names = vec![town.name.as_str(), town.region.as_str()];
+        names.retain(|name| !name.is_empty() && *name != town.country);
+        names.dedup();
+        for name in names {
+            places.entry(name).or_insert((0, town.country.as_str())).0 += 1;
+        }
+        places.entry(town.country.as_str()).or_insert((0, "")).0 += 1;
+    }
+    for (name, (n, country)) in places {
+        let aside = if country.is_empty() { String::new() } else { format!(", {country}") };
+        all.push(suggest(Token::Place(name.to_string()), name, aside, n));
+    }
+    for (name, n) in tally(within(Section::People).iter().flat_map(|photo| seen.people.get(&photo.id).into_iter().flatten().map(String::as_str))) {
+        all.push(suggest(Token::Person(name.to_string()), name, String::new(), n));
+    }
+    for (camera, n) in tally(within(Section::Cameras).iter().filter_map(|photo| seen.cameras.get(&photo.id).map(String::as_str))) {
+        all.push(suggest(Token::Camera(camera.to_string()), camera, String::new(), n));
+    }
+
+    let days: Vec<String> = within(Section::Dates).into_iter().map(day_of).collect();
+    for (date, n) in tally(days.iter().flat_map(|day| [&day[..4], &day[..7], day.as_str()])) {
+        all.push(suggest(Token::Date(date.to_string()), &tokens::date_label(date), String::new(), n));
+    }
+    all.extend(library_suggestions(state));
+    all
+}
+
+fn library_suggestions(state: &App) -> Vec<tokens::Suggestion> {
+    let narrowing = *state.libraries.narrow.borrow() != Narrow::default() || words::searching(state);
+    let mut counts: HashMap<i64, usize> = HashMap::new();
+    if narrowing {
+        let mut photos = state.catalog.photos_everywhere(&Filter { all_libraries: true, ..Filter::default() }).unwrap_or_default();
+        narrow(state, &mut photos);
+        words::narrow(state, &mut photos);
+        photos.iter().for_each(|photo| *counts.entry(numa::io::catalog::library_of(photo.id)).or_default() += 1);
+    }
+    let libraries = state.libraries.places.borrow().clone();
+    libraries
+        .into_iter()
+        .filter_map(|place| {
+            let Place::Library(library) = &place else { return None };
+            let count = match narrowing {
+                true => counts.get(&library.id).copied().unwrap_or(0),
+                false => places::row(state, &place).count as usize,
+            };
+            let name = places::name_of(state, &place);
+            (count > 0).then(|| tokens::Suggestion { token: tokens::Token::Library(place), name, aside: String::new(), count })
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -171,15 +247,18 @@ fn seen(menu: &Menu) -> Rc<Seen> {
     if let Some(seen) = menu.seen.borrow().clone() {
         return seen;
     }
-    let state = &menu.state;
-    let filter = Filter { min_rating: 0, flag: None, file_type: FileType::Any, ..state.libraries.filter.borrow().clone() };
-    let photos = pipeline(state, &filter);
     let later = menu.clone();
-    let saw = words::seen_in(state, &photos, move || again(&later));
-    let root = (!filter.spans_libraries()).then(|| state.libraries.current.borrow().as_ref().map(|library| library.path.clone())).flatten();
-    let seen = Rc::new(Seen { people: people_of(state, &photos), cameras: cameras_of(state, &photos), saw, root, photos });
+    let seen = Rc::new(seen_now(&menu.state, move || again(&later)));
     menu.seen.replace(Some(seen.clone()));
     seen
+}
+
+fn seen_now(state: &App, ready: impl Fn() + 'static) -> Seen {
+    let filter = Filter { min_rating: 0, flag: None, file_type: FileType::Any, ..state.libraries.filter.borrow().clone() };
+    let photos = pipeline(state, &filter);
+    let saw = words::seen_in(state, &photos, ready);
+    let root = (!filter.spans_libraries()).then(|| state.libraries.current.borrow().as_ref().map(|library| library.path.clone())).flatten();
+    Seen { people: people_of(state, &photos), cameras: cameras_of(state, &photos), saw, root, photos }
 }
 
 fn again(menu: &Menu) {
@@ -257,7 +336,7 @@ fn said(state: &App, section: Section) -> String {
         Section::People => narrow.person.clone().unwrap_or_default(),
         Section::Places => narrow.place.clone().unwrap_or_default(),
         Section::Cameras => narrow.camera.clone().unwrap_or_default(),
-        Section::Dates => narrow.year.clone().unwrap_or_default(),
+        Section::Dates => narrow.date.as_deref().map(tokens::date_label).unwrap_or_default(),
         Section::Flag => FLAGS.iter().find(|(_, flag)| filter.flag == Some(*flag)).map(|(label, _)| label.to_string()).unwrap_or_default(),
         Section::Rating if filter.min_rating > 0 => rated(filter.min_rating),
         Section::Rating => String::new(),
@@ -404,12 +483,12 @@ fn options(menu: &Menu, section: Section, seen: &Seen, within: &[&Photo]) -> (Ve
             }
         }
         Section::Dates => {
-            let years: Vec<String> = within.iter().map(|photo| year_of(photo)).collect();
+            let years: Vec<String> = within.iter().map(|photo| day_of(photo)[..4].to_string()).collect();
             let mut years = tally(years.iter().map(String::as_str));
             years.sort_by(|a, b| b.0.cmp(a.0));
             for (year, n) in years {
-                let (year, on) = (year.to_string(), narrow.year.as_deref() == Some(year));
-                rows.push((line(&year, &count(n), Some(on), false, false), narrowing(menu, move |narrow| narrow.year = (!on).then(|| year.clone()))));
+                let (year, on) = (year.to_string(), narrow.date.as_deref() == Some(year));
+                rows.push((line(&year, &count(n), Some(on), false, false), narrowing(menu, move |narrow| narrow.date = (!on).then(|| year.clone()))));
             }
         }
         Section::Flag => {
@@ -461,8 +540,8 @@ fn library_choices(menu: &Menu) -> Vec<Choice> {
 
 fn place_choices(menu: &Menu, seen: &Seen, within: &[&Photo], chosen: Option<&str>) -> (Vec<Choice>, Vec<String>) {
     let looking = {
-        let menu = menu.clone();
-        spots::read(&seen.photos, move || again(&menu))
+        let asked = menu.clone();
+        spots::read(&menu.state, &seen.photos, move || again(&asked))
     };
     let towns: Vec<&'static Town> = within.iter().filter_map(|photo| spots::town_of(photo)).collect();
     let mut rows = Vec::new();

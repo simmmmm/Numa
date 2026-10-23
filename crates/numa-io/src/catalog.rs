@@ -12,6 +12,7 @@ use crate::raw;
 pub use crate::copy::{copy_into, Copied};
 
 mod after_camera;
+pub use after_camera::read_where;
 mod backup;
 mod clocks;
 mod schema;

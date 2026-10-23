@@ -146,14 +146,54 @@ struct Chips {
     year: Option<String>,
 }
 
+struct Coming {
+    line: gtk::Box,
+    said: gtk::Label,
+    spinner: gtk::Spinner,
+    bar: gtk::ProgressBar,
+}
+
+impl Coming {
+    fn new(words_at: gtk::Align) -> Self {
+        let spinner = spinner("Bringing the map");
+        let said = gtk::Label::new(None);
+        said.add_css_class("numeric");
+        let words = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        words.append(&spinner);
+        words.append(&said);
+        words.set_halign(words_at);
+        let bar = progress_on("map-coming-bar");
+        let line = gtk::Box::new(gtk::Orientation::Vertical, 8);
+
+        line.add_css_class("numa-content");
+        line.append(&words);
+        line.append(&bar);
+        Self { line, said, spinner, bar }
+    }
+
+    fn show(&self, lead: &str, progress: Option<(u64, u64)>) {
+        let megabytes = |bytes: u64| (bytes + 500_000) / 1_000_000;
+        self.said.set_text(&match progress {
+            Some((done, total)) => format!("{lead} {} of {} MB", megabytes(done), megabytes(total)),
+            None => lead.to_string(),
+        });
+        self.spinner.set_visible(progress.is_none());
+        self.bar.set_visible(progress.is_some());
+        self.bar.set_fraction(progress.map_or(0.0, |(done, total)| done as f64 / total as f64));
+    }
+}
+
 struct Page {
     list: gtk::ListBox,
     countries: gtk::Label,
     none: gtk::Label,
-    coming: gtk::Label,
     stage: gtk::Stack,
     overlay: gtk::Overlay,
     note: adw::StatusPage,
+
+    world: Coming,
+    again: gtk::Button,
+    streets: Coming,
     quick: Vec<gtk::ToggleButton>,
     year: gtk::MenuButton,
     pop: gtk::Popover,
@@ -188,6 +228,25 @@ pub(super) fn count() -> Option<usize> {
     current().and_then(|page| page.towns.get())
 }
 
+pub(super) fn count_at_start(state: &App) {
+    let Some(page) = current() else { return };
+    let all = photographs(state);
+    let again = glib::clone!(
+        #[strong] state,
+        move || count_at_start(&state)
+    );
+    if !spots::read(state, &all, again) {
+        tally(state, &page, &all);
+    }
+}
+
+fn tally(state: &App, page: &Page, all: &[Photo]) {
+    let towns: std::collections::HashSet<(&str, &str)> = all.iter().filter_map(spots::town_of).map(|town| (town.name.as_str(), town.country.as_str())).collect();
+    if page.towns.replace(Some(towns.len())) != Some(towns.len()) {
+        sidebar::fill(state);
+    }
+}
+
 pub(super) fn build(state: &App) -> gtk::Box {
     let title = gtk::Label::new(Some("Places"));
     title.add_css_class("title-2");
@@ -208,15 +267,13 @@ pub(super) fn build(state: &App) -> gtk::Box {
     scroller.set_child(Some(&list));
     let foot = gtk::Box::new(gtk::Orientation::Vertical, 4);
     foot.add_css_class("place-list-foot");
-    let (coming, none) = (gtk::Label::new(None), gtk::Label::new(None));
-    for line in [&coming, &none] {
-        line.set_xalign(0.0);
-        line.set_wrap(true);
-        line.add_css_class("caption");
-        line.add_css_class("dim-label");
-        line.set_visible(false);
-        foot.append(line);
-    }
+    let none = gtk::Label::new(None);
+    none.set_xalign(0.0);
+    none.set_wrap(true);
+    none.add_css_class("caption");
+    none.add_css_class("dim-label");
+    none.set_visible(false);
+    foot.append(&none);
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.set_size_request(LIST_WIDTH, -1);
 
@@ -225,8 +282,13 @@ pub(super) fn build(state: &App) -> gtk::Box {
     column.append(&scroller);
     column.append(&foot);
 
-    let note = adw::StatusPage::new();
-    note.set_title("Places");
+    let (note, world, again) = note(state);
+    let streets = Coming::new(gtk::Align::Start);
+    streets.said.add_css_class("caption");
+    streets.line.add_css_class("map-coming");
+    streets.line.set_halign(gtk::Align::Start);
+    streets.line.set_valign(gtk::Align::End);
+    streets.line.set_visible(false);
     let stage = gtk::Stack::new();
     stage.set_hexpand(true);
     stage.set_vexpand(true);
@@ -248,6 +310,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
     chips.set_halign(gtk::Align::Start);
     chips.set_valign(gtk::Align::Start);
     overlay.add_overlay(&chips);
+    overlay.add_overlay(&streets.line);
     let zoom = zoom_buttons();
     let credit = gtk::Label::new(Some(map_view::CREDIT));
     credit.add_css_class("caption");
@@ -259,10 +322,12 @@ pub(super) fn build(state: &App) -> gtk::Box {
         list,
         countries,
         none,
-        coming,
         stage,
         overlay: overlay.clone(),
         note,
+        world,
+        again,
+        streets,
         quick,
         year,
         pop,
@@ -323,6 +388,33 @@ pub(super) fn build(state: &App) -> gtk::Box {
     box_
 }
 
+fn note(state: &App) -> (adw::StatusPage, Coming, gtk::Button) {
+    let note = adw::StatusPage::new();
+    note.set_title("Places");
+    let world = Coming::new(gtk::Align::Center);
+    let again = primary_button("Try Again");
+    again.add_css_class("pill");
+    again.set_halign(gtk::Align::Center);
+    again.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Some(page) = current() {
+                bring(&state);
+                show_map(&state, &page);
+            }
+        }
+    ));
+    let under = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    under.append(&world.line);
+    under.append(&again);
+
+    let clamp = adw::Clamp::new();
+    clamp.set_maximum_size(LIST_WIDTH);
+    clamp.set_child(Some(&under));
+    note.set_child(Some(&clamp));
+    (note, world, again)
+}
+
 fn zoom_buttons() -> gtk::Box {
     let zoom = gtk::Box::new(gtk::Orientation::Vertical, 8);
     zoom.set_halign(gtk::Align::End);
@@ -377,7 +469,7 @@ fn liked(photo: &Photo) -> bool {
 fn fill(state: &App) {
     let Some(page) = current() else { return };
     let all = photographs(state);
-    let looking = spots::read(&all, glib::clone!(
+    let looking = spots::read(state, &all, glib::clone!(
         #[strong] state,
         move || {
             if state.stack.visible_child_name().as_deref() == Some("places") {
@@ -408,11 +500,8 @@ fn fill(state: &App) {
         }
     }
     let tree = tree(&points);
-    if chips == Chips::default() && !looking {
-        let towns: std::collections::HashSet<(&str, &str)> = points.iter().map(|(.., town)| (town.name.as_str(), town.country.as_str())).collect();
-        if page.towns.replace(Some(towns.len())) != Some(towns.len()) {
-            sidebar::fill(state);
-        }
+    if !looking {
+        tally(state, &page, &all);
     }
     page.countries.set_text(&match tree.len() {
         0 => String::new(),
@@ -549,20 +638,24 @@ fn fill_list(state: &App, page: &Rc<Page>) {
 
 fn show_map(state: &App, page: &Rc<Page>) {
     let file = map_view::file();
-    page.coming.set_text("Bringing the map…");
-    page.coming.set_visible(map_view::bringing());
     if !numa::io::map::ready(&file) {
-        bring(state);
-        page.note.set_description(Some(match map_view::bringing() {
-            true => "Bringing the map: the world once, about 45 MB, then a little more for each new place. It stays on this computer.",
-            false => "The map comes the first time Places opens, and needs the internet for that. It stays on this computer.",
-        }));
+
+        let failed = map_view::failed();
+        if failed.is_none() {
+            bring(state);
+        }
+        page.note.set_description(Some(failed.as_deref().unwrap_or("The world once, about 45 MB; it stays on this computer.")));
+        page.world.line.set_visible(failed.is_none());
+        page.again.set_visible(failed.is_some());
+        show_coming(page);
         page.stage.set_visible_child_name("note");
         return;
     }
     if page.map.borrow().is_none() {
         let Some((map, markers)) = map_view::new_map() else {
             page.note.set_description(Some("This computer's libshumate cannot draw the map."));
+            page.world.line.set_visible(false);
+            page.again.set_visible(false);
             page.stage.set_visible_child_name("note");
             return;
         };
@@ -612,20 +705,44 @@ fn everywhere(tree: &[Node]) -> Option<[f64; 4]> {
 }
 
 fn bring(state: &App) {
-    if let Some(page) = current() {
-        page.coming.set_visible(true);
+    if map_view::bringing() {
+        return;
     }
-    let state = state.clone();
-    map_view::bring(move |came| {
-        let Some(page) = current() else { return };
-        page.coming.set_visible(false);
-        if let (true, Some((map, _))) = (came, page.map.borrow().as_ref()) {
-            map_view::refresh(map);
+    map_view::bring(glib::clone!(
+        #[strong] state,
+        move |came| {
+            let Some(page) = current() else { return };
+            show_coming(&page);
+            if let (true, Some((map, _))) = (came, page.map.borrow().as_ref()) {
+                map_view::refresh(map);
+            }
+            if state.stack.visible_child_name().as_deref() == Some("places") && page.map.borrow().is_none() {
+                show_map(&state, &page);
+            }
         }
-        if state.stack.visible_child_name().as_deref() == Some("places") && page.map.borrow().is_none() {
+    ));
+    let state = state.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        let Some(page) = current() else { return glib::ControlFlow::Break };
+
+        if page.map.borrow().is_none() && numa::io::map::ready(&map_view::file()) && state.stack.visible_child_name().as_deref() == Some("places") {
             show_map(&state, &page);
         }
+        show_coming(&page);
+        match map_view::bringing() {
+            true => glib::ControlFlow::Continue,
+            false => glib::ControlFlow::Break,
+        }
     });
+}
+
+fn show_coming(page: &Page) {
+    let progress = map_view::progress();
+    match page.map.borrow().is_none() {
+        true => page.world.show("Bringing the map…", progress),
+        false => page.streets.show("Bringing the streets around new places…", progress),
+    }
+    page.streets.line.set_visible(page.map.borrow().is_some() && map_view::bringing());
 }
 
 fn place_soon(state: &App) {
@@ -822,7 +939,7 @@ fn pop(state: &App, page: &Rc<Page>, map: &libshumate::Map, node: &Node) {
             {
                 let mut narrow = state.libraries.narrow.borrow_mut();
                 narrow.place = Some(name_of.clone());
-                narrow.year = chips.year.clone();
+                narrow.date = chips.year.clone();
             }
             reload_grid(&state);
         }

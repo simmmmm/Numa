@@ -232,34 +232,52 @@ pub(super) fn world_pixel(latitude: f64, longitude: f64, zoom: f64) -> (f64, f64
 thread_local! {
 
     static BRINGING: Cell<bool> = const { Cell::new(false) };
+    static FAILED: RefCell<Option<String>> = const { RefCell::new(None) };
 }
+
+static TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(super) fn bring(done: impl FnOnce(bool) + 'static) {
     if BRINGING.replace(true) {
         return;
     }
+    FAILED.set(None);
+    TOTAL.store(0, std::sync::atomic::Ordering::Relaxed);
     let positions = spots::positions();
     glib::spawn_future_local(async move {
-        let brought = gio::spawn_blocking(move || numa::io::map::bring(&dir(), &positions, |_, _| {})).await;
+        let brought = gio::spawn_blocking(move || {
+            numa::io::map::bring(&dir(), &positions, |total, _| TOTAL.store(total, std::sync::atomic::Ordering::Relaxed))
+        })
+        .await;
         BRINGING.set(false);
-        match brought {
-            Ok(Ok((tiles, bytes))) => {
+        match brought.unwrap_or_else(|_| Err("it stopped short".into())) {
+            Ok((tiles, bytes)) => {
                 if tiles > 0 {
                     log::info!("map: {tiles} tiles, {} MB", bytes / 1_000_000);
                 }
                 done(tiles > 0);
             }
-            Ok(Err(err)) => {
+            Err(err) => {
                 log::warn!("map: {err}");
+                FAILED.set(Some(numa::io::map::plainly(&err)));
                 done(false);
             }
-            Err(_) => done(false),
         }
     });
 }
 
 pub(super) fn bringing() -> bool {
     BRINGING.get()
+}
+
+pub(super) fn progress() -> Option<(u64, u64)> {
+    let total = TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+    let done = std::fs::metadata(dir().join("tiles.part")).map_or(0, |meta| meta.len());
+    (bringing() && total > 0).then(|| (done.min(total), total))
+}
+
+pub(super) fn failed() -> Option<String> {
+    FAILED.with_borrow(Clone::clone)
 }
 
 #[cfg(test)]

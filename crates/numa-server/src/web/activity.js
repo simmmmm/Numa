@@ -65,8 +65,10 @@ async function activityBadge() {
     }
   }
   if (route().path === '/activity') drawActivity(activity, error);
+  // Places while the map comes: how far, every half second.
+  const map = activity && route().path === '/places' && mapProgress(activity);
   clearTimeout(activityTimer);
-  activityTimer = setTimeout(activityBadge, route().path === '/activity' || activity?.busy || !activity ? 2000 : 30000);
+  activityTimer = setTimeout(activityBadge, map ? 500 : route().path === '/activity' || activity?.busy || !activity ? 2000 : 30000);
 }
 
 function badgeButton() {
@@ -115,7 +117,7 @@ function drawActivity(activity, error) {
   const fetching = activity.downloads.filter(download => download.state !== 'done');
   const download = item => h('div', { class: 'job ' + (item.state === 'fetching' ? 'running' : item.state) },
     h('div', { class: 'line' }, h('span', { class: 'name' }, item.name),
-      h('span', { class: 'caption' }, phrase('ofTotal', { done: megabytes(item.done), total: megabytes(item.total) }))),
+      h('span', { class: 'caption' }, item.total ? phrase('ofTotal', { done: megabytes(item.done), total: megabytes(item.total) }) : '')),
     h('div', { class: 'meter' }, h('div', { class: 'fill', style: filled(item.total ? item.done / item.total : 0) })),
     h('div', { class: 'caption' }, { waiting: S.waitsTurn, fetching: S.downloading, failed: S.downloadFailed }[item.state]));
   page.paused = activity.paused;

@@ -235,13 +235,8 @@ async fn tests(server: &Arc<Server>, libraries: &[Library], photos: &[Photo], wa
         tests.push(("camera", Box::new(move |photo: &Photo| names.get(&photo.id).is_some_and(|name| name.eq_ignore_ascii_case(&camera)))));
     }
     if let Some(place) = given(&wanted.place) {
-        let (known, _) = crate::places::known(server, photos);
-
-        let mapped = crate::map::taken_in(server, photos, &place, false);
-        let at = move |photo: &Photo| {
-            mapped.contains(&photo.id) || known.get(&photo.id).is_some_and(|(town, country)| town.eq_ignore_ascii_case(&place) || country.eq_ignore_ascii_case(&place))
-        };
-        tests.push(("place", Box::new(at)));
+        let keep = crate::map::taken_in(server, photos, &place, false);
+        tests.push(("place", Box::new(move |photo: &Photo| keep.contains(&photo.id))));
     }
     if let Some(region) = given(&wanted.region) {
         let keep = crate::map::taken_in(server, photos, &region, true);

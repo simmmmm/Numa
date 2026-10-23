@@ -257,7 +257,7 @@ pub async fn names(State(server): State<Arc<Server>>, Signed(_): Signed) -> Resu
             .iter()
             .map(|paths| {
                 let times: Vec<i64> = paths.iter().step_by((paths.len() / 120).max(1)).filter_map(|path| numa_io::exif::taken(path)).collect();
-                crate::places::names_for(&server, paths, &times)
+                crate::places::names_for(&server, &crate::places::read(paths), paths, &times)
             })
             .collect()
     })

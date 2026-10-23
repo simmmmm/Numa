@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::OnceLock;
 
@@ -40,9 +41,33 @@ fn distance((a_lat, a_lon): (f32, f32), (b_lat, b_lon): (f32, f32)) -> f32 {
     6371.0 * (x * x + y * y).sqrt()
 }
 
+fn cells() -> &'static HashMap<(i32, i32), Vec<u32>> {
+    static CELLS: OnceLock<HashMap<(i32, i32), Vec<u32>>> = OnceLock::new();
+    CELLS.get_or_init(|| {
+        let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        for (index, place) in places().iter().enumerate() {
+            cells.entry((place.latitude.floor() as i32, place.longitude.floor() as i32)).or_default().push(index as u32);
+        }
+        cells
+    })
+}
+
 pub fn nearest(at: (f32, f32)) -> Option<&'static Place> {
+
+    let (row, column) = (at.0.floor() as i32, at.1.floor() as i32);
+    let wide = (0.46 / (at.0.abs() + 0.46).min(89.9).to_radians().cos()).ceil().min(360.0) as i32;
+    let mut near: Vec<u32> = (row - 1..=row + 1)
+        .flat_map(|row| (column - wide..=column + wide).filter_map(move |column| cells().get(&(row, column))))
+        .flatten()
+        .copied()
+        .collect();
+    near.sort_unstable();
+    nearest_of(at, near.into_iter().map(|index| &places()[index as usize]))
+}
+
+fn nearest_of(at: (f32, f32), places: impl Iterator<Item = &'static Place>) -> Option<&'static Place> {
     let (mut any, mut town): (Option<(f32, &Place)>, Option<&Place>) = (None, None);
-    for place in places() {
+    for place in places {
         let far = distance(at, (place.latitude, place.longitude));
         if any.is_none_or(|(best, _)| far < best) {
             any = Some((far, place));
@@ -122,5 +147,20 @@ mod tests {
 
         assert!(from_positions(&[(0.0, -30.0)]).is_empty());
         assert!(from_positions(&[]).is_empty());
+    }
+
+    #[test]
+    fn nearest_looks_around_and_finds_what_all_would() {
+        let mut at: Vec<(f32, f32)> = places()
+            .iter()
+            .step_by(171)
+            .enumerate()
+            .map(|(i, place)| (place.latitude + (i % 17) as f32 * 0.05 - 0.4, place.longitude + (i % 13) as f32 * 0.07 - 0.42))
+            .collect();
+        at.extend([(78.22, 15.65), (82.5, -62.3), (89.9, 0.0), (-17.7, 178.0), (-16.5, 179.99), (0.0, -30.0)]);
+        for at in at {
+            let pointer = |place: Option<&'static Place>| place.map(|place| place as *const Place);
+            assert_eq!(pointer(nearest(at)), pointer(nearest_of(at, places().iter())), "{at:?}");
+        }
     }
 }
