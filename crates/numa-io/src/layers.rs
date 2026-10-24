@@ -265,6 +265,32 @@ impl Layers {
         document
     }
 
+    pub(crate) fn decompose_onto(&self, id: i64, document: &Document, stored: Option<&Document>) -> Document {
+        let mut own = self.decompose(id, document);
+        let Some(stored) = stored else { return own };
+        let (Ok(serde_json::Value::Object(shown)), Ok(serde_json::Value::Object(now)), Ok(serde_json::Value::Object(kept)), Ok(serde_json::Value::Object(mut back))) = (
+            serde_json::to_value(self.compose(id, stored).basic()),
+            serde_json::to_value(document.basic()),
+            serde_json::to_value(stored.basic()),
+            serde_json::to_value(own.basic()),
+        ) else {
+            return own;
+        };
+        for (key, value) in &now {
+            let untouched = match (value.as_f64(), shown.get(key).and_then(|shown| shown.as_f64())) {
+                (Some(value), Some(shown)) => (value - shown).abs() < 1e-4,
+                _ => false,
+            };
+            if let (true, Some(kept)) = (untouched, kept.get(key)) {
+                back.insert(key.clone(), kept.clone());
+            }
+        }
+        if let Ok(basic) = serde_json::from_value(serde_json::Value::Object(back)) {
+            own.set_basic(basic);
+        }
+        own
+    }
+
     pub(crate) fn decompose(&self, id: i64, document: &Document) -> Document {
         let mut own = document.clone();
         if self.apart.contains(&id) {
@@ -380,6 +406,28 @@ mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn a_clamped_sum_does_not_eat_the_frames_own() {
+        let layers = Layers { tone: [2.0, 0.0, 0.0, 0.0, 0.0, 0.0], vibrance: 40.0, ..Layers::default() };
+        let mut own = with(4.0, 0.0);
+        let mut basic = own.basic();
+        basic.presence.vibrance = 80.0;
+        own.set_basic(basic);
+        let mut shown = layers.compose(1, &own);
+        assert!(close(shown.basic().tone.exposure, 5.0) && close(shown.basic().presence.vibrance, 100.0));
+        let mut basic = shown.basic();
+        basic.tone.contrast = 10.0;
+        shown.set_basic(basic);
+        let back = layers.decompose_onto(1, &shown, Some(&own)).basic();
+        assert!(close(back.tone.exposure, 4.0) && close(back.presence.vibrance, 80.0), "own became {} and {}", back.tone.exposure, back.presence.vibrance);
+        assert!(close(back.tone.contrast, 10.0), "and what was changed is changed");
+
+        let mut basic = shown.basic();
+        basic.tone.exposure = 3.0;
+        shown.set_basic(basic);
+        assert!(close(layers.decompose_onto(1, &shown, Some(&own)).basic().tone.exposure, 1.0));
     }
 
     #[test]

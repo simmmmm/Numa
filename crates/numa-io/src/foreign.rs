@@ -166,8 +166,10 @@ fn lua_tokens(text: &str) -> Vec<Token> {
                     at += 1;
                 }
                 let number: String = chars[start..=at].iter().collect();
-                if let Ok(number) = number.parse::<f32>() {
-                    tokens.push(Token::Number(number));
+
+                match finite(&number) {
+                    Some(value) => tokens.push(Token::Number(value)),
+                    None => tokens.push(Token::Word(number)),
                 }
             }
             c if c.is_alphabetic() || c == '_' => {
@@ -244,7 +246,7 @@ fn read_xmp(text: &str) -> Result<(Settings, Option<String>, bool), String> {
             }
         } else if key.starts_with("ToneCurve") {
             let numbers: Vec<f32> =
-                items.iter().flat_map(|item| item.split(',')).filter_map(|n| n.trim().parse().ok()).collect();
+                items.iter().flat_map(|item| item.split(',')).filter_map(finite).collect();
             settings.insert(key, Value::List(numbers));
         }
     }
@@ -266,10 +268,14 @@ fn read_costyle(text: &str) -> Settings {
     settings
 }
 
+fn finite(text: &str) -> Option<f32> {
+    text.trim().trim_start_matches('+').parse::<f32>().ok().filter(|number| number.is_finite())
+}
+
 fn parse_value(value: &str) -> Value {
-    match value.trim().trim_start_matches('+').parse::<f32>() {
-        Ok(number) => Value::Number(number),
-        Err(_) => Value::Text(value.to_string()),
+    match finite(value) {
+        Some(number) => Value::Number(number),
+        None => Value::Text(value.to_string()),
     }
 }
 
@@ -602,7 +608,7 @@ fn from_capture_one(settings: &Settings) -> Translated {
 
     let balance = |b: &Builder, key: &str| -> Option<Range> {
         let Some(Value::Text(text)) = b.settings.get(key) else { return None };
-        let gain: Vec<f32> = text.split(';').filter_map(|v| v.trim().parse().ok()).collect();
+        let gain: Vec<f32> = text.split(';').filter_map(finite).collect();
         let [r, g, bl] = gain[..] else { return None };
         range_from_gain([r, g, bl])
     };
@@ -624,7 +630,7 @@ fn from_capture_one(settings: &Settings) -> Translated {
             .split(';')
             .filter_map(|pair| {
                 let (x, y) = pair.split_once(',')?;
-                Some([x.trim().parse().ok()?, y.trim().parse().ok()?])
+                Some([finite(x)?, finite(y)?])
             })
             .collect();
         (points.len() >= 2).then(|| Curve::new(points))
@@ -715,6 +721,23 @@ fn hue_rgb(degrees: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_number_that_is_not_finite_is_not_a_setting() {
+        let text = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1e40" crs:Contrast2012="NaN" crs:Saturation="10"/></rdf:RDF></x:xmpmeta>"#;
+        let translated = translate(text, "xmp", "x").unwrap();
+        let json = serde_json::to_string(&translated.preset).unwrap();
+        assert!(!json.contains("\"exposure\":null") && !json.contains("\"contrast\":null"), "{json}");
+        let read: Preset = serde_json::from_str(&json).expect("reads back");
+        assert_eq!(read.document.basic().presence.saturation, 10.0);
+        assert_eq!(read.document.basic().tone.exposure, 0.0);
+
+        let lua = "s = { title = \"x\", settings = { Exposure2012 = 1e999, Contrast2012 = 25, Saturation = 10, }, }";
+        let translated = translate(lua, "lrtemplate", "x").unwrap();
+        let basic = translated.preset.document.basic();
+        assert_eq!((basic.tone.exposure, basic.presence.saturation), (0.0, 10.0), "the next key is still its own");
+        assert!(basic.tone.contrast != 0.0, "and so is the one right after");
+    }
 
     #[test]
     fn a_lightroom_classic_template_translates() {

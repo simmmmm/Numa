@@ -28,6 +28,12 @@ pub fn verify(password: &str, hash: Option<&str>) -> bool {
     Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok() && known
 }
 
+pub async fn argon<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, Fail> {
+    static TURNS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+    let _turn = TURNS.acquire().await.map_err(Fail::internal)?;
+    tokio::task::spawn_blocking(work).await.map_err(Fail::internal)
+}
+
 pub fn token() -> (String, String) {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
@@ -109,8 +115,20 @@ impl Limit {
         keys.iter().filter_map(|key| map.get(key)).filter(|(_, last)| now - last < FORGET).map(|(failures, last)| last + wait(*failures) - now).max().unwrap_or(0).max(0)
     }
 
-    pub fn fail(&self, keys: &[String], now: i64) {
+    pub fn reserve(&self, keys: &[String], now: i64) -> i64 {
         let mut map = self.map();
+        let left = keys.iter().filter_map(|key| map.get(key)).filter(|(_, last)| now - last < FORGET).map(|(failures, last)| last + wait(*failures) - now).max().unwrap_or(0).max(0);
+        if left == 0 {
+            Self::count(&mut map, keys, now);
+        }
+        left
+    }
+
+    pub fn fail(&self, keys: &[String], now: i64) {
+        Self::count(&mut self.map(), keys, now);
+    }
+
+    fn count(map: &mut HashMap<String, (u32, i64)>, keys: &[String], now: i64) {
 
         if map.len() > 10_000 {
             map.retain(|_, (_, last)| now - *last < FORGET);
@@ -215,6 +233,16 @@ mod tests {
     }
 
     #[test]
+    fn sign_ins_at_once_are_counted_before_they_are_checked() {
+        let limit = Limit::default();
+        let tom = limit_keys("tom", "203.0.113.7".parse().unwrap());
+        assert_eq!((0..5).map(|_| limit.reserve(&tom, 3000)).collect::<Vec<_>>(), [0; 5]);
+        assert_eq!(limit.reserve(&tom, 3000), 30);
+        limit.clear(&tom);
+        assert_eq!(limit.reserve(&tom, 3000), 0, "a right password clears it");
+    }
+
+    #[test]
     fn wrong_passwords_slow_down() {
         assert_eq!((0..=11).map(wait).collect::<Vec<_>>(), [0, 0, 0, 0, 0, 30, 60, 120, 240, 480, 900, 900]);
         let limit = Limit::default();
@@ -249,6 +277,7 @@ mod tests {
         assert_eq!(six("2001:db8:1:2::5"), six("2001:db8:1:2:aaaa::9"));
         assert_ne!(six("2001:db8:1:2::5"), six("2001:db8:1:3::5"));
         assert_eq!(try_again(4), "Try again in 4 seconds.");
+
         assert_eq!(try_again(200), "Try again in 4 minutes.");
     }
 

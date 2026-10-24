@@ -138,6 +138,8 @@ pub(super) struct Head {
     tidy: gtk::Button,
     rename: gtk::Button,
 
+    sync: gtk::Button,
+
     owner: Rc<Cell<&'static str>>,
 }
 
@@ -169,7 +171,9 @@ impl Head {
         tidy.set_tooltip_text(Some("Copies, runs of the same frame and photographs past use, in this library"));
         let rename = gtk::Button::with_label("Rename…");
         rename.set_valign(gtk::Align::Center);
-        Self { back, title, caption, tokens, book, tidy, rename, owner: Rc::new(Cell::new("libraries")) }
+        let sync = gtk::Button::new();
+        sync.set_valign(gtk::Align::Center);
+        Self { back, title, caption, tokens, book, tidy, rename, sync, owner: Rc::new(Cell::new("libraries")) }
     }
 }
 
@@ -212,6 +216,15 @@ fn build_head(state: &App) -> gtk::Box {
         }
     ));
     row.append(&head.rename);
+    head.sync.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Place::Library(library) = current_place(&state) {
+                home_pair::run(&state, &library);
+            }
+        }
+    ));
+    row.append(&head.sync);
     cullbar::keep_focus(row.upcast_ref());
     row
 }
@@ -222,11 +235,23 @@ pub(super) fn show_head(state: &App) {
     let read = places::row(state, &place);
     head.title.set_label(&places::name_of(state, &place));
     let searched = filter::searched(state);
-    head.caption.set_label(&match places::period(read.first, read.last) {
+    let caption = match places::period(read.first, read.last) {
         _ if searched.is_some() => places::photos(state.grid.wall.len()),
         Some(period) => format!("{period} \u{b7} {}", places::photos(read.count as usize)),
         None => places::photos(read.count as usize),
-    });
+    };
+
+    let synced = match &place {
+        Place::Library(library) if searched.is_none() => home_sync::sync_said(state, library.id).map(|said| (library.id, said)),
+        _ => None,
+    };
+    match synced {
+        Some((id, said)) => {
+            head.caption.set_label(&format!("{caption} \u{b7} {said}"));
+            home_sync::follow_caption(id, &head.caption, &format!("{caption} \u{b7} "));
+        }
+        None => head.caption.set_label(&caption),
+    }
     head.tokens.set_visible(searched.is_some());
     head.tokens.set_label(&searched.unwrap_or_default().to_uppercase());
     let (owner, back) = match place {
@@ -242,6 +267,12 @@ pub(super) fn show_head(state: &App) {
     let here = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
     head.tidy.set_visible(here);
     head.rename.set_visible(here);
+    let sync = match &place {
+        Place::Library(library) => home_pair::label(home_pair::commands(state, library)),
+        _ => None,
+    };
+    head.sync.set_label(sync.unwrap_or_default());
+    head.sync.set_visible(sync.is_some());
 }
 
 pub(super) fn mark_texture() -> Option<gtk::gdk::Texture> {
@@ -624,12 +655,15 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
         many => format!("Move {} photographs to the trash?", many.len()),
     };
 
+    let synced = doomed.iter().any(|(id, _)| home_sync::is_linked(state, numa::io::catalog::library_of(*id)));
     let dialog = adw::AlertDialog::new(
         Some(&title),
-        Some(
-            "The file goes to your desktop's trash, where it can be put back. \
-             Its rating, flag and edits are forgotten here and those do not come back.",
-        ),
+        Some(match synced {
+            true => "The file goes to your desktop's trash and Numa Home's to its own, where each can be put back. \
+                     Put back on either side, it comes back on both, with its edits.",
+            false => "The file goes to your desktop's trash, where it can be put back. \
+                      Its rating, flag and edits are forgotten here and those do not come back.",
+        }),
     );
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("trash", "Move to Trash");
@@ -660,6 +694,7 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
             };
 
             let mut trashed = 0usize;
+            let mut gone = Vec::new();
             let mut failures = Vec::new();
 
             for ((id, path), result) in doomed.iter().zip(results) {
@@ -668,12 +703,14 @@ pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {
                         if let Err(err) = state.catalog.remove_photo(*id) {
                             log::warn!("{}: {err}", path.display());
                         }
+                        gone.push((*id, path.clone()));
                         trashed += 1;
                     }
                     Err(err) => failures.push(format!("{}: {err}", path.display())),
                 }
             }
 
+            home_sync::note_trashed(&state, &gone);
             reload_grid(&state);
             state.toast(&match failures.as_slice() {
                 [] => format!("Moved {trashed} photo(s) to the trash"),

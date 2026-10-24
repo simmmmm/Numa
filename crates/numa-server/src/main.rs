@@ -21,6 +21,7 @@ mod selection;
 mod send;
 mod start;
 mod store;
+mod sync;
 mod tidy;
 mod timeline;
 mod today;
@@ -242,6 +243,9 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/{id}/edits", get(photos::edits_get).put(photos::edits_put).layer(axum::extract::DefaultBodyLimit::max(64 << 20)))
         .route("/api/v1/photos/{id}/marks", put(photos::marks))
         .route("/api/v1/libraries/{id}/photos", get(timeline::in_step))
+        .route("/api/v1/libraries/{id}/restore", post(manage::restore_paths))
+        .route("/api/v1/libraries/{id}/sync", delete(sync::stop))
+        .route("/api/v1/sync", get(sync::devices))
         .route("/api/v1/send/{name}", put(send::send).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/{*rest}", axum::routing::any(|| async { Fail(StatusCode::NOT_FOUND, "There is no such address in the API.".into()) }))
         .merge(pages::routes())

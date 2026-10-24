@@ -19,6 +19,19 @@ pub struct AtHome {
     pub flag: Flag,
 }
 
+pub(super) fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
+    let has_changed = conn.prepare("SELECT * FROM photos LIMIT 0").map(|statement| statement.column_names().contains(&"changed")).unwrap_or(true);
+    if !has_changed {
+        conn.execute("ALTER TABLE photos ADD COLUMN changed INTEGER", []).map_err(text)?;
+    }
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS photos_changed AFTER UPDATE OF edits, rating, flag ON photos \
+         WHEN OLD.edits IS NOT NEW.edits OR OLD.rating IS NOT NEW.rating OR OLD.flag IS NOT NEW.flag \
+         BEGIN UPDATE photos SET changed = CAST(strftime('%s', 'now') AS INTEGER) WHERE id = NEW.id; END;",
+    )
+    .map_err(text)
+}
+
 pub fn home_thumb(root: &Path, id: &str) -> PathBuf {
     root.join(LIBRARY_DIR).join("home").join(format!("{id}.jpg"))
 }
@@ -38,14 +51,21 @@ pub(super) fn stand_in_all(open: &OpenLibrary) {
 }
 
 pub(super) fn found_here(open: &OpenLibrary, tx: &rusqlite::Transaction, paths: &std::collections::HashSet<String>) -> Result<(), String> {
-    let homes: Vec<(i64, String, String)> = {
-        let mut stmt = tx.prepare("SELECT h.photo_id, p.path, h.id FROM at_home h JOIN photos p ON p.id = h.photo_id").map_err(text)?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(text)?;
-        rows.flatten().filter(|(_, path, _)| paths.contains(path)).collect()
+    type Home = (i64, String, String, i64, Option<String>);
+    let homes: Vec<Home> = {
+        let sql = "SELECT h.photo_id, p.path, h.id, p.mtime, p.edits FROM at_home h JOIN photos p ON p.id = h.photo_id";
+        let mut stmt = tx.prepare(sql).map_err(text)?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).map_err(text)?;
+        rows.flatten().filter(|(_, path, ..)| paths.contains(path)).collect()
     };
-    for (local, path, id) in homes {
+    for (local, path, id, mtime, edits) in homes {
         tx.execute("DELETE FROM at_home WHERE photo_id = ?1", params![local]).map_err(text)?;
-        crate::thumbs::forget_stand_in(&open.absolute(&path));
+        let file = open.absolute(&path);
+        crate::thumbs::forget_stand_in(&file);
+        let edge = crate::thumbs::LIBRARY_EDGE;
+        if let Ok(thumb) = image::open(home_thumb(&open.root, &id)) {
+            crate::thumbs::store(&file, mtime, edge, edits.as_deref(), &thumb.thumbnail(edge, edge).to_rgb8());
+        }
         let _ = std::fs::remove_file(home_thumb(&open.root, &id));
         let _ = std::fs::remove_file(home_preview(&open.root, &id));
     }
@@ -53,6 +73,37 @@ pub(super) fn found_here(open: &OpenLibrary, tx: &rusqlite::Transaction, paths: 
 }
 
 impl Catalog {
+
+    pub fn changed_times(&self, library_id: i64) -> Result<HashMap<i64, i64>, String> {
+        let open = self.library(library_id)?;
+        let mut stmt = open.conn.prepare("SELECT id, changed FROM photos WHERE changed IS NOT NULL").map_err(text)?;
+        let rows = stmt.query_map([], |row| Ok((global_id(library_id, row.get(0)?), row.get::<_, i64>(1)?))).map_err(text)?;
+        rows.collect::<Result<_, _>>().map_err(text)
+    }
+
+    pub fn back_home(&self, photo_id: i64, id: &str, size: u64) -> Result<(), String> {
+        let (open, local) = self.photo(photo_id)?;
+        open.connected()?;
+        let path: String = open.conn.query_row("SELECT path FROM photos WHERE id = ?1", params![local], |row| row.get(0)).map_err(text)?;
+        open.conn
+            .execute("INSERT OR REPLACE INTO at_home (photo_id, id, size) VALUES (?1, ?2, ?3)", params![local, id, size as i64])
+            .map_err(text)?;
+        crate::thumbs::stand_in(open.absolute(&path), home_thumb(&open.root, id));
+        Ok(())
+    }
+
+    pub fn keep_aside(&self, photo_id: i64, name: &str, other: &numa_core::document::Document) -> Result<String, String> {
+        let names: std::collections::HashSet<String> = self.snapshots(photo_id)?.into_iter().map(|(name, _)| name).collect();
+        let name = std::iter::once(name.to_string()).chain((2..).map(|n| format!("{name} {n}"))).find(|name| !names.contains(name)).expect("a free name");
+        self.save_snapshot(photo_id, &name, other)?;
+        let now = self.own_edits(photo_id)?.unwrap_or_else(|| numa_core::document::Document::new(other.source.path.clone()));
+        let mut states = self.load_history(photo_id)?.map_or_else(Vec::new, |(states, _)| states);
+        states.extend([other.clone(), now]);
+        let keep = states.len().saturating_sub(crate::history::HISTORY_KEPT);
+        states.drain(..keep);
+        self.save_history(photo_id, &states, states.len() - 1)?;
+        Ok(name)
+    }
 
     pub fn add_at_home(&self, library_id: i64, photos: &[AtHome]) -> Result<usize, String> {
         let open = self.library(library_id)?;
@@ -153,13 +204,58 @@ mod tests {
         assert_eq!(photos.iter().find(|photo| photo.id == away.id).map(|photo| photo.rating), Some(2));
 
         catalog.add_at_home(library.id, &[at_home("b.RAF", "9")]).unwrap();
+        image::RgbImage::new(640, 480).save_with_format(home_thumb(&root, "9"), image::ImageFormat::Jpeg).unwrap();
         let b = catalog.photos(library.id, &Filter::default()).unwrap().into_iter().find(|photo| photo.path.ends_with("b.RAF")).unwrap();
         std::fs::write(&b.path, b"raw").unwrap();
         let mtime = std::fs::metadata(&b.path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
         catalog.arrived(b.id, mtime, &crate::exif::stamp(&b.path)).unwrap();
         assert!(catalog.at_home(library.id).unwrap().is_empty());
+
+        let kept = crate::thumbs::cached(&b.path, mtime, crate::thumbs::LIBRARY_EDGE, None).expect("Home's thumbnail kept");
+        assert_eq!(image::image_dimensions(kept).unwrap(), (320, 240));
         let known = catalog.known_files(&library).unwrap();
         assert!(crate::catalog::scan(&root, &known).unchanged);
+        drop(catalog);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_change_is_dated_and_the_other_edit_is_kept_aside() {
+        numa_core::paths::use_test_cache(std::env::temp_dir().join(format!("numa-thumbs-test-cache-{}", std::process::id())));
+        let root = std::env::temp_dir().join(format!("numa-test-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.RAF"), b"x").unwrap();
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        catalog.sync_library(&library).unwrap();
+        let photo = catalog.photos(library.id, &Filter::default()).unwrap()[0].clone();
+        assert!(catalog.changed_times(library.id).unwrap().is_empty(), "never changed");
+        catalog.set_rating(photo.id, 3).unwrap();
+        let at = catalog.changed_times(library.id).unwrap()[&photo.id];
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        assert!((now - at).abs() < 5, "{at} is now");
+
+        let mut theirs = numa_core::document::Document::new(photo.path.to_string_lossy().into_owned());
+        let mut basic = theirs.basic();
+        basic.tone.exposure = 1.5;
+        theirs.set_basic(basic);
+        let mut ours = theirs.clone();
+        let mut basic = ours.basic();
+        basic.tone.exposure = -0.5;
+        ours.set_basic(basic);
+        catalog.save_own_edits(photo.id, &ours).unwrap();
+        assert_eq!(catalog.keep_aside(photo.id, "From Numa Home, 24 Oct 10:12", &theirs).unwrap(), "From Numa Home, 24 Oct 10:12");
+        assert_eq!(catalog.keep_aside(photo.id, "From Numa Home, 24 Oct 10:12", &theirs).unwrap(), "From Numa Home, 24 Oct 10:12 2");
+        let json = |document: &numa_core::document::Document| serde_json::to_string(document).unwrap();
+        assert_eq!(json(&catalog.load_snapshot(photo.id, "From Numa Home, 24 Oct 10:12").unwrap()), json(&theirs));
+        let (states, position) = catalog.load_history(photo.id).unwrap().unwrap();
+        assert_eq!((states[position - 1].basic().tone.exposure, states[position].basic().tone.exposure), (1.5, -0.5));
+        assert_eq!(catalog.own_edits(photo.id).unwrap().as_ref().map(json), Some(json(&ours)), "the edit it has stays");
+
+        catalog.back_home(photo.id, "77", 1).unwrap();
+        assert_eq!(catalog.at_home(library.id).unwrap(), HashMap::from([(photo.id, ("77".to_string(), 1))]));
+        assert_eq!(catalog.photos(library.id, &Filter::default()).unwrap()[0].rating, 3);
         drop(catalog);
         std::fs::remove_dir_all(&root).unwrap();
     }

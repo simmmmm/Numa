@@ -91,7 +91,7 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     }
     group.set_header_suffix(Some(&sign_in));
 
-    let kept = state.catalog.libraries().unwrap_or_default().iter().any(|library| home_sync::is_home(state, library.id));
+    let kept = state.catalog.libraries().unwrap_or_default().iter().any(|library| home_sync::is_linked(state, library.id));
     let [keep, metered] = pace_rows(state);
     group.add(&keep);
     group.add(&metered);

@@ -82,27 +82,19 @@ pub async fn send(
 
     let incoming = library.path.join(numa_io::catalog::LIBRARY_DIR).join("incoming");
     tokio::fs::create_dir_all(&incoming).await.map_err(Fail::internal)?;
-    let part = incoming.join(format!("{}-{name}", &auth::token().0[..16]));
-    let received = receive(body, &part).await;
-    let got = match received {
-        Ok(got) => got,
-        Err(fail) => {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(fail);
-        }
-    };
+    sweep(&incoming);
+    let part = Part(incoming.join(format!("{}-{name}", &auth::token().0[..16])));
+    let got = receive(body, &part.0).await?;
     if told.as_ref().is_some_and(|told| *told != got) {
-        let _ = tokio::fs::remove_file(&part).await;
         return Err(Fail::bad("The file changed on the way: its SHA-256 is not the one sent with it."));
     }
     if let Some(id) = already(&got) {
-        let _ = tokio::fs::remove_file(&part).await;
         return duplicate(id);
     }
     let sha256 = got;
 
     let placed = {
-        let (library, name, sha256) = (library.clone(), name.clone(), sha256.clone());
+        let (part, library, name, sha256) = (part.0.clone(), library.clone(), name.clone(), sha256.clone());
         tokio::task::spawn_blocking(move || place(&part, &library, folder, &name, &sha256, hinted)).await.map_err(Fail::internal)?
     }?;
     let (target, duplicate) = placed;
@@ -120,6 +112,25 @@ pub async fn send(
     server.jobs.nudge();
     let status = if duplicate { StatusCode::OK } else { StatusCode::CREATED };
     Ok((status, Json(serde_json::json!({ "id": id, "duplicate": duplicate }))).into_response())
+}
+
+struct Part(PathBuf);
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn sweep(incoming: &FilePath) {
+    let Ok(entries) = std::fs::read_dir(incoming) else { return };
+    let day = std::time::Duration::from_secs(86_400);
+    for entry in entries.flatten() {
+        let old = entry.metadata().and_then(|meta| meta.modified()).is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > day));
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 async fn destination(server: &Arc<Server>, account: &str, asked: Option<i64>) -> Result<Library, Fail> {
@@ -179,6 +190,10 @@ fn place(part: &FilePath, library: &Library, folder: Option<PathBuf>, name: &str
         let _ = std::fs::remove_file(part);
         return Err(Fail::bad("That folder is not inside the library."));
     }
+    land(part, &folder, name, sha256)
+}
+
+fn land(part: &FilePath, folder: &FilePath, name: &str, sha256: &str) -> Result<(PathBuf, bool), Fail> {
     let path = FilePath::new(name);
     let (stem, extension) = (path.file_stem().unwrap_or_default().to_string_lossy(), path.extension().map(|ext| ext.to_string_lossy()));
     for n in 1..1000 {
@@ -187,9 +202,16 @@ fn place(part: &FilePath, library: &Library, folder: Option<PathBuf>, name: &str
             (_, Some(extension)) => folder.join(format!("{stem} ({n}).{extension}")),
             (_, None) => folder.join(format!("{stem} ({n})")),
         };
-        if !candidate.exists() {
-            std::fs::rename(part, &candidate).map_err(Fail::internal)?;
-            return Ok((candidate, false));
+        match std::fs::hard_link(part, &candidate) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(part);
+                return Ok((candidate, false));
+            }
+            Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists && !candidate.exists() => {
+                std::fs::rename(part, &candidate).map_err(Fail::internal)?;
+                return Ok((candidate, false));
+            }
+            Err(_) => {}
         }
         if auth::sha256_of(&candidate).is_ok_and(|there| there == sha256) {
             let _ = std::fs::remove_file(part);
@@ -239,5 +261,33 @@ mod tests {
         for bad in ["../x", "a/../../b", "/etc", ".numa", "a/.git", "./a"] {
             assert!(folder_in(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_file_lands_beside_one_of_the_same_name() {
+        let folder = std::env::temp_dir().join(format!("numa-land-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let send = |bytes: &[u8]| {
+            let part = folder.join(format!("part-{}", bytes.len()));
+            std::fs::write(&part, bytes).unwrap();
+            let sha256 = auth::sha256_of(&part).unwrap();
+            let landed = land(&part, &folder, "IMG_0001.HEIC", &sha256).unwrap();
+            assert!(!part.exists(), "the part is gone once placed");
+            landed
+        };
+        assert_eq!(send(b"first"), (folder.join("IMG_0001.HEIC"), false));
+        assert_eq!(send(b"second"), (folder.join("IMG_0001 (2).HEIC"), false));
+        assert_eq!(send(b"first"), (folder.join("IMG_0001.HEIC"), true));
+        assert_eq!(std::fs::read(folder.join("IMG_0001.HEIC")).unwrap(), b"first");
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_part_is_removed_when_the_request_ends() {
+        let path = std::env::temp_dir().join(format!("numa-part-{}", std::process::id()));
+        std::fs::write(&path, b"half").unwrap();
+        drop(Part(path.clone()));
+        assert!(!path.exists());
     }
 }

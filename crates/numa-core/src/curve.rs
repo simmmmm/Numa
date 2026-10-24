@@ -51,7 +51,10 @@ impl Curve {
     }
 
     pub fn is_identity(&self) -> bool {
-        self.points.iter().all(|[x, y]| (x - y).abs() < 1e-4)
+        let reaches = |point: Option<&[f32; 2]>, end: f32| point.is_some_and(|[x, _]| (x - end).abs() < 1e-4);
+        reaches(self.points.first(), 0.0)
+            && reaches(self.points.last(), 1.0)
+            && self.points.iter().all(|[x, y]| (x - y).abs() < 1e-4)
     }
 
     pub fn place(&mut self, point: [f32; 2], grab: f32) -> usize {
@@ -179,6 +182,15 @@ impl Curve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_diagonal_with_its_ends_pulled_in_is_not_the_identity() {
+        let faded = Curve::new([[0.25, 0.25], [0.75, 0.75]]);
+        assert_eq!(faded.value_at(0.0), 0.25);
+        assert!(!faded.is_identity());
+        assert!(Curve::identity().is_identity());
+        assert!(Curve::new([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]).is_identity());
+    }
 
     #[test]
     fn a_stored_curve_is_repaired_rather_than_trusted() {

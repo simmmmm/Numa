@@ -1,11 +1,19 @@
 use super::*;
 
 fn remote(id: &str, path: &str, updated: i64) -> Remote {
-    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), edited: false, updated }
+    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), edited: false, updated, albums: None, deleted: None }
 }
 
 fn local(path: &str, edits: Option<&str>, rating: u8) -> Local {
-    Local { path: path.into(), edits: edits.map(String::from), rating, flag: "none".into() }
+    Local { path: path.into(), edits: edits.map(String::from), rating, flag: "none".into(), ..Local::default() }
+}
+
+fn none() -> BTreeMap<String, i64> {
+    BTreeMap::new()
+}
+
+fn plan(link: &Link, remote: &[Remote], local: &[Local]) -> Vec<Step> {
+    super::plan(link, remote, local, &none())
 }
 
 fn link(kept: &[(&str, &Local, i64)]) -> Link {
@@ -23,12 +31,13 @@ fn new_on_the_server_comes_down_and_new_here_goes_up() {
     assert_eq!(plan(&sent, &[remote("7", "2026/b.raf", 5)], &[local("2026/b.RAF", None, 0)]), vec![]);
 }
 
-const NONE: Parts = Parts { edits: false, marks: false };
-const EDITS: Parts = Parts { edits: true, marks: false };
-const MARKS: Parts = Parts { edits: false, marks: true };
+const NONE: Parts = Parts { edits: false, marks: false, albums: false };
+const EDITS: Parts = Parts { edits: true, marks: false, albums: false };
+const MARKS: Parts = Parts { edits: false, marks: true, albums: false };
+const BOTH: Parts = Parts { edits: true, marks: true, albums: false };
 
 fn both(path: &str, id: &str, theirs: Option<Remote>, down: Parts, up: Parts) -> Step {
-    Step::Both { path: path.into(), id: id.into(), theirs, down, up }
+    Step::Both { path: path.into(), id: id.into(), theirs, down, up, albums: None }
 }
 
 #[test]
@@ -65,17 +74,17 @@ fn a_rating_here_and_an_edit_there_both_survive() {
 
     let edited = local("a.raf", Some("{}"), 0);
     let theirs = Remote { rating: 5, flag: "pick".into(), ..remote("1", "a.raf", 120) };
-    assert_eq!(plan(&kept, &[theirs.clone()], &[edited]), vec![both("a.raf", "1", Some(theirs), MARKS, EDITS)]);
+    assert_eq!(plan(&kept, &[theirs.clone()], &[edited]), vec![both("a.raf", "1", Some(theirs), BOTH, EDITS)]);
 }
 
 #[test]
-fn both_changed_this_side_wins_and_deletes_never_travel() {
+fn a_photograph_removed_here_but_not_trashed_stays_removed() {
     let a = local("a.raf", None, 0);
     let kept = link(&[("1", &a, 50), ("2", &local("gone.raf", None, 0), 50)]);
     let edited = local("a.raf", Some("{}"), 0);
     let theirs = remote("1", "a.raf", 120);
     let steps = plan(&kept, &[theirs.clone(), remote("2", "gone.raf", 120)], &[edited]);
-    assert_eq!(steps, vec![both("a.raf", "1", Some(theirs), NONE, EDITS)]);
+    assert_eq!(steps, vec![both("a.raf", "1", Some(theirs), EDITS, EDITS)]);
 
     assert_eq!(plan(&kept, &[], &[a]), vec![]);
 }
@@ -172,7 +181,9 @@ fn a_library_from_before_lists_everything_once_and_nothing_comes_twice() {
     assert_eq!(listed_after(&kept), 0);
     let all = [remote("1", "2026-03/a.raf", 400), remote("2", "2026-03/b.raf", 400), remote("3", "2026-01/c.raf", 200)];
     assert_eq!(plan(&kept, &all, &[brought.clone()]), vec![Step::Arrive(remote("3", "2026-01/c.raf", 200))]);
-    assert_eq!(listed_after(&Link { everything: true, ..kept }), 500);
+    assert_eq!(listed_after(&Link { everything: true, rules: RULES, ..kept.clone() }), 500);
+
+    assert_eq!(listed_after(&Link { everything: true, ..kept }), 0);
 
     let before: Link = serde_json::from_str(r#"{"address":"nas","library":"2","name":"Garden","since":9,"photos":{}}"#).unwrap();
     assert!(!before.everything && !before.keep_here);
@@ -201,4 +212,143 @@ fn home_thumbnails_come_in_one_curl_and_each_is_read() {
     assert_eq!(thumbnails_came("000\n000\n"), Err(Failure::Unreachable));
     assert_eq!(thumbnails_came(""), Err(Failure::Unreachable));
     assert!(matches!(thumbnails_came("401\n401\n"), Err(Failure::SignIn(_))));
+}
+
+fn gone(id: &str, here: bool) -> Gone {
+    Gone { id: id.into(), here, restored: false }
+}
+
+fn deleted(id: &str, path: &str, at: i64) -> Remote {
+    Remote { deleted: Some(at), ..remote(id, path, at) }
+}
+
+#[test]
+fn deletes_go_to_the_other_sides_trash() {
+    let a = local("a.raf", None, 0);
+    let kept = link(&[("1", &a, 50)]);
+    assert_eq!(plan(&kept, &[deleted("1", "a.raf", 120)], &[a.clone()]), vec![Step::Trash { path: "a.raf".into(), id: "1".into() }]);
+
+    assert_eq!(plan(&kept, &[deleted("1", "a.raf", 120)], &[local("a.raf", None, 4)]), vec![Step::Restore("a.raf".into())]);
+
+    assert_eq!(plan(&Link::default(), &[deleted("5", "b.raf", 120)], &[]), vec![]);
+    assert_eq!(plan(&kept, &[deleted("9", "a.raf", 120)], &[a.clone()]), vec![]);
+
+    assert_eq!(plan(&kept, &[deleted("", "a.raf", 120)], &[a]), vec![Step::Trash { path: "a.raf".into(), id: "1".into() }]);
+
+    let trashed = BTreeMap::from([("a.raf".to_string(), 130)]);
+    let delete = vec![Step::Delete { path: "a.raf".into(), id: "1".into() }];
+    assert_eq!(super::plan(&kept, &[], &[], &trashed), delete);
+    assert_eq!(super::plan(&kept, &[remote("1", "a.raf", 50)], &[], &trashed), delete);
+
+    let changed = Remote { rating: 5, ..remote("1", "a.raf", 120) };
+    assert_eq!(super::plan(&kept, &[changed.clone()], &[], &trashed), vec![Step::PutBack(changed)]);
+}
+
+#[test]
+fn a_photograph_put_back_comes_back_on_the_other_side() {
+
+    let after_home = Link { gone: BTreeMap::from([("a.raf".to_string(), gone("1", false))]), ..Link::default() };
+    let back = remote("7", "a.raf", 200);
+    assert_eq!(plan(&after_home, &[back.clone()], &[]), vec![Step::PutBack(back.clone())]);
+
+    assert_eq!(plan(&after_home, &[], &[local("a.raf", None, 0)]), vec![Step::Restore("a.raf".into())]);
+
+    let after_here = Link { gone: BTreeMap::from([("a.raf".to_string(), gone("1", true))]), ..Link::default() };
+    assert_eq!(plan(&after_here, &[], &[local("a.raf", None, 0)]), vec![Step::Restore("a.raf".into())]);
+
+    let asked = Link { gone: BTreeMap::from([("a.raf".to_string(), Gone { restored: true, ..gone("1", true) })]), ..Link::default() };
+    assert_eq!(plan(&asked, &[], &[local("a.raf", None, 0)]), vec![]);
+
+    let steps = plan(&after_here, &[back.clone()], &[local("a.raf", None, 3)]);
+    assert_eq!(steps, vec![Step::Both { path: "a.raf".into(), id: "7".into(), theirs: Some(back), down: NONE, up: Parts::ALL, albums: None }]);
+}
+
+#[test]
+fn albums_go_both_ways_by_name() {
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<String>>();
+    let agreed = names(&["Rome", "Family"]);
+
+    assert_eq!(albums(Some(&agreed), &names(&["Rome", "Family", "Best"]), &names(&["Rome"])), names(&["Best", "Rome"]));
+    assert_eq!(albums(None, &names(&["rome"]), &names(&["Rome", "Coast"])), names(&["Coast", "rome"]));
+    assert!(same_albums(&names(&["Rome", "best"]), &names(&["Best", "rome"])));
+
+    let a = Local { albums: names(&["Rome"]), ..local("a.raf", None, 0) };
+    let kept = Link { photos: BTreeMap::from([("a.raf".to_string(), Kept { albums: Some(names(&["Rome"])), ..a.kept("1", 50) })]), ..Link::default() };
+
+    let best = Local { albums: names(&["Rome", "Best"]), ..a.clone() };
+    let up = Parts { albums: true, ..NONE };
+    assert_eq!(plan(&kept, &[], &[best]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: None, down: NONE, up, albums: Some(names(&["Best", "Rome"])) }]);
+
+    let theirs = Remote { albums: Some(vec![]), ..remote("1", "a.raf", 120) };
+    let down = Parts { edits: true, albums: true, ..NONE };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[a.clone()]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(theirs), down, up: NONE, albums: Some(vec![]) }]);
+
+    assert_eq!(plan(&kept, &[remote("1", "a.raf", 50)], &[a.clone()]), vec![]);
+
+    let before = link(&[("1", &a, 50)]);
+    let said = Remote { albums: Some(names(&["Rome"])), ..remote("1", "a.raf", 50) };
+    assert_eq!(plan(&before, &[said.clone()], &[a]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(said), down: NONE, up: NONE, albums: Some(names(&["Rome"])) }]);
+}
+
+#[test]
+fn a_conflict_goes_to_the_later_and_keeps_the_other() {
+    let stack = |exposure: f32| {
+        let mut document = numa_core::document::Document::new("/home/a/a.raf".into());
+        let mut basic = document.basic();
+        basic.tone.exposure = exposure;
+        document.set_basic(basic);
+        serde_json::to_string(&document).unwrap()
+    };
+    let agreed = Local { edits: Some(stack(1.0)), ..local("a.raf", None, 0) };
+    let kept = agreed.kept("1", 100);
+    let ours = Local { edits: Some(stack(2.0)), changed: 150, ..agreed.clone() };
+
+    let home = |exposure: f32| stack(exposure).replace("/home/a/a.raf", "/photos/2026/a.raf");
+    assert_eq!(settle(&kept, &ours, Some(&home(1.0)), 120), Settled::Up, "Home's unchanged");
+    assert_eq!(settle(&kept, &ours, Some(&home(2.0)), 160), Settled::Same, "the same on both");
+    assert_eq!(settle(&kept, &agreed, Some(&home(3.0)), 160), Settled::Down, "unchanged here");
+    assert_eq!(settle(&kept, &ours, Some(&home(3.0)), 140), Settled::UpKeepingTheirs, "here later");
+    assert_eq!(settle(&kept, &ours, Some(&home(3.0)), 160), Settled::DownKeepingOurs, "Home later");
+
+    assert_eq!(settle(&kept, &Local { changed: 0, ..ours.clone() }, Some(&home(3.0)), 160), Settled::UpKeepingTheirs);
+
+    let before = Kept { canon: None, ..kept };
+    assert_eq!(settle(&before, &ours, Some(&home(1.0)), 120), Settled::UpKeepingTheirs);
+    assert_eq!(aside(true, "24 Oct 10:12", ""), "From Numa Home, 24 Oct 10:12");
+    assert_eq!(aside(false, "", "Tijmen's MacBook"), "From Tijmen's MacBook");
+    assert_eq!(device_label("Tijmen", "MacBook"), "Tijmen's MacBook");
+    assert_eq!(device_label("Tijmen", "Tijmen's iPhone"), "Tijmen's iPhone");
+    assert_eq!(canon(None), canon(Some(&serde_json::to_string(&numa_core::document::Document::new("x".into())).unwrap())));
+}
+
+#[test]
+fn marks_given_on_both_sides_go_to_the_later() {
+    let a = local("a.raf", None, 0);
+    let kept = link(&[("1", &a, 100)]);
+    let theirs = Remote { rating: 5, ..remote("1", "a.raf", 160) };
+    let early = Local { rating: 2, changed: 150, ..a.clone() };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[early]), vec![both("a.raf", "1", Some(theirs.clone()), BOTH, NONE)]);
+    let late = Local { rating: 2, changed: 170, ..a };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[late]), vec![both("a.raf", "1", Some(theirs), EDITS, MARKS)]);
+}
+
+#[test]
+fn the_way_is_kept_with_the_link() {
+    let up = Link { way: Some(Way::Up), ..Link::default() };
+    assert_eq!(way(&up, true), Way::Up);
+    assert_eq!(way(&Link::default(), true), Way::Down);
+    assert_eq!(way(&Link::default(), false), Way::Up);
+    assert!(synced(&up, Way::Up), "a library of this device's has its originals here");
+    assert!(!synced(&Link::default(), Way::Down));
+    assert!(synced(&Link { keep_here: true, ..Link::default() }, Way::Down), "Keep on This Computer is Sync on This Device");
+    let json = serde_json::to_string(&up).unwrap();
+    assert!(json.contains("\"way\":\"up\""));
+    let read: Link = serde_json::from_str(r#"{"address":"nas","library":"2","name":"Garden","since":9,"photos":{"a.raf":{"id":"3","edits":"","rating":0,"flag":"none","updated":1}}}"#).unwrap();
+    assert_eq!((read.way, read.rules, read.photos["a.raf"].canon.clone()), (None, 0, None));
+
+    assert_eq!(restored("{\"restored\":1,\"photos\":[{\"id\":12,\"path\":\"2026/a.raf\"}]}\n200"), Ok(vec![("12".into(), "2026/a.raf".into())]));
+    assert_eq!(photos("[{\"id\":null,\"path\":\"a.raf\",\"deleted\":5,\"updated\":5}]\n200").unwrap()[0], Remote { size: 0, ..deleted("", "a.raf", 5) });
+    assert_eq!(albums_at_home("[{\"key\":\"k1\",\"name\":\"Rome\",\"count\":3}]\n200"), Ok(vec![("k1".into(), "Rome".into())]));
+    assert!(list_changes("nas", "1", 5, true).last().unwrap().to_string_lossy().ends_with("/libraries/1/photos?since=5&gone=1&synced=1"));
+    assert!(delete_photos("nas", &["3".into()]).iter().any(|arg| arg == "{\"ids\":[3]}"));
 }

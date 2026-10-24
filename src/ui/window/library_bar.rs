@@ -16,6 +16,8 @@ pub(super) struct Bar {
     open: gtk::Button,
     rename: gtk::Button,
     more: gtk::MenuButton,
+
+    actions: gio::SimpleActionGroup,
     select: Rc<RefCell<Option<gtk::ToggleButton>>>,
 }
 
@@ -29,7 +31,8 @@ impl Bar {
         let more = gtk::MenuButton::new();
         more.set_icon_name("view-more-symbolic");
         more.set_tooltip_text(Some("More"));
-        Self { bar, count, open: gtk::Button::with_label("Open"), rename: gtk::Button::with_label("Rename…"), more, select: Rc::default() }
+        let actions = gio::SimpleActionGroup::new();
+        Self { bar, count, open: gtk::Button::with_label("Open"), rename: gtk::Button::with_label("Rename…"), more, actions, select: Rc::default() }
     }
 }
 
@@ -121,9 +124,34 @@ pub(super) fn page(state: &App, stacks: &gtk::ScrolledWindow) -> gtk::Box {
 
 fn install_more(state: &App) {
     let model = gio::Menu::new();
-    model.append(Some("Remove from Numa…"), Some("chosen.remove"));
-    model.append(Some("Move to Trash…"), Some("chosen.trash"));
-    let actions = gio::SimpleActionGroup::new();
+    let sync = gio::Menu::new();
+    let actions = state.libraries.bar.actions.clone();
+    for (label, name) in [("Sync on This Device", "sync-here"), ("Sync to Numa Home", "sync-home"), ("Stop Syncing…", "stop-sync")] {
+        let item = gio::MenuItem::new(Some(label), Some(&format!("chosen.{name}")));
+        item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+        sync.append_item(&item);
+        let action = gio::SimpleAction::new(name, None);
+        action.connect_activate(glib::clone!(
+            #[strong] state,
+            move |action, _| {
+                let chosen = libraries(&state);
+                let_go(&state);
+                match action.name().as_str() {
+                    "stop-sync" => home_pair::stop_syncing(&state, chosen),
+                    _ => home_pair::start_syncing(&state, chosen),
+                }
+            }
+        ));
+        actions.add_action(&action);
+    }
+    model.append_section(None, &sync);
+    let here = gio::Menu::new();
+    for (label, name) in [("Remove from Numa…", "chosen.remove"), ("Move to Trash…", "chosen.trash")] {
+        let item = gio::MenuItem::new(Some(label), Some(name));
+        item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+        here.append_item(&item);
+    }
+    model.append_section(None, &here);
     let remove = gio::SimpleAction::new("remove", None);
     remove.connect_activate(glib::clone!(
         #[strong] state,
@@ -250,9 +278,18 @@ fn paint(state: &App) {
         0 => "Choose libraries".to_string(),
         n => format!("{} chosen", counted(n)),
     });
+
+    let chosen = libraries(state);
+    let here = chosen.iter().all(|library| !home_sync::is_home(state, library.id));
+    let offered = home_pair::offered(state, &chosen);
+    for (name, on) in [("sync-here", offered.here), ("sync-home", offered.home), ("stop-sync", offered.stop), ("remove", here), ("trash", here)] {
+        if let Some(action) = bar.actions.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+            action.set_enabled(on);
+        }
+    }
     bar.open.set_visible(ids.len() == 1);
-    bar.rename.set_visible(ids.len() == 1);
-    bar.more.set_visible(!ids.is_empty());
+    bar.rename.set_visible(ids.len() == 1 && here);
+    bar.more.set_visible(!ids.is_empty() && (here || offered != home_pair::Commands::default()));
 }
 
 fn names(libraries: &[Library]) -> String {

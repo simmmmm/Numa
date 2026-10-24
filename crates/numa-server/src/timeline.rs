@@ -453,22 +453,27 @@ fn tally<T: Ord + std::hash::Hash>(values: impl Iterator<Item = T>) -> Vec<(T, u
 #[derive(Deserialize)]
 pub struct Since {
     since: Option<i64>,
+
+    gone: Option<u8>,
+
+    synced: Option<u8>,
 }
 
 pub async fn in_step(
     State(server): State<Arc<Server>>,
     Signed(me): Signed,
+    headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
-    Query(since): Query<Since>,
+    Query(asked): Query<Since>,
 ) -> Result<axum::response::Response, Fail> {
     use axum::response::IntoResponse;
     let now = crate::store::now();
     let library = server.home.libraries(&me.name).into_iter().find(|library| library.id == id);
     let library = library.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
-    let since = since.since.unwrap_or(0);
+    let since = asked.since.unwrap_or(0);
     let updated = server.store.updated();
     let photos = server.home.files(id);
-    let rows = tokio::task::spawn_blocking(move || {
+    let mut rows = tokio::task::spawn_blocking(move || {
         photos
             .iter()
             .filter_map(|photo| {
@@ -492,6 +497,13 @@ pub async fn in_step(
     })
     .await
     .map_err(Fail::internal)?;
+    if asked.gone == Some(1) {
+        crate::sync::with_albums(&server, &mut rows).await?;
+        rows.extend(crate::sync::deletes(&server, id, since));
+    }
+    if asked.synced == Some(1) {
+        crate::sync::note(&server, &headers, &me.name, id);
+    }
     Ok(([("x-numa-now", now.to_string())], Json(rows)).into_response())
 }
 

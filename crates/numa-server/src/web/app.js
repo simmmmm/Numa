@@ -240,6 +240,20 @@ async function libraries() {
 }
 const libraryName = library => library.mine ? S.sentHome : library.name;
 
+// "Synced with Tijmen's MacBook, iPhone" under a library a device syncs; the
+// devices asked once for every library on the page.
+let synced = { at: 0, asked: null };
+function syncedWith(id) {
+  if (Date.now() - synced.at > 30000) synced = { at: Date.now(), asked: api('sync', { quiet: true }).catch(() => ({})) };
+  const line = h('div', { class: 'caption', hidden: true });
+  synced.asked.then(all => {
+    if (!all[id]?.length) return;
+    line.textContent = phrase('syncedWith', { devices: all[id].join(', ') });
+    line.hidden = false;
+  });
+  return line;
+}
+
 window.addEventListener('hashchange', () => { if (state.me) render(); });
 
 // One title per page, so a tab, the history and a screen reader say where you
@@ -624,7 +638,8 @@ async function filterRow(params, narrowed) {
   const back = owner && { library: S.libraries, album: S.albums, person: S.people }[owner];
   const head = h('div', { class: 'collection-head' },
     back && h('button', { class: 'round small', 'aria-label': back, title: back, onclick: () => go(OWNERS[owner]) }, icon('back')),
-    h('div', { class: 'titles' }, h('h1', {}, owner ? names[owner] : params.get('q') ? S.search : S.photosPage), h('div', { class: 'caption' }, dates)),
+    h('div', { class: 'titles' }, h('h1', {}, owner ? names[owner] : params.get('q') ? S.search : S.photosPage), h('div', { class: 'caption' }, dates),
+      owner === 'library' && library && syncedWith(library.id)),
     h('div', { class: 'act' }, book,
       // HOME-019: a library's own Tidy Up, beside its book.
       owner === 'library' && library && tidyEntry(library),

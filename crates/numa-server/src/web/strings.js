@@ -31,6 +31,7 @@ const S = {
   signInText: "The household's photographs, as Numa shows them.",
   // the places
   sentHome: 'Sent Home',
+  syncedWith: 'Synced with {devices}',
   today: 'Today',
   photosPage: 'Photos',
   libraries: 'Libraries',

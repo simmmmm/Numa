@@ -1,9 +1,9 @@
 use super::home::{account, curl, forget_token, said, scratch, sha256, sign_in_first, signed_out, Running, NUMA_HOME};
 use super::places::photos;
 use super::*;
-use numa::io::home::sync::{self, Kept, Link, Local, Pace, Remote, Step};
+use numa::io::home::sync::{self, Gone, Kept, Link, Local, Pace, Remote, Settled, Step, Way};
 use numa::io::home::{self as api, Account, Failure};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 const EVERY: u32 = 180;
@@ -15,6 +15,58 @@ thread_local! {
     static QUIET: RefCell<Option<Cancel>> = const { RefCell::new(None) };
 
     static TURN: Cell<usize> = const { Cell::new(0) };
+
+    static SHOWN: RefCell<HashMap<i64, Shown>> = RefCell::default();
+    static CAPTIONS: RefCell<Vec<(i64, glib::WeakRef<gtk::Label>, String)>> = const { RefCell::new(Vec::new()) };
+
+    static WAYS: RefCell<HashMap<i64, Option<(Way, bool)>>> = RefCell::default();
+}
+
+#[derive(Clone, Copy, Default)]
+struct Shown {
+    syncing: Option<(usize, usize)>,
+    to_send: usize,
+    waits: bool,
+}
+
+impl Shown {
+    fn said(self) -> String {
+        let n = |n: usize| places::grouped(n as i64);
+        match self {
+            Shown { syncing: Some((done, total)), .. } => format!("Syncing \u{b7} {} of {}", n(done.min(total)), n(total)),
+            Shown { waits: true, .. } => format!("Waits for {NUMA_HOME}"),
+            Shown { to_send: 0, .. } => "Synced".to_string(),
+            Shown { to_send, .. } => format!("{} to send", n(to_send)),
+        }
+    }
+}
+
+pub(super) fn sync_said(state: &App, library: i64) -> Option<String> {
+    is_synced(state, library).then(|| SHOWN.with(|shown| shown.borrow().get(&library).copied().unwrap_or_default()).said())
+}
+
+pub(super) fn follow_caption(library: i64, label: &gtk::Label, before: &str) {
+    CAPTIONS.with(|captions| {
+        let mut captions = captions.borrow_mut();
+        captions.retain(|(_, label, _)| label.upgrade().is_some());
+        captions.push((library, label.downgrade(), before.to_string()));
+    });
+}
+
+fn say_state(_state: &App, library: i64, change: impl FnOnce(&mut Shown)) {
+    let now = SHOWN.with(|shown| {
+        let mut shown = shown.borrow_mut();
+        let entry = shown.entry(library).or_default();
+        change(entry);
+        *entry
+    });
+    CAPTIONS.with(|captions| {
+        for (_, label, before) in captions.borrow().iter().filter(|(id, ..)| *id == library) {
+            if let Some(label) = label.upgrade() {
+                label.set_text(&format!("{before}{}", now.said()));
+            }
+        }
+    });
 }
 
 const PACE: &str = "numa-home-pace";
@@ -23,11 +75,53 @@ pub(super) fn linked(state: &App, library: i64) -> Option<Link> {
     serde_json::from_str(&state.catalog.library_setting(library, sync::LINK)?).ok()
 }
 
-pub(super) fn is_home(state: &App, library: i64) -> bool {
+pub(super) fn is_linked(state: &App, library: i64) -> bool {
     state.catalog.library_setting(library, sync::LINK).is_some()
 }
 
-fn keep(state: &App, library: i64, link: &Link) {
+pub(super) fn is_home(state: &App, library: i64) -> bool {
+    way_of(state, library) == Some(Way::Down)
+}
+
+fn home_root() -> PathBuf {
+    let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
+    pictures.join(NUMA_HOME)
+}
+
+fn way_synced(state: &App, library: i64) -> Option<(Way, bool)> {
+    if let Some(known) = WAYS.with(|ways| ways.borrow().get(&library).copied()) {
+        return known;
+    }
+    let known = linked(state, library).map(|link| {
+        let path = state.libraries.all.borrow().iter().find(|it| it.id == library).map(|it| it.path.clone());
+        let path = path.or_else(|| state.catalog.libraries().ok()?.into_iter().find(|it| it.id == library).map(|it| it.path));
+        let way = sync::way(&link, path.is_some_and(|path| path.starts_with(home_root())));
+        (way, sync::synced(&link, way))
+    });
+    WAYS.with(|ways| ways.borrow_mut().insert(library, known));
+    known
+}
+
+pub(super) fn way_of(state: &App, library: i64) -> Option<Way> {
+    way_synced(state, library).map(|(way, _)| way)
+}
+
+pub(super) fn is_synced(state: &App, library: i64) -> bool {
+    way_synced(state, library).is_some_and(|(_, synced)| synced)
+}
+
+pub(super) fn unlink(state: &App, library: i64) {
+    for key in [sync::LINK, sync::TRASHED] {
+        if let Err(err) = state.catalog.set_library_setting(library, key, None) {
+            log::warn!("Numa Home: {err}");
+        }
+    }
+    WAYS.with(|ways| ways.borrow_mut().remove(&library));
+    SHOWN.with(|shown| shown.borrow_mut().remove(&library));
+}
+
+pub(super) fn keep(state: &App, library: i64, link: &Link) {
+    WAYS.with(|ways| ways.borrow_mut().remove(&library));
     let saved = serde_json::to_string(link).map_err(|err| err.to_string()).and_then(|json| state.catalog.set_library_setting(library, sync::LINK, Some(&json)));
     if let Err(err) = saved {
         log::warn!("Numa Home: the link could not be kept: {err}");
@@ -168,13 +262,17 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
 }
 
 fn home_folder(state: &App, from: &sync::Library, account: &Account) -> Result<Library, String> {
-    let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
-    let root = pictures.join(NUMA_HOME).join(from.name.replace('/', "-"));
+    let root = home_root().join(from.name.replace('/', "-"));
     std::fs::create_dir_all(&root).map_err(|err| format!("{}: {err}", root.display()))?;
     let known = state.catalog.libraries()?.into_iter().find(|library| library.path == root);
     let library = known.map_or_else(|| state.catalog.add_library(&root), Ok)?;
-    let link = linked(state, library.id)
-        .unwrap_or_else(|| Link { address: account.address.clone(), library: from.id.clone(), name: from.name.clone(), ..Link::default() });
+    let link = linked(state, library.id).unwrap_or_else(|| Link {
+        address: account.address.clone(),
+        library: from.id.clone(),
+        name: from.name.clone(),
+        way: Some(Way::Down),
+        ..Link::default()
+    });
 
     if link.library != from.id || !api::same_server(&link.address, &account.address) {
         return Err(format!("{} is kept at {NUMA_HOME} as another library", root.display()));
@@ -317,14 +415,17 @@ pub(super) fn keep_in_step(state: &App) {
             move || {
 
                 adopt(&state, false);
-                if !allowed(&state) {
-                    QUIET.with(|quiet| quiet.borrow().as_ref().map(Cancel::stop));
-                    return glib::ControlFlow::Continue;
-                }
-                let kept: Vec<Library> = state.catalog.libraries().unwrap_or_default().into_iter().filter(|library| is_home(&state, library.id)).collect();
+                let how = match allowed(&state) {
+                    true => How::Quiet,
+                    false => {
+                        QUIET.with(|quiet| quiet.borrow().as_ref().map(Cancel::stop));
+                        How::Light
+                    }
+                };
+                let kept: Vec<Library> = state.catalog.libraries().unwrap_or_default().into_iter().filter(|library| is_linked(&state, library.id)).collect();
                 if !kept.is_empty() {
                     let at = TURN.with(|turn| turn.replace(turn.get() + 1)) % kept.len();
-                    in_step(&state, kept[at].clone(), How::Quiet);
+                    in_step(&state, kept[at].clone(), how);
                 }
                 glib::ControlFlow::Continue
             }
@@ -345,60 +446,58 @@ fn allowed(state: &App) -> bool {
     pace(state).allows(hour, gio::NetworkMonitor::default().is_network_metered())
 }
 
-pub(super) fn opened(state: &App) {
-    if let Some(library) = offer(state) {
-        let how = if allowed(state) { How::Quiet } else { How::Look };
-        in_step(state, library, how);
+fn paced(state: &App) -> How {
+    match allowed(state) {
+        true => How::Quiet,
+        false => How::Light,
     }
 }
 
-fn offer(state: &App) -> Option<Library> {
+pub(super) fn opened(state: &App) {
+    if let Some(library) = offer(state) {
+        in_step(state, library, paced(state));
+    }
+}
+
+pub(super) fn edited(state: &App, library: i64) {
+    let library = state.libraries.all.borrow().iter().find(|it| it.id == library).cloned();
+    if let Some(library) = library.filter(|library| is_linked(state, library.id)) {
+        if !ROUND.with(Cell::get) {
+            in_step(state, library, paced(state));
+        }
+    }
+}
+
+pub(super) fn offer(state: &App) -> Option<Library> {
     let library = state.libraries.current.borrow().clone();
-    let kept = library.filter(|library| is_home(state, library.id));
     let window = state.stack.root().and_downcast::<adw::ApplicationWindow>();
     let action = |name: &str| window.as_ref().and_then(|window| window.lookup_action(name)).and_downcast::<gio::SimpleAction>();
+    let commands = library.as_ref().map(|library| home_pair::commands(state, library)).unwrap_or_default();
+    for (name, on) in [("home-sync-here", commands.here), ("home-sync-home", commands.home), ("home-stop-sync", commands.stop)] {
+        if let Some(action) = action(name) {
+            action.set_enabled(on);
+        }
+    }
+    let kept = library.filter(|library| is_linked(state, library.id));
     if let Some(action) = action("home-sync") {
         action.set_enabled(kept.is_some());
-    }
-
-    if let Some(action) = action("home-keep") {
-        action.set_enabled(kept.is_some());
-        action.set_state(&kept.as_ref().is_some_and(|library| keeps_here(state, library.id)).to_variant());
     }
     kept
 }
 
-pub(super) fn keeps_here(state: &App, library: i64) -> bool {
-    linked(state, library).is_some_and(|link| link.keep_here)
-}
-
 pub(super) fn keep_here(state: &App, library: &Library, on: bool) {
     let Some(link) = linked(state, library.id) else { return };
-    if link.keep_here == on {
-        return;
-    }
-    keep(state, library.id, &Link { keep_here: on, ..link });
-    offer(state);
-    if state.stack.visible_child_name().as_deref() == Some("libraries") {
-        show_folders(state);
-    }
-    if !on || state.catalog.at_home(library.id).map_or(true, |at_home| at_home.is_empty()) {
-        return;
-    }
-    match allowed(state) {
-        true => in_step(state, library.clone(), How::Quiet),
-        false => state.toast(&format!("{} comes to this computer {}", library.label(), when(pace(state)))),
+    if link.keep_here != on {
+        keep(state, library.id, &Link { keep_here: on, ..link });
     }
 }
 
-pub(super) fn kept_here_line(state: &App, library: i64) -> Option<String> {
-    if !keeps_here(state, library) {
-        return None;
-    }
-    Some(match state.catalog.at_home(library).map_or(0, |at_home| at_home.len()) {
-        0 => "Kept on this computer".to_string(),
-        left => format!("Kept on this computer \u{b7} {} to bring", places::grouped(left as i64)),
-    })
+pub(super) fn sync_now(state: &App, library: Library) {
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        round_over().await;
+        in_step(&state, library, How::ByHand);
+    });
 }
 
 pub(super) fn install(state: &App, window: &adw::ApplicationWindow) {
@@ -413,27 +512,28 @@ pub(super) fn install(state: &App, window: &adw::ApplicationWindow) {
         }
     ));
     window.add_action(&sync_now);
-
-    let keep_action = gio::SimpleAction::new_stateful("home-keep", None, &false.to_variant());
-    keep_action.set_enabled(false);
-    keep_action.connect_change_state(glib::clone!(
-        #[strong] state,
-        move |action, value| {
-            let Some(on) = value.and_then(|value| value.get::<bool>()) else { return };
-            action.set_state(&on.to_variant());
-            if let Some(library) = state.libraries.current.borrow().clone() {
-                keep_here(&state, &library, on);
+    for name in ["home-sync-here", "home-sync-home", "home-stop-sync"] {
+        let action = gio::SimpleAction::new(name, None);
+        action.set_enabled(false);
+        action.connect_activate(glib::clone!(
+            #[strong] state,
+            move |action, _| {
+                let Some(library) = state.libraries.current.borrow().clone() else { return };
+                match action.name().as_str() {
+                    "home-stop-sync" => home_pair::stop_syncing(&state, vec![library]),
+                    _ => home_pair::start_syncing(&state, vec![library]),
+                }
             }
-        }
-    ));
-    window.add_action(&keep_action);
+        ));
+        window.add_action(&action);
+    }
 }
 
 pub(super) fn keep_at_home(state: &App, libraries: &[Library]) {
     let account = account(state);
-    let new: Vec<&Library> = libraries.iter().filter(|library| !is_home(state, library.id)).collect();
+    let new: Vec<&Library> = libraries.iter().filter(|library| !is_linked(state, library.id)).collect();
     for library in &new {
-        keep(state, library.id, &Link { address: account.address.clone(), name: library.label(), ..Link::default() });
+        keep(state, library.id, &Link { address: account.address.clone(), name: library.label(), way: Some(Way::Up), ..Link::default() });
     }
     let Some(first) = new.first() else { return };
     match allowed(state) {
@@ -449,11 +549,51 @@ fn when(pace: Pace) -> &'static str {
     }
 }
 
+fn trashed_here(state: &App, library: i64) -> BTreeMap<String, i64> {
+    state.catalog.library_setting(library, sync::TRASHED).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
+fn keep_trashed(state: &App, library: i64, trashed: &BTreeMap<String, i64>) {
+    let json = (!trashed.is_empty()).then(|| serde_json::to_string(trashed).unwrap_or_default());
+    if let Err(err) = state.catalog.set_library_setting(library, sync::TRASHED, json.as_deref()) {
+        log::warn!("Numa Home: {err}");
+    }
+}
+
+pub(super) fn note_trashed(state: &App, photos: &[(i64, PathBuf)]) {
+    let now = glib::real_time() / 1_000_000;
+    let libraries = state.libraries.all.borrow().clone();
+    for library in libraries.iter().filter(|library| is_linked(state, library.id)) {
+        let mut trashed = trashed_here(state, library.id);
+        let before = trashed.len();
+        for (_, file) in photos.iter().filter(|(id, _)| numa::io::catalog::library_of(*id) == library.id) {
+            if let Ok(path) = file.strip_prefix(&library.path) {
+                trashed.insert(path.to_string_lossy().into_owned(), now);
+            }
+        }
+        if trashed.len() != before {
+            keep_trashed(state, library.id, &trashed);
+        }
+    }
+}
+
+fn forget_trashed(state: &App, library: i64, paths: &[String]) {
+    let mut trashed = trashed_here(state, library);
+    let before = trashed.len();
+    for path in paths {
+        trashed.remove(path);
+    }
+    if trashed.len() != before {
+        keep_trashed(state, library, &trashed);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum How {
     Import,
     ByHand,
     Quiet,
+    Light,
     Look,
     Glance,
 }
@@ -461,6 +601,14 @@ enum How {
 impl How {
     fn looks(self) -> bool {
         matches!(self, How::Look | How::Glance)
+    }
+
+    fn holds(self, step: &Step) -> bool {
+        match self {
+            How::Look | How::Glance => !matches!(step, Step::Arrive(_)),
+            How::Light => matches!(step, Step::Send(_)),
+            _ => false,
+        }
     }
 }
 
@@ -479,6 +627,9 @@ fn in_step(state: &App, library: Library, how: How) {
         }
         return;
     }
+
+    link.way = link.way.or_else(|| way_of(state, library.id));
+    let synced = is_synced(state, library.id);
     let state = state.clone();
     glib::spawn_future_local(async move {
         if link.library.is_empty() {
@@ -490,13 +641,18 @@ fn in_step(state: &App, library: Library, how: How) {
                 Err(failure) => return let_go(&state, failure, &account, Some(&library)),
             }
         }
-        let out = curl(sync::list_photos(&account.address, &link.library, sync::listed_after(&link)), account.header(), &Running::default()).await;
-        match sync::photos(&out) {
+        let asked = sync::list_changes(&account.address, &link.library, sync::listed_after(&link), synced && !how.looks());
+        match sync::photos(&curl(asked, account.header(), &Running::default()).await) {
             Ok(remote) => {
                 let since = sync::next_since(link.since, &remote);
                 round(&state, library, link, remote, since, how, (Vec::new(), None));
             }
-            Err(failure) => let_go(&state, failure, &account, (how == How::ByHand).then_some(&library)),
+            Err(failure) => {
+                if !matches!(failure, Failure::Said(_)) {
+                    say_state(&state, library.id, |shown| shown.waits = true);
+                }
+                let_go(&state, failure, &account, (how == How::ByHand).then_some(&library))
+            }
         }
     });
 }
@@ -510,9 +666,7 @@ fn let_go(state: &App, failure: Failure, account: &Account, making: Option<&Libr
         }
         Failure::Said(sentence) if making.is_some_and(|library| linked(state, library.id).is_some_and(|link| link.library.is_empty())) => {
             let library = making.expect("checked above");
-            if let Err(err) = state.catalog.set_library_setting(library.id, sync::LINK, None) {
-                log::warn!("Numa Home: {err}");
-            }
+            unlink(state, library.id);
             reload_libraries(state);
             state.toast(&format!("{} is not kept at {NUMA_HOME}: {sentence}", library.label()));
         }
@@ -523,16 +677,25 @@ fn let_go(state: &App, failure: Failure, account: &Account, making: Option<&Libr
 
 fn local_photos(state: &App, library: &Library) -> Vec<(i64, Local)> {
 
-    state
-        .catalog
-        .photos(library.id, &Filter::default())
-        .unwrap_or_default()
+    let photos = state.catalog.photos(library.id, &Filter::default()).unwrap_or_default();
+    let ids: Vec<i64> = photos.iter().map(|photo| photo.id).collect();
+    let mut albums = state.catalog.albums_of(&ids).unwrap_or_default();
+    let changed = state.catalog.changed_times(library.id).unwrap_or_default();
+    photos
         .into_iter()
         .map(|photo| {
             let path = photo.path.strip_prefix(&library.path).unwrap_or(&photo.path).to_string_lossy().to_string();
 
             let edits = state.catalog.own_edits_json(photo.id).ok().flatten();
-            (photo.id, Local { path, edits, rating: photo.rating, flag: sync::flag_name(photo.flag).to_string() })
+            let local = Local {
+                path,
+                edits,
+                rating: photo.rating,
+                flag: sync::flag_name(photo.flag).to_string(),
+                albums: albums.remove(&photo.id).unwrap_or_default(),
+                changed: changed.get(&photo.id).copied().unwrap_or(0),
+            };
+            (photo.id, local)
         })
         .collect()
 }
@@ -546,26 +709,38 @@ struct Done {
 
     pictures: usize,
     brought: usize,
+
+    trashed: usize,
+    deleted: usize,
     failures: Vec<String>,
 
     cut: bool,
+
+    waits: bool,
+
+    hold: bool,
+}
+
+fn goes_up(step: &Step) -> bool {
+    matches!(step, Step::Send(_) | Step::Delete { .. } | Step::Restore(_)) || matches!(step, Step::Both { up, .. } if up.any())
 }
 
 fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, how: How, then: (Vec<String>, Option<String>)) {
     let local: Vec<Local> = local_photos(state, &library).into_iter().map(|(_, photo)| photo).collect();
-    let mut steps = sync::plan(&link, &remote, &local);
+    let mut steps = sync::plan(&link, &remote, &local, &trashed_here(state, library.id));
 
-    let whole = !how.looks() || steps.iter().all(|step| matches!(step, Step::Arrive(_)));
-    steps.retain(|step| !how.looks() || matches!(step, Step::Arrive(_)));
+    let whole = !how.looks() || !steps.iter().any(|step| how.holds(step));
+    let held = steps.iter().filter(|step| how.holds(step) && goes_up(step)).count();
+    steps.retain(|step| !how.holds(step));
 
-    let to_send = steps.iter().filter(|step| matches!(step, Step::Send(_)) || matches!(step, Step::Both { up, .. } if up.any())).count();
+    let to_send = steps.iter().filter(|step| goes_up(step)).count();
 
-    let keep_here = link.keep_here && !how.looks();
+    let keep_here = is_synced(state, library.id) && !how.looks() && how != How::Light;
     let to_bring = if keep_here { state.catalog.at_home(library.id).map_or(0, |at_home| at_home.len()) } else { 0 };
     let cancel = Cancel::default();
     let running = Running::default();
     let progress = (!steps.is_empty() || to_bring > 0).then(|| match how {
-        How::Quiet | How::Look | How::Glance => {
+        How::Quiet | How::Light | How::Look | How::Glance => {
             QUIET.with(|quiet| quiet.replace(Some(cancel.clone())));
             quiet(state, &library)
         }
@@ -582,10 +757,13 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
             (toast, text, Some(bar))
         }
     });
+    if progress.is_some() {
+        say_state(state, library.id, |shown| shown.syncing = Some((0, steps.len().max(to_bring))));
+    }
     let state = state.clone();
     glib::spawn_future_local(async move {
         let shown = progress.as_ref().map(|(_, text, bar)| (text.clone(), bar.clone()));
-        let mut done = carry_out(&state, &library, &mut link, steps, shown, how == How::Glance, &cancel, &running).await;
+        let mut done = carry_out(&state, &library, &mut link, steps, (shown, how), &cancel, &running).await;
         if keep_here && !done.cut {
             let say = |at: usize, of: usize| {
                 if let Some((_, text, bar)) = &progress {
@@ -594,6 +772,7 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
                         bar.set_fraction(at as f64 / of.max(1) as f64);
                     }
                 }
+                say_state(&state, library.id, |shown| shown.syncing = Some((at, of)));
             };
             match home_fetch::bring_all(&state, &library, &cancel, say).await {
                 Ok(brought) => done.brought = brought,
@@ -605,28 +784,40 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
         let finished = !done.cut && done.failures.is_empty();
 
         link.everything |= finished && how != How::Glance;
-        if how == How::Import || (whole && finished) {
+        if how == How::Import || (whole && finished && !done.hold) {
             link.since = since;
+            if how != How::Import {
+                link.rules = sync::RULES;
+            }
+        }
+
+        if let Some(stored) = linked(&state, library.id) {
+            (link.keep_here, link.way) = (stored.keep_here, stored.way.or(link.way));
         }
         keep(&state, library.id, &link);
         ROUND.with(|round| round.set(false));
         QUIET.with(|quiet| quiet.replace(None));
+        let left = held + to_send.saturating_sub(done.went + done.deleted);
+        say_state(&state, library.id, |shown| *shown = Shown { syncing: None, to_send: if finished { held } else { left }, waits: done.waits });
         if let Some((toast, _, _)) = progress {
             toast.dismiss();
         }
-        if done.came + done.changed + done.pictures + done.brought > 0 && state.libraries.current.borrow().as_ref().is_some_and(|open| open.id == library.id) {
+        let moved = done.came + done.changed + done.pictures + done.brought + done.trashed;
+        if moved > 0 && state.libraries.current.borrow().as_ref().is_some_and(|open| open.id == library.id) {
             reload_grid(&state);
         }
         for failure in &done.failures {
             log::warn!("Numa Home: {failure}");
         }
         log::info!(
-            "Numa Home: {} new there, {} changed there, {} went up, {} thumbnails, {} brought",
+            "Numa Home: {} new there, {} changed there, {} went up, {} thumbnails, {} brought, {} to the trash here, {} to Home's trash",
             done.came,
             done.changed,
             done.went,
             done.pictures,
-            done.brought
+            done.brought,
+            done.trashed,
+            done.deleted
         );
         if let Some(said) = round_said(&done, how, &cancel, to_send, &library) {
             state.toast(&said);
@@ -640,7 +831,7 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
 
 fn round_said(done: &Done, how: How, cancel: &Cancel, to_send: usize, library: &Library) -> Option<String> {
     let loud = matches!(how, How::Import | How::ByHand);
-    let to_go = match to_send.saturating_sub(done.went) {
+    let to_go = match to_send.saturating_sub(done.went + done.deleted) {
         0 => String::new(),
         left => format!("; {left} to send home"),
     };
@@ -651,13 +842,20 @@ fn round_said(done: &Done, how: How, cancel: &Cancel, to_send: usize, library: &
         }
 
         _ if how == How::Import => None,
-        (Done { came: 0, went: 0, changed: 0, brought: 0, .. }, true) => Some(format!("Kept at {NUMA_HOME} \u{b7} just now")),
-        (Done { came, changed, went, brought, .. }, true) => {
-            let moved: Vec<String> = [(*came, "new"), (*changed, "changed there"), (*went, "sent home"), (*brought, "brought")]
-                .into_iter()
-                .filter(|(n, _)| *n > 0)
-                .map(|(n, said)| format!("{n} {said}"))
-                .collect();
+        (Done { came: 0, went: 0, changed: 0, brought: 0, trashed: 0, deleted: 0, .. }, true) => Some(format!("Kept at {NUMA_HOME} \u{b7} just now")),
+        (Done { came, changed, went, brought, trashed, deleted, .. }, true) => {
+            let moved: Vec<String> = [
+                (*came, "new"),
+                (*changed, "changed there"),
+                (*went, "sent home"),
+                (*brought, "brought"),
+                (*trashed, "to the trash here"),
+                (*deleted, "to Numa Home's trash"),
+            ]
+            .into_iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, said)| format!("{n} {said}"))
+            .collect();
             Some(format!("Kept at {NUMA_HOME} \u{b7} just now \u{b7} {}", moved.join(" \u{b7} ")))
         }
 
@@ -672,71 +870,74 @@ fn quiet(state: &App, library: &Library) -> (adw::Toast, gtk::Label, Option<gtk:
     (toast, text, None)
 }
 
-#[allow(clippy::too_many_arguments)]
+struct Saying<'a> {
+    state: &'a App,
+    library: i64,
+    shown: Option<(gtk::Label, Option<gtk::ProgressBar>)>,
+    total: usize,
+}
+
+impl Saying<'_> {
+    fn say(&self, at: usize, text: String) {
+        if let Some((label, bar)) = &self.shown {
+            label.set_text(&text);
+            if let Some(bar) = bar {
+                bar.set_fraction(at as f64 / self.total.max(1) as f64);
+            }
+        }
+        say_state(self.state, self.library, |shown| shown.syncing = Some((at, self.total)));
+    }
+}
+
 async fn carry_out(
     state: &App,
     library: &Library,
     link: &mut Link,
     steps: Vec<Step>,
-    shown: Option<(gtk::Label, Option<gtk::ProgressBar>)>,
-    covers_only: bool,
+    (shown, how): (Option<(gtk::Label, Option<gtk::ProgressBar>)>, How),
     cancel: &Cancel,
     running: &Running,
 ) -> Done {
     let account = account(state);
     let mut done = Done::default();
-    let total = steps.len();
-    let say = |at: usize, text: String| {
-        if let Some((label, bar)) = &shown {
-            label.set_text(&text);
-            if let Some(bar) = bar {
-                bar.set_fraction(at as f64 / total.max(1) as f64);
-            }
-        }
-    };
-    let (arrivals, rest): (Vec<Step>, Vec<Step>) = steps.into_iter().partition(|step| matches!(step, Step::Arrive(_)));
-    let arrived: Vec<Remote> = arrivals.into_iter().filter_map(|step| if let Step::Arrive(theirs) = step { Some(theirs) } else { None }).collect();
+    let saying = Saying { state, library: library.id, shown, total: steps.len() };
+    let (first, rest): (Vec<Step>, Vec<Step>) = steps.into_iter().partition(|step| matches!(step, Step::Arrive(_) | Step::PutBack(_)));
+    let back: Vec<Remote> = first.iter().filter_map(|step| if let Step::PutBack(theirs) = step { Some(theirs.clone()) } else { None }).collect();
+    let came_back = from_trash(library, &back).await;
+    let arrived: Vec<Remote> = first.into_iter().filter_map(|step| if let Step::Arrive(theirs) | Step::PutBack(theirs) = step { Some(theirs) } else { None }).collect();
     let later = arrive(state, library, link, &arrived, &mut done);
+    forget_trashed(state, library.id, &back.iter().map(|theirs| theirs.path.clone()).collect::<Vec<_>>());
     let here: HashMap<String, (i64, Local)> = local_photos(state, library).into_iter().map(|(id, photo)| (photo.path.clone(), (id, photo))).collect();
+    settle_arrivals(state, library, &arrived, &came_back, &here).await;
+    let (deletes, rest): (Vec<Step>, Vec<Step>) = rest.into_iter().partition(|step| matches!(step, Step::Delete { .. }));
+    if let Err(failure) = delete_there(state, &account, library, link, deletes, &mut done, running).await {
+        stop(state, failure, &account, cancel, &mut done);
+    }
     let folder = scratch();
+    let albums_there = RefCell::new(None);
     let (brought, pulled) = (arrived.len(), later.len());
     let mut moved: HashSet<String> = HashSet::new();
+    let ctx = Ctx { state, account: &account, library, folder: &folder, albums_there: &albums_there, running, light: how == How::Light };
     for (at, step) in later.into_iter().chain(rest).enumerate() {
-        say(brought + at.saturating_sub(pulled), match &step {
-            Step::Send(_) => format!("Sending {} of {total} home", brought + at.saturating_sub(pulled) + 1),
+        if done.cut {
+            break;
+        }
+        let at = brought + done.deleted + at.saturating_sub(pulled);
+        saying.say(at, match &step {
+            Step::Send(_) => format!("Sending {} of {} home", at + 1, saying.total),
             _ => format!("Edits and marks with {NUMA_HOME}"),
         });
-        let (path, ways, edits) = match &step {
-            Step::Both { path, down, up, .. } => (path, (down.any(), up.any()), down.edits || up.edits),
-            Step::Send(path) => (path, (false, true), true),
-            Step::Arrive(_) => continue,
-        };
-
-        let Some((photo, ours)) = here.get(path) else { continue };
-        let result = match &step {
-            Step::Both { id, theirs, down, up, .. } => both(state, &account, (&library.path, &folder), (*photo, ours), id, theirs.as_ref(), (*down, *up), running).await,
-            _ => send(state, &account, (&library.path, &folder), (*photo, ours), &link.library, running).await,
-        };
-        match result {
-            Ok(kept) => {
-                done.changed += ways.0 as usize;
-                done.went += ways.1 as usize;
-                link.photos.insert(path.clone(), kept);
-                if edits {
-                    moved.insert(path.clone());
-                }
-            }
-            Err(failure) => {
-                if stop(state, failure, &account, cancel, &mut done) {
-                    break;
-                }
+        let result = one(&ctx, link, &here, step, &mut done, &mut moved).await;
+        if let Err(failure) = result {
+            if stop(state, failure, &account, cancel, &mut done) {
+                break;
             }
         }
     }
     let _ = std::fs::remove_dir_all(&folder);
     if !done.cut {
-        let saying = |at: usize, of: usize| say(total, format!("{} of {} photos from {NUMA_HOME}", places::grouped(at as i64), places::grouped(of as i64)));
-        match pictures(state, &account, library, (&here, covers_only), &moved, running, saying).await {
+        let saying = |at: usize, of: usize| saying.say(saying.total, format!("{} of {} photos from {NUMA_HOME}", places::grouped(at as i64), places::grouped(of as i64)));
+        match pictures(state, &account, library, (&here, how == How::Glance), &moved, running, saying).await {
             Ok(came) => done.pictures = came,
             Err(failure) => {
                 stop(state, failure, &account, cancel, &mut done);
@@ -744,6 +945,155 @@ async fn carry_out(
         }
     }
     done
+}
+
+struct Ctx<'a> {
+    state: &'a App,
+    account: &'a Account,
+    library: &'a Library,
+
+    folder: &'a Path,
+
+    albums_there: &'a RefCell<Option<Vec<(String, String)>>>,
+    running: &'a Running,
+
+    light: bool,
+}
+
+async fn one(ctx: &Ctx<'_>, link: &mut Link, here: &HashMap<String, (i64, Local)>, step: Step, done: &mut Done, moved: &mut HashSet<String>) -> Result<(), Failure> {
+    match step {
+        Step::Trash { path, id } => {
+            trash_here(ctx.state, ctx.library, here.get(&path).map(|(photo, _)| *photo), &path).await?;
+            link.photos.remove(&path);
+            link.gone.insert(path, Gone { id, here: false, restored: false });
+            done.trashed += 1;
+        }
+        Step::Restore(path) => {
+            let back = sync::restored(&curl(sync::restore(&ctx.account.address, &link.library, std::slice::from_ref(&path)), ctx.account.header(), ctx.running).await);
+            match back {
+                Ok(back) if back.iter().any(|(_, at)| *at == path) => {
+                    link.gone.entry(path).or_default().restored = true;
+                    done.hold = true;
+                }
+
+                Ok(_) | Err(Failure::Said(_)) if !ctx.light => {
+                    link.gone.remove(&path);
+                    let Some((photo, ours)) = here.get(&path) else { return Ok(()) };
+                    let kept = send(ctx, (*photo, ours), &link.library).await?;
+                    done.went += 1;
+                    moved.insert(path.clone());
+                    link.photos.insert(path, kept);
+                }
+                Ok(_) | Err(Failure::Said(_)) => {}
+                Err(failure) => return Err(failure),
+            }
+        }
+        Step::Both { path, id, theirs, down, up, albums } => {
+            let Some((photo, ours)) = here.get(&path) else { return Ok(()) };
+            let kept = link.photos.get(&path).cloned();
+            let theirs_albums = theirs.as_ref().and_then(|theirs| theirs.albums.clone()).or_else(|| kept.as_ref().and_then(|kept| kept.albums.clone())).unwrap_or_default();
+            let sides = Sides { theirs: theirs.as_ref(), kept: kept.as_ref(), albums: albums.as_deref(), theirs_albums: &theirs_albums };
+            let now = both(ctx, (*photo, ours), &id, sides, (down, up)).await?;
+            done.changed += (down.any() && now.updated > 0) as usize;
+            done.went += up.any() as usize;
+            if now.edits != kept.as_ref().map(|kept| kept.edits.clone()).unwrap_or_default() || down.edits {
+                moved.insert(path.clone());
+            }
+            link.gone.remove(&path);
+            link.photos.insert(path, now);
+        }
+        Step::Send(path) => {
+            let Some((photo, ours)) = here.get(&path) else { return Ok(()) };
+            let kept = send(ctx, (*photo, ours), &link.library).await?;
+            done.went += 1;
+            moved.insert(path.clone());
+            link.photos.insert(path, kept);
+        }
+        Step::Arrive(_) | Step::PutBack(_) | Step::Delete { .. } => {}
+    }
+    Ok(())
+}
+
+async fn trash_here(state: &App, library: &Library, photo: Option<i64>, path: &str) -> Result<(), Failure> {
+    let Some(photo) = photo else { return Ok(()) };
+    let at_home = state.catalog.at_home(library.id).unwrap_or_default().contains_key(&photo);
+    if let (false, Some(file)) = (at_home, sync::inside(&library.path, path).filter(|file| file.exists())) {
+        let shown = file.display().to_string();
+        let trashed = gio::spawn_blocking(move || gio::File::for_path(&file).trash(gio::Cancellable::NONE).map_err(|err| err.to_string())).await;
+        trashed.unwrap_or_else(|_| Err("the trash did not answer".into())).map_err(|err| Failure::Said(format!("{shown}: {err}")))?;
+    }
+    state.catalog.remove_photo(photo).map_err(Failure::Said)
+}
+
+async fn delete_there(state: &App, account: &Account, library: &Library, link: &mut Link, deletes: Vec<Step>, done: &mut Done, running: &Running) -> Result<(), Failure> {
+    let gone: Vec<(String, String)> = deletes.into_iter().filter_map(|step| if let Step::Delete { path, id } = step { Some((path, id)) } else { None }).collect();
+    if gone.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = gone.iter().map(|(_, id)| id.clone()).collect();
+    let answer = api::taken(&curl(sync::delete_photos(&account.address, &ids), account.header(), running).await);
+    let refused = match answer {
+        Ok(()) => None,
+        Err(Failure::Said(sentence)) => Some(sentence),
+        Err(failure) => return Err(failure),
+    };
+    for (path, id) in &gone {
+        link.photos.remove(path);
+        if refused.is_none() {
+            link.gone.insert(path.clone(), Gone { id: id.clone(), here: true, restored: false });
+        }
+    }
+    match refused {
+        None => done.deleted += gone.len(),
+        Some(sentence) => done.failures.push(format!("{} stay at {NUMA_HOME}: {sentence}", photographs(gone.len()))),
+    }
+    forget_trashed(state, library.id, &gone.into_iter().map(|(path, _)| path).collect::<Vec<_>>());
+    Ok(())
+}
+
+async fn from_trash(library: &Library, back: &[Remote]) -> HashSet<String> {
+    let wanted: HashMap<PathBuf, String> = back.iter().filter_map(|theirs| Some((sync::inside(&library.path, &theirs.path)?, theirs.path.clone()))).collect();
+    if wanted.is_empty() {
+        return HashSet::new();
+    }
+    let found = gio::spawn_blocking(move || {
+        let trash = gio::File::for_uri("trash:///");
+        let mut came = HashSet::new();
+        let Ok(items) = trash.enumerate_children("standard::name,trash::orig-path", gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE) else { return came };
+        for info in items.flatten() {
+            let Some(orig) = info.attribute_byte_string("trash::orig-path").map(|orig| PathBuf::from(orig.as_str())) else { continue };
+            let Some(path) = wanted.get(&orig).filter(|path| !came.contains(*path) && !orig.exists()) else { continue };
+            let moved = trash.child(info.name()).move_(&gio::File::for_path(&orig), gio::FileCopyFlags::NONE, gio::Cancellable::NONE, None);
+            match moved {
+                Ok(()) => drop(came.insert(path.clone())),
+                Err(err) => log::info!("Numa Home: {}: {err}", orig.display()),
+            }
+        }
+        came
+    });
+    found.await.unwrap_or_default()
+}
+
+async fn settle_arrivals(state: &App, library: &Library, arrived: &[Remote], came_back: &HashSet<String>, here: &HashMap<String, (i64, Local)>) {
+    for theirs in arrived {
+        let Some((photo, _)) = here.get(&theirs.path) else { continue };
+        if let Some(albums) = theirs.albums.as_deref().filter(|albums| !albums.is_empty()) {
+            if let Err(failure) = albums_here(state, *photo, &[], albums) {
+                log::warn!("Numa Home: {}", said(failure, &account(state)));
+            }
+        }
+        let Some(file) = sync::inside(&library.path, &theirs.path).filter(|_| came_back.contains(&theirs.path)) else { continue };
+        let read = gio::spawn_blocking(move || {
+            let mtime = std::fs::metadata(&file).and_then(|meta| meta.modified()).ok();
+            let mtime = mtime.and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |at| at.as_secs() as i64);
+            (mtime, numa::io::exif::stamp(&file))
+        });
+        let (mtime, stamp) = read.await.unwrap_or_default();
+        if let Err(err) = state.catalog.arrived(*photo, mtime, &stamp) {
+            log::warn!("Numa Home: {err}");
+        }
+        state.grid.at_home.borrow_mut().remove(photo);
+    }
 }
 
 fn arrive(state: &App, library: &Library, link: &mut Link, arrived: &[Remote], done: &mut Done) -> Vec<Step> {
@@ -755,14 +1105,20 @@ fn arrive(state: &App, library: &Library, link: &mut Link, arrived: &[Remote], d
         return Vec::new();
     }
     done.came += arrived.len();
-    let edits = sync::Parts { edits: true, marks: false };
+    let edits = sync::Parts { edits: true, ..sync::Parts::default() };
     arrived
         .iter()
         .filter_map(|theirs| {
-            let flag = sync::flag_name(sync::flag(&theirs.flag)).to_string();
-            let kept = Kept { id: theirs.id.clone(), edits: sync::digest(None), rating: theirs.rating.min(5), flag, updated: theirs.updated };
-            link.photos.insert(theirs.path.clone(), kept);
-            let down = Step::Both { path: theirs.path.clone(), id: theirs.id.clone(), theirs: Some(theirs.clone()), down: edits, up: sync::Parts::default() };
+            link.photos.insert(theirs.path.clone(), theirs.kept());
+            link.gone.remove(&theirs.path);
+            let down = Step::Both {
+                path: theirs.path.clone(),
+                id: theirs.id.clone(),
+                theirs: Some(theirs.clone()),
+                down: edits,
+                up: sync::Parts::default(),
+                albums: theirs.albums.clone(),
+            };
             theirs.edited.then_some(down)
         })
         .collect()
@@ -802,6 +1158,7 @@ fn stop(state: &App, failure: Failure, account: &Account, cancel: &Cancel, done:
         return true;
     }
     let last = !matches!(failure, Failure::Said(_));
+    done.waits |= last;
     if let Failure::SignIn(_) = failure {
         forget_token(state);
     }
@@ -837,38 +1194,138 @@ pub(super) async fn download(account: &Account, root: &Path, theirs: &Remote, ru
     Ok(())
 }
 
-async fn both(
-    state: &App,
-    account: &Account,
-    (root, folder): (&Path, &Path),
-    (photo, ours): (i64, &Local),
-    id: &str,
-    theirs: Option<&Remote>,
-    (down, up): (sync::Parts, sync::Parts),
-    running: &Running,
-) -> Result<Kept, Failure> {
+struct Sides<'a> {
+    theirs: Option<&'a Remote>,
+    kept: Option<&'a Kept>,
+    albums: Option<&'a [String]>,
+    theirs_albums: &'a [String],
+}
+
+async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Sides<'_>, (down, up): (sync::Parts, sync::Parts)) -> Result<Kept, Failure> {
+    let (state, account, running) = (ctx.state, ctx.account, ctx.running);
+    let file = ctx.library.path.join(&ours.path);
     let mut now = ours.clone();
-    let mut at = theirs.map_or(0, |theirs| theirs.updated);
-    if let (true, Some(theirs)) = (down.edits, theirs) {
+    let mut at = sides.theirs.map_or(0, |theirs| theirs.updated);
+    let mut up_edits = up.edits;
+    if let (true, Some(theirs)) = (down.edits, sides.theirs) {
         let (stack, given) = sync::edits(&curl(sync::get_edits(&account.address, &theirs.id), account.header(), running).await)?;
-        now.edits = put_edits(state, root.join(&ours.path), photo, stack)?;
         at = at.max(given);
+        let settled = match sides.kept {
+            Some(kept) => sync::settle(kept, ours, stack.as_deref(), at),
+            None => Settled::Down,
+        };
+        match settled {
+            Settled::Same => up_edits = false,
+            Settled::Down | Settled::DownKeepingOurs => {
+                now.edits = put_edits(state, file.clone(), photo, stack)?;
+                if settled == Settled::DownKeepingOurs {
+                    let device = sync::device_label(&account.name, &glib::host_name());
+                    keep_aside(state, photo, &file, ours.edits.as_deref(), &sync::aside(false, "", &device))?;
+                }
+                up_edits = false;
+            }
+            Settled::Up => up_edits = true,
+            Settled::UpKeepingTheirs => {
+                keep_aside(state, photo, &file, stack.as_deref(), &sync::aside(true, &moment(at), ""))?;
+                up_edits = true;
+            }
+        }
     }
-    if let (true, Some(theirs)) = (down.marks, theirs) {
+    if let (true, Some(theirs)) = (down.marks, sides.theirs) {
         let (rating, flag) = (theirs.rating.min(5), sync::flag(&theirs.flag));
         state.catalog.set_ratings(&[photo], rating).map_err(Failure::Said)?;
         state.catalog.set_flags(&[photo], flag).map_err(Failure::Said)?;
         (now.rating, now.flag) = (rating, sync::flag_name(flag).to_string());
     }
-    if up.edits {
-        let stack = folder.join("edits.json");
+    if let (true, Some(albums)) = (down.albums, sides.albums) {
+        albums_here(state, photo, &ours.albums, albums)?;
+        now.albums = albums.to_vec();
+    }
+    if up_edits {
+        let stack = ctx.folder.join("edits.json");
         std::fs::write(&stack, ours.edits.as_deref().unwrap_or_default()).map_err(|err| Failure::Said(err.to_string()))?;
         at = at.max(sync::updated(&curl(api::edits(&account.address, id, &stack), account.header(), running).await)?);
     }
     if up.marks {
         at = at.max(sync::updated(&curl(sync::put_marks(&account.address, id, ours.rating, &ours.flag), account.header(), running).await)?);
     }
-    Ok(now.kept(id, at))
+    if let (true, Some(albums)) = (up.albums, sides.albums) {
+        at = at.max(albums_there(ctx, id, sides.theirs_albums, albums).await?);
+    }
+    let mut kept = now.kept(id, at);
+    kept.albums = sides.albums.map(<[String]>::to_vec).or_else(|| sides.kept.and_then(|kept| kept.albums.clone()));
+    Ok(kept)
+}
+
+fn moment(at: i64) -> String {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    match glib::DateTime::from_unix_local(at) {
+        Ok(when) => format!("{} {} {:02}:{:02}", when.day_of_month(), MONTHS[(when.month() as usize).clamp(1, 12) - 1], when.hour(), when.minute()),
+        Err(_) => String::new(),
+    }
+}
+
+fn keep_aside(state: &App, photo: i64, file: &Path, stack: Option<&str>, name: &str) -> Result<(), Failure> {
+    let file = file.to_string_lossy().to_string();
+    let mut other = match stack {
+        Some(json) => serde_json::from_str::<Document>(json).map_err(|_| Failure::Said(format!("The edits of {file} could not be read")))?,
+        None => Document::new(file.clone()),
+    };
+    other.source.path = file;
+    other.moment = None;
+    let kept = state.catalog.keep_aside(photo, name, &other).map_err(Failure::Said)?;
+    log::info!("Numa Home: the other edit kept as “{kept}”");
+    Ok(())
+}
+
+fn albums_here(state: &App, photo: i64, from: &[String], to: &[String]) -> Result<(), Failure> {
+    let mut known = state.catalog.albums().map_err(Failure::Said)?;
+    let key = |known: &[(String, String)], name: &str| known.iter().find(|(_, it)| it.eq_ignore_ascii_case(name)).map(|(key, _)| key.clone());
+    let has = |names: &[String], name: &str| names.iter().any(|it| it.eq_ignore_ascii_case(name));
+    for name in to.iter().filter(|name| !has(from, name)) {
+        let key = match key(&known, name) {
+            Some(key) => key,
+            None => {
+                let made = state.catalog.create_album(name).map_err(Failure::Said)?;
+                known.push((made.clone(), name.clone()));
+                made
+            }
+        };
+        state.catalog.set_in_album(&key, &[photo], true).map_err(Failure::Said)?;
+    }
+    for name in from.iter().filter(|name| !has(to, name)) {
+        if let Some(key) = key(&known, name) {
+            state.catalog.set_in_album(&key, &[photo], false).map_err(Failure::Said)?;
+        }
+    }
+    Ok(())
+}
+
+async fn albums_there(ctx: &Ctx<'_>, id: &str, from: &[String], to: &[String]) -> Result<i64, Failure> {
+    let (account, running) = (ctx.account, ctx.running);
+    if ctx.albums_there.borrow().is_none() {
+        let listed = sync::albums_at_home(&curl(sync::list_albums(&account.address), account.header(), running).await)?;
+        ctx.albums_there.replace(Some(listed));
+    }
+    let key = |name: &str| ctx.albums_there.borrow().iter().flatten().find(|(_, it)| it.eq_ignore_ascii_case(name)).map(|(key, _)| key.clone());
+    let has = |names: &[String], name: &str| names.iter().any(|it| it.eq_ignore_ascii_case(name));
+    let ids = [id.to_string()];
+    let mut at = 0;
+    for name in to.iter().filter(|name| !has(from, name)) {
+        let known = key(name);
+        let out = curl(sync::put_in_album(&account.address, &ids, known.as_deref().ok_or(name.as_str()), true), account.header(), running).await;
+        let made = sync::album_key(&out)?;
+        if known.is_none() {
+            ctx.albums_there.borrow_mut().get_or_insert_with(Vec::new).push((made, name.clone()));
+        }
+        at = at.max(sync::updated(&out)?);
+    }
+    for name in from.iter().filter(|name| !has(to, name)) {
+        if let Some(known) = key(name) {
+            at = at.max(sync::updated(&curl(sync::put_in_album(&account.address, &ids, Ok(&known), false), account.header(), running).await)?);
+        }
+    }
+    Ok(at)
 }
 
 fn put_edits(state: &App, file: PathBuf, photo: i64, stack: Option<String>) -> Result<Option<String>, Failure> {
@@ -883,11 +1340,13 @@ fn put_edits(state: &App, file: PathBuf, photo: i64, stack: Option<String>) -> R
     state.catalog.own_edits_json(photo).map_err(Failure::Said)
 }
 
-async fn send(state: &App, account: &Account, (root, folder): (&Path, &Path), (photo, ours): (i64, &Local), library: &str, running: &Running) -> Result<Kept, Failure> {
-    let file = root.join(&ours.path);
+async fn send(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), library: &str) -> Result<Kept, Failure> {
+    let (account, running) = (ctx.account, ctx.running);
+    let file = ctx.library.path.join(&ours.path);
     let dir = Path::new(&ours.path).parent().map(|dir| dir.to_string_lossy().to_string()).unwrap_or_default();
     let sha256 = sha256(&file).await?;
     let sent = api::sent(&curl(api::send_into(&account.address, &file, &sha256, library, &dir), account.header(), running).await)?;
-    let up = sync::Parts { edits: ours.edits.is_some(), marks: ours.rating != 0 || ours.flag != "none" };
-    both(state, account, (root, folder), (photo, ours), &sent.id, None, (sync::Parts::default(), up), running).await
+    let up = sync::Parts { edits: ours.edits.is_some(), marks: ours.rating != 0 || ours.flag != "none", albums: !ours.albums.is_empty() };
+    let sides = Sides { theirs: None, kept: None, albums: Some(&ours.albums), theirs_albums: &[] };
+    both(ctx, (photo, ours), &sent.id, sides, (sync::Parts::default(), up)).await
 }

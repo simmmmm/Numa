@@ -513,16 +513,20 @@ fn act(state: &App, card: &Card, keep: &[i64], twins: &HashMap<i64, Vec<(i64, Pa
             return;
         };
         let mut failed = Vec::new();
+        let mut gone = Vec::new();
         for ((id, path), result) in doomed.iter().zip(results) {
             match result {
                 Ok(()) => {
                     if let Err(err) = state.catalog.remove_photo(*id) {
                         log::warn!("{}: {err}", path.display());
                     }
+                    gone.push((*id, path.clone()));
                 }
                 Err(err) => failed.push(format!("{}: {err}", path.display())),
             }
         }
+
+        home_sync::note_trashed(&state, &gone);
         state.grid.stale.set(true);
         if let [first, ..] = failed.as_slice() {
             failed.iter().for_each(|failure| log::warn!("{failure}"));

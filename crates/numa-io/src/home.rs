@@ -202,6 +202,7 @@ pub fn sent(out: &str) -> Result<Sent, Failure> {
 fn id_text<'de, D: serde::Deserializer<'de>>(from: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(from)? {
         serde_json::Value::String(id) => id,
+        serde_json::Value::Null => String::new(),
         other => other.to_string(),
     })
 }

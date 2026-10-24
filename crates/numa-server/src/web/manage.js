@@ -551,6 +551,7 @@ function libraryShelf(library, list) {
     if (!chooseLibrary(event, library, list)) go('/', { library: library.id });
   });
   place.dataset.library = library.id;
+  place.querySelector('.caption').after(syncedWith(library.id));
   place.classList.toggle('picked', shelved.ids.has(library.id));
   if (state.me.admin && !library.mine) place.querySelector('.stack').append(h('span', { class: 'check', 'aria-hidden': 'true' }));
   return h('div', { class: 'shelf' }, place);

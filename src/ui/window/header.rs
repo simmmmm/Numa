@@ -325,9 +325,11 @@ fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
     sync_now.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
     library.append_item(&sync_now);
 
-    let keep_here = gio::MenuItem::new(Some("Keep on This Computer"), Some("win.home-keep"));
-    keep_here.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
-    library.append_item(&keep_here);
+    for (label, action) in [("Sync on This Device", "win.home-sync-here"), ("Sync to Numa Home", "win.home-sync-home"), ("Stop Syncing…", "win.home-stop-sync")] {
+        let item = gio::MenuItem::new(Some(label), Some(action));
+        item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+        library.append_item(&item);
+    }
     library.append(Some("Camera Clocks…"), Some("win.clocks"));
     library.append(Some("Add Places from a Track…"), Some("win.places-from-track"));
 

@@ -474,6 +474,7 @@ impl Catalog {
         if !has_aspect {
             conn.execute("ALTER TABLE photos ADD COLUMN aspect REAL", []).map_err(text)?;
         }
+        at_home::migrate(&conn)?;
         clocks::migrate(&conn)?;
         back_up_weekly(&conn, &dir);
 
@@ -2042,7 +2043,10 @@ impl Catalog {
 
     pub fn save_edits(&self, photo_id: i64, document: &Document) -> Result<(), String> {
         match document.moment.and_then(|record| self.layers(library_of(photo_id), record)) {
-            Some(layers) => self.save_own_edits(photo_id, &layers.decompose(photo_id, document)),
+            Some(layers) => {
+                let stored = self.own_edits(photo_id).ok().flatten();
+                self.save_own_edits(photo_id, &layers.decompose_onto(photo_id, document, stored.as_ref()))
+            }
             None => self.save_own_edits(photo_id, document),
         }
     }

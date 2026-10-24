@@ -134,7 +134,7 @@ pub(super) fn fetch_first(state: &App, id: i64, then: impl FnOnce(&App) + 'stati
 
 fn remote(library: &Library, path: &Path, mtime: i64, id: String, size: u64) -> Remote {
     let path = path.strip_prefix(&library.path).unwrap_or(path).to_string_lossy().into_owned();
-    Remote { id, path, size, mtime, taken: None, rating: 0, flag: "none".into(), edited: false, updated: 0 }
+    Remote { id, path, size, mtime, taken: None, rating: 0, flag: "none".into(), edited: false, updated: 0, albums: None, deleted: None }
 }
 
 fn failed(state: &App, failure: Failure, account: &Account) {

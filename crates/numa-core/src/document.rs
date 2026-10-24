@@ -319,6 +319,12 @@ impl Default for Balance {
     }
 }
 
+pub fn inside_frame([x, y, width, height]: [f32; 4]) -> [f32; 4] {
+    let finite = |value: f32, otherwise: f32| if value.is_finite() { value } else { otherwise };
+    let (width, height) = (finite(width, 1.0).clamp(1e-4, 2.0), finite(height, 1.0).clamp(1e-4, 2.0));
+    [finite(x, 0.0).clamp(-1.0, 1.0), finite(y, 0.0).clamp(-1.0, 1.0), width, height]
+}
+
 impl Basic {
 
     pub fn with(change: impl FnOnce(&mut Self)) -> Self {
@@ -433,7 +439,7 @@ impl Document {
     pub fn crop(&self) -> Option<([f32; 4], f32)> {
         self.operations.iter().find_map(|operation| match operation {
             Operation::Crop { x, y, width, height, angle, .. } => {
-                Some(([*x, *y, *width, *height], *angle))
+                Some((inside_frame([*x, *y, *width, *height]), if angle.is_finite() { *angle } else { 0.0 }))
             }
             _ => None,
         })
@@ -831,6 +837,9 @@ impl Document {
                 basic.detail.denoise_detail = from.detail.denoise_detail;
                 basic.detail.denoise_contrast = from.detail.denoise_contrast;
                 basic.detail.denoise_colour = from.detail.denoise_colour;
+
+                basic.detail.moire = from.detail.moire;
+                basic.detail.defringe = from.detail.defringe;
             }
             self.set_basic(basic);
         }
@@ -839,6 +848,42 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn every_slider_travels_with_a_part_or_stays_by_name() {
+        use super::*;
+
+        const STAYS: [&str; 4] = ["lens_distortion", "lens_vignetting", "temperature", "tint"];
+        let defaults = serde_json::to_value(Basic::default()).unwrap();
+        let every: serde_json::Map<String, serde_json::Value> =
+            defaults.as_object().unwrap().keys().enumerate().map(|(n, key)| (key.clone(), (n as f64 * 1.5 + 3.0).into())).collect();
+        let mut source = Document::new("s.RAF".into());
+        source.set_basic(serde_json::from_value(serde_json::Value::Object(every.clone())).unwrap());
+        let mut target = Document::new("t.RAF".into());
+        let all = EditParts { white_balance: true, tone: true, colour: true, curve: true, detail: true, geometry: true };
+        target.copy_from(&source, all);
+        let copied = serde_json::to_value(target.basic()).unwrap();
+        for (key, value) in &every {
+            let stays = STAYS.contains(&key.as_str());
+            assert_eq!(copied[key] == *value, !stays, "{key}: {}", if stays { "named as staying, but copied" } else { "no part copies it" });
+        }
+    }
+
+    #[test]
+    fn a_stored_crop_reads_back_within_reason() {
+        use super::*;
+        let read = |rect: [f32; 4], angle: f32| {
+            let mut document = Document::new(String::new());
+            document.set_crop(rect, angle);
+            document.crop().unwrap()
+        };
+        assert_eq!(read([0.1, 0.2, 0.5, 0.3], 3.0), ([0.1, 0.2, 0.5, 0.3], 3.0));
+        assert_eq!(read([-0.1, 0.0, 1.3, 0.2], 45.0), ([-0.1, 0.0, 1.3, 0.2], 45.0), "a thin crop at 45° keeps its long side");
+        let ([x, y, width, height], angle) = read([f32::NAN, 1e30, 1000.0, f32::INFINITY], f32::NAN);
+        assert!([x, y, width, height, angle].iter().all(|v| v.is_finite()));
+        assert!(width <= 2.0 && height <= 2.0 && (-1.0..=1.0).contains(&x) && (-1.0..=1.0).contains(&y));
+        assert_eq!(angle, 0.0);
+    }
 
     #[test]
     fn a_grade_keeps_a_hue_chosen_before_its_saturation() {

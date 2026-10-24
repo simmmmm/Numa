@@ -23,7 +23,7 @@ thread_local! {
 
     static SHELVES: RefCell<(i64, Rc<HashMap<i64, Glance>>)> = RefCell::new((0, Rc::new(HashMap::new())));
 
-    static TEXTURES: RefCell<HashMap<(PathBuf, u32), Option<gtk::gdk::Texture>>> = RefCell::new(HashMap::new());
+    static TEXTURES: RefCell<HashMap<(PathBuf, u32), gtk::gdk::Texture>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Default)]
@@ -252,28 +252,25 @@ pub(super) fn period(first: Option<i64>, last: Option<i64>) -> Option<String> {
 
 pub(super) fn texture(photo: &(PathBuf, i64, Option<String>), edge: u32) -> Option<gtk::gdk::Texture> {
     let (path, mtime, edits) = photo;
-    TEXTURES.with(|textures| {
-        textures
-            .borrow_mut()
-            .entry((path.clone(), edge))
-            .or_insert_with(|| {
-                let edits = edits.as_deref();
+    let key = (path.clone(), edge);
+    if let Some(known) = TEXTURES.with(|textures| textures.borrow().get(&key).cloned()) {
+        return Some(known);
+    }
+    let edits = edits.as_deref();
 
-                let file = numa::io::thumbs::cached(path, *mtime, edge, edits)
-                    .or_else(|| numa::io::thumbs::any_cached(path, *mtime, edits))?;
-                let whole = image::open(&file).ok()?;
-                let side = whole.width().min(whole.height());
-                let square = whole
-                    .crop_imm((whole.width() - side) / 2, (whole.height() - side) / 2, side, side)
-                    .resize_exact(edge, edge, image::imageops::FilterType::Triangle)
-                    .to_rgb8();
-                if side > edge {
-                    numa::io::thumbs::store(path, *mtime, edge, edits, &square);
-                }
-                Some(texture_from(&square))
-            })
-            .clone()
-    })
+    let file = numa::io::thumbs::cached(path, *mtime, edge, edits).or_else(|| numa::io::thumbs::any_cached(path, *mtime, edits))?;
+    let whole = image::open(&file).ok()?;
+    let side = whole.width().min(whole.height());
+    let square = whole
+        .crop_imm((whole.width() - side) / 2, (whole.height() - side) / 2, side, side)
+        .resize_exact(edge, edge, image::imageops::FilterType::Triangle)
+        .to_rgb8();
+    if side > edge {
+        numa::io::thumbs::store(path, *mtime, edge, edits, &square);
+    }
+    let made = texture_from(&square);
+    TEXTURES.with(|textures| textures.borrow_mut().insert(key, made.clone()));
+    Some(made)
 }
 
 fn lean(index: usize, tile: f32) -> gsk::Transform {

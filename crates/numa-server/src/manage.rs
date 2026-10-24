@@ -167,13 +167,16 @@ pub struct Kept {
 
     albums: Vec<String>,
     pub author: Option<String>,
+
+    #[serde(default)]
+    photo: i64,
 }
 
 pub fn keep(catalog: &Catalog, photo: &Photo, author: Option<String>) -> Kept {
     let names = catalog.albums_of(&[photo.id]).unwrap_or_default().remove(&photo.id).unwrap_or_default();
     let albums = catalog.albums().unwrap_or_default().into_iter().filter(|(_, name)| names.contains(name)).map(|(key, _)| key).collect();
     let edits = catalog.edits_json(photo.id).ok().flatten();
-    Kept { rating: photo.rating, flag: crate::photos::flag_name(photo.flag).into(), edits, albums, author }
+    Kept { rating: photo.rating, flag: crate::photos::flag_name(photo.flag).into(), edits, albums, author, photo: photo.id }
 }
 
 impl Kept {
@@ -384,25 +387,44 @@ pub struct Ids {
 pub async fn restore(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
     let rows: Vec<(Library, crate::store::Trashed)> = its_trash(&server, &me).into_iter().filter(|(_, row)| asked.ids.contains(&row.id)).collect();
     let working = server.clone();
-    let restored = tokio::task::spawn_blocking(move || {
-        let server = working;
-        let mut back = Vec::new();
-        for (library, row) in rows {
-            let to = free(library.path.join(&row.path));
-            let from = in_trash(&library, &row);
-            if let Err(err) = move_file(&from, &to) {
-                log::warn!("{}: {err}", from.display());
-                continue;
-            }
-            let _ = from.parent().map(std::fs::remove_dir);
-            server.store.untrash(row.id);
-            back.push((library, to, serde_json::from_str::<Kept>(&row.kept).unwrap_or_default()));
+    let restored = tokio::task::spawn_blocking(move || put_back(&working, rows)).await.map_err(Fail::internal)?;
+    Ok(Json(json!({ "restored": restored.len() })))
+}
+
+#[derive(Deserialize)]
+pub struct Paths {
+    paths: Vec<String>,
+}
+
+pub async fn restore_paths(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(asked): Json<Paths>) -> Result<Json<Value>, Fail> {
+    let mut rows: Vec<(Library, crate::store::Trashed)> = Vec::new();
+    for (library, row) in its_trash(&server, &me) {
+        if library.id == id && asked.paths.contains(&row.path) && !rows.iter().any(|(_, taken)| taken.path == row.path) {
+            rows.push((library, row));
         }
-        land(&server, back)
-    })
-    .await
-    .map_err(Fail::internal)?;
-    Ok(Json(json!({ "restored": restored })))
+    }
+    let working = server.clone();
+    let back = tokio::task::spawn_blocking(move || put_back(&working, rows)).await.map_err(Fail::internal)?;
+    let photos: Vec<Value> = back.into_iter().map(|(id, path)| json!({ "id": id, "path": path })).collect();
+    Ok(Json(json!({ "restored": photos.len(), "photos": photos })))
+}
+
+fn put_back(server: &Arc<Server>, rows: Vec<(Library, crate::store::Trashed)>) -> Vec<(i64, String)> {
+    let mut back = Vec::new();
+    for (library, row) in rows {
+        let to = free(library.path.join(&row.path));
+        let from = in_trash(&library, &row);
+        if let Err(err) = move_file(&from, &to) {
+            log::warn!("{}: {err}", from.display());
+            continue;
+        }
+        let _ = from.parent().map(std::fs::remove_dir);
+        server.store.untrash(row.id);
+        back.push((library, to, serde_json::from_str::<Kept>(&row.kept).unwrap_or_default()));
+    }
+    let landed: Vec<(Library, PathBuf)> = back.iter().map(|(library, to, _)| (library.clone(), to.clone())).collect();
+    land(server, back);
+    landed.into_iter().filter_map(|(library, to)| Some((server.home.at(&to)?, within(&library, &to)))).collect()
 }
 
 pub fn move_photos(server: &Arc<Server>, photos: Vec<(Library, Photo)>, target: &Library, to: impl Fn(&Library, &Photo) -> PathBuf) -> usize {

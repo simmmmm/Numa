@@ -101,21 +101,20 @@ async fn hashed(password: &str) -> Result<String, Fail> {
         return Err(Fail::bad("A password is at least 8 characters."));
     }
     let password = password.to_string();
-    tokio::task::spawn_blocking(move || auth::hash(&password)).await.map_err(Fail::internal)?.map_err(Fail::internal)
+    auth::argon(move || auth::hash(&password)).await?.map_err(Fail::internal)
 }
 
 async fn checked(server: &Server, name: &str, password: String, address: std::net::IpAddr) -> Result<Option<(String, String, bool)>, Fail> {
     let keys = auth::limit_keys(name, address);
-    let left = server.limit.left(&keys, now());
+    let left = server.limit.reserve(&keys, now());
     if left > 0 {
         return Err(Fail(StatusCode::TOO_MANY_REQUESTS, format!("Too many wrong passwords. {}", auth::try_again(left))));
     }
     let known = server.store.account(name.trim());
     let hash = known.as_ref().map(|(_, hash, _)| hash.clone());
-    let right = tokio::task::spawn_blocking(move || auth::verify(&password, hash.as_deref())).await.map_err(Fail::internal)?;
-    match right {
-        true => server.limit.clear(&keys),
-        false => server.limit.fail(&keys, now()),
+    let right = auth::argon(move || auth::verify(&password, hash.as_deref())).await?;
+    if right {
+        server.limit.clear(&keys);
     }
     Ok(known.filter(|_| right))
 }

@@ -429,6 +429,11 @@ pub(super) fn write_rest_of_panel(state: &App) {
 pub(super) fn close_editor(state: &App) {
     save_open_edits(state);
 
+    let edited = match state.open.borrow().as_ref().map(|open| &open.source) {
+        Some(Source::Photo { id, .. }) => Some(numa::io::catalog::library_of(*id)),
+        _ => None,
+    };
+
     clear_reference(state);
     if let Some(photo) = state.open.borrow().as_ref() {
 
@@ -448,5 +453,8 @@ pub(super) fn close_editor(state: &App) {
     state.stack.set_visible_child_name("library");
     if state.grid.stale.replace(false) {
         reload_grid(state);
+    }
+    if let Some(library) = edited {
+        home_sync::edited(state, library);
     }
 }

@@ -60,6 +60,7 @@ mod cards;
 mod exporting;
 mod home;
 mod home_sync;
+mod home_pair;
 mod home_fetch;
 mod startup;
 mod self_test;

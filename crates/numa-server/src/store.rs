@@ -263,6 +263,33 @@ impl Store {
 }
 
 impl Store {
+    const SYNCED: &'static str = "CREATE TABLE IF NOT EXISTS synced (
+        library INTEGER NOT NULL, account TEXT NOT NULL COLLATE NOCASE, device TEXT NOT NULL, at INTEGER NOT NULL,
+        PRIMARY KEY (library, account, device))";
+
+    pub fn note_synced(&self, library: i64, account: &str, device: &str) {
+        let sql = "INSERT INTO synced (library, account, device, at) VALUES (?1, ?2, ?3, ?4)
+                   ON CONFLICT (library, account, device) DO UPDATE SET at = excluded.at";
+        let _ = self.with(|conn| conn.execute(Self::SYNCED, []).and_then(|_| conn.execute(sql, params![library, account, device, now()])));
+    }
+
+    pub fn unsynced(&self, library: i64, account: &str, device: &str) {
+        let sql = "DELETE FROM synced WHERE library = ?1 AND account = ?2 AND device = ?3";
+        let _ = self.with(|conn| conn.execute(Self::SYNCED, []).and_then(|_| conn.execute(sql, params![library, account, device])));
+    }
+
+    pub fn synced(&self, after: i64) -> Vec<(i64, String, String)> {
+        self.with(|conn| {
+            conn.execute(Self::SYNCED, [])?;
+            let mut statement = conn.prepare("SELECT library, account, device FROM synced WHERE at > ?1")?;
+            let rows = statement.query_map([after], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+}
+
+impl Store {
 
     pub fn setting(&self, key: &str) -> Option<String> {
         self.with(|conn| conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).optional()).ok().flatten()

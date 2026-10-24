@@ -140,8 +140,11 @@ impl LinearImage {
         let [_, _, width, height] = rect;
         let (source_width, source_height) = (self.width as f32, self.height as f32);
 
-        let crop_width = (width * source_width).round().max(1.0);
-        let crop_height = (height * source_height).round().max(1.0);
+        let side = |fraction: f32, edge: f32| match fraction.is_finite() {
+            true => (fraction * edge).round().clamp(1.0, (4.0 * edge).max(1.0)),
+            false => edge.max(1.0),
+        };
+        let (crop_width, crop_height) = (side(width, source_width), side(height, source_height));
         let (out_width, out_height) = (crop_width as usize, crop_height as usize);
 
         let source_of = source_map(source_width, source_height, rect, angle, perspective);
@@ -547,6 +550,17 @@ fn nearest_in(polygon: &[[f32; 2]], target: [f32; 2]) -> Option<[f32; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_is_never_more_than_four_times_the_frame() {
+        let image = LinearImage::new(17, 11, vec![0.5; 17 * 11 * 3]);
+        for rect in [[0.0, 0.0, 50.0, 50.0], [0.0, 0.0, f32::MAX, 1.0], [0.0, 0.0, f32::NAN, f32::INFINITY]] {
+            let cut = image.cropped(rect, 0.0, Perspective::default());
+            assert!(cut.width <= 68 && cut.height <= 44 && cut.width >= 1 && cut.height >= 1, "{rect:?}: {}x{}", cut.width, cut.height);
+        }
+        let half = image.cropped([0.25, 0.25, 0.5, 0.5], 0.0, Perspective::default());
+        assert_eq!((half.width, half.height), (9, 6), "a crop inside the frame is cut as it was");
+    }
 
     fn coordinates() -> LinearImage {
         let mut data = Vec::new();
