@@ -63,14 +63,14 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     let analyse = build_analyse_button(state);
 
     let (group, export) = export_buttons(state, |state| export_selected_now(state));
-    group.set_sensitive(false);
+    group.set_visible(false);
     state.export.library_export.replace(Some(export.clone()));
     state.grid.wall.connect_selection_changed(glib::clone!(
         #[weak] group,
         #[weak] export,
         move |wall| {
             let chosen = wall.selected().len();
-            group.set_sensitive(chosen > 0);
+            group.set_visible(chosen > 0);
             export.set_label(&match chosen {
                 0 | 1 => "Export".to_string(),
                 many => format!("Export {}", places::grouped(many as i64)),
@@ -79,9 +79,6 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
     ));
 
     let end = &state.grid.header_end;
-    let sizes = build_grid_sizes(state);
-    cullbar::back_to_grid(state, &sizes);
-    end.append(&sizes);
     end.append(&analyse);
     end.append(&group);
     cullbar::keep_focus(end.upcast_ref());
@@ -165,9 +162,14 @@ fn build_chips(state: &App) -> (gtk::Revealer, gtk::Box, Vec<gtk::ToggleButton>,
     bar.append(&chip_row);
     bar.append(&count);
     let (order, direction) = order_buttons();
+
     bar.append(&order);
-    bar.append(&direction);
+    direction.set_visible(false);
     bar.append(&select_toggle(state));
+
+    let sizes = build_grid_sizes(state);
+    cullbar::back_to_grid(state, &sizes);
+    bar.append(&sizes);
     let chips = gtk::Revealer::new();
     chips.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     chips.set_child(Some(&bar));
@@ -203,11 +205,17 @@ fn order_buttons() -> (gtk::MenuButton, gtk::Button) {
         item.set_action_and_target_value(Some("win.sort"), Some(&target.to_variant()));
         keys.append_item(&item);
     }
+
+    let reverse = gio::Menu::new();
+    reverse.append(Some("Reverse Order"), Some("win.sort-reversed"));
+    let menu = gio::Menu::new();
+    menu.append_section(None, &keys);
+    menu.append_section(None, &reverse);
     let order = gtk::MenuButton::new();
-    order.set_menu_model(Some(&keys));
+    order.set_menu_model(Some(&menu));
     order.set_has_frame(false);
     order.set_label("Date");
-    order.set_tooltip_text(Some("Sort by"));
+    order.set_tooltip_text(Some("Sort by, and which end first"));
     let direction = gtk::Button::with_label("Oldest First");
     direction.add_css_class("flat");
     direction.set_action_name(Some("win.sort-reversed"));
@@ -241,8 +249,8 @@ fn show_filter(state: &App, shown: &Shown) {
         };
         action.set_state(&value);
     }
-    shown.order.set_label(sort_name(filter.sort));
     let (now, other) = direction_words(filter.sort, filter.reversed);
+    shown.order.set_label(&format!("{} \u{b7} {now}", sort_name(filter.sort)));
     shown.direction.set_label(now);
     shown.direction.set_tooltip_text(Some(&format!("{now} — click for {}", other.to_lowercase())));
 
@@ -518,7 +526,8 @@ fn build_grid_sizes(state: &App) -> gtk::MenuButton {
         }
     ));
     let sizes = gtk::MenuButton::new();
-    sizes.set_icon_name("numa-sliders-symbolic");
+    sizes.set_icon_name("view-grid-symbolic");
+    sizes.add_css_class("raised-control");
     sizes.set_tooltip_text(Some("Size of the photographs and the space between them"));
     sizes.set_popover(Some(&popover));
     sizes

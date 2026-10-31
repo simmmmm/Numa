@@ -15,8 +15,11 @@ pub(super) struct State {
     pub(super) selected_spot: Rc<Cell<Option<usize>>>,
     pub(super) list: gtk::ListBox,
 
+    pub(super) spots_empty: gtk::Label,
+
     pub(super) face_sliders: Vec<gtk::Scale>,
     pub(super) face_section: gtk::Box,
+    pub(super) face_rows: gtk::Box,
     pub(super) face_note: gtk::Label,
 }
 
@@ -38,10 +41,12 @@ impl State {
             on: Rc::new(Cell::new(false)),
             selected_spot: Rc::new(Cell::new(None)),
             list: gtk::ListBox::new(),
+            spots_empty: gtk::Label::new(Some("No Spots Yet")),
             face_sliders: (0..5)
                 .map(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0))
                 .collect(),
             face_section: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            face_rows: gtk::Box::new(gtk::Orientation::Vertical, 0),
             face_note: gtk::Label::new(None),
         }
     }
@@ -70,8 +75,8 @@ impl RetouchTool {
 
 fn tool_buttons(state: &App) -> gtk::Box {
 
-    let tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    tools.set_margin_bottom(8);
+    let tools = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    tools.add_css_class("chip-rows");
     let pairs = [chip_row(), chip_row()];
     for pair in &pairs {
         pair.set_homogeneous(true);
@@ -131,6 +136,12 @@ pub(super) fn build_retouch(state: &App) -> gtk::Box {
 
     column.append(&tool_buttons(state));
 
+    let note = gtk::Label::new(Some("Click a blemish, then drag to a clean spot."));
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.add_css_class("note");
+    column.append(&note);
+
     for (index, value) in [(0usize, 3.0), (1, 50.0), (2, 100.0)] {
         state.retouch.sliders[index].set_value(value);
         set_neutral(&state.retouch.sliders[index], value);
@@ -163,45 +174,51 @@ pub(super) fn build_retouch(state: &App) -> gtk::Box {
             }
         ));
         let row = slider_row(state, name, scale, readout);
-        if index == 0 {
-            row.add_css_class("lead");
-        }
         column.append(&row);
     }
 
-    let finders = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    finders.set_halign(gtk::Align::Start);
-    finders.set_margin_top(6);
     let people = gtk::Button::with_label("Remove People");
     people.set_tooltip_text(Some("Take out everyone but the subject — the passers-by behind"));
     people.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| remove_people(&state)
     ));
-    let dust = gtk::Button::with_label("Find Dust");
+    let dust = gtk::Button::with_label("Find");
     dust.set_tooltip_text(Some("Heal the specks a dirty sensor leaves in skies and walls"));
+    dust.update_property(&[gtk::accessible::Property::Label("Find Dust")]);
     dust.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| find_dust(&state)
     ));
-    for button in [&people, &dust] {
+    for (name, button, width) in [("People", &people, 116), ("Sensor Dust", &dust, 88)] {
         button.add_css_class("panel-action");
-        finders.append(button);
+        button.set_size_request(width, -1);
+        let row = named_row(name, button);
+        row.add_css_class("pass-row");
+        column.append(&row);
+
+        if name == "People" {
+            let ready = numa::render::remove::is_installed() && numa::render::distractions::is_installed();
+            button.set_sensitive(ready);
+            if !ready {
+                let missing = gtk::Label::new(Some("Remove People needs LaMa and YOLOX. Preferences says which and where."));
+                missing.set_xalign(0.0);
+                missing.set_wrap(true);
+                missing.add_css_class("note");
+                missing.add_css_class("problem");
+                column.append(&missing);
+            }
+        }
     }
-    column.append(&finders);
 
-    let note = gtk::Label::new(Some("Click a blemish, then drag to a clean spot."));
-    note.set_xalign(0.0);
-    note.set_wrap(true);
-    note.set_margin_top(4);
-    note.set_margin_bottom(8);
-    note.add_css_class("profile-note");
-    note.add_css_class("hint");
-    column.append(&note);
-
+    column.append(&section_header("Your spots"));
     state.retouch.list.set_selection_mode(gtk::SelectionMode::None);
     state.retouch.list.add_css_class("boxed-list");
     column.append(&state.retouch.list);
+    let empty = &state.retouch.spots_empty;
+    empty.set_xalign(0.0);
+    empty.add_css_class("note");
+    column.append(empty);
 
     column
 }
@@ -260,14 +277,12 @@ fn remove_people(state: &App) {
 
 pub(super) fn build_face(state: &App) -> gtk::Box {
     let column = state.retouch.face_section.clone();
-    column.set_margin_top(14);
     column.append(&section_header("Face"));
 
     let note = state.retouch.face_note.clone();
     note.set_xalign(0.0);
     note.set_wrap(true);
-    note.set_margin_bottom(6);
-    note.add_css_class("profile-note");
+    note.add_css_class("note");
     column.append(&note);
 
     let names = [
@@ -289,12 +304,8 @@ pub(super) fn build_face(state: &App) -> gtk::Box {
             }
         ));
         let row = slider_row(state, name, scale, Readout::Positive(0));
-        if index == 0 {
-            row.add_css_class("lead");
-        }
-        column.append(&row);
+        state.retouch.face_rows.append(&row);
     }
-
-    column.set_visible(false);
+    column.append(&state.retouch.face_rows);
     column
 }

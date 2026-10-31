@@ -310,7 +310,7 @@ fn import_pack(folder: &Path, path: &Path, imported: &mut Imported) {
     };
     for index in 0..archive.len() {
         let Ok(mut entry) = archive.by_index(index) else { continue };
-        let inner = entry.name().to_string();
+        let Ok(inner) = entry.name().map(|name| name.to_string()) else { continue };
         let file = inner.rsplit('/').next().unwrap_or(&inner).to_string();
         if !file.to_ascii_lowercase().ends_with(".costyle") || file.starts_with("._") || inner.contains("__MACOSX") {
             continue;

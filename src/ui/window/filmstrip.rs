@@ -106,7 +106,14 @@ fn make_frame(state: &App) -> gtk::Button {
     frame.connect_clicked(glib::clone!(
         #[strong] state,
         move |frame| {
-            if let Ok(id) = frame.widget_name().parse::<i64>() {
+            let Ok(id) = frame.widget_name().parse::<i64>() else { return };
+
+            if state.loupe.reveal.reveals_child() && state.stack.visible_child_name().as_deref() == Some("library") {
+                let at = state.grid.lazy.borrow().iter().position(|card| card.id == id);
+                if let Some(at) = at {
+                    show_loupe(&state, at);
+                }
+            } else {
                 open_photo(&state, id);
             }
         }
@@ -198,6 +205,40 @@ pub(super) fn rebind_frames(state: &App) {
     for (index, frame) in live {
         bind_frame(state, &frame, index);
     }
+}
+
+thread_local! {
+
+    static HOME: RefCell<Option<(gtk::Box, Option<gtk::Widget>)>> = const { RefCell::new(None) };
+}
+
+pub(super) fn into_loupe(state: &App) {
+    startup::ensure_editor_page(state);
+    let scroller = &state.filmstrip.scroller;
+    let slot = &state.loupe.tape.slot;
+    if scroller.parent().as_ref() != Some(slot.upcast_ref()) {
+        if let Some(home) = scroller.parent().and_downcast::<gtk::Box>() {
+            HOME.with(|kept| kept.replace(Some((home.clone(), scroller.prev_sibling()))));
+            home.remove(scroller);
+        }
+        slot.append(scroller);
+        build_filmstrip(state);
+    }
+    if let Some(id) = state.loupe.at.get().and_then(|at| state.grid.lazy.borrow().get(at).map(|card| card.id)) {
+        mark_filmstrip(state, id);
+    }
+}
+
+pub(super) fn back_home(state: &App) {
+    let scroller = &state.filmstrip.scroller;
+    let Some((home, after)) = HOME.with(|kept| kept.borrow().clone()) else { return };
+    if scroller.parent().as_ref() == Some(home.upcast_ref()) {
+        return;
+    }
+    if let Some(parent) = scroller.parent().and_downcast::<gtk::Box>() {
+        parent.remove(scroller);
+    }
+    home.insert_child_after(scroller, after.as_ref());
 }
 
 pub(super) fn mark_filmstrip(state: &App, current: i64) {

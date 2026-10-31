@@ -7,18 +7,23 @@ mod cards;
 mod copy;
 mod edit;
 mod faces;
+mod grants;
+mod guard;
 mod home;
 mod jobs;
 mod manage;
 mod map;
+mod mark;
 mod models;
 mod night;
 mod pages;
 mod safe;
 mod photos;
 mod places;
+mod proof;
 mod selection;
 mod send;
+mod share;
 mod start;
 mod store;
 mod sync;
@@ -31,7 +36,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -64,9 +69,36 @@ pub struct Server {
     pub editing: edit::Editing,
 
     pub limit: auth::Limit,
+
+    pub pace: guard::Pace,
+
+    pub setup_code: String,
 }
 
 impl Server {
+
+    pub fn new(store: store::Store, photos: PathBuf, sent: PathBuf, data: PathBuf) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Server {
+            activity: activity::Activity::new(&store),
+            things: Default::default(),
+            artists: Default::default(),
+            map: Default::default(),
+            store,
+            home: home::Home::start(photos, sent)?,
+            data,
+            words: Mutex::default(),
+            jobs: jobs::Nudge::default(),
+            cards: cards::Cards::default(),
+            scanned: Default::default(),
+            decodes: tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get())),
+            renders: tokio::sync::Semaphore::new(1),
+            tidy: tidy::Tidy::default(),
+            editing: Default::default(),
+            limit: Default::default(),
+            pace: Default::default(),
+            setup_code: auth::setup_code(),
+        }))
+    }
 
     pub fn shelve(&self, only: Option<i64>, catalog: &numa_io::catalog::Catalog) {
         let ids = self.home.shelve(only, catalog);
@@ -124,26 +156,27 @@ fn main() -> Result<(), String> {
     }
 
     let store = store::Store::open(&data.join("server.db"))?;
-    let server = Arc::new(Server {
-        activity: activity::Activity::new(&store),
-        things: Default::default(),
-        artists: Default::default(),
-        map: Default::default(),
-        store,
-        home: home::Home::start(photos, sent)?,
-        data,
-        words: Mutex::default(),
-        jobs: jobs::Nudge::default(),
-        cards: cards::Cards::default(),
-        scanned: Default::default(),
-        decodes: tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get())),
-        renders: tokio::sync::Semaphore::new(1),
-        tidy: tidy::Tidy::default(),
-        editing: Default::default(),
-        limit: Default::default(),
-    });
+    share::tables(&store)?;
+    let server = Server::new(store, photos, sent, data)?;
+    if !server.store.has_accounts() {
+        log::warn!("Numa Home is not set up yet. Set it up from your home network, or from elsewhere with this code: {}", server.setup_code);
+    }
     jobs::start(server.clone());
     cards::watch(server.clone(), path_from("NUMA_HOME_CARDS", "/cards"));
+
+    let idle = server.clone();
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        if idle.renders.available_permits() == 1 && idle.decodes.available_permits() == cores {
+            numa_render::forget_kept();
+
+            #[cfg(target_env = "gnu")]
+            unsafe {
+                libc::malloc_trim(0)
+            };
+        }
+    });
 
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
     runtime.block_on(async move {
@@ -181,6 +214,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/users", get(accounts::users).post(accounts::add_user))
         .route("/api/v1/users/{name}", put(accounts::set_user))
         .route("/api/v1/users/{name}/password", put(accounts::give_password))
+        .route("/api/v1/users/{name}/grants", get(accounts::grants).put(accounts::set_grants))
         .route("/api/v1/libraries", get(timeline::libraries).post(manage::add))
         .route("/api/v1/libraries/folders", get(manage::folders))
         .route("/api/v1/libraries/{id}", put(manage::rename))
@@ -214,6 +248,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/copy", post(copy::now_please))
         .route("/api/v1/background/pause", post(activity::pause))
         .route("/api/v1/background/resume", post(activity::resume))
+        .route("/api/v1/rights", get(photos::rights).put(photos::rights_put))
         .route("/api/v1/tidy", get(tidy::list))
         .route("/api/v1/tidy/keep", post(tidy::keep))
         .route("/api/v1/filters", get(timeline::filters))
@@ -249,16 +284,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/send/{name}", put(send::send).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/{*rest}", axum::routing::any(|| async { Fail(StatusCode::NOT_FOUND, "There is no such address in the API.".into()) }))
         .merge(pages::routes())
-        .layer(axum::middleware::map_response(guarded))
+        .merge(share::routes())
+        .layer(axum::middleware::from_fn_with_state(server.clone(), guard::guarded))
         .with_state(server)
-}
-
-const POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
-
-async fn guarded(mut response: Response) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(POLICY));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("same-origin"));
-    response
 }

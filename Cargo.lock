@@ -1060,8 +1060,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2162,6 +2164,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.10.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no_std_io2"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2293,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "numa"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "byteorder",
  "dirs",
@@ -2326,7 +2340,7 @@ dependencies = [
 
 [[package]]
 name = "numa-core"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "dirs",
  "image",
@@ -2338,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "numa-cull"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "image",
  "log",
@@ -2352,7 +2366,7 @@ dependencies = [
 
 [[package]]
 name = "numa-gpu"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "bytemuck",
  "env_logger",
@@ -2368,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "numa-infer"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "image",
  "log",
@@ -2381,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "numa-io"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "avif-serialize",
  "byteorder",
@@ -2418,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "numa-render"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "image",
  "log",
@@ -2435,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "numa-server"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "argon2",
  "axum",
@@ -2443,6 +2457,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "image",
+ "jpeg-encoder",
  "libc",
  "log",
  "numa-core",
@@ -3192,9 +3207,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "ruzstd"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a252f5e20f038fe7b4ea53e073e65398d652c864cc162fc77c56c2f13717b888"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 dependencies = [
  "twox-hash",
 ]
@@ -3746,9 +3761,9 @@ checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typed-path"
-version = "0.12.3"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
 
 [[package]]
 name = "typenum"
@@ -3933,9 +3948,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -4291,15 +4306,18 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
  "flate2",
+ "getrandom 0.4.3",
  "indexmap",
  "memchr",
+ "nix",
  "typed-path",
+ "windows-sys",
 ]
 
 [[package]]

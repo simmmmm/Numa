@@ -273,31 +273,8 @@ pub(super) fn toggle_mask_part(state: &App, index: usize, part: MaskPart) {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
         let Some(mask) = photo.document.mask_mut(index) else { return };
-        match part {
-            MaskPart::Class(class) => {
-                if let Some(at) = mask.muted.iter().position(|held| *held == class) {
-                    mask.muted.remove(at);
-                } else {
-
-                    let Shape::Segment { classes } = &mask.shape else { return };
-                    let live = classes.iter().filter(|c| !mask.muted.contains(c)).count();
-                    if live <= 1 {
-                        return;
-                    }
-                    mask.muted.push(class);
-                }
-            }
-            MaskPart::Point(at) => match mask.points.get_mut(at) {
-                Some(point) => point.enabled = !point.enabled,
-                None => return,
-            },
-            MaskPart::Stroke { at, run } => {
-                let Some(first) = mask.strokes.get(at) else { return };
-                let wanted = !first.enabled;
-                for stroke in mask.strokes.iter_mut().skip(at).take(run) {
-                    stroke.enabled = wanted;
-                }
-            }
+        if !mask.toggle_part(part) {
+            return;
         }
         photo.view = None;
     }
@@ -314,29 +291,8 @@ pub(super) fn remove_mask_part(state: &App, index: usize, part: MaskPart) {
         let mut open = state.open.borrow_mut();
         let Some(photo) = open.as_mut() else { return };
         let Some(mask) = photo.document.mask_mut(index) else { return };
-        match part {
-            MaskPart::Class(class) => {
-                let Shape::Segment { classes } = &mut mask.shape else { return };
-
-                if classes.len() <= 1 {
-                    return;
-                }
-                classes.retain(|held| *held != class);
-            }
-            MaskPart::Point(at) => {
-                if at >= mask.points.len() {
-                    return;
-                }
-                mask.points.remove(at);
-            }
-            MaskPart::Stroke { at, run } => {
-                if at >= mask.strokes.len() {
-                    return;
-                }
-
-                let end = (at + run).min(mask.strokes.len());
-                mask.strokes.drain(at..end);
-            }
+        if !mask.remove_part(part) {
+            return;
         }
         photo.view = None;
     }
@@ -348,13 +304,7 @@ pub(super) fn remove_mask_part(state: &App, index: usize, part: MaskPart) {
     schedule_history_push(state);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum MaskPart {
-    Class(u16),
-    Point(usize),
-
-    Stroke { at: usize, run: usize },
-}
+pub(super) use numa::core::mask_parts::MaskPart;
 
 pub(super) fn remove_mask(state: &App, index: usize) {
     busy_sync(state, "Removing the mask…", move |state| remove_mask_now(state, index))

@@ -362,6 +362,24 @@ pub(super) enum Readout {
 }
 
 impl Readout {
+
+    pub(super) fn parse(self, typed: &str) -> Option<f64> {
+        let number: String = typed
+            .chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, 'K' | 'k' | 'p' | 'x' | '\u{b0}' | '%' | '+'))
+            .map(|c| match c {
+                '\u{2212}' => '-',
+                ',' => '.',
+                c => c,
+            })
+            .collect();
+        let value: f64 = number.parse().ok().filter(|value: &f64| value.is_finite())?;
+        Some(match self {
+            Readout::BrushSize => brush_travel(value as f32 / 100.0),
+            _ => value,
+        })
+    }
+
     pub(super) fn format(self, value: f64) -> String {
         match self {
 

@@ -5,6 +5,7 @@ enum Target {
     Page(&'static str),
     Place(Place),
     NewAlbum,
+    AddFolder,
     Import,
 }
 
@@ -58,6 +59,31 @@ impl State {
     }
 }
 
+fn foot(state: &App, window: &adw::ApplicationWindow) -> gtk::ListBox {
+    let foot = gtk::ListBox::new();
+    foot.add_css_class("navigation-sidebar");
+    foot.add_css_class("side-foot");
+    foot.set_selection_mode(gtk::SelectionMode::None);
+    let targets = [
+        ("edit-clear-all-symbolic", "Tidy Up", Target::Page("tidy")),
+        ("camera-photo-symbolic", "Import…", Target::Import),
+        ("folder-new-symbolic", "Add Folder…", Target::AddFolder),
+    ];
+    for (symbol, label, _) in &targets {
+        foot.append(&place_row(symbol, label));
+    }
+    foot.connect_row_activated(glib::clone!(
+        #[strong] state,
+        #[weak] window,
+        move |_, row| {
+            if let Some((_, _, target)) = targets.get(row.index() as usize) {
+                go(&state, &window, target.clone());
+            }
+        }
+    ));
+    foot
+}
+
 pub(super) fn build(state: &App, window: &adw::ApplicationWindow, content: &impl IsA<gtk::Widget>) -> adw::OverlaySplitView {
     let side = &state.libraries.side;
     let scroller = gtk::ScrolledWindow::new();
@@ -67,11 +93,14 @@ pub(super) fn build(state: &App, window: &adw::ApplicationWindow, content: &impl
 
     side.peek.set_parent(&scroller);
     let bar = adw::HeaderBar::new();
-    bar.pack_start(&mark_button(state));
+    bar.pack_start(&mark_title());
     bar.set_title_widget(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
     let view = adw::ToolbarView::new();
+
+    view.add_css_class("floating-side");
     view.add_top_bar(&bar);
     view.set_content(Some(&scroller));
+    view.add_bottom_bar(&foot(state, window));
     side.split.set_sidebar(Some(&view));
     side.split.set_content(Some(content));
     side.split.set_max_sidebar_width(260.0);
@@ -135,47 +164,47 @@ fn narrower_than(width: i32) -> adw::BreakpointCondition {
 
 fn follow(state: &App) {
     let side = &state.libraries.side;
-    let away = state.stack.visible_child_name().as_deref() == Some("editor") || state.loupe.reveal.reveals_child();
-    side.toggle.set_visible(side.split.is_collapsed() && !away);
-    if away {
+    side.toggle.set_visible(side.split.is_collapsed() && !away(state));
+    if away(state) {
         side.split.set_show_sidebar(false);
-    } else if !side.split.is_collapsed() {
-        side.split.set_show_sidebar(true);
+    } else if !side.split.is_collapsed() && !side.split.shows_sidebar() {
+
+        let state = state.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(PAGE_FADE.into()), move || {
+            let side = &state.libraries.side;
+            if !away(&state) && !side.split.is_collapsed() {
+                side.split.set_show_sidebar(true);
+            }
+        });
     }
 }
 
-fn mark_button(state: &App) -> gtk::Button {
+fn away(state: &App) -> bool {
+    state.stack.visible_child_name().as_deref() == Some("editor") || state.loupe.reveal.reveals_child()
+}
+
+fn mark_title() -> gtk::Box {
+
     let mark = gtk::Image::from_paintable(mark_texture().as_ref());
-    mark.set_pixel_size(50);
+    mark.set_pixel_size(32);
     adw::StyleManager::default().connect_dark_notify(glib::clone!(
         #[weak] mark,
         move |_| mark.set_paintable(mark_texture().as_ref())
     ));
-    let button = gtk::Button::new();
-    button.set_child(Some(&mark));
-    button.add_css_class("flat");
-    button.set_tooltip_text(Some(if starts_on_photos(state) { "Photos" } else { "Today" }));
-    button.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |button| {
-            button.set_tooltip_text(Some(if starts_on_photos(&state) { "Photos" } else { "Today" }));
-            start_page(&state);
-        }
-    ));
-    button
+
+    let name = gtk::Label::new(Some("Numa"));
+    name.add_css_class("heading");
+    let child = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    child.set_margin_start(8);
+    child.append(&mark);
+    child.append(&name);
+    child
 }
 
 pub(super) const START_ON_PHOTOS: &str = "start-on-photos";
 
 pub(super) fn starts_on_photos(state: &App) -> bool {
     state.catalog.recall::<bool>(START_ON_PHOTOS).unwrap_or(false)
-}
-
-pub(super) fn start_page(state: &App) {
-    match starts_on_photos(state) {
-        true => show_place(state, Place::Everywhere),
-        false => today::show(state),
-    }
 }
 
 pub(super) fn fill(state: &App) {
@@ -201,8 +230,8 @@ fn fill_now(state: &App) {
         side.list.append(&row);
         rows.push((row, target));
     };
-    add(place_row("Today"), Target::Page("today"));
-    add(place_row("Photos"), Target::Place(Place::Everywhere));
+    add(place_row("weather-clear-symbolic", "Today"), Target::Page("today"));
+    add(place_row("image-x-generic-symbolic", "Photos"), Target::Place(Place::Everywhere));
     for (label, page, key) in [("Libraries", "libraries", "library"), ("People", "people", "person"), ("Albums", "albums", "album")] {
         let is_open = open.iter().any(|one| one == key);
         add(group_row(state, label, key, is_open), Target::Page(page));
@@ -230,15 +259,8 @@ fn fill_now(state: &App) {
         }
     }
 
-    add(counted_row("Places", places_page::count()), Target::Page("places"));
-    let archive = gtk::ListBoxRow::new();
-    archive.set_selectable(false);
-    archive.set_activatable(false);
-    archive.set_child(Some(&section_header("Archive")));
-    side.list.append(&archive);
-    add(place_row("Import…"), Target::Import);
+    add(counted_row("mark-location-symbolic", "Places", places_page::count()), Target::Page("places"));
 
-    add(place_row("Tidy Up"), Target::Page("tidy"));
     *side.rows.borrow_mut() = rows;
     mark(state);
 }
@@ -264,20 +286,24 @@ fn folds(state: &App) -> Vec<String> {
     state.catalog.recall::<Vec<String>>(FOLDS).unwrap_or_default()
 }
 
-fn place_row(label: &str) -> gtk::ListBoxRow {
-    let name = gtk::Label::new(Some(label));
-    name.set_xalign(0.0);
+fn place_row(symbol: &str, label: &str) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
-    row.set_child(Some(&name));
+    row.set_child(Some(&named(symbol, label)));
     row
 }
 
-fn counted_row(label: &str, count: Option<usize>) -> gtk::ListBoxRow {
+fn named(symbol: &str, label: &str) -> gtk::Box {
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    line.append(&gtk::Image::from_icon_name(symbol));
     let name = gtk::Label::new(Some(label));
     name.set_xalign(0.0);
     name.set_hexpand(true);
-    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     line.append(&name);
+    line
+}
+
+fn counted_row(symbol: &str, label: &str, count: Option<usize>) -> gtk::ListBoxRow {
+    let line = named(symbol, label);
     if let Some(count) = count {
         let count = gtk::Label::new(Some(&places::grouped(count as i64)));
         count.add_css_class("caption");
@@ -291,9 +317,12 @@ fn counted_row(label: &str, count: Option<usize>) -> gtk::ListBoxRow {
 }
 
 fn group_row(state: &App, label: &str, key: &'static str, open: bool) -> gtk::ListBoxRow {
-    let name = gtk::Label::new(Some(label));
-    name.set_xalign(0.0);
-    name.set_hexpand(true);
+    let symbol = match key {
+        "library" => "folder-symbolic",
+        "person" => "system-users-symbolic",
+        _ => "view-grid-symbolic",
+    };
+    let line = named(symbol, label);
     let fold = gtk::Button::from_icon_name(if open { "pan-down-symbolic" } else { "pan-end-symbolic" });
     fold.add_css_class("flat");
     fold.add_css_class("circular");
@@ -314,8 +343,6 @@ fn group_row(state: &App, label: &str, key: &'static str, open: bool) -> gtk::Li
             fill_now(&state);
         }
     ));
-    let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    line.append(&name);
     line.append(&fold);
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&line));
@@ -325,7 +352,8 @@ fn group_row(state: &App, label: &str, key: &'static str, open: bool) -> gtk::Li
 fn entry_row(state: &App, place: &Place, look: Look) -> gtk::ListBoxRow {
     let read = places::row(state, place);
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    line.set_margin_start(12);
+
+    line.set_margin_start(28);
     match look {
         Look::Tint(_) | Look::Dot => {
             let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -375,7 +403,8 @@ fn new_album_row() -> gtk::ListBoxRow {
     let name = gtk::Label::new(Some("New Album…"));
     name.set_xalign(0.0);
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    line.set_margin_start(12);
+
+    line.set_margin_start(28);
     line.append(&plus);
     line.append(&name);
     let row = gtk::ListBoxRow::new();
@@ -387,7 +416,7 @@ fn key_of(target: &Target) -> String {
     match target {
         Target::Page(page) => format!("page:{page}"),
         Target::Place(place) => places::key(place),
-        Target::NewAlbum | Target::Import => String::new(),
+        Target::NewAlbum | Target::AddFolder | Target::Import => String::new(),
     }
 }
 
@@ -475,10 +504,14 @@ fn peek(state: &App, row: &gtk::ListBoxRow, place: &Place) {
 }
 
 fn go_row(state: &App, window: &adw::ApplicationWindow, row: &gtk::ListBoxRow) {
-    unpeek(state);
     let Some(target) = state.libraries.side.rows.borrow().iter().find(|(one, _)| one == row).map(|(_, target)| target.clone()) else {
         return;
     };
+    go(state, window, target);
+}
+
+fn go(state: &App, window: &adw::ApplicationWindow, target: Target) {
+    unpeek(state);
     match target {
         Target::Page("today") => today::show(state),
         Target::Page("libraries") => show_folders(state),
@@ -491,6 +524,10 @@ fn go_row(state: &App, window: &adw::ApplicationWindow, row: &gtk::ListBoxRow) {
         Target::NewAlbum => {
             mark(state);
             new_album(state, window);
+        }
+        Target::AddFolder => {
+            mark(state);
+            add_library_dialog(state, window);
         }
         Target::Import => {
             mark(state);

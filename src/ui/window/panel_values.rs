@@ -136,11 +136,6 @@ pub(super) fn write_mixer(state: &App) {
     }
     state.colour.monochrome.set_active(mixer.monochrome);
 
-    for scale in [&state.sliders.presence.vibrance, &state.sliders.presence.saturation] {
-        if let Some(row) = scale.parent() {
-            row.set_sensitive(!mixer.monochrome);
-        }
-    }
     state.applying.set(false);
 }
 
@@ -225,6 +220,7 @@ pub(super) fn write_point_colours(state: &App) {
     }
 
     state.colour.point_controls.set_visible(!points.is_empty());
+    state.colour.point_none.set_visible(points.is_empty());
     let point = points.get(selected).copied().unwrap_or_default();
     tint_point_hue(&point);
     state.applying.set(true);

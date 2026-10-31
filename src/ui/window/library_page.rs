@@ -1,14 +1,39 @@
 use super::*;
 
+fn file_drop(state: &App) -> gtk::DropTarget {
+    let drop = gtk::DropTarget::new(gtk::gdk::FileList::static_type(), gtk::gdk::DragAction::COPY);
+    drop.connect_drop(glib::clone!(
+        #[strong] state,
+        move |_, value, _, _| {
+            let Ok(files) = value.get::<gtk::gdk::FileList>() else { return false };
+            let dropped: Vec<PathBuf> = files.files().iter().filter_map(|file| file.path()).collect();
+            let Some(library) = state.libraries.current.borrow().clone() else { return false };
+            if dropped.is_empty() {
+                return false;
+            }
+
+            if state.libraries.filter.borrow().spans_libraries() {
+                state.toast("Pick a library to copy these into");
+                return false;
+            }
+            copy_into_library(&state, library, dropped);
+            true
+        }
+    ));
+    drop
+}
+
 pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    page.append(&words::build_search_bar(state));
+    words::build_search_bar(state);
     words::install_search_action(state, window);
+    install_place_back(state, window);
 
     let head = build_head(state);
     state.grid.welcome.bind_property("visible", &head, "visible").invert_boolean().sync_create().build();
-    page.append(&head);
+
+    state.libraries.head_slot.append(&head);
     let bar = build_filter_bar(state, window);
 
     state.grid.welcome.bind_property("visible", &bar, "visible").invert_boolean().sync_create().build();
@@ -61,27 +86,7 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
 
     let scroller = build_grid_scroller(state);
 
-    let drop = gtk::DropTarget::new(gtk::gdk::FileList::static_type(), gtk::gdk::DragAction::COPY);
-    drop.connect_drop(glib::clone!(
-        #[strong] state,
-        move |_, value, _, _| {
-            let Ok(files) = value.get::<gtk::gdk::FileList>() else { return false };
-            let dropped: Vec<PathBuf> = files.files().iter().filter_map(|file| file.path()).collect();
-            let Some(library) = state.libraries.current.borrow().clone() else { return false };
-            if dropped.is_empty() {
-                return false;
-            }
-
-            if state.libraries.filter.borrow().spans_libraries() {
-                state.toast("Pick a library to copy these into");
-                return false;
-            }
-            copy_into_library(&state, library, dropped);
-            true
-        }
-    ));
-
-    page.add_controller(drop);
+    page.add_controller(file_drop(state));
 
     let over = gtk::Overlay::new();
 
@@ -94,9 +99,14 @@ pub(super) fn build_library_page(state: &App, window: &adw::ApplicationWindow) -
     over.add_overlay(&build_loupe(state));
 
     over.add_overlay(&build_compare(state));
-    page.append(&over);
 
-    page.append(&cullbar::build(state));
+    let bar = cullbar::build(state);
+    bar.add_css_class("floating-bar");
+    bar.set_halign(gtk::Align::Center);
+    bar.set_valign(gtk::Align::End);
+    bar.set_margin_bottom(16);
+    over.add_overlay(&bar);
+    page.append(&over);
 
     let loupe_keys = gtk::EventControllerKey::new();
     loupe_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -134,11 +144,20 @@ pub(super) struct Head {
     caption: gtk::Label,
 
     tokens: gtk::Label,
+
+    more: gtk::MenuButton,
     book: gtk::Button,
-    tidy: gtk::Button,
     rename: gtk::Button,
+    files: gtk::Button,
+    stop: gtk::Button,
+    tidy: gtk::Button,
 
     sync: gtk::Button,
+
+    pencil: gtk::Button,
+    edit: gtk::Entry,
+    titles_stack: gtk::Stack,
+    editing: Rc<Cell<bool>>,
 
     owner: Rc<Cell<&'static str>>,
 }
@@ -151,7 +170,7 @@ impl Head {
         back.set_valign(gtk::Align::Center);
         let title = gtk::Label::new(None);
         title.set_xalign(0.0);
-        title.add_css_class("title-2");
+        title.add_css_class("heading");
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let caption = gtk::Label::new(None);
         caption.set_xalign(0.0);
@@ -162,23 +181,54 @@ impl Head {
         tokens.set_xalign(0.0);
         tokens.add_css_class("section-header");
         tokens.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        let book = gtk::Button::with_label("For a Book…");
-        book.set_valign(gtk::Align::Center);
+        let item = |label: &str| {
+            let button = gtk::Button::with_label(label);
+            button.add_css_class("flat");
+            if let Some(child) = button.child().and_downcast::<gtk::Label>() {
+                child.set_xalign(0.0);
+            }
+            button
+        };
+        let book = item("For a Book…");
         book.set_action_name(Some("win.book"));
         book.set_tooltip_text(Some("The picks here, as a photo book's chapter folders"));
-        let tidy = gtk::Button::with_label("Tidy Up");
-        tidy.set_valign(gtk::Align::Center);
+        let rename = item("Rename…");
+        let files = item("Show in Files");
+        let stop = item("Stop Syncing…");
+        let tidy = item("Tidy Up");
         tidy.set_tooltip_text(Some("Copies, runs of the same frame and photographs past use, in this library"));
-        let rename = gtk::Button::with_label("Rename…");
-        rename.set_valign(gtk::Align::Center);
         let sync = gtk::Button::new();
         sync.set_valign(gtk::Align::Center);
-        Self { back, title, caption, tokens, book, tidy, rename, sync, owner: Rc::new(Cell::new("libraries")) }
+
+        sync.add_css_class("flat");
+        sync.add_css_class("circular");
+        let more = gtk::MenuButton::new();
+        more.set_icon_name("view-more-symbolic");
+        more.set_valign(gtk::Align::Center);
+        more.set_tooltip_text(Some("More"));
+        let pencil = gtk::Button::from_icon_name("document-edit-symbolic");
+        pencil.add_css_class("flat");
+        pencil.add_css_class("circular");
+
+        pencil.add_css_class("head-small");
+        pencil.set_valign(gtk::Align::Center);
+        pencil.set_opacity(0.0);
+        pencil.set_tooltip_text(Some("Rename"));
+        let edit = gtk::Entry::new();
+        edit.add_css_class("heading");
+        edit.set_valign(gtk::Align::Center);
+        let titles_stack = gtk::Stack::new();
+        titles_stack.set_halign(gtk::Align::Start);
+
+        titles_stack.set_vhomogeneous(false);
+        let editing = Rc::new(Cell::new(false));
+        Self { back, title, caption, tokens, more, book, rename, files, stop, tidy, sync, pencil, edit, titles_stack, editing, owner: Rc::new(Cell::new("libraries")) }
     }
 }
 
 fn build_head(state: &App) -> gtk::Box {
     let head = &state.libraries.head;
+
     head.back.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| match state.libraries.head.owner.get() {
@@ -187,17 +237,71 @@ fn build_head(state: &App) -> gtk::Box {
             _ => show_folders(&state),
         }
     ));
+
+    head.titles_stack.add_named(&head.title, Some("title"));
+    head.titles_stack.add_named(&head.edit, Some("edit"));
+    head.titles_stack.set_visible_child_name("title");
+    let name_line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    name_line.append(&head.titles_stack);
+    name_line.append(&head.pencil);
+    let hover = gtk::EventControllerMotion::new();
+    hover.connect_enter(glib::clone!(
+        #[weak(rename_to = pencil)] head.pencil,
+        move |_, _, _| pencil.set_opacity(1.0)
+    ));
+    hover.connect_leave(glib::clone!(
+        #[weak(rename_to = pencil)] head.pencil,
+        move |_| pencil.set_opacity(0.0)
+    ));
+    name_line.add_controller(hover);
+    let twice = gtk::GestureClick::new();
+    twice.connect_pressed(glib::clone!(
+        #[strong] state,
+        move |_, presses, _, _| {
+            if presses == 2 {
+                start_rename(&state);
+            }
+        }
+    ));
+    head.title.add_controller(twice);
+    head.pencil.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| start_rename(&state)
+    ));
+    head.edit.connect_activate(glib::clone!(
+        #[strong] state,
+        move |_| finish_rename(&state, true)
+    ));
+    let keys = gtk::EventControllerKey::new();
+    keys.connect_key_pressed(glib::clone!(
+        #[strong] state,
+        move |_, key, _, _| match key {
+            gtk::gdk::Key::Escape => {
+                finish_rename(&state, false);
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    ));
+    head.edit.add_controller(keys);
+    let leaving = gtk::EventControllerFocus::new();
+    leaving.connect_leave(glib::clone!(
+        #[strong] state,
+        move |_| finish_rename(&state, true)
+    ));
+    head.edit.add_controller(leaving);
+
     let titles = gtk::Box::new(gtk::Orientation::Vertical, 0);
     titles.set_hexpand(true);
     titles.set_valign(gtk::Align::Center);
-    titles.append(&head.title);
+    titles.append(&name_line);
+    head.caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    head.caption.set_xalign(0.0);
     titles.append(&head.caption);
-    titles.append(&head.tokens);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.add_css_class("place-head");
-    row.append(&head.back);
+    row.set_hexpand(true);
     row.append(&titles);
-    row.append(&head.book);
     head.tidy.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| {
@@ -206,16 +310,6 @@ fn build_head(state: &App) -> gtk::Box {
             }
         }
     ));
-    row.append(&head.tidy);
-    head.rename.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| {
-            if let Place::Library(library) = current_place(&state) {
-                library_bar::rename_library(&state, &library);
-            }
-        }
-    ));
-    row.append(&head.rename);
     head.sync.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| {
@@ -225,8 +319,91 @@ fn build_head(state: &App) -> gtk::Box {
         }
     ));
     row.append(&head.sync);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for button in [&head.tidy, &head.book, &head.rename, &head.files, &head.stop] {
+        list.append(button);
+        button.connect_clicked(glib::clone!(
+            #[weak(rename_to = more)] head.more,
+            move |_| more.popdown()
+        ));
+    }
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&list));
+    head.more.set_popover(Some(&popover));
+    head.rename.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| start_rename(&state)
+    ));
+    head.files.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Place::Library(library) = current_place(&state) {
+                gtk::FileLauncher::new(Some(&gio::File::for_path(&library.path))).launch(
+                    state.stack.root().and_downcast::<gtk::Window>().as_ref(),
+                    None::<&gio::Cancellable>,
+                    |result| {
+                        if let Err(err) = result {
+                            log::warn!("could not open the folder: {err}");
+                        }
+                    },
+                );
+            }
+        }
+    ));
+    head.stop.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Place::Library(library) = current_place(&state) {
+                home_pair::run(&state, &library);
+            }
+        }
+    ));
+    row.append(&head.more);
     cullbar::keep_focus(row.upcast_ref());
     row
+}
+
+fn start_rename(state: &App) {
+    let head = &state.libraries.head;
+    let Place::Library(library) = current_place(state) else { return };
+    if head.editing.get() || home_sync::is_home(state, library.id) {
+        return;
+    }
+    head.editing.set(true);
+    head.edit.set_text(&library.label());
+    head.titles_stack.set_visible_child_name("edit");
+    head.edit.grab_focus();
+    head.edit.select_region(0, -1);
+}
+
+fn finish_rename(state: &App, save: bool) {
+    let head = &state.libraries.head;
+    if !head.editing.replace(false) {
+        return;
+    }
+    head.titles_stack.set_visible_child_name("title");
+    let name = head.edit.text().trim().to_string();
+    let Place::Library(library) = current_place(state) else { return };
+    if save && !name.is_empty() && name != library.label() {
+        library_bar::rename_now(state, &library, &name);
+    }
+}
+
+pub(super) fn install_place_back(state: &App, window: &adw::ApplicationWindow) {
+    let action = gio::SimpleAction::new("place-back", None);
+    action.connect_activate(glib::clone!(
+        #[strong] state,
+        move |_, _| {
+            if state.stack.visible_child_name().as_deref() == Some("library") && !state.libraries.head.owner.get().is_empty() && !state.loupe.reveal.reveals_child() {
+                state.libraries.head.back.emit_clicked();
+            }
+        }
+    ));
+    window.add_action(&action);
+    if let Some(app) = window.application() {
+        app.set_accels_for_action("win.place-back", &["<alt>Left"]);
+    }
 }
 
 pub(super) fn show_head(state: &App) {
@@ -261,18 +438,37 @@ pub(super) fn show_head(state: &App) {
         Place::Person(_) => ("people", "People"),
     };
     head.owner.set(owner);
-    head.back.set_visible(!owner.is_empty());
     head.back.set_tooltip_text(Some(back));
-    head.book.set_visible(matches!(place, Place::Library(_) | Place::Album(_)));
+    let book = matches!(place, Place::Library(_) | Place::Album(_));
+    head.book.set_visible(book);
     let here = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
     head.tidy.set_visible(here);
     head.rename.set_visible(here);
-    let sync = match &place {
-        Place::Library(library) => home_pair::label(home_pair::commands(state, library)),
+    head.pencil.set_visible(here);
+
+    head.editing.set(false);
+    head.titles_stack.set_visible_child_name("title");
+    let commands = match &place {
+        Place::Library(library) => Some(home_pair::commands(state, library)),
         _ => None,
     };
-    head.sync.set_label(sync.unwrap_or_default());
-    head.sync.set_visible(sync.is_some());
+
+    let offer = commands.filter(|commands| commands.here || commands.home);
+    let said = offer.and_then(home_pair::label);
+    head.sync.set_icon_name(match offer {
+        Some(home_pair::Commands { here: true, .. }) => "folder-download-symbolic",
+        _ => "network-server-symbolic",
+    });
+    head.sync.set_tooltip_text(said);
+    head.sync.update_property(&[gtk::accessible::Property::Label(said.unwrap_or_default())]);
+    head.sync.set_visible(said.is_some());
+    let stop = commands.is_some_and(|commands| commands.stop && !commands.here && !commands.home);
+    head.stop.set_visible(stop);
+    let on_disk = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
+    head.files.set_visible(on_disk);
+    head.more.set_visible(book || here || stop || on_disk);
+
+    head.tokens.set_visible(false);
 }
 
 pub(super) fn mark_texture() -> Option<gtk::gdk::Texture> {

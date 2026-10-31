@@ -12,20 +12,20 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::grants::Level;
 use crate::manage::{self, within, Ids};
 use crate::store::Account;
 use crate::{Fail, Server};
 
-pub(crate) fn chosen(server: &Server, me: &Account, ids: &[i64], twins: bool, manage: bool) -> Result<Vec<(Library, Photo)>, Fail> {
+pub(crate) fn chosen(server: &Server, me: &Account, ids: &[i64], twins: bool, manage: bool, need: Level) -> Result<Vec<(Library, Photo)>, Fail> {
     if ids.is_empty() {
         return Err(Fail::bad("Choose a photograph first."));
     }
     let ids = if twins { server.home.with_twins(ids) } else { ids.to_vec() };
-    let libraries = server.home.libraries(&me.name);
     let mut photos = Vec::new();
     for id in ids {
-        let photo = server.home.photo(&me.name, id)?;
-        let library = libraries.iter().find(|library| library.id == library_of(id)).cloned().ok_or_else(|| Fail::internal("a photograph without its library"))?;
+        let photo = server.home.photo(me, id, need)?;
+        let library = server.home.library(library_of(id)).ok_or_else(|| Fail::internal("a photograph without its library"))?;
         if manage && !manage::may_manage(server, me, &library) {
             return Err(manage::refused());
         }
@@ -40,7 +40,7 @@ async fn blocking<R: Send + 'static>(server: &Arc<Server>, work: impl FnOnce(&Ar
 }
 
 pub async fn remove(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
-    let photos = chosen(&server, &me, &asked.ids, true, true)?;
+    let photos = chosen(&server, &me, &asked.ids, true, true, Level::Edit)?;
     let removed = blocking(&server, move |server| {
         let mut libraries = HashSet::new();
         for (library, photo) in &photos {
@@ -58,13 +58,13 @@ pub async fn remove(State(server): State<Arc<Server>>, Signed(me): Signed, Json(
 }
 
 pub async fn delete(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
-    let photos = chosen(&server, &me, &asked.ids, true, true)?;
+    let photos = chosen(&server, &me, &asked.ids, true, true, Level::Edit)?;
     let trashed = blocking(&server, move |server| manage::trash(server, photos)).await?;
     Ok(Json(json!({ "trashed": trashed })))
 }
 
 pub async fn keep_jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Value>, Fail> {
-    let raws: Vec<_> = chosen(&server, &me, &asked.ids, false, true)?.into_iter().filter(|(_, photo)| numa_io::raw::is_raw(&photo.path)).collect();
+    let raws: Vec<_> = chosen(&server, &me, &asked.ids, false, true, Level::Edit)?.into_iter().filter(|(_, photo)| numa_io::raw::is_raw(&photo.path)).collect();
     if raws.is_empty() {
         return Err(Fail::bad("None of these is a raw."));
     }
@@ -87,8 +87,8 @@ pub struct Moved {
 }
 
 pub async fn moved(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Moved>) -> Result<Json<Value>, Fail> {
-    let photos = chosen(&server, &me, &asked.ids, true, true)?;
-    let target = server.home.libraries(&me.name).into_iter().find(|library| library.id == asked.library).ok_or_else(|| Fail::bad("There is no such library."))?;
+    let photos = chosen(&server, &me, &asked.ids, true, true, Level::Edit)?;
+    let target = server.home.libraries(&me).into_iter().find(|library| library.id == asked.library).ok_or_else(|| Fail::bad("There is no such library."))?;
     if !manage::may_manage(&server, &me, &target) {
         return Err(manage::refused());
     }
@@ -107,7 +107,7 @@ pub struct Album {
 }
 
 pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Album>) -> Result<Json<Value>, Fail> {
-    let ids: Vec<i64> = chosen(&server, &me, &asked.ids, false, false)?.into_iter().map(|(_, photo)| photo.id).collect();
+    let ids: Vec<i64> = chosen(&server, &me, &asked.ids, false, false, Level::Edit)?.into_iter().map(|(_, photo)| photo.id).collect();
     let changed = ids.clone();
     let key = server
         .home
@@ -121,6 +121,7 @@ pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(a
         })
         .await?
         .map_err(Fail::bad)?;
+    server.home.forget_albums();
 
     let updated = changed.iter().map(|id| server.store.touch(*id)).max();
     Ok(Json(json!({ "album": key, "updated": updated })))
@@ -134,7 +135,7 @@ pub struct Marks {
 }
 
 pub async fn marks(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Marks>) -> Result<Json<Value>, Fail> {
-    let photos = chosen(&server, &me, &asked.ids, false, false)?;
+    let photos = chosen(&server, &me, &asked.ids, false, false, Level::Edit)?;
     let flag = asked.flag.as_deref().map(crate::photos::flag_from).transpose()?;
     if asked.rating.is_some_and(|rating| rating > 5) {
         return Err(Fail::bad("A rating is 0 to 5 stars."));
@@ -165,7 +166,7 @@ pub struct By {
 }
 
 pub async fn by(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<By>) -> Result<StatusCode, Fail> {
-    let photos = chosen(&server, &me, &asked.ids, true, false)?;
+    let photos = chosen(&server, &me, &asked.ids, true, false, Level::Edit)?;
     let account = match asked.account.as_deref() {
         Some(name) => Some(server.store.account(name).ok_or_else(|| Fail::bad("There is no such account."))?.0),
         None => None,
@@ -189,8 +190,10 @@ pub struct Listed {
 
 pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(listed): Query<Listed>) -> Result<Response, Fail> {
     let ids: Vec<i64> = listed.ids.split(',').filter_map(|id| id.trim().parse().ok()).collect();
-    let photos = chosen(&server, &me, &ids, false, false)?;
-    if listed.kind.as_deref() == Some("jpeg") {
+
+    let jpeg = listed.kind.as_deref() == Some("jpeg");
+    let photos = chosen(&server, &me, &ids, false, false, if jpeg { Level::View } else { Level::Edit })?;
+    if jpeg {
         return jpegs(server, photos, listed.edge.map_or(u32::MAX, |edge| edge.clamp(256, 8192))).await;
     }
     let scratch = server.data.join("tmp").join(format!("zip-{}-{}.zip", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos())));
@@ -236,6 +239,7 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let runtime = tokio::runtime::Handle::current();
     let scratch = server.data.join("tmp");
+    let settings = crate::photos::jpeg_settings(&server);
     tokio::task::spawn_blocking(move || {
         let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, crate::book::Pipe(tx)));
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -250,7 +254,7 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
                 }
                 name = format!("{} {at}.jpg", base.display());
             }
-            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::book::develop(photo, edge, edits, &scratch));
+            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::book::develop(photo, edge, edits, &scratch, &settings));
             match developed {
                 Ok(bytes) => {
                     if zip.start_file(name, options).is_err() || zip.write_all(&bytes).is_err() {

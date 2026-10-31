@@ -45,15 +45,18 @@ async function moveOn(step, out) {
 function accountStep(page) {
   const name = h('input', { type: 'text', autocomplete: 'username', placeholder: S.name, required: true, autocapitalize: 'words' });
   const password = h('input', { type: 'password', autocomplete: 'new-password', placeholder: S.passwordHint, required: true, minlength: 8 });
+  // HOME-037 (#60): set up from outside the house, Home asks the code its log said.
+  const code = h('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: S.setupCode, hidden: true });
+  api('status', { quiet: true }).then(status => { code.hidden = !status.code; code.required = !!status.code; }).catch(() => {});
   const said = h('p', { class: 'said', role: 'status' });
   page.append(h('form', { class: 'step', onsubmit: async event => {
     event.preventDefault();
     said.textContent = '';
     try {
-      await api('setup', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value }) });
+      await api('setup', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, code: code.value.trim() || undefined }) });
       await signInAs(name.value.trim(), password.value);
     } catch (error) { said.textContent = error.message; }
-  } }, h('h1', {}, S.yourAccount), h('p', { class: 'body' }, S.makeFirst), h('div', { class: 'fields' }, name, password), said,
+  } }, h('h1', {}, S.yourAccount), h('p', { class: 'body' }, S.makeFirst), h('div', { class: 'fields' }, name, password, code), said,
   stepFoot({ skip: false, note: S.nextPhotographs })));
   name.focus();
 }
@@ -129,7 +132,8 @@ async function householdStep(page) {
       event.preventDefault();
       said.textContent = '';
       try {
-        await api('users', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, admin: admin.checked }) });
+        // HOME-003 (#56): the household edits every library; a guest is made on Accounts.
+        await api('users', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, admin: admin.checked, access: 'edit' }) });
         [name.value, password.value, admin.checked] = ['', '', false];
         await list();
         name.focus();

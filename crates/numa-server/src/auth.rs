@@ -79,13 +79,14 @@ impl FromRequestParts<Arc<Server>> for Signed {
     type Rejection = Fail;
 
     async fn from_request_parts(parts: &mut Parts, server: &Arc<Server>) -> Result<Self, Fail> {
-        let account = presented(&parts.headers)
+        let mut account = presented(&parts.headers)
             .and_then(|token| server.store.session(&digest(&token)))
             .ok_or_else(|| Fail(StatusCode::UNAUTHORIZED, "Sign in first.".into()))?;
         if account.must_change && !parts.uri.path().starts_with("/api/v1/me") {
 
             return Err(Fail(StatusCode::FORBIDDEN, "Choose a new password on Numa Home's page in a browser first.".into()));
         }
+        account.sight = Arc::new(crate::grants::sight(server, &account).await?);
         Ok(Signed(account))
     }
 }
@@ -153,6 +154,33 @@ pub fn limit_keys(name: &str, address: IpAddr) -> [String; 2] {
         v4 => v4,
     };
     [format!("name:{}", name.trim().to_lowercase()), format!("address:{address}")]
+}
+
+pub fn local(address: IpAddr) -> bool {
+    match address.to_canonical() {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local() || (v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64),
+        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+pub fn in_house(peer: SocketAddr, headers: &HeaderMap) -> bool {
+    in_house_among(peer.ip().to_canonical(), headers, proxies())
+}
+
+fn in_house_among(peer: IpAddr, headers: &HeaderMap, proxies: &[(IpAddr, u8)]) -> bool {
+    let named = proxies.iter().any(|proxy| within(peer, *proxy));
+    let forwarded = ["x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|name| headers.contains_key(*name));
+    (named || !forwarded) && local(client_among(peer, headers, proxies).0)
+}
+
+pub fn setup_code() -> String {
+    let (token, _) = token();
+    token[..12].as_bytes().chunks(4).map(|part| String::from_utf8_lossy(part).into_owned()).collect::<Vec<_>>().join("-")
+}
+
+pub fn same_code(given: &str, code: &str) -> bool {
+    let plain = |text: &str| text.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
+    !code.is_empty() && plain(given) == plain(code)
 }
 
 pub fn try_again(seconds: i64) -> String {
@@ -233,6 +261,38 @@ mod tests {
     }
 
     #[test]
+    fn only_the_house_sets_up_without_the_code() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let forwarded = |from: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-for", from.parse().unwrap());
+            headers
+        };
+        let proxies = [(ip("172.18.0.0"), 16)];
+        assert!(in_house_among(ip("192.168.1.9"), &HeaderMap::new(), &[]), "the house, directly");
+        assert!(in_house_among(ip("100.64.0.7"), &HeaderMap::new(), &[]), "its tunnel");
+        assert!(!in_house_among(ip("203.0.113.7"), &HeaderMap::new(), &[]), "a stranger, directly");
+        assert!(!in_house_among(ip("172.17.0.1"), &forwarded("203.0.113.7"), &[]), "a stranger through a proxy not named");
+        assert!(!in_house_among(ip("172.17.0.1"), &forwarded("192.168.1.9"), &[]), "a proxy not named is not believed either way");
+        assert!(!in_house_among(ip("172.18.0.1"), &forwarded("203.0.113.7"), &proxies), "a stranger through a named proxy");
+        assert!(in_house_among(ip("172.18.0.1"), &forwarded("192.168.1.9"), &proxies), "the house through a named proxy");
+    }
+
+    #[test]
+    fn only_one_is_the_first_admin() {
+        let store = Arc::new(crate::store::Store::open(std::path::Path::new(":memory:")).unwrap());
+        let tries: Vec<_> = (0..16)
+            .map(|at| {
+                let store = store.clone();
+                std::thread::spawn(move || store.add_account(&format!("name{at}"), "hash", true, true).unwrap())
+            })
+            .collect();
+        let made = tries.into_iter().map(|one| one.join().unwrap()).filter(|made| *made).count();
+        assert_eq!(made, 1);
+        assert_eq!(store.accounts().unwrap().len(), 1);
+    }
+
+    #[test]
     fn sign_ins_at_once_are_counted_before_they_are_checked() {
         let limit = Limit::default();
         let tom = limit_keys("tom", "203.0.113.7".parse().unwrap());
@@ -279,6 +339,20 @@ mod tests {
         assert_eq!(try_again(4), "Try again in 4 seconds.");
 
         assert_eq!(try_again(200), "Try again in 4 minutes.");
+    }
+
+    #[test]
+    fn local_addresses_and_the_setup_code() {
+        for near in ["127.0.0.1", "192.168.1.20", "10.0.0.5", "172.18.0.1", "100.101.102.103", "::1", "fd12::5", "fe80::1", "::ffff:192.168.1.2"] {
+            assert!(local(near.parse().unwrap()), "{near}");
+        }
+        for far in ["203.0.113.7", "8.8.8.8", "100.128.0.1", "2001:db8::1"] {
+            assert!(!local(far.parse().unwrap()), "{far}");
+        }
+        let code = setup_code();
+        assert_eq!(code.len(), 14);
+        assert!(same_code(&code.to_uppercase().replace('-', " "), &code));
+        assert!(!same_code("", &code) && !same_code("0000-0000-0000", &code));
     }
 
     #[test]

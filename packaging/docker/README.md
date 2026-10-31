@@ -50,5 +50,19 @@ days, prepares Tidy Up, compacts the catalogs and keeps the thumbnail cache
 within 8 GB. Set `TZ` in `compose.yaml` to your time zone
 (`Europe/Amsterdam`, `America/New_York`); without it the night is UTC's.
 `NUMA_HOME_NIGHT=2-5` moves the hours, `NUMA_HOME_CACHE_GB` the cache's
-size. The Activity page says each morning what was done and what needs you. Outside the house, use the NAS's own reverse
-proxy or Tailscale; Numa Home speaks plain HTTP.
+size. The Activity page says each morning what was done and what needs you.
+
+Outside the house, use the NAS's own reverse proxy or Tailscale; Numa Home
+speaks plain HTTP. Behind a reverse proxy, set `NUMA_HOME_PROXY` in
+`compose.yaml` to the proxy's address or network as Numa Home sees it, comma
+separated: `172.18.0.1` or `172.18.0.0/16`. The proxy has to send
+`X-Forwarded-For` and `X-Forwarded-Proto`; Numa Home reads no other headers for
+this. Only then does the session cookie carry `Secure`, HSTS go out over https,
+and the sign-in limit count each visitor rather than the proxy as one. Unset, or
+naming the wrong address, none of the three happens, and the log says so once.
+Name the proxy as narrowly as you can, and keep port 8283 from being reached past
+it: a request from an address named here is believed about whom it forwards.
+
+Where it goes on the other stores: ZimaOS and Unraid have the field, empty;
+TrueNAS takes it under Additional Environment Variables; Umbrel, Runtipi and Cosmos
+set it for their own proxy.

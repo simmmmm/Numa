@@ -257,28 +257,33 @@ pub(super) const MOST_GUIDES: usize = 4;
 
 pub(super) const GUIDE_REACH: f64 = 12.0;
 
-pub(super) fn guided_row(state: &App, auto: &gtk::Button) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.set_margin_top(4);
-    auto.set_margin_top(0);
-    auto.set_hexpand(true);
-    row.append(auto);
-
+pub(super) fn guided_row(state: &App) -> gtk::Box {
     let guided = state.crop.guided.clone();
-    guided.set_hexpand(true);
     guided.set_tooltip_text(Some("Draw up to four lines along what should be upright or level"));
-    let clear = gtk::Button::with_label("Clear");
-    clear.set_hexpand(true);
-    clear.set_tooltip_text(Some("Remove the guides"));
-    clear.set_sensitive(false);
-    guided.connect_toggled(glib::clone!(
+    guided.update_property(&[gtk::accessible::Property::Label("Guided")]);
+    let clear = state.crop.guides_clear.clone();
+    clear.add_css_class("flat");
+    clear.add_css_class("row-accessory");
+    clear.set_valign(gtk::Align::Center);
+    clear.set_tooltip_text(Some("Clear Guides"));
+    let end = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    end.append(&clear);
+    end.append(&guided);
+
+    let note = gtk::Label::new(Some("Draw along up to four lines that should be upright or level."));
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.add_css_class("note");
+    note.set_visible(false);
+    guided.connect_active_notify(glib::clone!(
         #[strong] state,
-        #[weak] clear,
-        move |button| {
-            clear.set_sensitive(button.is_active());
-            if !button.is_active() {
+        #[weak] note,
+        move |switch| {
+            note.set_visible(switch.is_active());
+            if !switch.is_active() {
                 state.crop.guide_lines.borrow_mut().clear();
             }
+            show_guides_clear(&state);
             state.crop.area.queue_draw();
         }
     ));
@@ -286,12 +291,24 @@ pub(super) fn guided_row(state: &App, auto: &gtk::Button) -> gtk::Box {
         #[strong] state,
         move |_| {
             state.crop.guide_lines.borrow_mut().clear();
+            show_guides_clear(&state);
             state.crop.area.queue_draw();
         }
     ));
-    row.append(&guided);
-    row.append(&clear);
-    row
+    show_guides_clear(state);
+
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.append(&named_row("Guided", &end));
+    column.append(&note);
+    column
+}
+
+pub(super) fn show_guides_clear(state: &App) {
+    let any = state.crop.guided.is_active() && !state.crop.guide_lines.borrow().is_empty();
+    let clear = &state.crop.guides_clear;
+    clear.set_opacity(if any { 1.0 } else { 0.0 });
+    clear.set_sensitive(any);
+    clear.set_can_target(any);
 }
 
 pub(super) fn guide_frame(state: &App) -> (f32, f32, f32, Perspective) {
@@ -373,6 +390,7 @@ pub(super) fn guide_drag_end(state: &App, grab: &GuideGrab) {
         })
         .collect();
     *state.crop.guide_lines.borrow_mut() = lines.clone();
+    show_guides_clear(state);
     state.crop.area.queue_draw();
     if lines.is_empty() {
         return;

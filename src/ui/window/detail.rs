@@ -12,16 +12,11 @@ pub(super) fn build_detail(
 ) -> gtk::Box {
     let detail = page_column();
 
-    detail.add_css_class("quiet");
-
     let sharpening = section_header("Sharpening");
     detail.append(&sharpening);
     for (name, scale, readout) in &all[13..16] {
         let row = slider_row(state, name, scale, *readout);
 
-        if *name == "Sharpening" {
-            row.add_css_class("lead");
-        }
         detail.append(&row);
     }
 
@@ -42,18 +37,16 @@ pub(super) fn build_detail(
 
     let lens = section_header("Lens");
     detail.append(&lens);
-    for (name, scale, readout) in &all[20..22] {
-        detail.append(&slider_row(state, name, scale, *readout));
-    }
 
     let note = gtk::Label::new(None);
     note.set_xalign(0.0);
     note.set_wrap(true);
-    note.set_margin_top(8);
-    note.set_margin_bottom(4);
-    note.add_css_class("profile-note");
+    note.add_css_class("note");
     global_only(note.as_ref());
     detail.append(&note);
+    for (name, scale, readout) in &all[20..22] {
+        detail.append(&slider_row(state, name, scale, *readout));
+    }
 
     let scope = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let manual = gtk::Box::new(gtk::Orientation::Vertical, 0);

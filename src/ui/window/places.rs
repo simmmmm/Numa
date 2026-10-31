@@ -61,7 +61,7 @@ pub(super) fn key(place: &Place) -> String {
     }
 }
 
-fn shelves(state: &App) -> Rc<HashMap<i64, Glance>> {
+pub(super) fn shelves(state: &App) -> Rc<HashMap<i64, Glance>> {
     let now = stamp(state);
 
     if let Some(had) = SHELVES.with(|shelves| (shelves.borrow().0 == now).then(|| shelves.borrow().1.clone())) {

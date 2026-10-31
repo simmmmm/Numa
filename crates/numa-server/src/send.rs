@@ -72,7 +72,7 @@ pub async fn send(
     };
     let hinted: Option<i64> = headers.get("x-numa-taken").and_then(|value| value.to_str().ok()).and_then(|value| value.trim().parse().ok());
     let folder = into.dir.as_deref().map(folder_in).transpose()?;
-    let library = destination(&server, &me.name, into.library).await?;
+    let library = destination(&server, &me, into.library).await?;
 
     let already = |sha256: &str| server.store.sent(&me.name, sha256, library.id).map(|kept| library.path.join(kept)).and_then(|path| server.home.at(&path));
     let duplicate = |id: i64| Ok((StatusCode::OK, Json(serde_json::json!({ "id": id, "duplicate": true }))).into_response());
@@ -133,10 +133,11 @@ fn sweep(incoming: &FilePath) {
     }
 }
 
-async fn destination(server: &Arc<Server>, account: &str, asked: Option<i64>) -> Result<Library, Fail> {
-    let seen = server.home.libraries(account);
+async fn destination(server: &Arc<Server>, me: &crate::store::Account, asked: Option<i64>) -> Result<Library, Fail> {
+    let account = me.name.as_str();
+    let seen = server.home.libraries(me);
     if let Some(id) = asked {
-        return seen.into_iter().find(|library| library.id == id).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()));
+        return server.home.editable(me).into_iter().find(|library| library.id == id).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()));
     }
     let own = server.home.sent_folder(account);
     if let Some(library) = seen.into_iter().find(|library| library.path == own) {

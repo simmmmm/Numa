@@ -6,14 +6,11 @@ pub(super) fn build_page(column: &gtk::Box) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroller.set_vexpand(true);
-    let clamp = adw::Clamp::new();
-    clamp.set_maximum_size(1600);
     column.set_margin_top(24);
     column.set_margin_bottom(32);
     column.set_margin_start(24);
     column.set_margin_end(24);
-    clamp.set_child(Some(column));
-    scroller.set_child(Some(&clamp));
+    scroller.set_child(Some(column));
     scroller
 }
 
@@ -241,10 +238,13 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
         marks.set_halign(gtk::Align::End);
         marks.set_valign(gtk::Align::End);
         if said.is_some() {
-            let synced = gtk::Image::from_icon_name("view-refresh-symbolic");
-            synced.add_css_class("home-badge");
-            synced.set_tooltip_text(Some("Synced"));
-            marks.append(&synced);
+
+            let syncing = gtk::Image::from_icon_name("view-refresh-symbolic");
+            syncing.add_css_class("home-badge");
+            syncing.add_css_class("sync-turning");
+            syncing.set_tooltip_text(Some("Syncing"));
+            home_sync::follow_mark(library_id.unwrap_or_default(), &syncing);
+            marks.append(&syncing);
         }
         let house = gtk::Image::from_icon_name("go-home-symbolic");
         house.add_css_class("home-badge");
@@ -280,7 +280,8 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     button.add_css_class("flat");
     button.set_child(Some(&inside));
     button.set_tooltip_text(match place {
-        Place::Library(library) => Some(library.path.to_string_lossy().into_owned()),
+
+        Place::Library(library) if !home_sync::is_cache_only(library) => Some(library.path.to_string_lossy().into_owned()),
         _ => None,
     }.as_deref());
     if let Place::Library(library) = place {

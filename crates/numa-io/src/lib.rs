@@ -3,6 +3,7 @@ pub mod avif;
 pub mod book;
 pub mod camera_look;
 pub mod capture;
+pub mod error;
 pub mod catalog;
 pub mod clocks;
 pub mod copy;

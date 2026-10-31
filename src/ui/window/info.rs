@@ -62,14 +62,14 @@ pub(super) fn build_histogram(state: &App) -> gtk::Box {
         stacked.add_overlay(button);
     }
 
-    install_scope_menu(state, &area);
+    install_scope_menu(state, &area, &stacked);
     column.append(&stacked);
     column
 }
 
 const SCOPE_SETTING: &str = "scope";
 
-fn install_scope_menu(state: &App, area: &gtk::DrawingArea) {
+fn install_scope_menu(state: &App, area: &gtk::DrawingArea, stacked: &gtk::Overlay) {
     let saved = state.catalog.setting(SCOPE_SETTING).map(|name| render::scope::Kind::from_name(&name)).unwrap_or_default();
     state.info.scope_kind.set(saved);
 
@@ -88,7 +88,8 @@ fn install_scope_menu(state: &App, area: &gtk::DrawingArea) {
     ));
     let group = gio::SimpleActionGroup::new();
     group.add_action(&action);
-    area.insert_action_group("scope", Some(&group));
+
+    stacked.insert_action_group("scope", Some(&group));
 
     let menu = gio::Menu::new();
     for kind in render::scope::Kind::ALL {
@@ -108,6 +109,35 @@ fn install_scope_menu(state: &App, area: &gtk::DrawingArea) {
         }
     ));
     area.add_controller(click);
+
+    let chevron = gtk::MenuButton::new();
+    chevron.set_icon_name("pan-down-symbolic");
+    chevron.set_menu_model(Some(&menu));
+    chevron.set_tooltip_text(Some("Histogram, Waveform or Parade"));
+    chevron.add_css_class("flat");
+    chevron.add_css_class("circular");
+    chevron.add_css_class("scope-chevron");
+
+    chevron.set_halign(gtk::Align::End);
+    chevron.set_valign(gtk::Align::Start);
+    chevron.set_margin_top(1);
+    chevron.set_margin_end(22);
+    chevron.set_opacity(0.0);
+    stacked.add_overlay(&chevron);
+    let hover = gtk::EventControllerMotion::new();
+    hover.connect_enter(glib::clone!(
+        #[weak] chevron,
+        move |_, _, _| chevron.set_opacity(1.0)
+    ));
+    hover.connect_leave(glib::clone!(
+        #[weak] chevron,
+        move |_| {
+            if !chevron.is_active() {
+                chevron.set_opacity(0.0);
+            }
+        }
+    ));
+    stacked.add_controller(hover);
 }
 
 fn draw_scope(context: &gtk::cairo::Context, width: f64, height: f64, scope: &render::scope::Scope) {
@@ -143,24 +173,44 @@ pub(super) fn draw_histogram(
     let Some(histogram) = histogram else { return };
 
     let scale = histogram.scale() as f64;
-    let step = width / render::histogram::BINS as f64;
+    let step = width / (render::histogram::BINS - 1) as f64;
 
-    context.set_operator(gtk::cairo::Operator::Add);
+    let at = |count: f64| height - (count / scale).min(1.0) * (height - 1.0);
+    let channel = |index: usize, bin: usize| histogram.channels[index][bin] as f64;
 
-    for (index, colour) in [(0, (0.85, 0.2, 0.2)), (1, (0.2, 0.8, 0.3)), (2, (0.25, 0.45, 0.95))] {
-        context.set_source_rgba(colour.0, colour.1, colour.2, 0.62);
-        context.move_to(0.0, height);
+    let light: Vec<f64> = (0..render::histogram::BINS)
+        .map(|bin| 0.2126 * channel(0, bin) + 0.7152 * channel(1, bin) + 0.0722 * channel(2, bin))
+        .collect();
 
-        for (bin, count) in histogram.channels[index].iter().enumerate() {
-
-            let value = (*count as f64 / scale).min(1.0);
-            context.line_to(bin as f64 * step, height - value * height);
-        }
-
-        context.line_to(width, height);
-        context.close_path();
-        let _ = context.fill();
+    context.move_to(0.0, height);
+    for (bin, count) in light.iter().enumerate() {
+        context.line_to(bin as f64 * step, at(*count));
     }
+    context.line_to(width, height);
+    context.close_path();
+    context.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+    let _ = context.fill();
+
+    let apart = height / 20.0;
+    context.set_line_width(1.0);
+    for (index, colour) in [(0, (0.92, 0.36, 0.32)), (1, (0.36, 0.82, 0.45)), (2, (0.38, 0.56, 0.96))] {
+        context.set_source_rgba(colour.0, colour.1, colour.2, 0.85);
+        for bin in 1..render::histogram::BINS {
+            let (from, to) = (at(channel(index, bin - 1)), at(channel(index, bin)));
+            if (to - at(light[bin])).abs() > apart || (from - at(light[bin - 1])).abs() > apart {
+                context.move_to((bin - 1) as f64 * step, from);
+                context.line_to(bin as f64 * step, to);
+            }
+        }
+        let _ = context.stroke();
+    }
+
+    context.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+    context.set_line_width(1.5);
+    for (bin, count) in light.iter().enumerate() {
+        context.line_to(bin as f64 * step, at(*count));
+    }
+    let _ = context.stroke();
 }
 
 pub(super) fn build_info(state: &App) -> gtk::Box {

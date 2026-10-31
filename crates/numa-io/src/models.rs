@@ -53,7 +53,7 @@ pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") 
 
     ("YOLOX-s", "Remove people: finding the passers-by · Apache-2.0 · 36 MB", &[(
         "yolox_s.onnx",
-        "https://huggingface.co/Heliosoph/yolox-onnx/resolve/main/yolox_s.onnx",
+        "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx",
         35_858_002, "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
     )]),
 
@@ -148,6 +148,8 @@ pub fn packed(file: &str) -> Option<&'static Packed> {
     PACKED.iter().find(|(name, ..)| *name == file)
 }
 
+const MOST_RANGES: usize = 1 << 20;
+
 pub fn unpack(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::io::{Error, Read, Write};
     let input = std::io::BufReader::new(std::fs::File::open(from)?);
@@ -158,7 +160,12 @@ pub fn unpack(from: &Path, to: &Path) -> std::io::Result<()> {
     if &header[..8] != b"NUMAPACK" {
         return Err(Error::other("not a packed model"));
     }
-    let mut ranges = vec![0; u32::from_le_bytes(header[8..].try_into().unwrap()) as usize * 17];
+
+    let count = u32::from_le_bytes(header[8..].try_into().unwrap()) as usize;
+    if count > MOST_RANGES {
+        return Err(Error::other("not a packed model"));
+    }
+    let mut ranges = vec![0; count * 17];
     zstd.read_exact(&mut ranges)?;
     let (mut at, mut packed, mut plain) = (0, Vec::new(), Vec::new());
     for range in ranges.chunks(17) {
@@ -174,8 +181,10 @@ pub fn unpack(from: &Path, to: &Path) -> std::io::Result<()> {
         if std::io::copy(&mut (&mut zstd).take(gap), &mut out)? != gap {
             return Err(Error::other("packed model cut short"));
         }
-        packed.resize(stored, 0);
-        zstd.read_exact(&mut packed)?;
+        packed.clear();
+        if (&mut zstd).take(stored as u64).read_to_end(&mut packed)? != stored {
+            return Err(Error::other("packed model cut short"));
+        }
         plain.resize(length, 0);
         let count = stored / width;
         for index in 0..count {
@@ -287,6 +296,20 @@ mod tests {
         let cut = ruzstd::encoding::compress_to_vec(&container[..container.len() - 30], ruzstd::encoding::CompressionLevel::Fastest);
         std::fs::write(&packed, &cut).unwrap();
         assert!(unpack(&packed, &unpacked).is_err());
+
+        let mut huge = b"NUMAPACK".to_vec();
+        huge.extend(u32::MAX.to_le_bytes());
+        let zstd = ruzstd::encoding::compress_to_vec(&huge[..], ruzstd::encoding::CompressionLevel::Fastest);
+        std::fs::write(&packed, &zstd).unwrap();
+        assert_eq!(unpack(&packed, &unpacked).unwrap_err().to_string(), "not a packed model");
+        let mut long = b"NUMAPACK".to_vec();
+        long.extend(1u32.to_le_bytes());
+        long.extend(0u64.to_le_bytes());
+        long.extend((1u64 << 60).to_le_bytes());
+        long.push(1);
+        let zstd = ruzstd::encoding::compress_to_vec(&long[..], ruzstd::encoding::CompressionLevel::Fastest);
+        std::fs::write(&packed, &zstd).unwrap();
+        assert_eq!(unpack(&packed, &unpacked).unwrap_err().to_string(), "packed model cut short");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -95,7 +95,7 @@ fn reframe(document: &mut Document, rect: [f32; 4], angle: f32, (width, height):
 }
 
 pub async fn frame(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Response, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, crate::grants::Level::Edit)?;
     let document = document(&server, &photo).await?;
     let _one = server.renders.acquire().await.map_err(Fail::internal)?;
     let (jpeg, view, angle) = tokio::task::spawn_blocking(move || -> Result<_, String> {
@@ -119,13 +119,13 @@ pub async fn frame(State(server): State<Arc<Server>>, Signed(me): Signed, Path(i
 }
 
 pub async fn get(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, crate::grants::Level::Edit)?;
     let document = document(&server, &photo).await?;
     Ok(Json(shown(&document)))
 }
 
 pub async fn post(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(change): Json<Change>) -> Result<Json<Value>, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, crate::grants::Level::Edit)?;
     let _one = server.editing.lock(id).await;
     let mut document = document(&server, &photo).await?;
     if !change.set.is_empty() {
@@ -172,7 +172,7 @@ pub async fn post(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
         (document, straightened) = with_scene(&server, id, document, straighten).await?;
     }
     let saved = document.clone();
-    let updated = changed(&server, id, move |catalog| catalog.save_edits(id, &saved)).await?;
+    let updated = changed(&server, id, move |catalog| catalog.save_edits(id, &saved).map_err(String::from)).await?;
     let mut answer = shown(&document);
     answer["updated"] = updated.0["updated"].clone();
     answer["crops"] = json!(crops);

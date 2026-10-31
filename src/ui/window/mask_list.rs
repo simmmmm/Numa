@@ -32,7 +32,7 @@ pub(super) fn refresh_masks(state: &App) {
 
 pub(super) fn paint_power(button: &gtk::ToggleButton, on: bool) {
     button.set_icon_name("system-shutdown-symbolic");
-    button.set_tooltip_text(Some(if on { "Turn this mask off" } else { "Turn this mask on" }));
+    button.set_tooltip_text(Some(if on { "Turn Off" } else { "Turn On" }));
     match on {
         true => button.remove_css_class("dim-label"),
         false => button.add_css_class("dim-label"),
@@ -46,36 +46,15 @@ fn append_mask_list_row(
     index: usize,
     mask: &Mask,
 ) {
-    let row = adw::ActionRow::new();
-    row.set_title_lines(1);
-    row.set_subtitle_lines(1);
-    set_row_title(&row, &mask_label(masks, index));
-    row.set_subtitle(&match (mask.visible, mask.is_pending(), mask.is_idle()) {
-        (false, ..) => "Off".to_string(),
-        (_, true, _) => "Working out where it is…".to_string(),
-        (_, _, true) => "Nothing set yet".to_string(),
-
-        _ if mask.opacity < 0.999 => format!("{:.0}% strength", mask.opacity * 100.0),
-        _ => String::new(),
-    });
-    row.set_activatable(true);
-    row.connect_activated(glib::clone!(
-        #[strong] state,
-        move |_| select_mask(&state, Some(index))
-    ));
-    if Some(index) == selected {
-        row.add_css_class("current-mask");
-    }
-
-    let grip = gtk::Image::from_icon_name("list-drag-handle-symbolic");
-    grip.add_css_class("dim-label");
-    row.add_prefix(&grip);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    line.add_css_class("list-line");
 
     let shown = gtk::ToggleButton::new();
     paint_power(&shown, mask.visible);
     shown.set_active(mask.visible);
     shown.set_valign(gtk::Align::Center);
     shown.add_css_class("flat");
+    shown.add_css_class("list-power");
     shown.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
@@ -84,36 +63,146 @@ fn append_mask_list_row(
             }
         }
     ));
-    row.add_suffix(&shown);
+    line.append(&shown);
 
-    let invert = gtk::ToggleButton::new();
-    invert.set_icon_name("numa-invert-symbolic");
-    invert.set_active(mask.inverted);
-    invert.set_valign(gtk::Align::Center);
-    invert.add_css_class("flat");
-    invert.set_tooltip_text(Some("Invert — everything except this"));
-    invert.connect_toggled(glib::clone!(
+    let words = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    words.set_hexpand(true);
+    words.set_valign(gtk::Align::Center);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let title = gtk::Label::new(Some(&mask_label(masks, index)));
+    title.set_xalign(0.0);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.add_css_class("list-title");
+    head.append(&title);
+    if !mask.is_idle() {
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.set_valign(gtk::Align::Center);
+        dot.add_css_class("touched-dot");
+        head.append(&dot);
+    }
+    words.append(&head);
+    let subtitle = gtk::Label::new(Some(&mask_subtitle(mask)));
+    subtitle.set_xalign(0.0);
+    subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    subtitle.add_css_class("list-subtitle");
+    words.append(&subtitle);
+    line.append(&words);
+
+    let actions = gio::SimpleActionGroup::new();
+    let invert = gio::SimpleAction::new_stateful("invert", None, &mask.inverted.to_variant());
+    invert.connect_activate(glib::clone!(
         #[strong] state,
-        move |button| {
-            if !state.applying.get() {
-                set_mask_inverted(&state, index, button.is_active());
-            }
+        move |action, _| {
+            let inverted = !action.state().and_then(|now| now.get::<bool>()).unwrap_or(false);
+            action.set_state(&inverted.to_variant());
+            set_mask_inverted(&state, index, inverted);
         }
     ));
-    row.add_suffix(&invert);
+    actions.add_action(&invert);
+    let last = masks.len().saturating_sub(1);
+    let plain: [(&str, bool, Rc<dyn Fn(&App)>); 5] = [
+        ("duplicate", true, Rc::new(move |state| duplicate_mask(state, index))),
+        ("rename", true, Rc::new(move |state| ask_mask_name(state, index))),
+        ("up", index > 0, Rc::new(move |state| move_mask(state, index, index - 1))),
+        ("down", index < last, Rc::new(move |state| move_mask(state, index, index + 1))),
+        ("delete", true, Rc::new(move |state| remove_mask(state, index))),
+    ];
+    for (name, enabled, run) in plain {
+        let action = gio::SimpleAction::new(name, None);
+        action.set_enabled(enabled);
+        action.connect_activate(glib::clone!(
+            #[strong] state,
+            move |_, _| run(&state)
+        ));
+        actions.add_action(&action);
+    }
 
-    let delete = gtk::Button::from_icon_name("user-trash-symbolic");
-    delete.set_valign(gtk::Align::Center);
-    delete.add_css_class("flat");
-    delete.set_tooltip_text(Some("Delete this mask"));
-    delete.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| remove_mask(&state, index)
+    let menu = gio::Menu::new();
+    let first = gio::Menu::new();
+    first.append(Some("Invert"), Some("mask.invert"));
+    first.append(Some("Duplicate"), Some("mask.duplicate"));
+    first.append(Some("Rename…"), Some("mask.rename"));
+    let moves = gio::Menu::new();
+    moves.append(Some("Move Up"), Some("mask.up"));
+    moves.append(Some("Move Down"), Some("mask.down"));
+    let end = gio::Menu::new();
+    end.append(Some("Delete"), Some("mask.delete"));
+    for section in [&first, &moves, &end] {
+        menu.append_section(None, section);
+    }
+    let more = gtk::MenuButton::new();
+    more.set_icon_name("view-more-horizontal-symbolic");
+    more.set_menu_model(Some(&menu));
+    more.set_valign(gtk::Align::Center);
+    more.add_css_class("flat");
+    more.set_tooltip_text(Some("More"));
+    line.append(&more);
+
+    let chevron = gtk::Image::from_icon_name("go-next-symbolic");
+    chevron.add_css_class("list-chevron");
+    line.append(&chevron);
+
+    let row = gtk::ListBoxRow::new();
+    row.set_child(Some(&line));
+    row.insert_action_group("mask", Some(&actions));
+    if Some(index) == selected {
+        row.add_css_class("current-mask");
+    }
+    let right = gtk::GestureClick::new();
+    right.set_button(gtk::gdk::BUTTON_SECONDARY);
+    right.connect_pressed(glib::clone!(
+        #[weak] more,
+        move |_, _, _, _| more.popup()
     ));
-    row.add_suffix(&delete);
+    row.add_controller(right);
 
     add_mask_reordering(state, &row, index);
     state.masks.mask_list.append(&row);
+}
+
+fn mask_subtitle(mask: &Mask) -> String {
+
+    let shape = match &mask.shape {
+        Shape::ColourRange { .. } => "Colour Range".to_string(),
+        Shape::LuminanceRange { .. } => "Brightness Range".to_string(),
+        _ => mask_name(&Mask { name: None, ..mask.clone() }),
+    };
+    let state = match (mask.visible, mask.is_pending(), mask.is_idle()) {
+        (false, ..) => "Off".to_string(),
+        (_, true, _) => "Working out where it is…".to_string(),
+        (_, _, true) => "Nothing set yet".to_string(),
+        _ => format!("{:.0} % strength", mask.opacity * 100.0),
+    };
+    let mut parts = vec![shape, state];
+    if mask.inverted {
+        parts.push("Inverted".to_string());
+    }
+    parts.join(" · ")
+}
+
+pub(super) fn ask_mask_name(state: &App, index: usize) {
+    let Some(mask) = state.open.borrow().as_ref().and_then(|photo| photo.document.masks().get(index).cloned()) else {
+        return;
+    };
+    let entry = gtk::Entry::new();
+    entry.set_text(mask.name.as_deref().unwrap_or(""));
+    entry.set_placeholder_text(Some(&mask_name(&Mask { name: None, ..mask.clone() })));
+    entry.set_activates_default(true);
+    let ask = adw::AlertDialog::new(Some("Rename Mask"), None);
+    ask.set_extra_child(Some(&entry));
+    ask.add_response("cancel", "Cancel");
+    ask.add_response("rename", "Rename");
+    ask.set_default_response(Some("rename"));
+    ask.set_close_response("cancel");
+    let anchor = state.masks.mask_list.clone();
+    let (state, typed) = (state.clone(), entry.clone());
+    ask.connect_response(None, move |_, response| {
+        if response == "rename" {
+            rename_mask(&state, index, &typed.text());
+        }
+    });
+    ask.present(Some(&anchor));
+    entry.grab_focus();
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -798,7 +887,7 @@ pub(super) fn add_mask_now(state: &App, kind: MaskKind) {
     schedule_history_push(state);
 }
 
-pub(super) fn add_mask_reordering(state: &App, row: &adw::ActionRow, index: usize) {
+pub(super) fn add_mask_reordering(state: &App, row: &gtk::ListBoxRow, index: usize) {
     let source = gtk::DragSource::new();
     source.set_actions(gtk::gdk::DragAction::MOVE);
     source.connect_prepare(move |_, _, _| {

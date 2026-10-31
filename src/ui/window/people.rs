@@ -66,6 +66,29 @@ pub(super) fn fill_people(state: &App, fetch: bool) {
         return;
     }
     let mut wanted: Vec<StoredFace> = Vec::new();
+
+    let top = chip_row();
+    top.set_margin_bottom(16);
+    let back = gtk::Button::with_label(&match read.aside {
+        0 => "Ask Again".to_string(),
+        1 => "Ask Again About 1 Face".to_string(),
+        n => format!("Ask Again About {} Faces", places::grouped(n)),
+    });
+    back.set_sensitive(read.aside > 0);
+    back.set_tooltip_text(Some("Faces set aside as nobody to name are asked about again"));
+    back.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            for library in state.libraries.all.borrow().iter() {
+                if let Err(err) = state.catalog.unignore_all(library.id) {
+                    log::warn!("could not bring the faces back: {err}");
+                }
+            }
+            fill_people(&state, false);
+        }
+    ));
+    top.append(&back);
+    column.append(&top);
     if !names.is_empty() {
         let flow = gtk::FlowBox::new();
         flow.set_selection_mode(gtk::SelectionMode::None);
@@ -97,30 +120,6 @@ pub(super) fn fill_people(state: &App, fetch: bool) {
             wanted.extend(members.iter().take(3).filter(|face| face.portrait.is_none()).cloned());
             column.append(&name_row(state, members, *photos));
         }
-    }
-    if read.aside > 0 {
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        line.set_margin_top(24);
-        let said = gtk::Label::new(Some(&format!("{} set aside as nobody to name", match read.aside {
-            1 => "1 face".to_string(),
-            n => format!("{} faces", places::grouped(n)),
-        })));
-        said.add_css_class("dim-label");
-        let back = gtk::Button::with_label("Ask Again");
-        back.connect_clicked(glib::clone!(
-            #[strong] state,
-            move |_| {
-                for library in state.libraries.all.borrow().iter() {
-                    if let Err(err) = state.catalog.unignore_all(library.id) {
-                        log::warn!("could not bring the faces back: {err}");
-                    }
-                }
-                fill_people(&state, false);
-            }
-        ));
-        line.append(&said);
-        line.append(&back);
-        column.append(&line);
     }
     if fetch && !wanted.is_empty() {
         fetch_portraits(state, wanted);
@@ -254,16 +253,22 @@ fn renamed(state: &App) {
     });
 }
 
+const THREE_FACES: i32 = 152;
+
 fn name_row(state: &App, members: &[StoredFace], photos: usize) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.set_margin_bottom(12);
+
     let faces = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    faces.set_valign(gtk::Align::End);
+
+    faces.set_width_request(THREE_FACES);
     for face in members.iter().take(3) {
         faces.append(&picture(Some(face), 48));
     }
     let ask = gtk::Box::new(gtk::Orientation::Vertical, 4);
     ask.set_hexpand(true);
-    ask.set_valign(gtk::Align::Center);
+    ask.set_valign(gtk::Align::End);
     let caption = gtk::Label::new(Some(&format!("In {}", places::photos(photos))));
     caption.set_xalign(0.0);
     caption.add_css_class("caption");
@@ -273,10 +278,10 @@ fn name_row(state: &App, members: &[StoredFace], photos: usize) -> gtk::Box {
     ask.append(&caption);
     ask.append(&field);
     let name = gtk::Button::with_label("Name");
-    name.set_valign(gtk::Align::Center);
+    name.set_valign(gtk::Align::End);
 
     let nobody = gtk::Button::with_label("Nobody");
-    nobody.set_valign(gtk::Align::Center);
+    nobody.set_valign(gtk::Align::End);
     nobody.set_tooltip_text(Some("Nobody to name — stop asking about these faces"));
     let faces_of: Vec<(i64, [f32; cull::people::LENGTH])> = members.iter().map(|face| (face.photo_id, face.embedding)).collect();
     nobody.connect_clicked(glib::clone!(

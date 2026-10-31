@@ -84,7 +84,7 @@ function activityPage(main) {
   const toggle = h('button', { class: 'primary', hidden: true, onclick: async () => {
     try { await api('background/' + (page.paused ? 'resume' : 'pause'), { method: 'POST' }); activityBadge(); } catch (error) { said.textContent = error.message; }
   } });
-  // Its heading is Safe at Home's, over the tabs.
+  // Its heading is Settings', over the tabs.
   page.append(h('div', { class: 'head' }, h('div', {},
     h('p', { class: 'body' }, S.activityText)), toggle),
   said, h('span', { class: 'said late' }), h('div', { class: 'list' }, h('p', { class: 'body' }, S.loading)));
@@ -155,14 +155,15 @@ function lastNight(night) {
 }
 
 // HOME-035: Safe at Home — whether everything that should come home did,
-// room for it, and last night. Accounts, Cameras and Activity are its tabs,
-// a chip row under its title.
+// room for it, and last night: the first tab of Settings, whose others are
+// Activity, Accounts, Devices and Cameras, a chip row under its title. The
+// paths stay /safe and the rest, so links and the apps keep working.
 const SAFE = ['/safe', '/accounts', '/devices', '/cameras', '/activity'];
 function safeHead(path) {
-  const tabs = [[S.overview, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'],
+  const tabs = [[S.safeAtHome, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'],
     [S.activity, '/activity']].filter(Boolean);
   if (!tabs.some(([, to]) => to === path)) return null;
-  return h('div', { class: 'safe-head' }, h('h1', {}, S.safeAtHome),
+  return h('div', { class: 'safe-head' }, h('h1', {}, S.settings),
     h('div', { class: 'chips' }, tabs.map(([label, to]) => h('button', { class: 'chip' + (to === path ? ' chosen' : ''),
       'aria-current': to === path ? 'page' : null, onclick: () => go(to) }, label))));
 }
@@ -180,7 +181,7 @@ function ago(at) {
 async function safePage(main) {
   const page = h('div', { class: 'safe' }, h('p', { class: 'body' }, S.loading));
   main.append(page);
-  const [safe, activity] = await Promise.all([api('safe'), api('background').catch(() => null)])
+  const [safe, activity, rights] = await Promise.all([api('safe'), api('background').catch(() => null), state.me.admin ? api('rights').catch(() => null) : null])
     .catch(error => (page.replaceChildren(fault(error.message)), []));
   if (!safe) return;
   // `attention` only on what asks for a person, always with its words.
@@ -202,12 +203,29 @@ async function safePage(main) {
       : h('p', { class: 'body' }, S.devicesEmpty)),
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.storage), safe.disks.map(disk)),
     secondCopy(safe.copy),
+    rights && homeRights(rights),
     night && h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.lastNight),
       h('ul', { class: 'done' }, night.done.slice(0, 4).map(line => h('li', {}, line))),
       h('button', { class: 'chip', onclick: () => go('/activity') }, S.activity)),
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.numaHome), h('div', { class: 'big' }, safe.version),
       // The licences, where the version is (and where an Updates tab will hold them): P15, a visible route.
       h('a', { class: 'caption', href: '/licences', target: '_blank', rel: 'noopener' }, S.licences))));
+}
+
+// IO-005: an admin's — who made and owns the JPEGs Numa Home makes, written
+// into each with "no AI training"; the place and serial numbers stay out.
+function homeRights(rights) {
+  const creator = h('input', { type: 'text', placeholder: S.creator, 'aria-label': S.creator, value: rights.creator, autocomplete: 'off' });
+  const copyright = h('input', { type: 'text', placeholder: S.copyright, 'aria-label': S.copyright, value: rights.copyright, autocomplete: 'off' });
+  const save = async event => {
+    event.preventDefault();
+    try {
+      await api('rights', { method: 'PUT', body: JSON.stringify({ creator: creator.value, copyright: copyright.value }) });
+      toast(S.rightsSaved);
+    } catch (error) { toast(error.message); }
+  };
+  return h('form', { class: 'box', onsubmit: save }, h('div', { class: 'section-label' }, S.inHomesJpegs),
+    creator, copyright, h('p', { class: 'caption' }, S.inHomesJpegsText), h('button', { class: 'chip', type: 'submit' }, S.save));
 }
 
 // HOME-036: the second copy — when it was last made whole, what it holds
@@ -238,7 +256,7 @@ function secondCopy(copy) {
     h('div', { class: 'copy-acts' }, now, h('a', { class: 'caption', href: GUIDE_RESTORE, target: '_blank', rel: 'noopener' }, S.howToRestore)));
 }
 
-// HOME-037: Safe at Home › Devices — every device signed in to this account
+// HOME-037: Settings › Devices — every device signed in to this account
 // (an admin: to every account), when it signed in, was last seen and last
 // sent home, and from where; Sign Out for each, and Sign Out Everywhere Else.
 async function devicesPage(main) {

@@ -10,6 +10,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::grants::Level;
+use crate::store::Account;
 use crate::home::{month as month_of, when};
 use crate::{Fail, Server};
 
@@ -63,16 +65,17 @@ fn given(text: &Option<String>) -> Option<String> {
 pub async fn libraries(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Vec<Value>> {
     let mine = server.home.sent_folder(&me.name);
 
-    let mut libraries = server.home.libraries(&me.name);
+    let mut libraries = server.home.libraries(&me);
     libraries.sort_by_cached_key(|library| std::cmp::Reverse(server.home.newest(library.id)));
     let rows = libraries.into_iter().map(|library| {
-        json!({ "id": library.id, "name": library.label(), "count": server.home.count(library.id), "mine": library.path == mine })
+
+        json!({ "id": library.id, "name": library.label(), "count": server.home.count(library.id), "mine": library.path == mine, "level": me.sight.library(library.id) })
     });
     Json(rows.collect())
 }
 
 pub async fn months(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
-    let photos = chosen(&server, &me.name, &wanted).await?;
+    let photos = chosen(&server, &me, &wanted).await?;
 
     type Month = (String, usize, Vec<(i64, usize)>);
     let mut months: Vec<Month> = Vec::new();
@@ -108,7 +111,7 @@ pub async fn month(
     if !shaped {
         return Err(Fail::bad("A month is written 2026-03."));
     }
-    let photos: Vec<Photo> = chosen(&server, &me.name, &wanted).await?.into_iter().filter(|photo| month == EVERYTHING || month_of(photo) == month).collect();
+    let photos: Vec<Photo> = chosen(&server, &me, &wanted).await?.into_iter().filter(|photo| month == EVERYTHING || month_of(photo) == month).collect();
     let marks = Marks::of(&server, &photos);
 
     let rows = tokio::task::spawn_blocking(move || {
@@ -157,8 +160,8 @@ impl Marks {
     }
 }
 
-pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted) -> Result<Vec<Photo>, Fail> {
-    let mut libraries = server.home.libraries(account);
+pub(crate) async fn chosen(server: &Arc<Server>, me: &Account, wanted: &Wanted) -> Result<Vec<Photo>, Fail> {
+    let mut libraries = server.home.reach(me);
     if let Some(only) = wanted.library {
         libraries.retain(|library| library.id == only);
         if libraries.is_empty() {
@@ -166,7 +169,7 @@ pub(crate) async fn chosen(server: &Arc<Server>, account: &str, wanted: &Wanted)
         }
     }
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
-    let mut photos = server.home.photos(&ids);
+    let mut photos = server.home.shown(me, &ids);
     let tests = tests(server, &libraries, &photos, wanted).await?;
     photos.retain(|photo| tests.iter().all(|(_, test)| test(photo)));
     let reversed = given(&wanted.reversed).is_some_and(|value| value == "1");
@@ -267,8 +270,8 @@ fn in_album(catalog: &numa_io::catalog::Catalog, libraries: &[i64], album: &str)
 }
 
 pub async fn people(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
-    let libraries: Vec<i64> = server.home.libraries(&me.name).iter().map(|library| library.id).collect();
-    let shown = server.home.photos(&libraries);
+    let libraries: Vec<i64> = server.home.reach(&me).iter().map(|library| library.id).collect();
+    let shown = server.home.shown(&me, &libraries);
     let found = server
         .home
         .ask(move |catalog| libraries.iter().flat_map(|&library| catalog.people(library).unwrap_or_default()).collect::<Vec<_>>())
@@ -293,8 +296,8 @@ pub async fn people(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
 }
 
 pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
-    let libraries: Vec<i64> = server.home.libraries(&me.name).iter().map(|library| library.id).collect();
-    let shown: HashSet<i64> = server.home.photos(&libraries).iter().map(|photo| photo.id).collect();
+    let libraries: Vec<i64> = server.home.reach(&me).iter().map(|library| library.id).collect();
+    let shown: HashSet<i64> = server.home.shown(&me, &libraries).iter().map(|photo| photo.id).collect();
     let albums = server
         .home
         .ask(move |catalog| {
@@ -315,31 +318,40 @@ pub struct Renamed {
     name: String,
 }
 
-async fn seen(server: &Arc<Server>, account: &str, key: &str) -> Result<(), Fail> {
-    let libraries: Vec<i64> = server.home.libraries(account).iter().map(|library| library.id).collect();
-    let shown: HashSet<i64> = server.home.photos(&libraries).iter().map(|photo| photo.id).collect();
-    let key = key.to_string();
-    let any = server.home.ask(move |catalog| in_album(catalog, &libraries, &key).iter().any(|id| shown.contains(id))).await?;
-    any.then_some(()).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such album.".into()))
+async fn seen(server: &Arc<Server>, me: &Account, key: &str) -> Result<(), Fail> {
+    let ids = server.home.album(key).await?;
+    let known = server.home.ask({
+        let key = key.to_string();
+        move |catalog| catalog.albums().unwrap_or_default().iter().any(|(have, _)| *have == key)
+    });
+    if !known.await? || !me.admin && !ids.iter().any(|id| me.sight.level(*id) >= Level::View) {
+        return Err(Fail(StatusCode::NOT_FOUND, "There is no such album.".into()));
+    }
+    match me.admin || ids.iter().all(|id| me.sight.level(*id) == Level::Edit) {
+        true => Ok(()),
+        false => Err(Fail(StatusCode::FORBIDDEN, "Only someone who may edit every photograph in it changes this album.".into())),
+    }
 }
 
 pub async fn rename_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>, Json(renamed): Json<Renamed>) -> Result<Json<Value>, Fail> {
-    seen(&server, &me.name, &key).await?;
+    seen(&server, &me, &key).await?;
     let (name, at) = (renamed.name.trim().to_string(), key.clone());
     server.home.ask(move |catalog| catalog.rename_album(&at, &name)).await?.map_err(Fail::bad)?;
+    server.home.forget_albums();
     Ok(Json(json!({ "key": key, "name": renamed.name.trim() })))
 }
 
 pub async fn delete_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>) -> Result<Json<Value>, Fail> {
-    seen(&server, &me.name, &key).await?;
+    seen(&server, &me, &key).await?;
     server.home.ask(move |catalog| catalog.delete_album(&key)).await?.map_err(Fail::bad)?;
+    server.home.forget_albums();
     Ok(Json(json!({ "deleted": true })))
 }
 
 pub async fn search(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
     let q = given(&wanted.q).ok_or_else(|| Fail::bad("Say what to look for."))?;
-    let found = found(&server, server.home.libraries(&me.name), q).await?;
-    let kept: HashMap<i64, Photo> = chosen(&server, &me.name, &Wanted { q: None, ..wanted }).await?.into_iter().map(|photo| (photo.id, photo)).collect();
+    let found = found(&server, server.home.reach(&me), q).await?;
+    let kept: HashMap<i64, Photo> = chosen(&server, &me, &Wanted { q: None, ..wanted }).await?.into_iter().map(|photo| (photo.id, photo)).collect();
     let photos: Vec<(&Photo, f32)> = found.into_iter().filter_map(|(id, score)| Some((kept.get(&id)?, score))).collect();
     let marks = Marks::of(&server, photos.iter().map(|(photo, _)| *photo));
     Ok(Json(
@@ -394,9 +406,9 @@ pub fn indexes<'a>(server: &'a Server, libraries: &[Library]) -> MutexGuard<'a, 
 }
 
 pub async fn filters(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Value>, Fail> {
-    let libraries = server.home.libraries(&me.name);
+    let libraries = server.home.reach(&me);
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
-    let photos = server.home.photos(&ids);
+    let photos = server.home.shown(&me, &ids);
     let tests = tests(&server, &libraries, &photos, &wanted).await?;
     let people = {
         let ids = ids.clone();
@@ -468,7 +480,7 @@ pub async fn in_step(
 ) -> Result<axum::response::Response, Fail> {
     use axum::response::IntoResponse;
     let now = crate::store::now();
-    let library = server.home.libraries(&me.name).into_iter().find(|library| library.id == id);
+    let library = server.home.libraries(&me).into_iter().find(|library| library.id == id);
     let library = library.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
     let since = asked.since.unwrap_or(0);
     let updated = server.store.updated();

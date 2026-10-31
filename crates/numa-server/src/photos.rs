@@ -12,11 +12,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::grants::Level;
 use crate::home::when;
 use crate::{Fail, Server};
 
 pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, Level::View)?;
     let path = photo.path.clone();
 
     let (summary, spot) = {
@@ -32,7 +33,7 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         })
         .await?;
 
-    let library = server.home.libraries(&me.name).into_iter().filter(|library| library.id == library_of(id)).collect::<Vec<_>>();
+    let library: Vec<_> = server.home.library(library_of(id)).into_iter().collect();
     let by = crate::by::owners(&server, &library).await?.remove(&id);
     let chosen = library.first().is_some_and(|library| server.store.authors().contains_key(&(library.id, crate::manage::within(library, &photo.path))));
     let summary = summary.as_ref();
@@ -65,6 +66,8 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         "chosen": chosen,
         "sharpness": sharpness(&server, &photo),
         "measured": photo.sharpness.is_some(),
+
+        "level": me.sight.level(id),
     });
     said.as_object_mut().expect("an object").extend(crate::map::said(spot).as_object().cloned().unwrap_or_default());
     Ok(Json(said))
@@ -76,7 +79,7 @@ fn sharpness(server: &Server, photo: &Photo) -> Option<String> {
 }
 
 pub async fn sharpness_now(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
-    let mut photo = server.home.photo(&me.name, id)?;
+    let mut photo = server.home.photo(&me, id, Level::View)?;
     if photo.sharpness.is_none() {
         let _turn = server.decodes.acquire().await.map_err(Fail::internal)?;
         let path = photo.path.clone();
@@ -125,7 +128,7 @@ pub(crate) async fn edits(server: &Server, photo: &Photo) -> Result<Option<Strin
 }
 
 async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, edge: u32, headers: HeaderMap) -> Result<Response, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, Level::View)?;
     let edits = edits(&server, &photo).await?;
     let tag = format!("\"{:x}\"", fnv(&format!("{}\0{}\0{edge}\0{}", photo.path.display(), photo.mtime, edits.as_deref().unwrap_or(""))));
     if headers.get(header::IF_NONE_MATCH).is_some_and(|asked| asked.as_bytes() == tag.as_bytes()) {
@@ -182,7 +185,10 @@ fn fnv(text: &str) -> u64 {
 }
 
 pub async fn original(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Response, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    file(&server.home.photo(&me, id, Level::Edit)?).await
+}
+
+async fn file(photo: &Photo) -> Result<Response, Fail> {
     let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let file = tokio::fs::File::open(&photo.path).await.map_err(|_| Fail(StatusCode::NOT_FOUND, "The file is no longer there.".into()))?;
     let length = file.metadata().await.map(|meta| meta.len()).ok();
@@ -219,10 +225,16 @@ pub fn attachment(name: &str) -> HeaderValue {
 }
 
 pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Query(asked): Query<Edge>) -> Result<Response, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, Level::View)?;
     let edge = asked.edge.map(|edge| edge.clamp(256, 8192));
+    let settings = jpeg_settings(&server);
     if edge.is_none() && !photo.edited && kind(&photo.path) == "image/jpeg" {
-        return original(State(server), Signed(me), Path(id)).await;
+
+        let file = tokio::fs::read(&photo.path).await.map_err(|_| Fail(StatusCode::NOT_FOUND, "The file is no longer there.".into()))?;
+        if let Some(bytes) = numa_io::export::restamped(&file, &settings) {
+            let name = photo.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")), (header::CONTENT_DISPOSITION, attachment(&name))], bytes).into_response());
+        }
     }
     let edits = match edits(&server, &photo).await? {
         Some(edits) => edits,
@@ -233,11 +245,11 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
     let _turn = server.renders.acquire().await.map_err(Fail::internal)?;
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         if let Some(edge) = edge {
-            return crate::book::develop(&photo, edge, &edits, scratch.parent().unwrap_or(&scratch));
+            return crate::book::develop(&photo, edge, &edits, scratch.parent().unwrap_or(&scratch), &settings);
         }
         let image = thumbs::render(&photo.path, u32::MAX, &edits)?;
         std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|err| err.to_string())?;
-        let written = numa_io::export::save(&image, &scratch, &numa_io::export::ExportSettings::default(), Some(&photo.path));
+        let written = numa_io::export::save(&image, &scratch, &settings, Some(&photo.path));
         let bytes = written.and_then(|()| std::fs::read(&scratch).map_err(|err| err.to_string()));
         let _ = std::fs::remove_file(&scratch);
         bytes
@@ -250,8 +262,46 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
     Ok((headers, bytes).into_response())
 }
 
+const CREATOR: &str = "jpegs:creator";
+const COPYRIGHT: &str = "jpegs:copyright";
+
+pub(crate) fn jpeg_settings(server: &Server) -> numa_io::export::ExportSettings {
+    shared(server.store.setting(CREATOR).unwrap_or_default(), server.store.setting(COPYRIGHT).unwrap_or_default())
+}
+
+fn shared(creator: String, copyright: String) -> numa_io::export::ExportSettings {
+    numa_io::export::ExportSettings { creator, copyright, no_ai_training: true, ..Default::default() }
+}
+
+#[derive(Deserialize)]
+pub struct Rights {
+    creator: String,
+    copyright: String,
+}
+
+fn admin(me: &crate::store::Account) -> Result<(), Fail> {
+    match me.admin {
+        true => Ok(()),
+        false => Err(Fail(StatusCode::FORBIDDEN, "Only an admin sets who made and owns Home's JPEGs.".into())),
+    }
+}
+
+pub async fn rights(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Value>, Fail> {
+    admin(&me)?;
+    let settings = jpeg_settings(&server);
+    Ok(Json(json!({ "creator": settings.creator, "copyright": settings.copyright })))
+}
+
+pub async fn rights_put(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Rights>) -> Result<Json<Value>, Fail> {
+    admin(&me)?;
+    for (key, value) in [(CREATOR, &asked.creator), (COPYRIGHT, &asked.copyright)] {
+        server.store.set_setting(key, value.trim()).map_err(Fail::internal)?;
+    }
+    Ok(Json(json!({ "creator": asked.creator.trim(), "copyright": asked.copyright.trim() })))
+}
+
 pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, body: Bytes) -> Result<Json<Value>, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, Level::Edit)?;
     let _one = server.editing.lock(id).await;
     if numa_core::document::schema_of(&String::from_utf8_lossy(&body)) > numa_core::document::SCHEMA {
         return Err(crate::edit::newer());
@@ -264,11 +314,11 @@ pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Pa
 
     document.source.path = photo.path.to_string_lossy().into_owned();
     document.moment = None;
-    changed(&server, id, move |catalog| catalog.save_edits(id, &document)).await
+    changed(&server, id, move |catalog| catalog.save_edits(id, &document).map_err(String::from)).await
 }
 
 pub async fn edits_get(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
-    let photo = server.home.photo(&me.name, id)?;
+    let photo = server.home.photo(&me, id, Level::View)?;
 
     let edits = server.home.ask(move |catalog| catalog.edits_json(id)).await?.map_err(Fail::internal)?;
     let edits: Option<Value> = edits.map(|edits| serde_json::from_str(&edits)).transpose().map_err(Fail::internal)?;
@@ -282,7 +332,7 @@ pub struct Marks {
 }
 
 pub async fn marks(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(marks): Json<Marks>) -> Result<Json<Value>, Fail> {
-    server.home.photo(&me.name, id)?;
+    server.home.photo(&me, id, Level::Edit)?;
     let flag = flag_from(&marks.flag)?;
     if marks.rating > 5 {
         return Err(Fail::bad("A rating is 0 to 5 stars."));
@@ -341,5 +391,12 @@ mod tests {
         assert!(!super::reshaped(Some(0.6667), 213.0 / 320.0));
 
         assert!(super::reshaped(None, 1.5));
+    }
+
+    #[test]
+    fn homes_jpegs_keep_the_metadata_and_mark() {
+        let settings = super::shared("Sam".into(), "© Sam".into());
+        assert!(settings.metadata && !settings.strip_location && !settings.strip_serials && settings.no_ai_training);
+        assert_eq!((settings.creator.as_str(), settings.copyright.as_str()), ("Sam", "© Sam"));
     }
 }

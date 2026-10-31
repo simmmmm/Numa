@@ -36,18 +36,16 @@ pub(super) fn build_adjustment_panel(state: &App) -> gtk::Box {
     pages.add_named(&wrap_page(&build_detail(state, &all, &global_only)), Some("detail"));
 
     let masks = page_column();
-    masks.add_css_class("quiet");
 
     masks.append(&section_header("New mask"));
     masks.append(&build_masks(state));
     pages.add_named(&wrap_page(&masks), Some("masks"));
 
     let crop = page_column();
-    crop.add_css_class("quiet");
-    crop.append(&build_crop_controls(state));
+    let (controls, foot) = build_crop_controls(state);
+    crop.append(&controls);
 
     let retouch = page_column();
-    retouch.add_css_class("quiet");
 
     retouch.append(&section_header("Spots"));
     retouch.append(&build_retouch(state));
@@ -55,7 +53,12 @@ pub(super) fn build_adjustment_panel(state: &App) -> gtk::Box {
     retouch.append(&build_face(state));
     pages.add_named(&wrap_page(&retouch), Some("retouch"));
 
-    pages.add_named(&wrap_page(&crop), Some("crop"));
+    let scroller = wrap_page(&crop);
+    pin_foot(&scroller, &foot);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.append(&scroller);
+    page.append(&foot);
+    pages.add_named(&page, Some("crop"));
 
     let presets = state.panel.presets_page.clone();
 
@@ -86,28 +89,16 @@ thread_local! {
 pub(super) const MASK_TABS: [&str; 5] = ["light", "colour", "effects", "grade", "detail"];
 
 pub(super) fn refresh_rail_dots(state: &App) {
-    fn scales(widget: &gtk::Widget, found: &mut Vec<gtk::Scale>) {
-        if let Some(scale) = widget.downcast_ref::<gtk::Scale>() {
-            found.push(scale.clone());
-        }
-        let mut child = widget.first_child();
-        while let Some(this) = child {
-            scales(&this, found);
-            child = this.next_sibling();
-        }
-    }
-
+    let open = state.open.borrow();
+    let Some(photo) = open.as_ref() else { return };
+    let raw = photo.proxy.profile.is_some();
+    let mask = state.mask_overlay.selected_mask.get().and_then(|index| photo.document.masks().get(index).cloned());
     RAIL_DOTS.with(|dots| {
         for (name, dot) in dots.borrow().iter() {
-            let Some(page) = state.panel.stack.child_by_name(name) else { continue };
-            let mut found = Vec::new();
-            scales(&page, &mut found);
-            let moved = found.iter().any(|scale| match neutral_of(scale) {
-                Some(rest) => (scale.value() - rest).abs() > 1e-4,
-
-                None => false,
+            dot.set_visible(match &mask {
+                Some(mask) => mask.tab_touched(name),
+                None => photo.document.tab_touched(name, raw.then_some(photo.as_shot)),
             });
-            dot.set_visible(moved);
         }
     });
 }
@@ -125,11 +116,11 @@ pub(super) const PANEL_TABS: [(&str, &str, &str, Option<&str>); 9] = [
 ];
 
 pub(super) fn page_column() -> gtk::Box {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    column.set_margin_top(6);
-    column.set_margin_bottom(18);
-    column.set_margin_start(14);
-    column.set_margin_end(14);
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.set_margin_top(8);
+    column.set_margin_bottom(8);
+    column.set_margin_start(12);
+    column.set_margin_end(12);
     column
 }
 
@@ -152,6 +143,11 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     luts.set_vexpand(true);
     luts.append(&lut::build(state));
     kinds.add_named(&luts, Some("luts"));
+    let searches = state.panel.looks_searches.clone();
+    for name in ["presets", "luts"] {
+        searches.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some(name));
+    }
+    kinds.bind_property("visible-child-name", &searches, "visible-child-name").sync_create().build();
     let first = &state.panel.looks_first;
     for (label, name) in [("Presets", "presets"), ("LUTs", "luts")] {
         let button = match name {
@@ -187,19 +183,35 @@ fn build_looks(state: &App, presets: &gtk::Box) -> gtk::Box {
     ends.add_named(&lut_more, Some("luts"));
     kinds.bind_property("visible-child-name", &ends, "visible-child-name").sync_create().build();
     ends.set_valign(gtk::Align::Center);
+
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    line.set_margin_top(8);
-    line.append(&choice);
+    line.append(&section_header("Looks"));
     line.append(&ends);
     name_icon_buttons(line.upcast_ref());
     top.append(&line);
-
+    top.append(&choice);
+    top.append(&searches);
+    cardify(&top);
     looks.append(&top);
     looks.append(&kinds);
+
+    let foots = gtk::Stack::new();
+    foots.add_named(&strength_foot(state), Some("presets"));
+    if let Some(amount) = lut::foot() {
+        foots.add_named(&amount, Some("luts"));
+    }
+    kinds.bind_property("visible-child-name", &foots, "visible-child-name").sync_create().build();
+    let foot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    foot.add_css_class("panel-foot");
+    foot.add_css_class("ruled");
+    foot.append(&foots);
+    looks.append(&foot);
     looks
 }
 
 pub(super) fn wrap_page(column: &gtk::Box) -> gtk::ScrolledWindow {
+
+    cardify(column);
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.add_css_class("adjustment");
@@ -348,6 +360,8 @@ pub(super) struct State {
 
     pub(super) looks_first: gtk::ToggleButton,
 
+    pub(super) looks_searches: gtk::Stack,
+
     pub(super) history_list: gtk::ListBox,
 }
 
@@ -360,6 +374,7 @@ impl State {
             scoped: Rc::new(RefCell::new(Vec::new())),
             presets_page: gtk::Box::new(gtk::Orientation::Vertical, 0),
             looks_first: gtk::ToggleButton::new(),
+            looks_searches: gtk::Stack::new(),
             history_list: gtk::ListBox::new(),
         }
     }

@@ -41,11 +41,12 @@ pub(super) fn libraries_dialog(state: &App, window: &adw::ApplicationWindow) {
         let counted = state.catalog.photo_count(library.id);
         let row = adw::EntryRow::new();
 
+        let place = if super::home_sync::is_cache_only(&library) { String::new() } else { format!(" · {}", library.path.display()) };
         set_row_title(&row, &match (counted.as_ref(), library.path.is_dir()) {
-            (Ok(count), true) => format!("{count} photo(s) · {}", library.path.display()),
+            (Ok(count), true) => format!("{count} photo(s){place}"),
 
-            (Ok(count), false) => format!("Not connected · {count} photo(s) remembered · {}", library.path.display()),
-            (Err(_), _) => format!("Not connected · {}", library.path.display()),
+            (Ok(count), false) => format!("Not connected · {count} photo(s) remembered{place}"),
+            (Err(_), _) => format!("Not connected{place}"),
         });
         row.set_text(&library.label());
         row.set_show_apply_button(true);
@@ -152,7 +153,7 @@ fn locate_button(
                         dialog.close();
                         libraries_dialog(&state, &parent);
                     }
-                    Err(err) => state.toast(&err),
+                    Err(err) => state.toast(&err.to_string()),
                 }
             });
         }

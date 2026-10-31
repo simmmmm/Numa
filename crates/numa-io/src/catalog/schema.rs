@@ -434,3 +434,60 @@ CREATE TABLE IF NOT EXISTS auto_read (
     grid     BLOB NOT NULL
 );
 "#;
+
+pub(super) const LIBRARY_VERSION: u32 = 1;
+
+pub(super) const LIBRARY_MIGRATIONS: &[(u32, &str)] = &[];
+
+pub(super) const HOME_VERSION: u32 = 1;
+pub(super) const HOME_MIGRATIONS: &[(u32, &str)] = &[];
+
+pub(super) fn user_version(conn: &Connection) -> u32 {
+    conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).map_or(0, |version| version.max(0) as u32)
+}
+
+pub(super) fn upgrade(conn: &Connection, migrations: &[(u32, &str)], current: u32) -> Result<(), String> {
+    let have = user_version(conn).max(1);
+    for (version, sql) in migrations.iter().filter(|(version, _)| *version > have) {
+        conn.execute_batch(&format!("BEGIN; {sql}; PRAGMA user_version = {version}; COMMIT;")).map_err(|err| {
+            let _ = conn.execute_batch("ROLLBACK");
+            format!("could not bring the catalog to version {version}: {err}")
+        })?;
+    }
+    if user_version(conn) != current {
+        conn.execute_batch(&format!("PRAGMA user_version = {current}")).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+const BASELINE_COLUMNS: &[(&str, &str, &str)] = &[
+
+    ("faces", "portrait", "ALTER TABLE faces ADD COLUMN portrait BLOB"),
+
+    ("analysis", "colourfulness", "ALTER TABLE analysis ADD COLUMN brightness REAL; ALTER TABLE analysis ADD COLUMN contrast REAL; ALTER TABLE analysis ADD COLUMN colourfulness REAL"),
+
+    ("analysis", "shape", "ALTER TABLE analysis ADD COLUMN shape INTEGER; ALTER TABLE analysis ADD COLUMN echo INTEGER"),
+
+    ("analysis", "exposure", "ALTER TABLE analysis ADD COLUMN exposure REAL; ALTER TABLE analysis ADD COLUMN focal35 REAL"),
+
+    ("analysis", "raw_clipped", "ALTER TABLE analysis ADD COLUMN raw_clipped REAL; ALTER TABLE analysis ADD COLUMN raw_dark REAL"),
+
+    ("analysis", "eyes_closed", "ALTER TABLE analysis ADD COLUMN eyes_closed INTEGER"),
+
+    ("photos", "taken", "ALTER TABLE photos ADD COLUMN taken INTEGER"),
+
+    ("photos", "aspect", "ALTER TABLE photos ADD COLUMN aspect REAL"),
+];
+
+pub(super) fn add_missing_columns(conn: &Connection) -> Result<(), String> {
+    for (table, probe, sql) in BASELINE_COLUMNS {
+        let has = conn
+            .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
+            .map(|statement| statement.column_names().contains(probe))
+            .unwrap_or(true);
+        if !has {
+            conn.execute_batch(sql).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}

@@ -108,10 +108,11 @@ fn inside_archive(server: &Server, place: Place, shoot: &Shoot) -> Place {
     }
 }
 
-pub async fn status(State(server): State<Arc<Server>>, Signed(_): Signed) -> Json<Value> {
+pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Value> {
     let cards = &server.cards;
     let card = cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(card) = card.as_ref() else { return Json(Value::Null) };
+
+    let Some(card) = card.as_ref().filter(|_| me.sight.household) else { return Json(Value::Null) };
     let shoots: Vec<Value> = card
         .shoots
         .iter()
@@ -156,7 +157,15 @@ pub struct Asked {
     shoots: Vec<Destination>,
 }
 
-pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(asked): Json<Asked>) -> Result<StatusCode, Fail> {
+fn household(me: &crate::store::Account) -> Result<(), Fail> {
+    match me.sight.household {
+        true => Ok(()),
+        false => Err(Fail(StatusCode::FORBIDDEN, "Only the household imports a card.".into())),
+    }
+}
+
+pub async fn start(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Asked>) -> Result<StatusCode, Fail> {
+    household(&me)?;
     let libraries = archive(&server);
     let (items, places, camera) = {
         let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -215,9 +224,10 @@ pub async fn start(State(server): State<Arc<Server>>, Signed(_): Signed, Json(as
     Ok(StatusCode::ACCEPTED)
 }
 
-pub async fn photos(State(server): State<Arc<Server>>, Signed(_): Signed) -> Json<Value> {
+pub async fn photos(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Value>, Fail> {
+    household(&me)?;
     let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(card) = card.as_ref() else { return Json(Value::Null) };
+    let Some(card) = card.as_ref() else { return Ok(Json(Value::Null)) };
     let shoots: Vec<Vec<Value>> = card
         .shoots
         .iter()
@@ -233,10 +243,11 @@ pub async fn photos(State(server): State<Arc<Server>>, Signed(_): Signed) -> Jso
                 .collect()
         })
         .collect();
-    Json(json!({ "card": card.root.file_name().map(|name| name.to_string_lossy()), "shoots": shoots }))
+    Ok(Json(json!({ "card": card.root.file_name().map(|name| name.to_string_lossy()), "shoots": shoots })))
 }
 
-pub async fn thumb(State(server): State<Arc<Server>>, Signed(_): Signed, axum::extract::Path(at): axum::extract::Path<usize>) -> Result<axum::response::Response, Fail> {
+pub async fn thumb(State(server): State<Arc<Server>>, Signed(me): Signed, axum::extract::Path(at): axum::extract::Path<usize>) -> Result<axum::response::Response, Fail> {
+    household(&me)?;
     let path = {
         let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         card.as_ref().and_then(|card| card.found.get(at)).map(|photo| photo.path.clone())
@@ -245,7 +256,8 @@ pub async fn thumb(State(server): State<Arc<Server>>, Signed(_): Signed, axum::e
     crate::manage::embedded(&server, path, 320).await
 }
 
-pub async fn names(State(server): State<Arc<Server>>, Signed(_): Signed) -> Result<Json<Vec<Value>>, Fail> {
+pub async fn names(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
+    household(&me)?;
     let shoots: Vec<Vec<PathBuf>> = {
         let card = server.cards.card.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(card) = card.as_ref() else { return Ok(Json(Vec::new())) };

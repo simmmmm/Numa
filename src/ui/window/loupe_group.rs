@@ -24,6 +24,8 @@ pub(super) struct State {
     one: Rc<Cell<bool>>,
 
     pill: gtk::Label,
+
+    pub(super) plain: Rc<Cell<bool>>,
 }
 
 impl State {
@@ -34,6 +36,7 @@ impl State {
             shown: Rc::default(),
             one: Rc::new(Cell::new(false)),
             pill: gtk::Label::new(None),
+            plain: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -65,6 +68,19 @@ pub(super) fn build_pill(state: &App) -> gtk::Label {
 }
 
 fn members(state: &App, at: usize) -> Option<Vec<usize>> {
+    if state.loupe.group.plain.get() {
+        return None;
+    }
+
+    let few = state.loupe.few.borrow();
+    let mut chosen = if few.side_by_side { few.selection.clone() } else { Vec::new() };
+    drop(few);
+    chosen.sort_unstable();
+    if chosen.len() >= 2 {
+        let here = chosen.iter().position(|index| *index == at)?;
+        let start = here / MOST * MOST;
+        return Some(chosen[start..(start + MOST).min(chosen.len())].to_vec());
+    }
 
     let all: Vec<usize> = burst_run(state, at).filter(|index| in_reach(state, *index)).collect();
     if all.len() < 2 {

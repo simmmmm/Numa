@@ -29,7 +29,7 @@ fn year(name: &str) -> bool {
 }
 
 pub fn may_manage(server: &Server, me: &Account, library: &Library) -> bool {
-    me.admin || me.manage || library.path == server.home.sent_folder(&me.name)
+    library.path == server.home.sent_folder(&me.name) || (me.admin || me.manage) && me.sight.library(library.id) == crate::grants::Level::Edit
 }
 
 pub fn refused() -> Fail {
@@ -105,6 +105,8 @@ pub async fn add(State(server): State<Arc<Server>>, Signed(me): Signed, Json(mad
             server.store.leave_out(&relative(&server, &folder), false).map_err(Fail::internal)?;
             folder
         }
+
+        (None, Some(_)) if !me.sight.household => return Err(Fail(StatusCode::FORBIDDEN, "Only the household adds libraries to the photos folder.".into())),
         (None, Some(name)) if plain(name) => {
             let year = made.year.as_deref().map(str::trim).filter(|year| !year.is_empty());
             if year.is_some_and(|year| !self::year(year)) {
@@ -134,7 +136,7 @@ pub struct Renamed {
 }
 
 pub async fn rename(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(renamed): Json<Renamed>) -> Result<Json<Value>, Fail> {
-    let library = server.home.libraries(&me.name).into_iter().find(|library| library.id == id).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
+    let library = server.home.libraries(&me).into_iter().find(|library| library.id == id).ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
     if !may_manage(&server, &me, &library) {
         return Err(refused());
     }
@@ -342,7 +344,7 @@ pub fn empty_old(server: &Server) -> usize {
 }
 
 fn its_trash(server: &Server, me: &Account) -> Vec<(Library, crate::store::Trashed)> {
-    let libraries: Vec<Library> = server.home.libraries(&me.name).into_iter().filter(|library| may_manage(server, me, library)).collect();
+    let libraries: Vec<Library> = server.home.libraries(me).into_iter().filter(|library| may_manage(server, me, library)).collect();
     server
         .store
         .trashed()
@@ -464,7 +466,7 @@ fn archive(server: &Server, me: &Account, ids: &[i64]) -> Result<Vec<Library>, F
     if ids.is_empty() {
         return Err(Fail::bad("Choose a library first."));
     }
-    let libraries = server.home.libraries(&me.name);
+    let libraries = server.home.libraries(me);
     ids.iter()
         .map(|id| {
             let library = libraries.iter().find(|library| library.id == *id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;

@@ -6,6 +6,7 @@ services:
       - "8283:8283"
     environment:
       TZ: Etc/UTC
+      NUMA_HOME_PROXY: ""
     volumes:
       - ./photos:/photos
       - ./sent:/sent

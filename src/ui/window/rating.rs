@@ -257,6 +257,18 @@ fn editor_key(
         return glib::Propagation::Stop;
     }
 
+    if key == gtk::gdk::Key::Escape {
+        let typing = gtk::prelude::GtkWindowExt::focus(window).is_some_and(|focus| focus.is::<gtk::Editable>() || focus.is::<gtk::Text>());
+        if typing {
+            return glib::Propagation::Proceed;
+        }
+        match open_id(state) {
+            Some(_) => close_editor(state),
+            None => state.toast("A merge is only here until it is exported. Back lets it go"),
+        }
+        return glib::Propagation::Stop;
+    }
+
     match key {
         gtk::gdk::Key::Left | gtk::gdk::Key::Page_Up => {
             step_photo(&state, false);

@@ -604,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "ios"))]
     fn a_build_is_read_by_its_ranges_into_the_map() {
         let dir = std::env::temp_dir().join(format!("numa-map-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

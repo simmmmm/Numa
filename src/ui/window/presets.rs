@@ -39,13 +39,12 @@ pub(super) enum Kind {
     Luts,
 }
 
-const NO_LUT: &str = "None";
-
 impl Kind {
     fn names(self) -> Vec<String> {
         match self {
             Kind::Presets => numa::io::presets::list(&numa::io::presets::dir()),
-            Kind::Luts => std::iter::once(NO_LUT.to_string()).chain(numa::io::luts::list()).collect(),
+
+            Kind::Luts => numa::io::luts::list(),
         }
     }
 
@@ -59,7 +58,6 @@ impl Kind {
     fn file(self, name: &str) -> Option<PathBuf> {
         match self {
             Kind::Presets => Some(self.folder().join(format!("{name}.json"))),
-            Kind::Luts if name == NO_LUT => None,
             Kind::Luts => Some(self.folder().join(name)),
         }
     }
@@ -82,7 +80,7 @@ impl Kind {
             }
             Kind::Luts => {
                 let mut document = photo.document.clone();
-                document.lut = (name != NO_LUT).then(|| numa::core::lut::LutChoice { name: name.to_string(), amount: 100.0 });
+                document.lut = Some(numa::core::lut::LutChoice { name: name.to_string(), amount: 100.0 });
                 Some(document)
             }
         }
@@ -100,7 +98,36 @@ impl Kind {
                     Err(err) => state.toast(&err),
                 }
             }
-            Kind::Luts => lut::choose(state, (name != NO_LUT).then_some(name)),
+            Kind::Luts => lut::choose(state, Some(name)),
+        }
+    }
+
+    fn is_on(self, name: &str, applied: Option<&str>) -> bool {
+        match self {
+            Kind::Presets => applied == Some(name.rsplit('/').next().unwrap_or(name)),
+            Kind::Luts => applied == Some(name),
+        }
+    }
+
+    fn take_off(self, state: &App, name: &str) -> bool {
+        match self {
+            Kind::Presets => {
+                let on = {
+                    let open = state.open.borrow();
+                    open.as_ref().and_then(|photo| photo.before_preset.as_ref()).is_some_and(|on| {
+                        self.is_on(name, Some(&on.name))
+                            && numa::io::presets::load(&self.folder(), name).is_ok_and(|preset| serde_json::to_string(&preset.document).ok() == serde_json::to_string(&on.preset.document).ok())
+                    })
+                };
+                on && remove_preset(state)
+            }
+            Kind::Luts => {
+                let on = self.is_on(name, applied(state, self).as_deref());
+                if on {
+                    lut::choose(state, None);
+                }
+                on
+            }
         }
     }
 
@@ -128,8 +155,12 @@ pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static
 
     if names.is_empty() {
         let empty = adw::StatusPage::new();
-        empty.set_title("No Presets Yet");
-        empty.set_description(Some("Save the settings of a photograph, or import presets from another raw developer."));
+        let (title, words) = match kind {
+            Kind::Presets => ("No Presets Yet", "Save the settings of a photograph, or import presets from another raw developer."),
+            Kind::Luts => ("No LUTs Yet", "Import .cube files from the ⋯ menu above."),
+        };
+        empty.set_title(title);
+        empty.set_description(Some(words));
         empty.set_vexpand(true);
         column.append(&empty);
     } else {
@@ -155,9 +186,11 @@ pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static
 
             row.set_widget_name(&name);
             let (title, group) = kind.title(&name);
-            if let Some(label) = row.first_child().and_then(|card| card.next_sibling()).and_downcast::<gtk::Label>() {
+            let head = row.first_child().and_then(|card| card.next_sibling());
+            if let Some(label) = head.and_then(|head| head.first_child()).and_downcast::<gtk::Label>() {
                 label.set_text(&title);
             }
+            mark_card(&row, kind.is_on(&name, applied(&state, kind).as_deref()));
             if let Some(label) = row.last_child().and_downcast::<gtk::Label>() {
                 label.set_visible(!group.is_empty());
                 label.set_text(&group);
@@ -184,10 +217,17 @@ pub(super) fn browser(state: &App, kind: Kind, done: impl Fn() + Clone + 'static
                 kind.apply(&state, &name);
             }
         );
-        list.connect_activate({
-            let apply = apply.clone();
-            move |_, position| apply(position)
-        });
+        list.connect_activate(glib::clone!(
+            #[strong] state,
+            #[strong] filtered,
+            #[strong] apply,
+            move |_, position| {
+                let name = filtered.item(position).and_downcast::<gtk::StringObject>().map(|s| s.string());
+                if !name.is_some_and(|name| kind.take_off(&state, &name)) {
+                    apply(position);
+                }
+            }
+        ));
 
         search.connect_activate({
             let filtered = filtered.clone();
@@ -452,19 +492,29 @@ let factory = gtk::SignalListItemFactory::new();
         card.set_content_fit(gtk::ContentFit::Cover);
         card.add_css_class("preset-card");
         row.append(&card);
+
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let title = gtk::Label::new(None);
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
         title.set_max_width_chars(12);
+        title.add_css_class("look-name");
+        head.append(&title);
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.set_valign(gtk::Align::Center);
+        dot.add_css_class("touched-dot");
+        dot.set_visible(false);
+        head.append(&dot);
         let group = gtk::Label::new(None);
         group.set_xalign(0.0);
         group.set_ellipsize(gtk::pango::EllipsizeMode::End);
         group.set_max_width_chars(12);
         group.add_css_class("dim-label");
         group.add_css_class("caption");
-        row.append(&title);
+        row.append(&head);
         row.append(&group);
+        MARKED.with_borrow_mut(|cards| cards.push((kind, row.downgrade())));
 
         let hover = gtk::EventControllerMotion::new();
         hover.connect_enter(glib::clone!(
@@ -643,17 +693,22 @@ pub(super) fn fill_presets_page(state: &App) {
     while let Some(child) = page.first_child() {
         page.remove(&child);
     }
-    let card = strength_card(state);
-    if let Some(parent) = card.parent().and_downcast::<gtk::Box>() {
-        parent.remove(&card);
-    }
-    page.append(&card);
     refresh_strength(state);
     let browser = preset_browser(state, || {});
     browser.set_vexpand(true);
-
-    browser.set_margin_top(6);
+    take_search(state, "presets", &browser);
     page.append(&browser);
+}
+
+pub(super) fn take_search(state: &App, kind: &str, browser: &gtk::Box) {
+    let Some(slot) = state.panel.looks_searches.child_by_name(kind).and_downcast::<gtk::Box>() else { return };
+    while let Some(child) = slot.first_child() {
+        slot.remove(&child);
+    }
+    if let Some(search) = browser.first_child() {
+        browser.remove(&search);
+        slot.append(&search);
+    }
 }
 
 pub(super) fn preset_ends() -> gtk::Box {
@@ -675,18 +730,70 @@ pub(super) fn preset_ends() -> gtk::Box {
 
 thread_local! {
 
-    static STRENGTH: std::cell::OnceCell<(gtk::Box, gtk::Label, gtk::Scale)> = const { std::cell::OnceCell::new() };
+    static MARKED: RefCell<Vec<(Kind, glib::WeakRef<gtk::Box>)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn strength_card(state: &App) -> gtk::Box {
+fn applied(state: &App, kind: Kind) -> Option<String> {
+    let open = state.open.borrow();
+    let photo = open.as_ref()?;
+    match kind {
+        Kind::Presets => photo.before_preset.as_ref().map(|on| on.name.clone()),
+        Kind::Luts => photo.document.lut.as_ref().map(|lut| lut.name.clone()),
+    }
+}
+
+fn mark_card(row: &gtk::Box, on: bool) {
+    match on {
+        true => row.add_css_class("applied"),
+        false => row.remove_css_class("applied"),
+    }
+    if let Some(dot) = row.first_child().and_then(|card| card.next_sibling()).and_then(|head| head.last_child()) {
+        dot.set_visible(on);
+    }
+}
+
+pub(super) fn mark_applied(state: &App, kind: Kind) {
+    let applied = applied(state, kind);
+    MARKED.with_borrow_mut(|cards| {
+        cards.retain(|(of, row)| {
+            let Some(row) = row.upgrade() else { return false };
+            if *of == kind {
+                mark_card(&row, kind.is_on(&row.widget_name(), applied.as_deref()));
+            }
+            true
+        })
+    });
+}
+
+thread_local! {
+
+    static STRENGTH: std::cell::OnceCell<(gtk::Box, gtk::Label, gtk::Scale, gtk::Stack, gtk::Label, gtk::Button)> = const { std::cell::OnceCell::new() };
+}
+
+pub(super) fn strength_foot(state: &App) -> gtk::Box {
     STRENGTH.with(|strength| {
         strength
             .get_or_init(|| {
-                let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                card.add_css_class("strength-card");
-                let name = section_header("");
-                name.set_margin_top(0);
-                card.append(&name);
+                let foot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let name = section_header("Strength");
+                name.set_hexpand(true);
+                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                line.add_css_class("section-line");
+                line.append(&name);
+
+                let remove = gtk::Button::from_icon_name("window-close-symbolic");
+                remove.add_css_class("label-action");
+                remove.set_tooltip_text(Some("Remove Preset"));
+                remove.connect_clicked(glib::clone!(
+                    #[strong] state,
+                    move |_| {
+                        remove_preset(&state);
+                    }
+                ));
+                line.append(&remove);
+                foot.append(&line);
+
                 let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
                 scale.set_value(100.0);
                 set_neutral(&scale, 100.0);
@@ -702,7 +809,7 @@ fn strength_card(state: &App) -> gtk::Box {
                         }
                     }
                 ));
-                card.append(&slider_row(state, "Strength", &scale, Readout::Positive(0)));
+                let row = slider_row(state, "Strength", &scale, Readout::Positive(0));
                 scale.connect_value_changed(glib::clone!(
                     #[strong] state,
                     move |_| {
@@ -711,7 +818,18 @@ fn strength_card(state: &App) -> gtk::Box {
                         }
                     }
                 ));
-                (card, name, scale)
+                let note = gtk::Label::new(None);
+                note.set_xalign(0.0);
+                note.set_wrap(true);
+                note.add_css_class("note");
+                let slot = gtk::Stack::new();
+                slot.add_named(&row, Some("strength"));
+                slot.add_named(&note, Some("note"));
+                let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                card.add_css_class("panel-card");
+                card.append(&slot);
+                foot.append(&card);
+                (foot, name, scale, slot, note, remove)
             })
             .0
             .clone()
@@ -736,18 +854,52 @@ fn strength_moved(state: &App, amount: f64) -> bool {
 }
 
 pub(super) fn refresh_strength(state: &App) {
-    let Some((card, name, scale)) = STRENGTH.with(|strength| strength.get().cloned()) else { return };
-    let chosen = state.open.borrow().as_ref().and_then(|photo| match &photo.before_preset {
-        Some(on) if on.left == EditState::of(&photo.document) => Some((on.name.clone(), on.amount)),
-        _ => None,
+    let Some((_, name, scale, slot, note, remove)) = STRENGTH.with(|strength| strength.get().cloned()) else { return };
+    let on = state.open.borrow().as_ref().and_then(|photo| {
+        let on = photo.before_preset.as_ref()?;
+        Some((on.name.clone(), on.amount, on.left == EditState::of(&photo.document)))
     });
-    card.set_visible(chosen.is_some());
-    if let Some((label, at)) = chosen {
-        name.set_text(&label.to_uppercase());
-        state.applying.set(true);
-        scale.set_value(at * 100.0);
-        state.applying.set(false);
+    name.set_text(&match &on {
+        Some((look, ..)) => format!("Strength · {look}"),
+        None => "Strength".to_string(),
     }
+    .to_uppercase());
+    let removable = matches!(on, Some((_, _, true)));
+    remove.set_opacity(if removable { 1.0 } else { 0.0 });
+    remove.set_sensitive(removable);
+    remove.set_can_target(removable);
+    match on {
+        Some((_, at, true)) => {
+            let was = state.applying.replace(true);
+            scale.set_value(at * 100.0);
+            state.applying.set(was);
+            slot.set_visible_child_name("strength");
+        }
+        Some(_) => {
+            note.set_text("Strength is set right after a look is applied.");
+            slot.set_visible_child_name("note");
+        }
+        None => {
+            note.set_text("Apply a look to set its strength here.");
+            slot.set_visible_child_name("note");
+        }
+    }
+    mark_applied(state, Kind::Presets);
+}
+
+fn remove_preset(state: &App) -> bool {
+    {
+        let mut open = state.open.borrow_mut();
+        let Some(photo) = open.as_mut() else { return false };
+        let snapshot = EditState::of(&photo.document);
+        let Some(on) = photo.before_preset.take_if(|on| on.left == snapshot) else { return false };
+        photo.document = on.base;
+    }
+
+    end_preview(state);
+    reload_open_document(state);
+    refresh_strength(state);
+    true
 }
 
 pub(super) fn note_look(state: &App, look: Option<(i64, String, numa::io::made::AppliedLook)>) {

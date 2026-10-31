@@ -12,6 +12,8 @@ pub const UNKNOWN_ASPECT: f32 = 1.5;
 
 const PAD: f32 = 12.0;
 
+const SIDE: f32 = 24.0;
+
 const HEAD_LINE: f32 = 16.0;
 const HEAD: f32 = HEAD_LINE + 8.0;
 const ABOVE: f32 = 24.0;
@@ -208,7 +210,7 @@ mod imp {
             let Some((x0, y0, x1, y1)) = self.band.get() else { return };
             let offset = self.obj().offset();
             let rect = graphene::Rect::new(
-                x0.min(x1) + PAD,
+                x0.min(x1) + SIDE,
                 y0.min(y1) + PAD - offset,
                 (x1 - x0).abs(),
                 (y1 - y0).abs(),
@@ -481,7 +483,7 @@ impl Justified {
     }
 
     fn inner_width(&self, width: i32) -> i32 {
-        (width - 2 * PAD as i32).max(1)
+        (width - 2 * SIDE as i32).max(1)
     }
 
     fn offset(&self) -> f32 {
@@ -489,7 +491,7 @@ impl Justified {
     }
 
     fn to_layout(&self, x: f64, y: f64) -> (f32, f32) {
-        (x as f32 - PAD, y as f32 + self.offset() - PAD)
+        (x as f32 - SIDE, y as f32 + self.offset() - PAD)
     }
 
     fn layout_for(&self, width: i32) {
@@ -569,7 +571,7 @@ impl Justified {
             card.measure(gtk::Orientation::Horizontal, -1);
             card.size_allocate(
                 &gtk::Allocation::new(
-                    (rect.x + PAD).round() as i32,
+                    (rect.x + SIDE).round() as i32,
                     (rect.y + PAD - offset).round() as i32,
                     (rect.width.round() as i32).max(1),
                     (rect.height.round() as i32).max(1),
@@ -609,12 +611,12 @@ impl Justified {
         }
 
         let (layout, offset) = (imp.layout.borrow(), self.offset());
-        let width = (self.width() - 2 * PAD as i32).max(1);
+        let width = (self.width() - 2 * SIDE as i32).max(1);
         for (at, head) in imp.heads.borrow().iter() {
             let Some(y) = layout.heads.get(*at) else { continue };
             let height = head.measure(gtk::Orientation::Vertical, width).1.max(HEAD_LINE as i32);
             let y = (y + PAD - offset + HEAD_LINE - height as f32).round() as i32;
-            head.size_allocate(&gtk::Allocation::new(PAD as i32, y, width, height), -1);
+            head.size_allocate(&gtk::Allocation::new(SIDE as i32, y, width, height), -1);
         }
     }
 

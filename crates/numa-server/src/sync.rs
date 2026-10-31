@@ -42,7 +42,7 @@ pub async fn stop(State(server): State<Arc<Server>>, Signed(me): Signed, headers
 }
 
 pub async fn devices(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Value> {
-    let seen: Vec<i64> = server.home.libraries(&me.name).iter().map(|library| library.id).collect();
+    let seen: Vec<i64> = server.home.libraries(&me).iter().map(|library| library.id).collect();
     let mut by_library: HashMap<i64, Vec<(String, String)>> = HashMap::new();
     for (library, account, device) in server.store.synced(crate::store::now() - STALE) {
         if seen.contains(&library) {

@@ -51,6 +51,14 @@ input[type=text], input[type=password], input[type=search], select {
   height: 36px; border-radius: 8px; border: 1px solid var(--rule); background: var(--ground-view); padding: 0 12px; min-width: 0;
 }
 input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+/* A select's chevron, Lucide's chevron-down in `name`, one gap in from the
+   edge, the text kept clear of it; the list it opens stays the browser's. */
+select {
+  appearance: none; -webkit-appearance: none; padding-right: calc(var(--space-16) + var(--space-20));
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='silver' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right var(--space-12) center; background-size: 16px 16px;
+}
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 
 /* Signing in, and the first account. */
 .gate { min-height: 100vh; display: grid; place-items: center; padding: var(--edge); }
@@ -543,6 +551,23 @@ dialog.ask .buttons .chip { height: 40px; border-radius: 20px; padding: 0 22px; 
 dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 dialog.ask input[type=checkbox] { accent-color: var(--accent); }
 dialog.ask .chapters { display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
+/* HOME-003 (#56): what an account sees, a tick per library and album, and
+   once ticked its May edit switch on the right: chosen is white. */
+dialog.ask .grants { display: grid; gap: 8px; max-height: 50vh; overflow-y: auto; }
+dialog.ask .grants-albums { display: grid; gap: 8px; }
+dialog.ask .grant { display: flex; justify-content: space-between; align-items: center; gap: var(--space-12); color: var(--name); min-width: 0; }
+dialog.ask .grant > label:first-child { min-width: 0; }
+dialog.ask .grant span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.ask .grant .may { flex: none; }
+dialog.ask .grant .may[hidden] { display: none; }
+dialog.ask .grants .rule { height: 1px; background: var(--rule); margin: 4px 0; }
+input.switch { appearance: none; -webkit-appearance: none; flex: none; width: 32px; height: 18px; margin: 0; border-radius: var(--radius-chip); background: var(--ground-chip);
+  border: 1px solid var(--rule); position: relative; cursor: pointer; transition: background var(--quick); }
+input.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 6px; background: var(--name); transition: transform var(--quick), background var(--quick); }
+input.switch:checked { background: var(--accent); border-color: var(--accent); }
+input.switch:checked::after { transform: translateX(14px); background: var(--on-accent); }
+input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+dialog.ask .grants .section-label { margin-top: 8px; }
 dialog.ask .chapters .caption { margin-left: auto; }
 dialog.ask .year { width: 80px; margin-left: auto; }
 .primary:disabled { opacity: 0.4; cursor: default; }
@@ -665,13 +690,35 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 
 /* HOME-039: Today. The years on one shelf that scrolls; on a wide screen
    what waits and what the night did beside the photographs. */
-.today { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px 32px; align-items: start; padding-top: 24px; }
-.today-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 12px; }
+.today { display: grid; gap: var(--space-30); align-items: start; }
+.today-plain { padding-top: 24px; }
+.today-head { display: flex; align-items: baseline; gap: 12px; }
 .today-head h1 { font-size: 26px; line-height: 32px; font-weight: 700; margin: 0; }
-.today-column, .today-part { display: grid; gap: 26px; min-width: 0; }
-.today-part { gap: 12px; }
-.today-part > .head, .arrival > .head { display: flex; align-items: center; gap: 10px; }
-.today-part > .head .caption, .arrival > .head .chip { margin-left: auto; }
+.today-column { display: grid; gap: var(--space-44); min-width: 0; width: 100%; max-width: 1120px; justify-self: center; }
+.today-part { display: grid; gap: var(--space-14); min-width: 0; }
+.today-part h2 { font-size: 20px; line-height: 24px; font-weight: 700; margin: 0; }
+.today-part > .head, .arrival > .head { display: flex; align-items: baseline; gap: 10px; }
+.today-part > .head .caption { margin-left: 0; }
+.arrival > .head { align-items: center; }
+.arrival > .head .chip { margin-left: auto; }
+/* #134: full bleed in the content's width, its foot running into the page. */
+.today-hero { position: relative; display: grid; align-content: space-between; margin: 0 calc(var(--edge) * -1); height: min(600px, 72vh); min-height: 420px; overflow: hidden; background: var(--ground-photo); }
+.today-hero > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.today-hero .scrim { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to bottom, var(--ground-hud), transparent 22%, transparent 45%, var(--ground-page)); }
+.today-hero .today-head, .today-hero .foot { position: relative; padding: var(--space-20) var(--space-44); }
+.today-hero .foot { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-20); padding-bottom: var(--space-30); }
+.today-hero .say { display: grid; gap: var(--space-8); min-width: 0; }
+.today-hero .section-label { color: var(--ink); }
+.today-hero .title { font-size: 48px; line-height: 56px; font-weight: 700; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.today-hero .when { margin: 0; color: var(--name); }
+.today-hero .caption { color: var(--name); }
+.today-hero .acts { flex: none; display: flex; gap: var(--space-8); align-items: center; }
+.today-hero .acts .primary { height: 36px; border-radius: 18px; padding: 0 var(--space-18); margin: 0; }
+@media (max-width: 720px) {
+  .today-hero .today-head, .today-hero .foot { padding-left: var(--edge); padding-right: var(--edge); }
+  .today-hero .foot { flex-direction: column; align-items: flex-start; }
+  .today-hero .title { font-size: 32px; line-height: 40px; max-width: 100%; }
+}
 .today .name { font-weight: 600; }
 .today a { color: var(--name); }
 .today .places { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 176px; overflow-x: auto; padding-top: 0; }
@@ -680,12 +727,10 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .strip { display: flex; gap: 4px; overflow: hidden; }
 .strip button { flex: none; height: 104px; min-width: 60px; padding: 0; border: 0; border-radius: 4px; overflow: hidden; background: var(--ground-raised); cursor: pointer; }
 .strip img { height: 100%; width: auto; display: block; }
-.waiting { gap: 0; padding: 16px 18px; border-radius: 14px; background: var(--ground-view); }
-.waiting .section-label { margin-bottom: 4px; }
-.wait { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
-.wait:last-child { border-bottom: 0; }
+.waiting { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-12); }
+.waiting > .head { grid-column: 1 / -1; }
+.wait { display: flex; align-items: center; gap: 12px; padding: var(--space-16); border-radius: 14px; background: var(--ground-view); min-width: 0; }
 .wait .what { flex: 1; display: grid; gap: 1px; }
-@media (min-width: 1100px) { .today.two { grid-template-columns: minmax(0, 1fr) 320px; } }
 @media (max-width: 720px) { .strip button { height: 96px; } }
 /* HOME-035 on Today: Safe at Home's one line, at the head's far end. */
 .today-head { flex-wrap: wrap; }

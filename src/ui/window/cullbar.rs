@@ -1,8 +1,31 @@
 use super::*;
 
+fn flag_buttons(state: &App) -> Vec<gtk::Button> {
+    [
+        ("Pick", "emoji-flags-symbolic", "Pick (P), again to clear", Flag::Picked),
+        ("Reject", "window-close-symbolic", "Reject (X), again to clear", Flag::Rejected),
+    ]
+    .into_iter()
+    .map(|(label, icon, tip, flag)| {
+        let button = gtk::Button::new();
+        button.set_child(Some(&labelled(label, icon)));
+        button.add_css_class("flat");
+        button.set_tooltip_text(Some(tip));
+        button.connect_clicked(glib::clone!(
+            #[strong] state,
+            move |_| apply_to_selection(&state, toggled(&state, &selected_ids(&state), Action::Flag(flag)))
+        ));
+        button
+    })
+    .collect()
+}
+
 pub(super) fn build(state: &App) -> gtk::ActionBar {
     let bar = gtk::ActionBar::new();
     bar.set_revealed(false);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    bar.set_center_widget(Some(&row));
 
     let clear = gtk::Button::from_icon_name("edit-clear-all-symbolic");
     clear.add_css_class("flat");
@@ -16,8 +39,8 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     count.add_css_class("numeric");
     count.set_margin_start(4);
     count.set_margin_end(10);
-    bar.pack_start(&clear);
-    bar.pack_start(&count);
+    row.append(&clear);
+    row.append(&count);
 
     let everything = gtk::Button::with_label("Select All");
     everything.set_tooltip_text(Some("Select All (Ctrl+A)"));
@@ -29,33 +52,22 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     chip.set_valign(gtk::Align::Center);
     chip.set_margin_end(4);
     chip.append(&everything);
-    bar.pack_start(&chip);
+    row.append(&chip);
 
     let mut acts: Vec<gtk::Widget> = Vec::new();
 
     let rate = rate_button("win.photo-rate");
     back_to_grid(state, &rate);
-    bar.pack_start(&rate);
+    row.append(&rate);
     acts.push(rate.upcast());
-    for (label, icon, tip, flag) in [
-        ("Pick", "emoji-flags-symbolic", "Pick (P), again to clear", Flag::Picked),
-        ("Reject", "window-close-symbolic", "Reject (X), again to clear", Flag::Rejected),
-    ] {
-        let button = gtk::Button::new();
-        button.set_child(Some(&labelled(label, icon)));
-        button.add_css_class("flat");
-        button.set_tooltip_text(Some(tip));
-        button.connect_clicked(glib::clone!(
-            #[strong] state,
-            move |_| apply_to_selection(&state, toggled(&state, &selected_ids(&state), Action::Flag(flag)))
-        ));
-        bar.pack_start(&button);
+    for button in flag_buttons(state) {
+        row.append(&button);
         acts.push(button.upcast());
     }
     let line = gtk::Separator::new(gtk::Orientation::Vertical);
     line.set_margin_start(6);
     line.set_margin_end(6);
-    bar.pack_start(&line);
+    row.append(&line);
     acts.push(line.upcast());
 
     let paste = gtk::Button::with_label("Paste Settings");
@@ -65,10 +77,10 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     paste.set_tooltip_text(Some(
         "Paste the settings copied with Copy Settings — a photograph's right-click menu, or Ctrl+C in the editor — onto the selection (Ctrl+V)",
     ));
-    bar.pack_start(&paste);
+    row.append(&paste);
     let album = album_button(state);
     back_to_grid(state, &album);
-    bar.pack_start(&album);
+    row.append(&album);
 
     acts.push(paste.upcast());
 
@@ -79,7 +91,7 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         #[strong] state,
         move |button| merge_selection(&state, button)
     ));
-    bar.pack_start(&merge);
+    row.append(&merge);
 
     let export = gtk::Button::new();
     export.set_tooltip_text(Some("Export the selection, choosing how"));
@@ -87,10 +99,8 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         #[strong] state,
         move |button| export_selection(&state, button)
     ));
-    bar.pack_end(&export);
     let more = more_button(state);
-    bar.pack_end(&more);
-    acts.extend([merge.clone().upcast(), export.clone().upcast(), more.upcast()]);
+    acts.extend([merge.clone().upcast(), export.clone().upcast(), more.clone().upcast()]);
 
     let into = primary_button("Add to");
     into.set_visible(false);
@@ -98,7 +108,10 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         #[strong] state,
         move |_| into_new_album(&state)
     ));
-    bar.pack_end(&into);
+
+    row.append(&into);
+    row.append(&more);
+    row.append(&export);
 
     let update = Rc::new(glib::clone!(
         #[weak] bar,

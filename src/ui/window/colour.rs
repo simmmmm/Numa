@@ -1,3 +1,5 @@
+use numa::core::panel::{light_source, LightSource, LIGHT_SOURCES};
+
 use super::*;
 
 #[derive(Clone)]
@@ -22,7 +24,11 @@ pub(super) struct State {
     pub(super) point_selected: Rc<Cell<usize>>,
     pub(super) point_sliders: Vec<gtk::Scale>,
     pub(super) point_controls: gtk::Box,
-    pub(super) point_show: gtk::ToggleButton,
+    pub(super) point_show: gtk::Switch,
+
+    pub(super) point_none: gtk::Label,
+
+    pub(super) profile_note: gtk::Label,
     pub(super) mixer_sliders: Vec<gtk::Scale>,
     pub(super) mixer_band: Rc<Cell<usize>>,
 
@@ -57,7 +63,9 @@ impl State {
             .map(|(low, high)| gtk::Scale::with_range(gtk::Orientation::Horizontal, low, high, 1.0))
             .collect(),
             point_controls: gtk::Box::new(gtk::Orientation::Vertical, 0),
-            point_show: gtk::ToggleButton::new(),
+            point_show: gtk::Switch::new(),
+            point_none: gtk::Label::new(None),
+            profile_note: gtk::Label::new(None),
             mixer_sliders: (0..3)
             .map(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, -100.0, 100.0, 1.0))
             .collect(),
@@ -81,10 +89,12 @@ impl State {
 pub(super) fn build_mixer(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let colours = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let colours = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     colours.add_css_class("mixer-bands");
-    colours.set_margin_bottom(12);
-    colours.set_halign(gtk::Align::Start);
+    colours.set_homogeneous(true);
+    colours.set_hexpand(true);
+    colours.set_margin_top(10);
+    colours.set_margin_bottom(10);
     let mut first: Option<gtk::ToggleButton> = None;
     for (band, (name, _)) in BANDS.iter().enumerate() {
         let swatch = gtk::ToggleButton::new();
@@ -116,17 +126,8 @@ pub(super) fn build_mixer(state: &App) -> gtk::Box {
         colours.append(&swatch);
     }
 
-    let pipette = state.colour.point_pipette.clone();
-
-    pipette.add_css_class("band-pipette");
     colours.set_valign(gtk::Align::Center);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.append(&colours);
-    row.append(&pipette);
-    row.set_margin_bottom(12);
-    colours.set_margin_bottom(0);
-
-    column.append(&row);
+    column.append(&colours);
 
     for (channel, name) in ["Hue", "Saturation", "Luminance"].into_iter().enumerate() {
         let scale = &state.colour.mixer_sliders[channel];
@@ -180,13 +181,25 @@ fn build_monochrome(state: &App) -> gtk::Box {
 pub(super) fn build_point_colours(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.set_margin_bottom(12);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    line.append(&section_header("Point colour"));
     let pipette = state.colour.point_pipette.clone();
     pipette.set_icon_name("color-select-symbolic");
-    pipette.set_tooltip_text(Some("Pick a colour from the photograph to adjust"));
+    pipette.set_tooltip_text(Some("Pick a Colour from the Photograph"));
+    pipette.update_property(&[gtk::accessible::Property::Label("Pick a Colour from the Photograph")]);
     pipette.add_css_class("flat");
+    pipette.add_css_class("label-action");
     pipette.set_valign(gtk::Align::Center);
+    line.append(&pipette);
+    column.append(&line);
+    let none = state.colour.point_none.clone();
+    none.set_label("Pick a colour to change only that colour.");
+    none.set_xalign(0.0);
+    none.set_wrap(true);
+    none.add_css_class("note");
+    column.append(&none);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     pipette.connect_toggled(glib::clone!(
         #[strong] state,
         move |button| {
@@ -202,9 +215,8 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
         }
     ));
     state.colour.point_swatches.set_valign(gtk::Align::Center);
+    state.colour.point_swatches.set_hexpand(true);
     row.append(&state.colour.point_swatches);
-
-    column.append(&row);
 
     let controls = state.colour.point_controls.clone();
     controls.add_css_class("point-section");
@@ -232,17 +244,21 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
         controls.append(&slider_row(state, name, scale, readout));
     }
 
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let show = state.colour.point_show.clone();
-    show.set_label("Show Affected Area");
-    show.set_tooltip_text(Some("Grey out everything this colour does not reach"));
-    show.connect_toggled(glib::clone!(
+    show.update_property(&[gtk::accessible::Property::Label("Show Affected Area")]);
+    show.connect_active_notify(glib::clone!(
         #[strong] state,
         move |_| request_render(&state)
     ));
+    let shown = named_row("Show Affected Area", &show);
+    shown.set_tooltip_text(Some("Grey out everything this colour does not reach"));
+
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
     remove.add_css_class("flat");
-    remove.set_tooltip_text(Some("Remove this colour"));
+    remove.add_css_class("panel-accessory");
+    remove.set_valign(gtk::Align::Center);
+    remove.set_tooltip_text(Some("Delete This Colour"));
+    remove.update_property(&[gtk::accessible::Property::Label("Delete This Colour")]);
     remove.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| {
@@ -262,9 +278,9 @@ pub(super) fn build_point_colours(state: &App) -> gtk::Box {
             schedule_history_push(&state);
         }
     ));
-    actions.append(&show);
-    actions.append(&remove);
-    controls.append(&actions);
+    row.append(&remove);
+    controls.prepend(&row);
+    controls.append(&shown);
     column.append(&controls);
 
     write_point_colours(state);
@@ -279,23 +295,20 @@ pub(super) fn build_colour(
 ) -> gtk::Box {
     let colour = page_column();
 
-    colour.add_css_class("quiet");
-
     let balance_header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    let balance_label = section_header("White balance");
-    balance_label.set_hexpand(true);
-    balance_header.append(&balance_label);
+    balance_header.append(&section_header("White balance"));
+    balance_header.append(&balance_source(state, all[0].1, all[1].1));
+    let room = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    room.set_hexpand(true);
+    balance_header.append(&room);
     let white = white_pipette(state);
-    white.set_valign(gtk::Align::End);
+    white.set_valign(gtk::Align::Center);
     balance_header.append(&white);
     global_only(balance_header.as_ref());
     colour.append(&balance_header);
     for (name, scale, readout) in &all[..2] {
 
         let row = slider_row(state, name, scale, *readout);
-        if *name == "Temperature" {
-            row.add_css_class("lead");
-        }
         global_only(row.as_ref());
         colour.append(&row);
     }
@@ -319,9 +332,6 @@ pub(super) fn build_colour(
     ] {
         let row = slider_row(state, name, scale, readout);
         row.set_tooltip_text(Some(tooltip));
-        if name == "Temperature" {
-            row.add_css_class("lead");
-        }
 
         set_neutral(scale, 0.0);
         mask_only(row.as_ref());
@@ -343,11 +353,7 @@ pub(super) fn build_colour(
     let monochrome = build_monochrome(state);
     colour.append(&monochrome);
     for (name, scale, readout) in &all[9..11] {
-        let row = slider_row(state, name, scale, *readout);
-        if *name == "Vibrance" {
-            row.add_css_class("lead");
-        }
-        colour.append(&row);
+        colour.append(&slider_row(state, name, scale, *readout));
     }
 
     let mixer_header = state.colour.mixer_header.clone();
@@ -365,6 +371,83 @@ pub(super) fn build_colour(
     global_only(camera.as_ref());
     colour.append(&camera);
     colour
+}
+
+thread_local! {
+
+    static SOURCE: RefCell<Option<(gtk::MenuButton, gio::SimpleAction)>> = const { RefCell::new(None) };
+}
+
+fn balance_source(state: &App, temperature: &gtk::Scale, tint: &gtk::Scale) -> gtk::MenuButton {
+    let action = gio::SimpleAction::new_stateful("source", Some(glib::VariantTy::STRING), &"custom".to_variant());
+    action.connect_activate(glib::clone!(
+        #[strong] state,
+        #[weak] temperature,
+        #[weak] tint,
+        move |_, chosen| {
+            let Some(chosen) = chosen.and_then(|chosen| chosen.str()) else { return };
+            let to = match chosen {
+                "as-shot" => state.open.borrow().as_ref().map(|photo| (photo.as_shot.temperature as f64, -photo.as_shot.tint as f64)),
+                name => LIGHT_SOURCES.iter().find(|(preset, _, _)| *preset == name).map(|(_, kelvin, shift)| (*kelvin as f64, *shift as f64)),
+            };
+            if let Some((kelvin, shift)) = to {
+                temperature.set_value(kelvin);
+                tint.set_value(shift);
+            }
+        }
+    ));
+    let group = gio::SimpleActionGroup::new();
+    group.add_action(&action);
+    let menu = gtk::MenuButton::new();
+    menu.insert_action_group("wb", Some(&group));
+    menu.set_label("As Shot");
+    menu.set_always_show_arrow(true);
+    menu.add_css_class("flat");
+    menu.add_css_class("label-action");
+    menu.add_css_class("balance-source");
+    menu.set_valign(gtk::Align::Center);
+    menu.set_tooltip_text(Some("Light source"));
+    for scale in [&temperature, &tint] {
+        scale.connect_value_changed(glib::clone!(
+            #[strong] state,
+            move |_| refresh_balance(&state)
+        ));
+    }
+    SOURCE.with(|source| *source.borrow_mut() = Some((menu.clone(), action)));
+    menu
+}
+
+pub(super) fn refresh_balance(state: &App) {
+    let open = state.open.borrow();
+    let raw = open.as_ref().is_some_and(|photo| photo.proxy.profile.is_some());
+
+    let shot = open.as_ref().map(|photo| (photo.as_shot.temperature, -photo.as_shot.tint));
+    drop(open);
+    state.colour.white_pipette.set_visible(raw);
+    let (kelvin, shift) = (state.sliders.balance.temperature.value(), state.sliders.balance.tint.value());
+    let (state_name, label) = match light_source(kelvin as f32, shift as f32, shot, raw) {
+        LightSource::AsShot => ("as-shot", "As Shot"),
+        LightSource::Preset(name) => (name, name),
+        LightSource::Custom => ("custom", "Custom"),
+    };
+    SOURCE.with(|source| {
+        let Some((menu, action)) = source.borrow().clone() else { return };
+        let model = gio::Menu::new();
+        let first = gio::Menu::new();
+        first.append(Some("As Shot"), Some("wb.source::as-shot"));
+        model.append_section(None, &first);
+        if raw {
+            let six = gio::Menu::new();
+            for (name, _, _) in LIGHT_SOURCES {
+                six.append(Some(name), Some(&format!("wb.source::{name}")));
+            }
+            model.append_section(None, &six);
+        }
+        menu.set_menu_model(Some(&model));
+        action.set_state(&state_name.to_variant());
+        menu.set_label(label);
+        menu.update_property(&[gtk::accessible::Property::Label(&format!("Light Source, {label}"))]);
+    });
 }
 
 fn white_pipette(state: &App) -> gtk::ToggleButton {
@@ -427,7 +510,14 @@ pub(super) fn build_profile_picker(state: &App) -> gtk::Box {
         }
     ));
 
-    named_row("Profile", &state.colour.profile_picker)
+    let profile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    profile.append(&named_row("Profile", &state.colour.profile_picker));
+    let note = state.colour.profile_note.clone();
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.add_css_class("note");
+    profile.append(&note);
+    profile
 }
 
 pub(super) fn build_tone_mapping(state: &App) -> gtk::Box {
@@ -485,6 +575,8 @@ fn camera_profiles(state: &App) -> Vec<(String, dcp::Source)> {
 }
 
 pub(super) fn refresh_profile_picker(state: &App) {
+
+    refresh_balance(state);
     let (chosen, automatic, mapping, finished) = {
         let open = state.open.borrow();
         let Some(photo) = open.as_ref() else { return };
@@ -542,4 +634,6 @@ fn write_profile_note(state: &App, chosen: Option<String>, automatic: Option<Str
 
     let more = dcp::profiles_dir().map(|dir| format!("\nMore: .dcp files in {}", dir.display())).unwrap_or_default();
     state.colour.profile_picker.set_tooltip_text(Some(&format!("{from}{more}")));
+    let short = from.replace("Numa's own profile, fitted from public-domain raws.", "Numa's profile, from public-domain raws.");
+    state.colour.profile_note.set_label(&short);
 }

@@ -40,7 +40,8 @@ pub async fn show(State(server): State<Arc<Server>>, Signed(me): Signed, headers
         let this = mine && device == asking;
         devices.push(json!({ "label": label, "account": account, "kind": "app", "sent": sent, "count": null, "late": late, "this": this }));
     }
-    for (camera, value) in server.store.settings_under("card:") {
+
+    for (camera, value) in server.store.settings_under("card:").into_iter().filter(|_| me.sight.household) {
         let mut parts = value.split(' ').map(|part| part.parse::<i64>().unwrap_or(0));
         let (sent, count) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
         devices.push(json!({ "label": camera, "account": null, "kind": "card", "sent": sent, "count": count, "late": false, "this": false }));
@@ -85,6 +86,8 @@ fn role(me: &Account, accounts: &[Account]) -> String {
     };
     match (me.admin, me.manage) {
         (true, _) => "You can do everything here, and make accounts.".into(),
+
+        _ if !me.sight.household => format!("You see the photographs an admin gives you. Giving more: {}.", others(|one| one.admin)),
         (false, true) => format!("You can add, rate, edit, move and delete photographs. Making accounts: {}.", others(|one| one.admin)),
         (false, false) => format!("You can add, rate and edit photographs. Moving and deleting: {}.", others(|one| one.admin || one.manage)),
     }
@@ -137,8 +140,13 @@ mod tests {
         let here = disks(&[("Photos", Path::new("/")), ("Sent Home", Path::new("/"))]);
         assert_eq!(here.len(), 1);
         assert_eq!(here[0].0, ["Photos", "Sent Home"]);
-        let one = |name: &str, admin, manage| Account { name: name.into(), admin, manage, must_change: false };
-        let house = [one("Anna", true, false), one("Tom", false, true), one("Ella", false, false)];
+        let one = |name: &str, admin, manage| {
+            let mut sight = crate::grants::Sight::default();
+            sight.household = name != "Kim";
+            Account { name: name.into(), admin, manage, sight: std::sync::Arc::new(sight), ..Account::default() }
+        };
+        let house = [one("Anna", true, false), one("Tom", false, true), one("Ella", false, false), one("Kim", false, false)];
+        assert_eq!(role(&house[3], &house), "You see the photographs an admin gives you. Giving more: Anna.");
         assert_eq!(role(&house[2], &house), "You can add, rate and edit photographs. Moving and deleting: Anna and Tom.");
         assert_eq!(role(&house[1], &house), "You can add, rate, edit, move and delete photographs. Making accounts: Anna.");
         assert_eq!(role(&house[0], &house), "You can do everything here, and make accounts.");

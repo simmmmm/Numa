@@ -6,6 +6,8 @@ use std::sync::{mpsc, RwLock};
 use axum::http::StatusCode;
 use numa_io::catalog::{library_of, Catalog, Filter, Library, Photo, Sort};
 
+use crate::grants::Level;
+use crate::store::Account;
 use crate::Fail;
 
 type Job = Box<dyn FnOnce(&Catalog) + Send>;
@@ -17,6 +19,8 @@ pub struct Home {
 
     found: RwLock<Vec<PathBuf>>,
     shelf: RwLock<Shelf>,
+
+    albums: RwLock<HashMap<String, Vec<i64>>>,
 }
 
 #[derive(Default)]
@@ -88,7 +92,7 @@ impl Home {
             })
             .map_err(|err| err.to_string())?;
         opened.recv().map_err(|err| err.to_string())??;
-        Ok(Self { tx, photos, sent, found: RwLock::default(), shelf: RwLock::default() })
+        Ok(Self { tx, photos, sent, found: RwLock::default(), shelf: RwLock::default(), albums: RwLock::default() })
     }
 
     pub async fn ask<R: Send + 'static>(&self, work: impl FnOnce(&Catalog) -> R + Send + 'static) -> Result<R, Fail> {
@@ -116,13 +120,45 @@ impl Home {
         (found.contains(&library.path) || library.path.parent() == Some(&self.sent)) && library.path.is_dir()
     }
 
-    pub fn sees(&self, account: &str, library: &Library) -> bool {
-        library.path.starts_with(&self.photos) || library.path == self.sent_folder(account)
+    pub fn libraries(&self, me: &Account) -> Vec<Library> {
+        self.with_level(me, Level::View)
     }
 
-    pub fn libraries(&self, account: &str) -> Vec<Library> {
+    pub fn editable(&self, me: &Account) -> Vec<Library> {
+        self.with_level(me, Level::Edit)
+    }
+
+    fn with_level(&self, me: &Account, need: Level) -> Vec<Library> {
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        shelf.libraries.iter().filter(|library| self.sees(account, library)).cloned().collect()
+        shelf.libraries.iter().filter(|library| me.sight.library(library.id) >= need).cloned().collect()
+    }
+
+    pub fn reach(&self, me: &Account) -> Vec<Library> {
+        let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        shelf.libraries.iter().filter(|library| me.sight.reaches(library.id)).cloned().collect()
+    }
+
+    pub fn shown(&self, me: &Account, libraries: &[i64]) -> Vec<Photo> {
+        let mut photos = self.photos(libraries);
+        photos.retain(|photo| me.sight.level(photo.id) >= Level::View);
+        photos
+    }
+
+    pub async fn album(&self, key: &str) -> Result<Vec<i64>, Fail> {
+        if let Some(ids) = self.albums.read().unwrap_or_else(|poisoned| poisoned.into_inner()).get(key) {
+            return Ok(ids.clone());
+        }
+        let libraries: Vec<i64> = self.all_libraries().iter().map(|library| library.id).collect();
+        let filter = Filter { album: Some(key.to_string()), ..Filter::default() };
+        let ids: Vec<i64> = self
+            .ask(move |catalog| libraries.iter().flat_map(|&library| catalog.photos(library, &filter).unwrap_or_default()).map(|photo| photo.id).collect())
+            .await?;
+        self.albums.write().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key.to_string(), ids.clone());
+        Ok(ids)
+    }
+
+    pub fn forget_albums(&self) {
+        self.albums.write().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
     }
 
     pub fn all_libraries(&self) -> Vec<Library> {
@@ -138,13 +174,10 @@ impl Home {
         shelf.order.get(&library)?.first().and_then(|id| shelf.photos.get(id)).map(when)
     }
 
-    pub fn photo(&self, account: &str, id: i64) -> Result<Photo, Fail> {
+    pub fn photo(&self, me: &Account, id: i64, need: Level) -> Result<Photo, Fail> {
+        me.sight.check(id, need)?;
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let library = shelf.libraries.iter().find(|library| library.id == library_of(id));
-        match (library, shelf.photos.get(&id)) {
-            (Some(library), Some(photo)) if self.sees(account, library) => Ok(photo.clone()),
-            _ => Err(Fail(StatusCode::NOT_FOUND, "There is no such photograph.".into())),
-        }
+        shelf.photos.get(&id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such photograph.".into()))
     }
 
     pub fn photos(&self, libraries: &[i64]) -> Vec<Photo> {
@@ -195,6 +228,7 @@ impl Home {
             }
         }
         let mut ids = Vec::new();
+        self.forget_albums();
         let mut shelf = self.shelf.write().unwrap_or_else(|poisoned| poisoned.into_inner());
         shelf.libraries = libraries;
         for (library, photos) in read {

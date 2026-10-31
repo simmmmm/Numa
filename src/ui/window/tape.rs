@@ -36,6 +36,8 @@ pub(super) struct State {
     band: gtk::Box,
     area: gtk::DrawingArea,
 
+    pub(super) slot: gtk::Box,
+
     position: gtk::Label,
 
     title: gtk::Label,
@@ -67,6 +69,7 @@ impl State {
         Self {
             band: gtk::Box::new(gtk::Orientation::Vertical, 4),
             area: gtk::DrawingArea::new(),
+            slot: gtk::Box::new(gtk::Orientation::Vertical, 0),
             position: gtk::Label::new(None),
             title: gtk::Label::new(None),
             acts: gtk::Box::new(gtk::Orientation::Horizontal, 8),
@@ -143,7 +146,8 @@ pub(super) fn build(state: &App) -> gtk::Box {
         move |_| area.queue_draw()
     ));
     install_gestures(state, area);
-    band.append(area);
+
+    band.append(&tape.slot);
     cullbar::keep_focus(band.upcast_ref());
     band
 }

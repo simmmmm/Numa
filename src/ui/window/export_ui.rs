@@ -224,6 +224,8 @@ struct Controls {
     hdr: adw::SwitchRow,
     metadata: adw::SwitchRow,
     strip_location: adw::SwitchRow,
+    strip_serials: adw::SwitchRow,
+    no_ai_training: adw::SwitchRow,
     keywords: adw::SwitchRow,
     creator: adw::EntryRow,
     copyright: adw::EntryRow,
@@ -263,12 +265,14 @@ impl Controls {
 
         let metadata = switch("Keep the camera's data", "Camera, lens, exposure, date");
         let strip_location = switch("Remove location", "Leave the camera's GPS position out");
+        let strip_serials = switch("Remove camera serials", "Leave the body's and the lens's serial numbers out");
+        let no_ai_training = switch("Prohibit AI training", "Say in the file that it may not be used to train AI");
         let keywords = switch("Stars and keywords", "The rating, and the people and albums it is in");
         let creator = entry("Creator");
         let copyright = entry("Copyright");
         let details = adw::ExpanderRow::new();
         details.set_title("Metadata");
-        for row in [metadata.upcast_ref::<gtk::Widget>(), strip_location.upcast_ref(), keywords.upcast_ref(), creator.upcast_ref(), copyright.upcast_ref()] {
+        for row in [metadata.upcast_ref::<gtk::Widget>(), strip_location.upcast_ref(), strip_serials.upcast_ref(), keywords.upcast_ref(), creator.upcast_ref(), copyright.upcast_ref(), no_ai_training.upcast_ref()] {
             details.add_row(row);
         }
 
@@ -316,6 +320,8 @@ impl Controls {
             hdr,
             metadata,
             strip_location,
+            strip_serials,
+            no_ai_training,
             keywords,
             creator,
             copyright,
@@ -358,6 +364,8 @@ impl Controls {
             copyright: self.copyright.text().to_string(),
             keywords: self.keywords.is_active(),
             strip_location: self.strip_location.is_active(),
+            strip_serials: self.strip_serials.is_active(),
+            no_ai_training: self.no_ai_training.is_active(),
             watermark: export::Watermark {
                 on: self.watermark.enables_expansion(),
                 text: self.watermark_text.text().to_string(),
@@ -384,6 +392,8 @@ impl Controls {
         self.hdr.set_active(settings.hdr);
         self.metadata.set_active(settings.metadata);
         self.strip_location.set_active(settings.strip_location);
+        self.strip_serials.set_active(settings.strip_serials);
+        self.no_ai_training.set_active(settings.no_ai_training);
         self.keywords.set_active(settings.keywords);
         self.creator.set_text(&settings.creator);
         self.copyright.set_text(&settings.copyright);
@@ -504,6 +514,24 @@ fn entry(title: &str) -> adw::EntryRow {
     row
 }
 
+pub(super) fn proof_settings(last: &export::ExportSettings) -> export::ExportSettings {
+    let name = [&last.watermark.text, &last.creator, &last.copyright].into_iter().find(|text| !text.trim().is_empty()).cloned().unwrap_or_else(|| "Proof".to_string());
+    export::ExportSettings {
+        format: export::Format::Jpeg,
+        quality: 70,
+        size: export::Size::LongEdge(2048),
+        sharpen: true,
+        metadata: true,
+        strip_location: true,
+        strip_serials: true,
+        no_ai_training: true,
+        hdr: false,
+        space: numa::core::space::ColourSpace::default(),
+        watermark: export::Watermark { on: true, text: name, ..last.watermark.clone() },
+        ..last.clone()
+    }
+}
+
 fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
     let presets = Rc::new(RefCell::new(state.catalog.recall::<Vec<(String, export::ExportSettings)>>(EXPORT_PRESETS).unwrap_or_default()));
     let row = adw::ComboRow::new();
@@ -512,7 +540,7 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
         #[weak] row,
         #[strong] presets,
         move || {
-            let mut names = vec!["As last time".to_string()];
+            let mut names = vec!["As last time".to_string(), "Proof".to_string()];
             names.extend(presets.borrow().iter().map(|(name, _)| name.clone()));
             row.set_model(Some(&gtk::StringList::new(&names.iter().map(String::as_str).collect::<Vec<_>>())));
         }
@@ -524,8 +552,9 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
         #[strong] presets,
         move |row| match row.selected() {
             0 => controls.write(&last),
+            1 => controls.write(&proof_settings(&last)),
             at => {
-                if let Some((_, settings)) = presets.borrow().get(at as usize - 1) {
+                if let Some((_, settings)) = presets.borrow().get(at as usize - 2) {
                     controls.write(settings);
                 }
             }
@@ -578,7 +607,7 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
                         let at = list.iter().position(|(have, _)| *have == name).unwrap_or(0);
                         drop(list);
                         fill();
-                        row.set_selected(at as u32 + 1);
+                        row.set_selected(at as u32 + 2);
                     }
                 ),
             );
@@ -591,10 +620,10 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
         #[weak] row,
         move |_| {
             let at = row.selected() as usize;
-            if at == 0 {
+            if at < 2 {
                 return;
             }
-            presets.borrow_mut().remove(at - 1);
+            presets.borrow_mut().remove(at - 2);
             state.catalog.remember(EXPORT_PRESETS, &*presets.borrow());
             fill();
             row.set_selected(0);
@@ -661,5 +690,20 @@ impl State {
             button: Rc::new(RefCell::new(None)),
             library_export: Rc::new(RefCell::new(None)),
         }
+    }
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use super::*;
+
+    #[test]
+    fn a_proof_is_small_marked_and_gives_nothing_away() {
+        let last = export::ExportSettings { creator: "Sam".into(), quality: 95, ..export::ExportSettings::default() };
+        let proof = proof_settings(&last);
+        assert!(proof.strip_location && proof.strip_serials && proof.no_ai_training);
+        assert!(matches!(proof.size, export::Size::LongEdge(2048)) && proof.quality < 90);
+        assert!(proof.watermark.on && proof.watermark.text == "Sam", "the watermark names the photographer");
+        assert_eq!(proof.creator, "Sam");
     }
 }

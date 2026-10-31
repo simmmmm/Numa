@@ -2,23 +2,33 @@ use super::*;
 
 thread_local! {
 
-    static CONTROLS: RefCell<Option<(gtk::Box, gtk::Box, gtk::Label, gtk::Scale)>> = const { RefCell::new(None) };
+    static CONTROLS: RefCell<Option<(gtk::Box, gtk::Box, gtk::Label, gtk::Scale, gtk::Stack, gtk::Button)>> = const { RefCell::new(None) };
 }
 
 pub(super) fn build(state: &App) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     page.set_vexpand(true);
 
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    card.add_css_class("strength-card");
-    let name = section_header("");
-    name.set_margin_top(0);
-    card.append(&name);
+    let foot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let name = section_header("Amount");
+    name.set_hexpand(true);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let remove = gtk::Button::from_icon_name("window-close-symbolic");
+    remove.add_css_class("label-action");
+    remove.set_tooltip_text(Some("Remove LUT"));
+    remove.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| choose(&state, None)
+    ));
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    line.add_css_class("section-line");
+    line.append(&name);
+    line.append(&remove);
+    foot.append(&line);
     let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
     amount.set_value(100.0);
     set_neutral(&amount, 100.0);
-    card.append(&slider_row(state, "Amount", &amount, Readout::Positive(0)));
-    card.set_visible(false);
+    let row = slider_row(state, "Amount", &amount, Readout::Positive(0));
     amount.connect_value_changed(glib::clone!(
         #[strong] state,
         move |amount| {
@@ -38,24 +48,37 @@ pub(super) fn build(state: &App) -> gtk::Box {
             }
         }
     ));
+    let note = gtk::Label::new(Some("Choose a LUT to set its amount here."));
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.add_css_class("note");
+    let slot = gtk::Stack::new();
+    slot.add_named(&row, Some("amount"));
+    slot.add_named(&note, Some("note"));
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("panel-card");
+    card.append(&slot);
+    foot.append(&card);
 
-    CONTROLS.with_borrow_mut(|controls| *controls = Some((page.clone(), card, name, amount)));
+    CONTROLS.with_borrow_mut(|controls| *controls = Some((page.clone(), foot, name, amount, slot, remove)));
     fill(state);
     page
 }
 
+pub(super) fn foot() -> Option<gtk::Box> {
+    CONTROLS.with_borrow(|controls| controls.as_ref().map(|controls| controls.1.clone()))
+}
+
 pub(super) fn fill(state: &App) {
-    let Some((page, card, ..)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
+    let Some((page, ..)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
 
     forget_cards(state);
     while let Some(child) = page.first_child() {
         page.remove(&child);
     }
-    page.append(&card);
     let browser = browser(state, Kind::Luts, || {});
     browser.set_vexpand(true);
-
-    browser.set_margin_top(6);
+    take_search(state, "luts", &browser);
     page.append(&browser);
     write(state);
 }
@@ -81,14 +104,23 @@ pub(super) fn more_button(state: &App) -> gtk::MenuButton {
 }
 
 pub(super) fn write(state: &App) {
-    let Some((_, card, name, amount)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
+    let Some((_, _, name, amount, slot, remove)) = CONTROLS.with_borrow(|controls| controls.clone()) else { return };
     let lut = state.open.borrow().as_ref().and_then(|photo| photo.document.lut.clone());
+    mark_applied(state, Kind::Luts);
     let was = state.applying.replace(true);
     amount.set_value(lut.as_ref().map_or(100.0, |choice| choice.amount as f64));
     state.applying.set(was);
-    card.set_visible(lut.is_some());
+    slot.set_visible_child_name(if lut.is_some() { "amount" } else { "note" });
 
-    name.set_text(&lut.map(|choice| Kind::Luts.title(&choice.name).0.to_uppercase()).unwrap_or_default());
+    remove.set_opacity(if lut.is_some() { 1.0 } else { 0.0 });
+    remove.set_sensitive(lut.is_some());
+    remove.set_can_target(lut.is_some());
+
+    name.set_text(&match lut {
+        Some(choice) => format!("Amount · {}", Kind::Luts.title(&choice.name).0),
+        None => "Amount".to_string(),
+    }
+    .to_uppercase());
 }
 
 pub(super) fn choose(state: &App, chosen: Option<&str>) {

@@ -5,183 +5,172 @@ pub(super) fn refresh_mask_parts(state: &App, masks: &[Mask], selected: Option<u
         state.masks.mask_parts.remove(&row);
     }
 
+    let bar = &state.masks.toolbar;
     let Some(mask) = selected.and_then(|index| masks.get(index)) else {
         state.masks.mask_parts.set_visible(false);
         state.masks.mask_parts_header.set_visible(false);
+        bar.parts_status.set_visible(false);
+        bar.undo_part.set_visible(false);
         return;
     };
     let index = selected.unwrap_or(0);
 
-    append_mask_name_row(state, mask, index);
-    append_subtract_row(state, mask, index);
+    state.masks.mask_parts_header.set_visible(true);
+    bar.power_item.set_label(if mask.visible { "Turn Off" } else { "Turn On" });
+    let without = refresh_subtract(state, masks, index);
+    let say = |parts: usize| {
+        let mut words = match parts {
+            0 => Vec::new(),
+            1 => vec!["1 part".to_string()],
+            many => vec![format!("{many} parts")],
+        };
+        if !without.is_empty() {
+
+            let word = if words.is_empty() { "Without" } else { "without" };
+            words.push(format!("{word} {}", without.join(", ")));
+        }
+        let line = words.join(" · ");
+        bar.parts_status.set_visible(!line.is_empty());
+        bar.parts_status.set_text(&line);
+    };
+    bar.undo_part.set_visible(false);
 
     state.masks.strength.set_value((mask.opacity * 100.0) as f64);
     state.masks.feather.set_value(mask.feather as f64);
     state.masks.edge.set_value(mask.shift as f64);
 
     if is_gradient(mask) {
-        state.masks.mask_parts.set_visible(true);
-        state.masks.mask_parts_header.set_visible(true);
+        state.masks.mask_parts.set_visible(false);
+        say(0);
         return;
     }
 
     if !append_range_rows(state, mask, index) {
-        state.masks.mask_parts.set_visible(true);
-        state.masks.mask_parts_header.set_visible(true);
+        state.masks.mask_parts.set_visible(state.masks.mask_parts.first_child().is_some());
+        say(0);
         return;
     }
 
     let parts = list_mask_parts(state, mask);
+    say(parts.len());
+
+    bar.undo_part.set_visible(parts.last().is_some_and(|(_, part, _)| !matches!(part, MaskPart::Class(_))));
 
     let last = parts.len() == 1 && matches!(mask.shape, Shape::Segment { .. });
     for (name, part, enabled) in parts {
         append_mask_part_row(state, index, last, name, part, enabled);
     }
 
-    let any = state.masks.mask_parts.first_child().is_some();
-    state.masks.mask_parts.set_visible(any);
-    state.masks.mask_parts_header.set_visible(any);
+    state.masks.mask_parts.set_visible(state.masks.mask_parts.first_child().is_some());
 }
 
-fn append_mask_name_row(state: &App, mask: &Mask, index: usize) {
-    let name = adw::EntryRow::new();
-    name.set_title("Name");
-    name.set_text(mask.name.as_deref().unwrap_or(""));
+pub(super) fn undo_last_part(state: &App) {
+    let Some(index) = state.mask_overlay.selected_mask.get() else { return };
+    let Some(mask) = mask_at(state, index) else { return };
+    let last = match (mask.strokes.len(), mask.points.len()) {
+        (0, 0) => return,
+        (0, points) => MaskPart::Point(points - 1),
+        (strokes, _) => MaskPart::Stroke { at: strokes - 1, run: 1 },
+    };
+    remove_mask_part(state, index, last);
+}
 
-    name.set_tooltip_text(Some(&format!("Blank for \u{201c}{}\u{201d}", mask_name(mask))));
-    name.connect_apply(glib::clone!(
-        #[strong] state,
-        move |entry| {
-            if !state.applying.get() {
-                rename_mask(&state, index, &entry.text());
-            }
+fn refresh_subtract(state: &App, masks: &[Mask], index: usize) -> Vec<String> {
+    let bar = &state.masks.toolbar;
+    let actions = &bar.refine_actions;
+    for name in actions.list_actions() {
+        if name.starts_with("minus-") {
+            actions.remove_action(&name);
         }
-    ));
-    state.masks.mask_parts.append(&name);
-}
-
-fn append_subtract_row(state: &App, mask: &Mask, index: usize) {
-    let masks = state.open.borrow().as_ref().map(|photo| photo.document.masks()).unwrap_or_default();
-    let row = adw::ExpanderRow::new();
-    row.set_title("Subtract");
+    }
+    bar.subtract_menu.remove_all();
+    let mask = &masks[index];
     let mut chosen: Vec<String> = Vec::new();
 
-    let tick = |row: &adw::ExpanderRow, title: &str, on: bool, toggled: Box<dyn Fn(bool)>| {
-        let check = gtk::CheckButton::new();
-        check.set_active(on);
-        check.set_valign(gtk::Align::Center);
-        let line = adw::ActionRow::new();
-        line.set_title(title);
-        line.add_prefix(&check);
-        line.set_activatable_widget(Some(&check));
-        check.connect_toggled(move |check| toggled(check.is_active()));
-        row.add_row(&line);
+    let item = |section: &gio::Menu, name: String, label: &str, on: bool, run: Box<dyn Fn()>| {
+        let action = gio::SimpleAction::new_stateful(&name, None, &on.to_variant());
+        let run = Rc::new(run);
+        action.connect_activate(move |_, _| {
+            let run = run.clone();
+            glib::idle_add_local_once(move || run());
+        });
+        actions.add_action(&action);
+        section.append(Some(label), Some(&format!("mask.{name}")));
     };
 
+    let others = gio::Menu::new();
     for (other, them) in masks.iter().enumerate().filter(|(other, _)| *other != index) {
-        let label = numa::io::masks::mask_label(&masks, other);
+        let label = numa::io::masks::mask_label(masks, other);
         let on = them.id != 0 && mask.minus_masks.contains(&them.id);
         if on {
             chosen.push(label.clone());
         }
         let state = state.clone();
-        tick(&row, &label, on, Box::new(move |on| {
-            if state.applying.get() {
-                return;
-            }
-
-            let state = state.clone();
-            glib::idle_add_local_once(move || subtract_mask_from(&state, index, other, on));
-        }));
+        item(&others, format!("minus-mask-{other}"), &label, on, Box::new(move || subtract_mask_from(&state, index, other, !on)));
     }
-    for (name, classes) in segment::PRESETS {
+    let found = gio::Menu::new();
+
+    let presets = if segment::is_installed() { segment::PRESETS } else { &[] };
+    for (at, (name, classes)) in presets.iter().enumerate() {
         let on = !mask.minus.is_empty() && classes.iter().all(|class| mask.minus.contains(class));
         if on {
             chosen.push(name.to_string());
         }
-        let state = state.clone();
-        let classes = classes.to_vec();
-        tick(&row, name, on, Box::new(move |on| {
-            if state.applying.get() {
-                return;
-            }
-            let Some(mut minus) = state.open.borrow().as_ref().and_then(|photo| photo.document.masks().get(index).map(|mask| mask.minus.clone()))
-            else {
-                return;
-            };
+        let (state, classes) = (state.clone(), classes.to_vec());
+        item(&found, format!("minus-preset-{at}"), name, on, Box::new(move || {
+            let Some(mut minus) = mask_at(&state, index).map(|mask| mask.minus) else { return };
             minus.retain(|class| !classes.contains(class));
-            if on {
+            if !on {
                 minus.extend(&classes);
             }
-            let state = state.clone();
-            glib::idle_add_local_once(move || subtract_from_mask(&state, index, minus));
+            subtract_from_mask(&state, index, minus);
         }));
     }
-    row.set_subtitle(&match chosen.is_empty() {
-        true => "Nothing".to_string(),
-        false => chosen.join(", "),
-    });
-    state.masks.mask_parts.append(&row);
+    bar.subtract_menu.append_section(None, &others);
+    bar.subtract_menu.append_section(None, &found);
+    chosen
 }
 
 fn list_mask_parts(state: &App, mask: &Mask) -> Vec<(String, MaskPart, bool)> {
-    let mut parts: Vec<(String, MaskPart, bool)> = Vec::new();
-    if let Shape::Segment { classes } = &mask.shape {
-        for class in classes {
-            parts.push((
-                segment::label(*class).unwrap_or("something").to_string(),
-                MaskPart::Class(*class),
-                !mask.muted.contains(class),
-            ));
-        }
-    }
 
     let segmentation = (!sam::is_installed())
         .then(|| state.open.borrow().as_ref().and_then(|photo| photo.segmentation.clone()))
         .flatten();
-    for (at, point) in mask.points.iter().enumerate() {
-        let named = segmentation
-            .as_ref()
-            .map(|found| found.class_at(point.at[0], point.at[1]))
-            .and_then(segment::label);
-        let doing = if point.subtract { "Without" } else { "With" };
-        parts.push((
-            match named {
-                Some(name) => format!("{doing} {name}"),
-                None => format!(
-                    "{doing} what is at {:.0} %, {:.0} %",
-                    point.at[0] * 100.0,
-                    point.at[1] * 100.0
-                ),
-            },
-            MaskPart::Point(at),
-            point.enabled,
-        ));
-    }
-
     let kind = |stroke: &Stroke| match (stroke.fill, stroke.erase) {
         (true, false) => "Lassoed in",
         (true, true) => "Lassoed out",
         (false, false) => "Painted",
         (false, true) => "Rubbed out",
     };
-    let mut at = 0;
-    while at < mask.strokes.len() {
-        let stroke = &mask.strokes[at];
-        let (name, on) = (kind(stroke), stroke.enabled);
-
-        let run = mask.strokes[at..]
-            .iter()
-            .take_while(|next| kind(next) == name && next.enabled == on)
-            .count();
-        parts.push((
-            if run > 1 { format!("{name} \u{00d7}{run}") } else { name.to_string() },
-            MaskPart::Stroke { at, run },
-            on,
-        ));
-        at += run;
-    }
-    parts
+    mask.parts()
+        .into_iter()
+        .map(|row| {
+            let name = match row.part {
+                MaskPart::Class(class) => segment::label(class).unwrap_or("something").to_string(),
+                MaskPart::Point(at) => {
+                    let point = &mask.points[at];
+                    let named = segmentation
+                        .as_ref()
+                        .map(|found| found.class_at(point.at[0], point.at[1]))
+                        .and_then(segment::label);
+                    let doing = if point.subtract { "Without" } else { "With" };
+                    match named {
+                        Some(name) => format!("{doing} {name}"),
+                        None => format!(
+                            "{doing} what is at {:.0} %, {:.0} %",
+                            point.at[0] * 100.0,
+                            point.at[1] * 100.0
+                        ),
+                    }
+                }
+                MaskPart::Stroke { at, run } => {
+                    let name = kind(&mask.strokes[at]);
+                    if run > 1 { format!("{name} \u{00d7}{run}") } else { name.to_string() }
+                }
+            };
+            (name, row.part, row.on)
+        })
+        .collect()
 }
 
 fn append_mask_part_row(

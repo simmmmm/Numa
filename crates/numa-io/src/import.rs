@@ -202,6 +202,44 @@ pub fn day(when: i64, offset: i64) -> String {
     format!("{year}-{month:02}-{day:02}")
 }
 
+pub const MINE_ON: &str = "today-mine";
+pub const MY_CAMERAS: &str = "my-cameras";
+pub const ME: &str = "me";
+
+#[derive(Debug, Clone, Default)]
+pub struct Mine {
+    cameras: std::collections::HashSet<String>,
+
+    bodies: std::collections::HashMap<i64, String>,
+
+    with_me: std::collections::HashSet<i64>,
+}
+
+impl Mine {
+    pub fn new(cameras: impl IntoIterator<Item = String>, bodies: std::collections::HashMap<i64, String>, with_me: impl IntoIterator<Item = i64>) -> Self {
+        Mine { cameras: cameras.into_iter().collect(), bodies, with_me: with_me.into_iter().collect() }
+    }
+
+    pub fn is_set(&self) -> bool {
+        !self.cameras.is_empty() || !self.with_me.is_empty()
+    }
+
+    pub fn keeps(&self, id: i64) -> bool {
+        self.with_me.contains(&id) || self.bodies.get(&id).is_some_and(|body| !body.is_empty() && self.cameras.contains(body))
+    }
+}
+
+pub fn day_seed(date: &str) -> u64 {
+    date.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+pub fn day_pick(seed: u64, who: i64, turn: u32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (seed.wrapping_add(who as u64).wrapping_add(u64::from(turn)) % len as u64) as usize
+}
+
 pub fn on_this_day(photos: impl IntoIterator<Item = (i64, i64, u8, crate::catalog::Flag)>, today: &str, years: usize) -> Vec<(i64, Vec<i64>)> {
     use crate::catalog::Flag;
     let (year, month_day) = today.split_at(today.len() - 6);
@@ -457,5 +495,34 @@ mod tests {
         assert_eq!(found[1], (2021, vec![7]));
         let years: Vec<i64> = found.iter().map(|(year, _)| *year).collect();
         assert_eq!(years, [2024, 2021, 2017, 2016, 2015, 2014]);
+    }
+
+    #[test]
+    fn the_days_seed_holds_all_day_and_changes_the_next() {
+        assert_eq!(day_seed("2026-10-26"), day_seed("2026-10-26"));
+        assert_ne!(day_seed("2026-10-26"), day_seed("2026-10-27"));
+        let (today, tomorrow) = (day_seed("2026-10-26"), day_seed("2026-10-27"));
+
+        for len in 1..40 {
+            assert!(day_pick(today, 7, 3, len) < len);
+        }
+        assert_eq!(day_pick(today, 1, 0, 0), 0);
+
+        let spread: std::collections::HashSet<usize> = (0..12).map(|library| day_pick(today, library, 0, 12)).collect();
+        assert_eq!(spread.len(), 12, "twelve libraries, twelve different frames of twelve");
+        assert_ne!(day_pick(today, 1, 0, 12), day_pick(today, 1, 1, 12));
+
+        assert!((0..12).any(|library| day_pick(today, library, 0, 12) != day_pick(tomorrow, library, 0, 12)));
+    }
+
+    #[test]
+    fn mine_is_my_camera_or_me_in_it() {
+        let bodies = [(1, "Fuji X-T5"), (2, "Canon R5"), (3, "Fuji X-T5"), (4, "")].into_iter().map(|(id, body)| (id, body.to_string())).collect();
+        let mine = Mine::new(["Fuji X-T5".to_string()], bodies, [2]);
+        assert!(mine.is_set());
+        assert!(mine.keeps(1) && mine.keeps(3), "my body");
+        assert!(mine.keeps(2), "I am in it, whoever took it");
+        assert!(!mine.keeps(4) && !mine.keeps(99), "no body known and not me");
+        assert!(!Mine::default().is_set());
     }
 }

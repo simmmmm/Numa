@@ -89,6 +89,12 @@ pub struct ExportSettings {
 
     #[serde(default)]
     pub strip_location: bool,
+
+    #[serde(default)]
+    pub strip_serials: bool,
+
+    #[serde(default = "yes")]
+    pub no_ai_training: bool,
     #[serde(default)]
     pub watermark: Watermark,
 
@@ -219,6 +225,8 @@ impl Default for ExportSettings {
             copyright: String::new(),
             keywords: true,
             strip_location: false,
+            strip_serials: false,
+            no_ai_training: true,
             watermark: Watermark::default(),
             proof: None,
         }
@@ -505,13 +513,13 @@ pub fn write(frame: &Developed, path: &Path, settings: &ExportSettings, source: 
 
 fn carried_exif(settings: &ExportSettings, source: Option<&Path>, position: Option<(f64, f64)>) -> Option<Vec<u8>> {
     let block = source.filter(|_| settings.metadata).and_then(exif_block)?;
-    if !settings.strip_location && position.is_none() {
+    if !settings.strip_location && !settings.strip_serials && position.is_none() {
         return Some(block);
     }
     use std::io::Cursor;
     let mut reader = Cursor::new(block.get(10..)?.to_vec());
     let root = IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()?;
-    app1_with(Some(&root), !settings.strip_location, Vec::new(), position)
+    app1_with(Some(&root), Carry::of(settings), Vec::new(), position)
 }
 
 fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Option<Vec<u8>> {
@@ -540,7 +548,7 @@ fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Desc
         let mut reader = std::io::Cursor::new(block.get(10..)?.to_vec());
         IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()
     });
-    app1_with(root.as_ref(), !settings.strip_location, own, about.position)
+    app1_with(root.as_ref(), Carry::of(settings), own, about.position)
 }
 
 fn save_coded(image: &Frame<u16>, path: &Path, settings: &ExportSettings, source: Option<&Path>, about: &Description) -> Result<(), String> {
@@ -639,7 +647,7 @@ fn save_tiff_with(image: &Frame<u16>, path: &Path, settings: &ExportSettings, so
         true => source.and_then(exif_block).and_then(|block| {
             let mut reader = Cursor::new(block.get(10..)?.to_vec());
             let root = IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()?;
-            carry_tags(&root, &mut tiff, !settings.strip_location, about.position)
+            carry_tags(&root, &mut tiff, Carry::of(settings), about.position)
         }),
         false => None,
     };
@@ -699,14 +707,30 @@ const EXIF_IFD: u16 = 0x8769;
 const GPS_IFD: u16 = 0x8825;
 const ORIENTATION: u16 = 0x0112;
 
+#[derive(Clone, Copy)]
+struct Carry {
+    location: bool,
+    serials: bool,
+}
+
+impl Carry {
+    const ALL: Carry = Carry { location: true, serials: true };
+
+    fn of(settings: &ExportSettings) -> Carry {
+        Carry { location: !settings.strip_location, serials: !settings.strip_serials }
+    }
+}
+
 fn carry_tags<W: std::io::Write + std::io::Seek>(
     root: &IFD,
     tiff: &mut TiffWriter<W>,
-    location: bool,
+    carry: Carry,
     position: Option<(f64, f64)>,
 ) -> Option<Vec<(u16, Value)>> {
 
     const MAKER_NOTE: u16 = 0x927C;
+
+    const SERIALS: [u16; 2] = [0xA431, 0xA435];
 
     const INTEROP_IFD: u16 = 0xA005;
 
@@ -726,13 +750,13 @@ fn carry_tags<W: std::io::Write + std::io::Seek>(
     root.get_entry_recursive(0x010Fu16)?;
     let mut carried: Vec<(u16, Value)> = Vec::new();
     for tag in [EXIF_IFD, GPS_IFD] {
-        if tag == GPS_IFD && !location {
+        if tag == GPS_IFD && !carry.location {
             continue;
         }
         let Some(source) = root.get_sub_ifd(tag) else { continue };
         let mut sub = tiff.new_directory();
         for (entry, value) in source.value_iter() {
-            if matches!(*entry, MAKER_NOTE | INTEROP_IFD) {
+            if matches!(*entry, MAKER_NOTE | INTEROP_IFD) || (!carry.serials && SERIALS.contains(entry)) {
                 continue;
             }
             sub.add_untyped_tag(*entry, value.clone());
@@ -743,7 +767,7 @@ fn carry_tags<W: std::io::Write + std::io::Seek>(
         let offset = sub.build(tiff).ok()?;
         carried.push((tag, Value::Long(vec![offset])));
     }
-    if let Some(position) = position.filter(|_| location && !carried.iter().any(|(tag, _)| *tag == GPS_IFD)) {
+    if let Some(position) = position.filter(|_| carry.location && !carried.iter().any(|(tag, _)| *tag == GPS_IFD)) {
         carried.push((GPS_IFD, Value::Long(vec![gps_directory(tiff, position)?])));
     }
     for (entry, value) in root.value_iter() {
@@ -818,27 +842,26 @@ fn exif_from_tiff(source: &Path) -> Option<Vec<u8>> {
     let file = std::fs::File::open(source).ok()?;
     let mut reader = std::io::BufReader::new(file);
     let root = IFD::new_root_with_correction(&mut reader, 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()?;
-    app1_from(&root, true)
+    app1_with(Some(&root), Carry::ALL, Vec::new(), None)
 }
 
-fn app1_from(root: &IFD, location: bool) -> Option<Vec<u8>> {
-    app1_with(Some(root), location, Vec::new(), None)
-}
-
-fn app1_with(root: Option<&IFD>, location: bool, own: Vec<(u16, Value)>, position: Option<(f64, f64)>) -> Option<Vec<u8>> {
+fn app1_with(root: Option<&IFD>, carry: Carry, own: Vec<(u16, Value)>, position: Option<(f64, f64)>) -> Option<Vec<u8>> {
     use std::io::Cursor;
     let mut buffer = Cursor::new(Vec::new());
     let mut tiff = TiffWriter::new(&mut buffer).ok()?;
-    let carried = root.and_then(|root| carry_tags(root, &mut tiff, location, position));
+    let carried = root.and_then(|root| carry_tags(root, &mut tiff, carry, position));
     if carried.is_none() && own.is_empty() {
         return None;
     }
+    let turned = own.iter().any(|(tag, _)| *tag == ORIENTATION);
     let mut ifd0 = tiff.new_directory();
     for (tag, value) in carried.into_iter().flatten().chain(own) {
         ifd0.add_untyped_tag(tag, value);
     }
 
-    ifd0.add_untyped_tag(ORIENTATION, Value::Short(vec![1]));
+    if !turned {
+        ifd0.add_untyped_tag(ORIENTATION, Value::Short(vec![1]));
+    }
     tiff.build(ifd0).ok()?;
 
     let tiff = buffer.into_inner();
@@ -892,6 +915,40 @@ fn tidy_exif(exif: &mut [u8]) {
     if next + 4 <= exif.len() {
         exif[next..next + 4].copy_from_slice(&[0, 0, 0, 0]);
     }
+}
+
+pub fn restamped(jpeg: &[u8], settings: &ExportSettings) -> Option<Vec<u8>> {
+    if jpeg.get(..2)? != [0xFF, 0xD8] {
+        return None;
+    }
+    let (mut kept, mut exif) = (vec![0xFF, 0xD8], None);
+    let mut at = 2;
+    loop {
+        let &[0xFF, marker, high, low, ..] = jpeg.get(at..)? else { return None };
+        if marker == 0xDA {
+            break;
+        }
+        let end = at + 2 + u16::from_be_bytes([high, low]) as usize;
+        let segment = jpeg.get(at..end)?;
+        match marker {
+            0xE1 if segment.get(4..10) == Some(&b"Exif\0\0"[..]) => exif = exif.or(Some(segment)),
+            0xE1 => {}
+            _ => kept.extend_from_slice(segment),
+        }
+        at = end;
+    }
+    kept.extend_from_slice(&jpeg[at..]);
+    let root = exif.filter(|_| settings.metadata).and_then(|segment| {
+        IFD::new_root_with_correction(&mut std::io::Cursor::new(segment.get(10..)?.to_vec()), 0, 0, 0, 10, &[EXIF_IFD, GPS_IFD]).ok()
+    });
+    let turn = root.as_ref().and_then(|root| root.get_entry(ORIENTATION)).map(|entry| (ORIENTATION, entry.value.clone()));
+    if let Some(block) = root.as_ref().and_then(|root| app1_with(Some(root), Carry::of(settings), turn.into_iter().collect(), None)) {
+        kept = with_exif(kept, &block);
+    }
+    if let Some(description) = crate::xmp::description(settings, &Description::default(), None) {
+        kept = crate::gainmap::with_segment(kept, &crate::xmp::segment(&description));
+    }
+    Some(kept)
 }
 
 fn with_exif(jpeg: Vec<u8>, exif: &[u8]) -> Vec<u8> {
@@ -1164,6 +1221,8 @@ mod tests {
         exif.add_untyped_tag(0x829Du16, Value::Rational(vec![rawler::formats::tiff::Rational::new(14, 10)]));
         exif.add_untyped_tag(0x8827u16, Value::Short(vec![200]));
         exif.add_untyped_tag(0x927Cu16, Value::Byte(vec![7; 64]));
+        exif.add_untyped_tag(0xA431u16, Value::Ascii(rawler::formats::tiff::TiffAscii::new("1234567")));
+        exif.add_untyped_tag(0xA435u16, Value::Ascii(rawler::formats::tiff::TiffAscii::new("7654321")));
         let exif_offset = exif.build(&mut tiff).unwrap();
 
         let mut root = tiff.new_directory();
@@ -1234,6 +1293,62 @@ mod tests {
         let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).unwrap();
         assert!(exif.get_field(::exif::Tag::GPSLatitude, ::exif::In::PRIMARY).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn serials_stay_behind() {
+        let dir = std::env::temp_dir().join(format!("numa-exif-serials-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = pentax_raw(&dir);
+        let read = |settings: &ExportSettings| {
+            let block = carried_exif(settings, Some(&path), None).expect("a block");
+            ::exif::Reader::new().read_raw(block[10..].to_vec()).unwrap()
+        };
+        let kept = read(&ExportSettings::default());
+        assert!(kept.get_field(::exif::Tag::BodySerialNumber, ::exif::In::PRIMARY).is_some());
+        let gone = read(&ExportSettings { strip_serials: true, ..ExportSettings::default() });
+        assert!(gone.get_field(::exif::Tag::BodySerialNumber, ::exif::In::PRIMARY).is_none());
+        assert!(gone.get_field(::exif::Tag::LensSerialNumber, ::exif::In::PRIMARY).is_none());
+        assert!(gone.get_field(::exif::Tag::PhotographicSensitivity, ::exif::In::PRIMARY).is_some(), "the rest travels");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_camera_jpeg_is_restamped() {
+        use rawler::formats::tiff::{Rational, TiffAscii};
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let mut tiff = TiffWriter::new(&mut buffer).unwrap();
+        let mut exif = tiff.new_directory();
+        exif.add_untyped_tag(0xA431u16, Value::Ascii(TiffAscii::new("1234567")));
+        let exif_offset = exif.build(&mut tiff).unwrap();
+        let mut gps = tiff.new_directory();
+        gps.add_untyped_tag(0x0001u16, Value::Ascii(TiffAscii::new("N")));
+        gps.add_untyped_tag(0x0002u16, Value::Rational(vec![Rational::new(35, 1); 3]));
+        let gps_offset = gps.build(&mut tiff).unwrap();
+        let mut root = tiff.new_directory();
+        root.add_untyped_tag(0x010Fu16, Value::Ascii(TiffAscii::new("FUJIFILM")));
+        root.add_untyped_tag(ORIENTATION, Value::Short(vec![6]));
+        root.add_untyped_tag(EXIF_IFD, Value::Long(vec![exif_offset]));
+        root.add_untyped_tag(GPS_IFD, Value::Long(vec![gps_offset]));
+        tiff.build(root).unwrap();
+        let tiff = buffer.into_inner();
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((tiff.len() + 8) as u16).to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        let scan = [0xFF, 0xDA, 0x00, 0x02, 1, 2, 3, 0xFF, 0xD9];
+        jpeg.extend_from_slice(&scan);
+
+        let home = ExportSettings { strip_location: true, strip_serials: true, ..ExportSettings::default() };
+        let out = restamped(&jpeg, &home).expect("a JPEG");
+        assert!(out.ends_with(&scan), "the pixels stay as they were");
+        let found = out.windows(6).position(|bytes| bytes == b"Exif\0\0").expect("EXIF");
+        let read = ::exif::Reader::new().read_raw(out[found + 6..].to_vec()).unwrap();
+        let field = |tag| read.get_field(tag, ::exif::In::PRIMARY);
+        assert!(field(::exif::Tag::GPSLatitude).is_none() && field(::exif::Tag::BodySerialNumber).is_none());
+        assert_eq!(field(::exif::Tag::Orientation).and_then(|field| field.value.get_uint(0)), Some(6), "the camera's turn stays");
+        assert!(String::from_utf8_lossy(&out).contains("DMI-PROHIBITED-AIMLTRAINING"));
     }
 
     #[test]

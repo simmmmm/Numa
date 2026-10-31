@@ -20,8 +20,12 @@ pub(super) struct State {
 
     pub(super) perspective: Vec<gtk::Scale>,
 
-    pub(super) guided: gtk::ToggleButton,
+    pub(super) guided: gtk::Switch,
+    pub(super) guides_clear: gtk::Button,
     pub(super) guide_lines: Rc<RefCell<Vec<numa::core::guided::Guide>>>,
+
+    pub(super) sides: Vec<gtk::SpinButton>,
+    pub(super) custom_rows: gtk::Box,
     pub(super) controls: gtk::Box,
 
     pub(super) at_open: Rc<Cell<Option<([f32; 4], f32, f32)>>>,
@@ -48,8 +52,11 @@ impl State {
             perspective: (0..3)
                 .map(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, -100.0, 100.0, 1.0))
                 .collect(),
-            guided: gtk::ToggleButton::with_label("Guided"),
+            guided: gtk::Switch::new(),
+            guides_clear: gtk::Button::with_label("Clear"),
             guide_lines: Rc::new(RefCell::new(Vec::new())),
+            sides: (0..2).map(|_| gtk::SpinButton::with_range(1.0, 99.0, 1.0)).collect(),
+            custom_rows: gtk::Box::new(gtk::Orientation::Vertical, 0),
             controls: gtk::Box::new(gtk::Orientation::Vertical, 0),
             at_open: Rc::new(Cell::new(None)),
             level_waiting: Waiting::new("Looking for the horizon", &level),
@@ -60,16 +67,16 @@ impl State {
     }
 }
 
-pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
+pub(super) fn build_crop_controls(state: &App) -> (gtk::Box, gtk::Box) {
     let column = state.crop.controls.clone();
     column.set_orientation(gtk::Orientation::Vertical);
-    column.set_spacing(6);
     column.set_visible(false);
 
     column.append(&section_header("Crop"));
 
     let (aspects, first) = aspect_buttons(state);
     column.append(&aspects);
+    column.append(&state.crop.custom_rows);
     let free = first.clone();
 
     let turns = turn_buttons(state);
@@ -77,7 +84,6 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
 
     let straighten = state.crop.straighten.clone();
     let row = slider_row(state, "Straighten", &straighten, Readout::Signed(1));
-    row.add_css_class("lead");
 
     follow_straighten(state);
 
@@ -92,19 +98,24 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
 
     let level = state.crop.level.clone();
     word_or_spinner(&level, "Auto", &state.crop.level_waiting);
-    level.add_css_class("flat");
-    level.add_css_class("caption");
     level.set_tooltip_text(Some("Level the photograph by its horizon and its verticals"));
     level.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| auto_level(&state)
     ));
-    if let Some(header) = row.first_child().and_downcast::<gtk::Box>() {
-        header.insert_child_after(&level, header.first_child().as_ref());
-    }
+
+    column.append(&section_row("Straighten", &[level.upcast_ref()]));
     column.append(&row);
 
-    column.append(&section_header("Perspective"));
+    let auto = state.crop.upright.clone();
+    word_or_spinner(&auto, "Auto", &state.crop.upright_waiting);
+    auto.set_tooltip_text(Some("Square up converging verticals; Horizontal is Guided's"));
+    auto.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| auto_perspective(&state)
+    ));
+
+    column.append(&section_row("Perspective", &[auto.upcast_ref()]));
     for (index, (name, tooltip)) in [
         ("Vertical", "Verticals that converge — a camera pointed up or down"),
         ("Horizontal", "Horizontals that converge — a camera turned left or right"),
@@ -124,31 +135,24 @@ pub(super) fn build_crop_controls(state: &App) -> gtk::Box {
             }
         ));
         let row = slider_row(state, name, &scale, Readout::Signed(0));
-        if index == 0 {
-            row.add_css_class("lead");
-        }
         column.append(&row);
     }
 
-    let auto = state.crop.upright.clone();
-    word_or_spinner(&auto, "Auto", &state.crop.upright_waiting);
-    auto.set_tooltip_text(Some("Square up converging verticals; Horizontal is Guided's"));
-    auto.set_margin_top(4);
-    auto.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| auto_perspective(&state)
-    ));
-    column.append(&guided_row(state, &auto));
+    column.append(&guided_row(state));
 
-    let finish = finish_buttons(state, &free);
-    column.append(&finish);
+    let foot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    foot.add_css_class("panel-foot");
+    foot.append(&finish_buttons(state, &free));
+    column.bind_property("visible", &foot, "visible").sync_create().build();
 
-    column
+    (column, foot)
 }
 
 fn aspect_buttons(state: &App) -> (gtk::Box, Option<gtk::ToggleButton>) {
-    let aspects = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let aspects = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    aspects.add_css_class("chip-rows");
     let rows = [chip_row(), chip_row()];
+    rows[1].add_css_class("four");
     for row in &rows {
         aspects.append(row);
     }
@@ -179,19 +183,19 @@ fn aspect_buttons(state: &App) -> (gtk::Box, Option<gtk::ToggleButton>) {
     choose(&rows[0], &original, Rc::new(|state| Some(frame_aspect(state))));
     choose(&rows[0], &free, Rc::new(|_| None));
     press_again_to_turn(state, &free);
-    for (index, sides) in [(1.0, 1.0), (5.0, 4.0), (3.0, 2.0), (16.0, 9.0)].into_iter().enumerate() {
+    for sides in [(1.0, 1.0), (5.0, 4.0), (3.0, 2.0), (16.0, 9.0)] {
         let button = gtk::ToggleButton::new();
         button.set_group(Some(&free));
-        choose(&rows[usize::from(index >= 2)], &button, Rc::new(move |state| Some(ratio_of(sides, state.crop.landscape.get()))));
+
+        choose(&rows[1], &button, Rc::new(move |state| Some(ratio_of(sides, state.crop.landscape.get()))));
         press_again_to_turn(state, &button);
         state.crop.ratios.borrow_mut().push((button, sides));
     }
     let custom = gtk::ToggleButton::with_label("Custom");
     custom.set_group(Some(&free));
     custom.set_tooltip_text(Some("A ratio of your own"));
-    choose(&rows[1], &custom, Rc::new(|state| Some(ratio_of(state.crop.custom.get(), state.crop.landscape.get()))));
-    let popover = custom_popover(state, &custom);
-    custom.connect_clicked(move |_| popover.popup());
+    choose(&rows[0], &custom, Rc::new(|state| Some(ratio_of(state.crop.custom.get(), state.crop.landscape.get()))));
+    custom_rows(state, &custom);
     label_ratios(state);
     (aspects, Some(free))
 }
@@ -228,44 +232,26 @@ pub(super) fn label_ratios(state: &App) {
         let (first, second) = if landscape { (long, short) } else { (short, long) };
         button.set_label(&format!("{first}:{second}"));
     }
+    let (long, short) = state.crop.custom.get();
+    let (wide, high) = if landscape { (long, short) } else { (short, long) };
+    let was = state.applying.replace(true);
+    state.crop.sides[0].set_value(wide as f64);
+    state.crop.sides[1].set_value(high as f64);
+    state.applying.set(was);
 }
 
-fn custom_popover(state: &App, custom: &gtk::ToggleButton) -> gtk::Popover {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.set_margin_top(6);
-    row.set_margin_bottom(6);
-    row.set_margin_start(6);
-    row.set_margin_end(6);
-    let sides: Vec<gtk::SpinButton> = (0..2).map(|_| gtk::SpinButton::with_range(1.0, 99.0, 1.0)).collect();
-    row.append(&sides[0]);
-    row.append(&gtk::Label::new(Some(":")));
-    row.append(&sides[1]);
-    let popover = gtk::Popover::new();
-    popover.set_child(Some(&row));
-    popover.set_parent(custom);
-
-    popover.connect_show(glib::clone!(
-        #[strong] state,
-        #[strong] sides,
-        move |_| {
-            let (long, short) = state.crop.custom.get();
-            let (wide, high) = if state.crop.landscape.get() { (long, short) } else { (short, long) };
-            state.applying.set(true);
-            sides[0].set_value(wide as f64);
-            sides[1].set_value(high as f64);
-            state.applying.set(false);
-        }
-    ));
-    for side in &sides {
+fn custom_rows(state: &App, custom: &gtk::ToggleButton) {
+    let rows = state.crop.custom_rows.clone();
+    for (side, name) in state.crop.sides.iter().zip(["Width", "Height"]) {
+        rows.append(&named_row(name, side));
         side.connect_value_changed(glib::clone!(
             #[strong] state,
-            #[strong] sides,
             #[weak] custom,
             move |_| {
                 if state.applying.get() {
                     return;
                 }
-
+                let sides = &state.crop.sides;
                 let (wide, high) = (sides[0].value() as f32, sides[1].value() as f32);
                 state.crop.custom.set((wide.max(high), wide.min(high)));
                 if wide != high {
@@ -280,7 +266,11 @@ fn custom_popover(state: &App, custom: &gtk::ToggleButton) -> gtk::Popover {
             }
         ));
     }
-    popover
+    rows.set_visible(custom.is_active());
+    custom.connect_toggled(glib::clone!(
+        #[weak] rows,
+        move |custom| rows.set_visible(custom.is_active())
+    ));
 }
 
 fn swap_orientation(state: &App) {
@@ -378,8 +368,8 @@ fn turn_buttons(state: &App) -> gtk::Box {
 }
 
 fn finish_buttons(state: &App, free: &Option<gtk::ToggleButton>) -> gtk::Box {
-    let finish = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    finish.set_margin_top(10);
+    let finish = chip_row();
+    finish.set_homogeneous(true);
 
     let reset = gtk::Button::with_label("Reset");
     reset.set_hexpand(true);

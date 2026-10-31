@@ -85,6 +85,8 @@ fn pack_settings(state: &App, edge: Option<u32>, folder: PathBuf) -> export::Exp
         copyright: mine.copyright.clone(),
         keywords: mine.keywords,
         strip_location: mine.strip_location,
+        strip_serials: mine.strip_serials,
+        no_ai_training: mine.no_ai_training,
         ..export::ExportSettings::default()
     }
 }

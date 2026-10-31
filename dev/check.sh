@@ -8,6 +8,15 @@ python3 dev/style.py
 python3 dev/style_web.py
 python3 dev/tokens.py --check
 python3 dev/smoke-readme.py
+if command -v cargo-deny >/dev/null; then
+    cargo deny check licenses
+elif [ -n "${CI:-}" ]; then
+    echo "cargo-deny is not installed on this runner" >&2
+    exit 1
+else
+    echo "cargo-deny is not installed: skipping the licence check" >&2
+fi
+if [ -x dev/feature-ids.sh ]; then dev/feature-ids.sh; fi
 if ! diff <(sed -n 's/^Build-Depends: //p' packaging/obs/numa.dsc) <(sed -n 's/^Build-Depends: //p' packaging/obs/debian.control); then
     echo "packaging/obs/numa.dsc and debian.control name other Build-Depends" >&2
     exit 1

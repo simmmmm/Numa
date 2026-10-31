@@ -155,7 +155,7 @@ fn left(job: &Job) -> Option<u64> {
 
 pub async fn status(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Value> {
 
-    let seen = server.home.libraries(&me.name);
+    let seen = server.home.libraries(&me);
     let paused = server.activity.paused();
     let jobs = server.activity.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 

@@ -66,6 +66,8 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 
     pub(super) static REGISTERED: RefCell<Vec<gtk::Scale>> = const { RefCell::new(Vec::new()) };
+
+    pub(super) static RESETS: RefCell<HashMap<usize, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) struct Painter {
@@ -101,17 +103,26 @@ pub(super) fn neutral_of(scale: &gtk::Scale) -> Option<f64> {
     NEUTRALS.with(|neutrals| neutrals.borrow().get(&(scale.as_ptr() as usize)).copied())
 }
 
+pub(super) fn fill_span(low: f64, high: f64, neutral: f64, value: f64) -> (f64, f64, bool) {
+    let span = (high - low).max(f64::EPSILON);
+    let at = |value: f64| ((value - low) / span * 100.0).clamp(0.0, 100.0);
+    let (rest, now) = (at(neutral), at(value));
+    let moved = (rest - now).abs() >= 0.2;
+    match neutral >= high {
+        true => (0.0, now, moved),
+        false => (rest.min(now), rest.max(now), moved),
+    }
+}
+
 fn rule_for(scale: &gtk::Scale, neutral: f64) -> (String, String) {
     let adjustment = scale.adjustment();
     let (low, high) = (adjustment.lower(), adjustment.upper());
-    let span = (high - low).max(f64::EPSILON);
-    let at = |value: f64| ((value - low) / span * 100.0).clamp(0.0, 100.0);
-    let (rest, now) = (at(neutral), at(scale.value()));
-    let (from, to) = (rest.min(now), rest.max(now));
+    let (from, to, moved) = fill_span(low, high, neutral, scale.value());
 
-    let fill = match (to - from).abs() < 0.2 {
-        true => "transparent",
-        false => "@numa_accent",
+    let fill = match (moved, neutral >= high) {
+        (true, _) => "@numa_accent",
+        (false, true) => "@numa_label",
+        (false, false) => "transparent",
     };
 
     let mut rules = (String::new(), String::new());
@@ -123,7 +134,7 @@ fn rule_for(scale: &gtk::Scale, neutral: f64) -> (String, String) {
         );
     }
     if low < 0.0 && high > 0.0 {
-        let zero = at(0.0);
+        let zero = -low / (high - low) * 100.0;
         rules.1 = format!(
             "scale {{ background-image: linear-gradient(@numa_rest_tick, @numa_rest_tick); \
              background-size: 1px 8px; \
@@ -162,7 +173,8 @@ pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: R
 
     let value = gtk::Label::new(Some(&readout.format(scale.value())));
     value.set_xalign(1.0);
-    value.set_width_chars(6);
+
+    value.set_halign(gtk::Align::End);
     value.add_css_class("slider-value");
 
     ROWS.with(|rows| rows.borrow_mut().push((scale.clone(), value.clone(), readout)));
@@ -196,6 +208,7 @@ pub(super) fn slider_row(state: &App, name: &str, scale: &gtk::Scale, readout: R
     ));
 
     connect_reset(state, scale, &value, readout);
+    typed_value(&header, scale, &value, readout);
 
     connect_wheel(scale);
 
@@ -230,6 +243,7 @@ fn connect_reset(state: &App, scale: &gtk::Scale, value: &gtk::Label, readout: R
             glide(&scale, &scale.adjustment(), original);
         }
     );
+    RESETS.with(|resets| resets.borrow_mut().insert(scale.as_ptr() as usize, Rc::new(reset.clone())));
     on_reset(scale, Some(value), reset);
 }
 
@@ -269,6 +283,114 @@ fn on_reset(scale: &gtk::Scale, value: Option<&gtk::Label>, reset: impl Fn() + C
     });
     value.add_controller(on_value);
     value.set_tooltip_text(Some("Right-click to reset"));
+}
+
+fn typed_value(header: &gtk::Box, scale: &gtk::Scale, value: &gtk::Label, readout: Readout) {
+    value.set_tooltip_text(Some("Click to type · right-click to reset"));
+    value.set_cursor_from_name(Some("text"));
+    let waiting: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_PRIMARY);
+    click.connect_pressed(glib::clone!(
+        #[weak] header,
+        #[weak] scale,
+        #[weak] value,
+        move |_, presses, _, _| {
+            if let Some(booked) = waiting.borrow_mut().take() {
+                booked.remove();
+            }
+            if presses != 1 || !scale.is_sensitive() {
+                return;
+            }
+            let time = gtk::Settings::default().map_or(400, |settings| settings.gtk_double_click_time());
+            let booked = waiting.clone();
+            let source = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(time.max(0) as u64),
+                glib::clone!(
+                    #[weak] header,
+                    #[weak] scale,
+                    #[weak] value,
+                    move || {
+                        booked.borrow_mut().take();
+                        type_into(&header, &scale, &value, readout);
+                    }
+                ),
+            );
+            *waiting.borrow_mut() = Some(source);
+        }
+    ));
+    value.add_controller(click);
+}
+
+fn type_into(header: &gtk::Box, scale: &gtk::Scale, value: &gtk::Label, readout: Readout) {
+    let shown = value.text().to_string();
+    let field = gtk::Text::new();
+    gtk::prelude::EditableExt::set_text(&field, &shown);
+    gtk::prelude::EditableExt::set_alignment(&field, 1.0);
+    field.set_halign(gtk::Align::End);
+    field.set_width_chars(6);
+    field.set_max_width_chars(6);
+    field.add_css_class("slider-value");
+    field.add_css_class("typing");
+    value.set_visible(false);
+    header.append(&field);
+    field.grab_focus();
+    gtk::prelude::EditableExt::select_region(&field, 0, -1);
+
+    let answered = Rc::new(Cell::new(false));
+    let answer = Rc::new(glib::clone!(
+        #[weak] header,
+        #[weak] scale,
+        #[weak] value,
+        #[weak] field,
+        move |take: bool| {
+            if answered.replace(true) {
+                return;
+            }
+
+            if take && field.text() != shown.as_str() {
+                match readout.parse(&field.text()) {
+                    Some(typed) => scale.set_value(typed),
+                    None => value.error_bell(),
+                }
+            }
+            value.set_visible(true);
+
+            glib::idle_add_local_once(glib::clone!(
+                #[weak] header,
+                #[weak] field,
+                move || header.remove(&field)
+            ));
+        }
+    ));
+    field.connect_activate(glib::clone!(
+        #[strong] answer,
+        #[weak] scale,
+        move |_| {
+            answer(true);
+            scale.grab_focus();
+        }
+    ));
+    let keys = gtk::EventControllerKey::new();
+
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(glib::clone!(
+        #[strong] answer,
+        #[weak] scale,
+        #[upgrade_or] glib::Propagation::Proceed,
+        move |_, key, _, _| {
+            if key != gtk::gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            answer(false);
+            scale.grab_focus();
+            glib::Propagation::Stop
+        }
+    ));
+    field.add_controller(keys);
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_leave(move |_| answer(true));
+    field.add_controller(focus);
 }
 
 pub(super) fn strength_scale() -> gtk::Scale {

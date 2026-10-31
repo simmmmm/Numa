@@ -302,24 +302,34 @@ pub(super) fn read_face(state: &App) {
 }
 
 pub(super) fn refresh_face(state: &App) {
-    let found = state
+    let (found, pending) = state
         .open
         .borrow()
         .as_ref()
-        .map(|photo| photo.document.faces.len())
-        .unwrap_or(0);
+        .map(|photo| (photo.document.faces.len(), photo.faces_pending))
+        .unwrap_or((0, false));
 
-    state.retouch.face_section.set_visible(found > 0);
-    state.retouch.face_note.set_text(&match found {
-        0 => String::new(),
-        1 => "One face found.".to_string(),
-        many => format!("{many} faces found — these apply to all of them."),
+    let installed = cull::faces::is_installed();
+    state.retouch.face_rows.set_visible(found > 0);
+    let note = &state.retouch.face_note;
+    note.set_text(&match (installed, pending, found) {
+        (false, ..) => "Finding faces needs a model. Preferences says which and where.".to_string(),
+        (_, true, _) => "Looking for faces…".to_string(),
+        (_, _, 0) => "No face found.".to_string(),
+        (_, _, 1) => "One face found.".to_string(),
+        (_, _, many) => format!("{many} faces found — these apply to all of them."),
     });
+    match installed {
+        true => note.remove_css_class("problem"),
+        false => note.add_css_class("problem"),
+    }
     write_face(state);
 }
 
 pub(super) fn ensure_faces(state: &App) {
     if !cull::faces::is_installed() {
+
+        refresh_face(state);
         return;
     }
     let request = {
@@ -341,6 +351,8 @@ pub(super) fn ensure_faces(state: &App) {
     };
 
     let (geometry, working) = request;
+
+    refresh_face(state);
     let generation = state.open_generation.get();
     let state = state.clone();
     glib::spawn_future_local(async move {
@@ -417,7 +429,6 @@ pub(super) fn refresh_retouch(state: &App) {
             index + 1
         ));
         row.set_subtitle(&format!("{:.1} % across", spot.radius * 100.0));
-        row.add_css_class("mask-part");
         row.set_activatable(true);
         if Some(index) == selected {
             row.add_css_class("current-mask");
@@ -446,6 +457,7 @@ pub(super) fn refresh_retouch(state: &App) {
     }
 
     state.retouch.list.set_visible(!spots.is_empty());
+    state.retouch.spots_empty.set_visible(spots.is_empty());
 
     if let Some(spot) = selected.and_then(|index| spots.get(index)) {
         state.applying.set(true);

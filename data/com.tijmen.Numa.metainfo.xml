@@ -51,6 +51,13 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.48.0" date="2026-10-31">
+      <description>
+        <p>Numa has a new design on Linux, the Mac, the iPad and the iPhone: the editor's panel in cards, Today with the photograph of the day, and Preferences with a tab for each subject. Numa Home's Today has the new design too.</p>
+        <p>A second click on a preset or a LUT takes it off. You can type a slider's number. Esc closes the photograph. After the editor, the grid stands at the photograph you edited. The sync mark shows only while a library syncs.</p>
+        <p>Numa Home's share links were checked against their rules, and the libraries that read archives were updated. As Shot's tint no longer reads as Custom on a raw that was not changed.</p>
+      </description>
+    </release>
     <release version="0.47.0" date="2026-10-24">
       <description>
         <p>A library can be kept in step with Numa Home. On the Libraries page, Sync on This Device brings a Numa Home library's photographs to this computer once, and Sync to Numa Home sends a library of this computer there once; after that only changes go back and forth: edits, stars, flags, albums, new photographs, and deletions, which go to the trash on the other side. When both sides changed a photograph, the later change wins and the other is kept as a snapshot.</p>

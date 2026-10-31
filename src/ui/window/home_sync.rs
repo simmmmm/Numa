@@ -19,6 +19,8 @@ thread_local! {
     static SHOWN: RefCell<HashMap<i64, Shown>> = RefCell::default();
     static CAPTIONS: RefCell<Vec<(i64, glib::WeakRef<gtk::Label>, String)>> = const { RefCell::new(Vec::new()) };
 
+    static MARKS: RefCell<Vec<(i64, glib::WeakRef<gtk::Image>)>> = const { RefCell::new(Vec::new()) };
+
     static WAYS: RefCell<HashMap<i64, Option<(Way, bool)>>> = RefCell::default();
 }
 
@@ -53,6 +55,15 @@ pub(super) fn follow_caption(library: i64, label: &gtk::Label, before: &str) {
     });
 }
 
+pub(super) fn follow_mark(library: i64, mark: &gtk::Image) {
+    mark.set_visible(SHOWN.with(|shown| shown.borrow().get(&library).is_some_and(|shown| shown.syncing.is_some())));
+    MARKS.with(|marks| {
+        let mut marks = marks.borrow_mut();
+        marks.retain(|(_, mark)| mark.upgrade().is_some());
+        marks.push((library, mark.downgrade()));
+    });
+}
+
 fn say_state(_state: &App, library: i64, change: impl FnOnce(&mut Shown)) {
     let now = SHOWN.with(|shown| {
         let mut shown = shown.borrow_mut();
@@ -67,9 +78,18 @@ fn say_state(_state: &App, library: i64, change: impl FnOnce(&mut Shown)) {
             }
         }
     });
+    MARKS.with(|marks| {
+        for (_, mark) in marks.borrow().iter().filter(|(id, _)| *id == library) {
+            if let Some(mark) = mark.upgrade() {
+                mark.set_visible(now.syncing.is_some());
+            }
+        }
+    });
 }
 
 const PACE: &str = "numa-home-pace";
+
+const PHOTOS_DIR: &str = "numa-home-photos-dir";
 
 pub(super) fn linked(state: &App, library: i64) -> Option<Link> {
     serde_json::from_str(&state.catalog.library_setting(library, sync::LINK)?).ok()
@@ -88,6 +108,90 @@ fn home_root() -> PathBuf {
     pictures.join(NUMA_HOME)
 }
 
+pub(super) fn browse_root() -> PathBuf {
+    dirs::cache_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".cache")).join("numa").join("home-libraries")
+}
+
+pub(super) fn is_cache_only(library: &Library) -> bool {
+    library.path.starts_with(browse_root())
+}
+
+pub(super) fn photos_root(state: &App) -> Option<PathBuf> {
+    state.catalog.setting(PHOTOS_DIR).filter(|path| !path.is_empty()).map(PathBuf::from)
+}
+
+pub(super) fn set_photos_root(state: &App, path: &Path) {
+    if let Err(err) = state.catalog.set_setting(PHOTOS_DIR, &path.to_string_lossy()) {
+        log::warn!("Numa Home: the photographs' folder could not be kept: {err}");
+    }
+}
+
+pub(super) fn with_photos_root(state: &App, then: impl FnOnce(PathBuf) + 'static) {
+    if let Some(root) = photos_root(state).filter(|root| root.is_dir()) {
+        return then(root);
+    }
+    let Some(window) = state.stack.root().and_downcast::<adw::ApplicationWindow>() else { return };
+    let picker = gtk::FileDialog::new();
+    picker.set_title(&format!("Where should photographs from {NUMA_HOME} be kept on this computer?"));
+    picker.set_accept_label(Some("Choose"));
+    if let Some(start) = dirs::picture_dir() {
+        picker.set_initial_folder(Some(&gio::File::for_path(start)));
+    }
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let Ok(file) = picker.select_folder_future(Some(&window)).await else { return };
+        let Some(path) = file.path() else { return };
+        set_photos_root(&state, &path);
+        then(path);
+    });
+}
+
+pub(super) fn room_path(state: &App, library: &Library) -> PathBuf {
+    if !library.path.starts_with(browse_root()) {
+        return library.path.clone();
+    }
+    photos_root(state)
+        .filter(|root| root.is_dir())
+        .or_else(dirs::picture_dir)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| library.path.clone())
+}
+
+pub(super) fn settle_here(state: &App, library: &Library, root: &Path) -> Result<Library, String> {
+    if !library.path.starts_with(browse_root()) {
+        return Ok(library.clone());
+    }
+    let name = library.path.file_name().ok_or_else(|| format!("{} has no name", library.path.display()))?;
+    let to = root.join(name);
+    if to.exists() {
+        return Err(format!("{} exists already", to.display()));
+    }
+    std::fs::create_dir_all(root).map_err(|err| format!("{}: {err}", root.display()))?;
+    if std::fs::rename(&library.path, &to).is_err() {
+
+        copy_all(&library.path, &to).map_err(|err| format!("{}: {err}", to.display()))?;
+        let _ = std::fs::remove_dir_all(&library.path);
+    }
+    state.catalog.relocate_library(library.id, &to)?;
+    WAYS.with(|ways| ways.borrow_mut().remove(&library.id));
+    Ok(Library { path: to, ..library.clone() })
+}
+
+fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        match entry.file_type()?.is_dir() {
+            true => copy_all(&entry.path(), &target)?,
+            false => {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn way_synced(state: &App, library: i64) -> Option<(Way, bool)> {
     if let Some(known) = WAYS.with(|ways| ways.borrow().get(&library).copied()) {
         return known;
@@ -95,7 +199,7 @@ fn way_synced(state: &App, library: i64) -> Option<(Way, bool)> {
     let known = linked(state, library).map(|link| {
         let path = state.libraries.all.borrow().iter().find(|it| it.id == library).map(|it| it.path.clone());
         let path = path.or_else(|| state.catalog.libraries().ok()?.into_iter().find(|it| it.id == library).map(|it| it.path));
-        let way = sync::way(&link, path.is_some_and(|path| path.starts_with(home_root())));
+        let way = sync::way(&link, path.is_some_and(|path| path.starts_with(home_root()) || path.starts_with(browse_root())));
         (way, sync::synced(&link, way))
     });
     WAYS.with(|ways| ways.borrow_mut().insert(library, known));
@@ -261,8 +365,16 @@ pub(super) fn import_group(state: &App, dialog: &adw::Dialog, go: &gtk::Button) 
     group
 }
 
-fn home_folder(state: &App, from: &sync::Library, account: &Account) -> Result<Library, String> {
-    let root = home_root().join(from.name.replace('/', "-"));
+fn home_folder(state: &App, from: &sync::Library, account: &Account, at: &Path) -> Result<Library, String> {
+    let known_by_link = state.catalog.libraries()?.into_iter().find(|library| {
+        linked(state, library.id).is_some_and(|link| link.library == from.id && api::same_server(&link.address, &account.address))
+    });
+    if let Some(library) = known_by_link {
+        let library = settle_here_if(state, library, at)?;
+        std::fs::create_dir_all(&library.path).map_err(|err| format!("{}: {err}", library.path.display()))?;
+        return Ok(library);
+    }
+    let root = at.join(from.name.replace('/', "-"));
     std::fs::create_dir_all(&root).map_err(|err| format!("{}: {err}", root.display()))?;
     let known = state.catalog.libraries()?.into_iter().find(|library| library.path == root);
     let library = known.map_or_else(|| state.catalog.add_library(&root), Ok)?;
@@ -281,9 +393,21 @@ fn home_folder(state: &App, from: &sync::Library, account: &Account) -> Result<L
     Ok(library)
 }
 
+fn settle_here_if(state: &App, library: Library, at: &Path) -> Result<Library, String> {
+    match at.starts_with(browse_root()) {
+        true => Ok(library),
+        false => settle_here(state, &library, at),
+    }
+}
+
 fn bring(state: &App, from: sync::Library, photos: Vec<Remote>, since: i64, then: (Vec<String>, Option<String>)) {
+    let state = state.clone();
+    with_photos_root(&state.clone(), move |root| bring_into(&state, &root, from, photos, since, then));
+}
+
+fn bring_into(state: &App, root: &Path, from: sync::Library, photos: Vec<Remote>, since: i64, then: (Vec<String>, Option<String>)) {
     let account = account(state);
-    let library = match home_folder(state, &from, &account) {
+    let library = match home_folder(state, &from, &account, root) {
         Ok(library) => library,
         Err(err) => return state.toast(&err),
     };
@@ -320,12 +444,33 @@ pub(super) fn adopt(state: &App, catch_up: bool) {
             .collect();
 
         let new = listed.into_iter().filter(|from| !links.iter().any(|link| link.library == from.id || (link.library.is_empty() && link.name == from.name)));
-        let made: Vec<Library> = new.filter_map(|from| home_folder(&state, &from, &account).map_err(|err| log::info!("Numa Home: {err}")).ok()).collect();
+        let made: Vec<Library> = new.filter_map(|from| home_folder(&state, &from, &account, &browse_root()).map_err(|err| log::info!("Numa Home: {err}")).ok()).collect();
         if !made.is_empty() {
             reload_libraries(&state);
         }
+
+        let all = state.catalog.libraries().unwrap_or_default();
+        let stale = stale_rows(&all, &home_root(), &browse_root(), |path| path.exists());
+        let removed = stale.into_iter().filter(|library| state.catalog.remove_library(library.id).map_err(|err| log::warn!("Numa Home: {}: {err}", library.path.display())).is_ok()).count();
+        if removed > 0 {
+            log::info!("Numa Home: {removed} libraries of {} whose folders are gone were dropped, the cache has them", home_root().display());
+            reload_libraries(&state);
+        }
+
         let unfinished = |library: &Library| {
-            linked(&state, library.id).is_some_and(|link| api::same_server(&link.address, &account.address) && !link.library.is_empty() && !link.everything)
+            let cleared = library.path.starts_with(browse_root()) && !library.path.exists();
+            if cleared {
+                if let Err(err) = std::fs::create_dir_all(&library.path) {
+                    log::info!("Numa Home: {}: {err}", library.path.display());
+                }
+            }
+            if let (true, Some(link)) = (cleared, linked(&state, library.id)) {
+
+                keep(&state, library.id, &Link { since: 0, everything: false, photos: BTreeMap::new(), gone: BTreeMap::new(), ..link });
+            }
+            linked(&state, library.id).is_some_and(|link| {
+                api::same_server(&link.address, &account.address) && !link.library.is_empty() && !link.everything
+            })
         };
         let made = match catch_up {
             true => state.catalog.libraries().unwrap_or_default().into_iter().filter(unfinished).collect(),
@@ -346,6 +491,13 @@ pub(super) fn adopt(state: &App, catch_up: bool) {
             }
         }
     });
+}
+
+fn stale_rows<'a>(all: &'a [Library], old_root: &Path, cache: &Path, exists: impl Fn(&Path) -> bool) -> Vec<&'a Library> {
+    let cached: HashSet<&std::ffi::OsStr> = all.iter().filter(|library| library.path.starts_with(cache)).filter_map(|library| library.path.file_name()).collect();
+    all.iter()
+        .filter(|library| library.path.starts_with(old_root) && !exists(&library.path) && library.path.file_name().is_some_and(|name| cached.contains(name)))
+        .collect()
 }
 
 async fn round_over() {
@@ -1286,7 +1438,7 @@ fn albums_here(state: &App, photo: i64, from: &[String], to: &[String]) -> Resul
         let key = match key(&known, name) {
             Some(key) => key,
             None => {
-                let made = state.catalog.create_album(name).map_err(Failure::Said)?;
+                let made = state.catalog.create_album(name).map_err(|err| Failure::Said(err.to_string()))?;
                 known.push((made.clone(), name.clone()));
                 made
             }
@@ -1336,7 +1488,7 @@ fn put_edits(state: &App, file: PathBuf, photo: i64, stack: Option<String>) -> R
     };
 
     document.source.path = file;
-    state.catalog.save_own_edits(photo, &document).map_err(Failure::Said)?;
+    state.catalog.save_own_edits(photo, &document).map_err(|err| Failure::Said(err.to_string()))?;
     state.catalog.own_edits_json(photo).map_err(Failure::Said)
 }
 
@@ -1349,4 +1501,29 @@ async fn send(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), library: &str) -> Res
     let up = sync::Parts { edits: ours.edits.is_some(), marks: ours.rating != 0 || ours.flag != "none", albums: !ours.albums.is_empty() };
     let sides = Sides { theirs: None, kept: None, albums: Some(&ours.albums), theirs_albums: &[] };
     both(ctx, (photo, ours), &sent.id, sides, (sync::Parts::default(), up)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn library(id: i64, path: &str) -> Library {
+        Library { id, path: PathBuf::from(path), name: None }
+    }
+
+    #[test]
+    fn an_old_row_with_no_folder_goes_when_the_cache_has_its_name() {
+        let all = vec![
+            library(1, "/mnt/Photos/2026/Japan"),
+            library(18, "/home/x/Pictures/Numa Home/Japan"),
+            library(19, "/home/x/Pictures/Numa Home/Milaan"),
+            library(20, "/home/x/Pictures/Numa Home/Overig"),
+            library(39, "/home/x/.cache/numa/home-libraries/Japan"),
+            library(40, "/home/x/.cache/numa/home-libraries/Milaan"),
+        ];
+        let kept_on_disk = |path: &Path| path.ends_with("Milaan");
+        let ids: Vec<i64> = stale_rows(&all, Path::new("/home/x/Pictures/Numa Home"), Path::new("/home/x/.cache/numa/home-libraries"), kept_on_disk).iter().map(|library| library.id).collect();
+
+        assert_eq!(ids, vec![18]);
+    }
 }

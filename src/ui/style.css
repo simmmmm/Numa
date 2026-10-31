@@ -1,28 +1,29 @@
-/* UX-003: the look. Chrome follows libadwaita's named palette, so the light
-   and dark schemes and the user's accent all reach it; Numa's own content
-   uses the design system's tokens (`@numa_*`, UX-031). */
+@define-color headerbar_bg_color @window_bg_color;
+@define-color sidebar_bg_color @window_bg_color;
+@define-color sidebar_backdrop_color @window_bg_color;
+@define-color secondary_sidebar_bg_color @window_bg_color;
+@define-color secondary_sidebar_backdrop_color @window_bg_color;
+@define-color view_bg_color @window_bg_color;
+@define-color headerbar_shade_color @numa_rule;
+@define-color sidebar_border_color @numa_rule;
+@define-color secondary_sidebar_border_color @numa_rule;
+@define-color raised_bg_color mix(@window_bg_color, @window_fg_color, 0.055);
+@define-color card_bg_color alpha(@window_fg_color, 0.055);
 
-/* ---------- The design system's parts ---------- */
+button.raised-control:not(:hover):not(:active):not(:checked),
+.raised-control > button:not(:hover):not(:active):not(:checked),
+.raised-control > menubutton > button:not(:hover):not(:active):not(:checked),
+windowcontrols > button:not(:hover):not(:active) > image,
+.navigation-sidebar > row:selected:not(:hover) {
+    background-color: @raised_bg_color;
+}
 
-/* Colours are the design system's tokens (`tokens.css`, from
-   data/design/tokens.json by dev/tokens.py), loaded ahead of this sheet. */
-
-/* Inside Numa's own content — the panel, the grid, the loupe, what is drawn
-   over the photograph, the mask bar, Numa's popovers — the accent is Numa's:
-   white with dark on it, near-black with white on the light scheme. The
-   chrome keeps the system accent. Custom properties need GTK 4.16 and
-   libadwaita 1.6; the rule after this one covers the older ones. */
 .numa-content {
     --accent-bg-color: @numa_accent;
     --accent-fg-color: @numa_on_accent;
     --accent-color: @numa_accent;
 }
 
-/* The same on GTK before 4.16 (Ubuntu 24.04: GTK 4.14, libadwaita 1.5), which
-   ignores the properties above: what libadwaita 1.5's sheet fills with its
-   accent (`$fill_color`), by its node names. A checked toggle button is grey
-   there, not the accent, and Numa's chips set their own; the focus ring
-   stays the system's on those versions, and a menu's check has no ground. */
 .numa-content switch:checked,
 .numa-content checkbutton > check:checked,
 .numa-content checkbutton > check:indeterminate,
@@ -32,17 +33,15 @@
     color: @numa_on_accent;
 }
 
-/* The one primary command of a screen (`primary_button`), header bar
-   included. `.opaque` with it, so a header bar does not flatten it. */
+.numa-content switch:checked > slider {
+    background-color: @numa_on_accent;
+}
+
 button.numa-primary {
     background-color: @numa_accent;
     color: @numa_on_accent;
 }
 
-/* The photo-side ground, as a card (the histogram) and as a pill (the zoom,
-   a name). #141414 at 70 % rather than the HUD's 55 %: GTK draws no backdrop
-   blur, so the ground does the material's reading work alone. Dark in both
-   schemes — it sits on the photograph. */
 .photo-card,
 .photo-pill {
     background: alpha(@numa_photo_ground_page, 0.7);
@@ -62,9 +61,6 @@ button.numa-primary {
     font-feature-settings: "tnum";
 }
 
-/* IO-034: Proof for Print's state, in the same pill: its chooser, Out of
-   Range and Stop as the photo side's own small buttons, Out of Range white
-   while it hatches. */
 .photo-pill button {
     min-height: 24px;
     padding: 0 8px;
@@ -87,19 +83,10 @@ button.numa-primary {
     font-weight: 400;
 }
 
-/* ---------- Adjustment panel ---------- */
-
 .adjustment {
     background: @window_bg_color;
-    border-left: 1px solid alpha(currentColor, 0.1);
 }
 
-/* UX-014: a label, not a heading. These are signposts between groups of
-   sliders and there are seven of them on a page — at full weight and half
-   opacity they compete with the values, which are the only numbers on the
-   panel worth reading. */
-/* PANEL_PLAN P1. Sizes in px rather than em: the panel is a measured layout
-   and a section label that grows with the desktop font stops being one. */
 .section-header {
     font-size: 10px;
     font-weight: 600;
@@ -109,42 +96,56 @@ button.numa-primary {
 }
 
 .slider-row {
-    min-height: 46px;
+    min-height: 32px;
+    padding: 4px 0;
+}
+
+.slider-row > scale {
+    margin-top: 4px;
 }
 
 .slider-name {
     font-size: 13px;
-    color: alpha(@window_fg_color, 0.72);
-}
-
-/* UX-017: one control leads its section, and says so at full weight. */
-.lead .slider-name {
-    font-weight: 600;
+    color: @numa_name;
 }
 
 .slider-value {
-    font-size: 12.5px;
-    color: alpha(@window_fg_color, 0.5);
+    font-size: 12px;
+    color: @numa_label;
     opacity: 1;
-    /* Tabular figures: without these the readout jitters while dragging. */
+
     font-feature-settings: "tnum";
 }
 
-/* Moved: the name and the number come up to full strength — white on the dark
-   scheme, black on the light — which is the whole of what "this one has been
-   touched" has to say. */
 .touched .slider-name,
 .touched .slider-value {
     color: @window_fg_color;
 }
 
-/* A slim bipolar slider. GTK draws the handle inside the trough by default, so
-   the negative margin is what lets a 14 px handle sit on a 4 px track.
-   
-   -5 rather than -6: the trough's minimum is the handle's minimum plus these
-   margins, and at -6 that arithmetic lands on 2 px with our own handle and
-   below zero with a theme whose handle is smaller — which GTK reports as
-   "trough reported min height -2" and then draws anyway. */
+label.slider-value,
+text.slider-value {
+    border-radius: 3px;
+}
+
+label.slider-value:hover,
+text.slider-value {
+    background: @raised_bg_color;
+    box-shadow: 0 0 0 4px @raised_bg_color;
+    color: @window_fg_color;
+}
+
+text.slider-value {
+    outline: 1px solid @numa_accent;
+    outline-offset: 3px;
+}
+
+.panel-card label.slider-value:hover,
+.panel-card text.slider-value {
+    background: @window_bg_color;
+    box-shadow: 0 0 0 4px @window_bg_color;
+    color: @window_fg_color;
+}
+
 .adjustment scale,
 scale.numa-slider {
     min-height: 0;
@@ -153,108 +154,398 @@ scale.numa-slider {
 
 .adjustment scale trough,
 scale.numa-slider trough {
-    /* PANEL_PLAN P1: a 2 px hairline, and a 10 px area for the thumb to sit in. */
+
     min-height: 2px;
     border-radius: 999px;
     background-color: @numa_track;
 }
 
-/* PANEL_PLAN P1: what GTK draws between a slider's lower bound and its value.
-   `paint_track` draws the fill this panel wants — from the *neutral* — so
-   this one has nothing left to say.
-
-   ponytail: `background: none` here does not remove the accent bar that still
-   runs from the left end of Tint's track to its thumb. Neither does
-   `min-height: 0`, nor the same on `trough > fill`, and the panel's own rule
-   for that slider is provably transparent — forcing it to full width paints
-   the whole track, so the rule is live and the bar is something else. Logged
-   on P1's punch list; find it with the GTK inspector rather than by guessing
-   at selectors. */
 scale highlight {
     background: none;
 }
 
-/* UX-014: smaller, and without the drop shadow. A shadow under a 14 px dot is
-   a detail nobody sees as a shadow; what it does is thicken the dot, and
-   eighteen thickened dots down a column is most of why the panel read as
-   heavy. */
 .adjustment scale slider,
 scale.numa-slider slider {
-    min-width: 10px;
-    min-height: 10px;
-    margin: -4px;
+    min-width: 12px;
+    min-height: 12px;
+
+    margin: -5px 0;
     border-radius: 50%;
-    background: alpha(currentColor, 0.5);
+    background: @numa_thumb_rest;
+    border: none;
+    box-shadow: none;
+    transition: background 120ms ease-out;
+}
+
+.adjustment scale:disabled slider {
+    background: none;
+}
+
+.section-line {
+    min-height: 24px;
+}
+
+.section-line > .section-header {
+    margin-left: 8px;
+}
+
+.section-line button,
+.section-line menubutton > button {
+    min-height: 24px;
+    min-width: 24px;
+}
+
+.panel-card {
+    background: @raised_bg_color;
+    border-radius: 8px;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+}
+
+.panel-card dropdown > button,
+.panel-card entry,
+.panel-card spinbutton,
+.panel-card .tone-curve,
+.panel-card .chip-row > button,
+.panel-card .chip-row > menubutton > button,
+.panel-card .found-chips > flowboxchild > button,
+.panel-card button.panel-action,
+.panel-card button.numa-primary {
+    border-radius: 8px;
+}
+
+.panel-card dropdown > button label {
+    font-size: 13px;
+    font-weight: 400;
+    color: @numa_name;
+}
+
+.chip-row {
+    border-spacing: 8px;
+}
+
+.panel-card .chip-row {
+    border-spacing: 4px;
+}
+
+.panel-card .chip-rows > .chip-row:not(:first-child) {
+    margin-top: 0;
+}
+
+.panel-card .linked > button,
+.panel-card .linked > menubutton > button,
+.panel-card .linked > togglebutton {
+    border-radius: 8px;
+    min-height: 32px;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-left: 4px;
+    background: @window_bg_color;
+    box-shadow: none;
+}
+
+.panel-card .linked > :first-child {
+    margin-left: 0;
+}
+
+.panel-card .linked > button:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.panel-card list.boxed-list {
+    background: none;
     border: none;
     box-shadow: none;
 }
 
-.adjustment scale:hover slider {
-    background: alpha(currentColor, 0.7);
+.panel-card list.boxed-list > row {
+    min-height: 44px;
+    margin: 0 -4px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
 }
 
-.adjustment scale:disabled slider {
-    background: alpha(currentColor, 0.3);
+.panel-card list.boxed-list > row > .list-line,
+.panel-card list.boxed-list > row > box.header {
+    min-height: 44px;
+    margin: 0;
+    padding: 0 8px;
 }
 
-/* UX-017: hierarchy from state. Under `.quiet` a slider at rest paints almost
-   nothing — a hairline, no handle — and comes back to a full track on hover or
-   once it has been moved. Sizes never change between the two states, only
-   what is painted, so nothing on the page shifts when a hand passes over it. */
-/* PANEL_PLAN P1: the track is the same hairline whether or not the slider has
-   been touched — what changes is the fill `paint_track` draws on it and the
-   thumb. A track that brightened as well said the same thing twice. */
-.quiet scale trough {
-    background-color: @numa_track;
+.panel-card list.boxed-list > row:hover,
+.panel-card list.boxed-list > row.current-mask {
+    background: @window_bg_color;
 }
 
-/* Neutral: the thumb is there, dim, on its neutral position — not absent.
-   Transparent until hover was a control that appeared out of nothing. */
-.quiet scale slider,
-scale.numa-slider slider {
-    background: @numa_thumb_rest;
-    transition: background 120ms ease-out;
+.panel-card .list-line > button:first-child {
+    margin-left: -4px;
 }
 
-.quiet scale:hover trough,
-scale.numa-slider:hover trough {
-    background-color: @numa_track_hover;
+.panel-card .list-line > .list-chevron,
+.panel-card list.boxed-list > row box.suffixes > button:last-child {
+    margin-right: -4px;
 }
 
-.quiet scale:hover slider,
-scale.numa-slider:hover slider {
-    background: alpha(currentColor, 0.7);
+.panel-card .list-line > button,
+.panel-card .list-line > menubutton > button,
+.panel-card list.boxed-list > row box.suffixes > button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
 }
 
-.quiet .slider-name {
-    opacity: 0.8;
+.panel-card .list-line > menubutton > button,
+.panel-card list.boxed-list > row box.suffixes > button {
+    color: @numa_name;
 }
 
-.quiet .slider-value {
-    opacity: 0.55;
+.panel-card .list-line button:hover,
+.panel-card .list-line button:active,
+.panel-card .list-line > menubutton > button:checked,
+.panel-card list.boxed-list > row box.suffixes > button:hover {
+    background: @window_bg_color;
 }
 
-.quiet .touched .slider-value,
-.quiet .lead .slider-name {
+.panel-card .list-title,
+.panel-card list.boxed-list > row .title {
+    font-size: 13px;
+    color: @numa_name;
+}
+
+.panel-card .list-subtitle,
+.panel-card list.boxed-list > row .subtitle {
+    font-size: 12px;
+    color: @numa_name;
     opacity: 1;
 }
 
-/* ---------- Histogram ---------- */
+.panel-card list.boxed-list > row.current-mask .list-title,
+.panel-card list.boxed-list > row.current-mask .title,
+.panel-card list.boxed-list > row:hover .list-title,
+.panel-card list.boxed-list > row:hover .title {
+    color: @numa_ink;
+}
+
+.panel-card .list-power:checked {
+    background: none;
+    color: @numa_ink;
+}
+
+.panel-card .list-power.dim-label {
+    opacity: 1;
+    color: @numa_name;
+}
+
+.panel-card .list-chevron {
+    color: @numa_name;
+}
+
+.panel-foot {
+    padding: 12px 12px 24px;
+    background: @window_bg_color;
+}
+
+.panel-foot.ruled {
+    box-shadow: inset 0 1px @numa_rule;
+}
+
+.panel-card .chip-row.four > button {
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+.panel-card button.panel-action {
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.panel-card button.row-accessory {
+    min-height: 24px;
+    padding: 0 8px;
+    color: @numa_name;
+}
+
+.panel-card.bare {
+    background: none;
+}
+
+.panel-card.bare .note,
+.panel-card.bare .profile-note,
+.panel-card.bare .dim-label {
+    color: @numa_label;
+}
+
+.note {
+    font-size: 12px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+.section-line button.raised-control:not(:hover):not(:active):not(:checked) {
+    background: none;
+}
+
+.panel-card .slider-value,
+.panel-card .dim-label,
+.panel-card .caption,
+.panel-card .profile-note,
+.panel-card .note {
+    color: @numa_name;
+    opacity: 1;
+}
+
+.panel-card .touched .slider-value {
+    color: @window_fg_color;
+}
+
+.panel-card scale trough {
+    background-color: @window_bg_color;
+}
+
+.panel-card scale slider {
+    background: @numa_label;
+}
+
+.panel-card .touched scale slider {
+    background: @numa_accent;
+}
+
+.panel-card .chip-row > button,
+.panel-card .chip-row > menubutton > button,
+.panel-card .found-chips > flowboxchild > button,
+.panel-card button.panel-action,
+.panel-card dropdown > button,
+.panel-card entry,
+.panel-card spinbutton,
+.panel-card switch {
+    background: @window_bg_color;
+}
+
+.panel-card .chip-row > button:checked,
+.panel-card .chip-row > button:checked:hover,
+.panel-card switch:checked {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.panel-card .chip-row > button:hover:not(:checked),
+.panel-card .chip-row > menubutton > button:hover,
+.panel-card .found-chips > flowboxchild > button:hover {
+    background: @window_bg_color;
+}
+
+.named-row {
+    min-height: 40px;
+}
+
+.panel-card .chip-row,
+.panel-card .linked {
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+.panel-card .chip-row > button,
+.panel-card .chip-row > menubutton > button {
+    min-height: 32px;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.section-line button.label-action,
+.section-line menubutton.label-action > button {
+    background: none;
+    box-shadow: none;
+    color: @numa_name;
+    font-size: 13px;
+    border-radius: 999px;
+}
+
+.section-line .label-action label,
+.section-line .label-action arrow,
+.section-line .label-action image {
+    color: @numa_name;
+}
+
+.section-line .label-action:hover label,
+.section-line .label-action:hover arrow,
+.section-line .label-action:hover image {
+    color: @window_fg_color;
+}
+
+.section-line button.label-action:hover,
+.section-line menubutton.label-action > button:hover {
+    background: @raised_bg_color;
+    color: @window_fg_color;
+}
+
+.touched-dot {
+    min-width: 4px;
+    min-height: 4px;
+    border-radius: 2px;
+    background: @numa_accent;
+}
+
+.chip-row > button:checked .touched-dot {
+    background: @numa_on_accent;
+}
+
+.curve-hint {
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+.reset-slot > button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    border-radius: 999px;
+    color: @numa_name;
+}
+
+.reset-slot > button:hover {
+    background: @raised_bg_color;
+    color: @window_fg_color;
+}
+
+@define-color popover_bg_color @window_bg_color;
+@define-color dialog_bg_color @window_bg_color;
 
 .histogram {
     background: alpha(black, 0.35);
     border-radius: 4px;
 }
 
-/* ADJ-002. Square, because a tone curve is read as a diagonal and a stretched
-   one lies about how steep the shape is. */
 .tone-curve {
-    background: alpha(black, 0.35);
-    border-radius: 4px;
+    background: @window_bg_color;
+    border-radius: 8px;
 }
 
-/* The clipping lights are indicators first and buttons second: they appear
-   only when there is something to report, and they name their end by colour. */
+.tone-curve:focus-visible {
+    outline: 1px solid @numa_accent;
+    outline-offset: 0;
+}
+
+.curve-foot {
+    min-height: 28px;
+}
+
+entry.curve-value {
+    min-height: 24px;
+    padding: 0 4px;
+    background: none;
+    box-shadow: none;
+    font-size: 12px;
+    font-feature-settings: "tnum";
+    color: @numa_name;
+}
+
+entry.curve-value:focus-within {
+    background: @raised_bg_color;
+}
+
 .clip-light {
     min-width: 14px;
     min-height: 14px;
@@ -271,16 +562,10 @@ scale.numa-slider:hover slider {
 .clip-shadow { background: #2858ff; }
 .clip-highlight { background: #ff4040; }
 
-/* ---------- Canvas ---------- */
-
 .canvas-area {
-    background: darker(@window_bg_color);
+    background: @numa_surround_dark;
 }
 
-/* ---------- Library grid ---------- */
-
-/* UX-026: a card is only the photograph. Selected is Numa's accent — white
-   on the dark ground, near-black on the light one — as a ring round it. */
 .photo-rows > overlay.grid-card {
     border-radius: 3px;
     background: alpha(black, 0.25);
@@ -295,9 +580,6 @@ scale.numa-slider:hover slider {
     opacity: 0.35;
 }
 
-/* What is set, on the photograph: always dark, whichever the theme. UX-036:
-   the filmstrip's frames carry the same marks (`.strip-badge` is the rating
-   there). */
 .card-badge,
 .strip-badge {
     margin: 6px;
@@ -340,9 +622,6 @@ scale.numa-slider:hover slider {
     background: white;
 }
 
-/* HOME-051: an original on its way from Numa Home, on the photograph: across
-   its tile, clear of its marks, in a pill of the photograph's own ground; in
-   the loupe, in the pill that says the frame is Home's preview. */
 .card-fetch {
     margin: 8px 16px;
     padding: 4px 8px;
@@ -368,11 +647,8 @@ scale.numa-slider:hover slider {
     background: @numa_photo_ink;
 }
 
-/* LIB-023: what narrows the grid, under the header while anything does.
-   UX-057: no rule under it — the top line of the content, on its ground,
-   not a second toolbar under the header. */
 .filter-chips {
-    padding: 10px 14px;
+    padding: 4px 24px 8px;
 }
 
 .filter-chips .filter-chip {
@@ -381,8 +657,6 @@ scale.numa-slider:hover slider {
     min-height: 30px;
 }
 
-/* LIB-029: what Numa saw by itself, drawn apart from anything the
-   photographer named: outlined and in italic, filled only when chosen. */
 .saw-chips button {
     border-radius: 999px;
     padding-left: 12px;
@@ -414,8 +688,6 @@ scale.numa-slider:hover slider {
     font-style: italic;
 }
 
-/* The name and the stars, with the pointer. */
-/* 12 px in and 8 up: the stars land where the rating's pill has its text. */
 .card-caption {
     padding: 22px 12px 8px;
     background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
@@ -438,12 +710,9 @@ scale.numa-slider:hover slider {
     opacity: 0;
 }
 
-/* CANVAS-006: the reference frame beside the canvas. A line between the two,
-   and the same dark ground the canvas has: two photographs side by side are
-   compared by their own light, not by the two panes looking different. */
 .reference-pane {
     border-right: 1px solid alpha(currentColor, 0.15);
-    background: darker(@window_bg_color);
+    background: @numa_surround_dark;
     padding: 12px;
 }
 
@@ -452,8 +721,6 @@ scale.numa-slider:hover slider {
     opacity: 0.6;
 }
 
-/* LIB-004: the loupe over the grid. Opaque and dark: it is a photograph being
-   looked at, and the cards showing through it would be light behind it. */
 .loupe {
     background: @window_bg_color;
     padding: 12px;
@@ -464,9 +731,6 @@ scale.numa-slider:hover slider {
     opacity: 0.6;
 }
 
-/* LIB-004: the bar under the loupe. Quiet until a button means something:
-   what is being looked at is the photograph, and the bar is there to be found
-   rather than to be read. */
 .loupe-bar button {
     opacity: 0.65;
 }
@@ -475,18 +739,12 @@ scale.numa-slider:hover slider {
     opacity: 1;
 }
 
-/* CULL-013: the band under the loupe — the tape of the shoot and the line
-   over it — on the view's ground with a hairline, as drawn (O6-Band). The
-   tape draws its marks in the accent (`color`), white on the dark scheme and
-   near-black on the light one, and its times at 12 px. */
 .tape-band {
     background: @view_bg_color;
     border-top: 1px solid @numa_rule;
     padding: 8px 16px 12px;
 }
 
-/* UX-075, P6: what the chosen frames are called is a plain name, not a third
-   kind of heading. */
 .tape-title {
     font-size: 13px;
     color: @numa_name;
@@ -498,11 +756,54 @@ scale.numa-slider:hover slider {
     font-size: 12px;
 }
 
+toolbarview.ruled .top-bar {
+    box-shadow: inset 0 -1px @numa_rule;
+}
 
-/* ---------- Bars ---------- */
+headerbar.content-bar {
 
-/* IO-012: the arrow beside Export is an icon, not a word, and the padding that
-   makes a labelled button comfortable makes this one look like a mistake. */
+    padding: 5px 8px;
+}
+
+headerbar.content-bar windowtitle label {
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+headerbar.content-bar .start,
+headerbar.content-bar .end {
+    border-spacing: 8px;
+}
+
+overlay-split-view > widget.sidebar-pane {
+    background: none;
+    box-shadow: none;
+    border: none;
+}
+
+.floating-side {
+    margin: 8px;
+    border-radius: 12px;
+    background-color: @raised_bg_color;
+    box-shadow: 0 2px 12px alpha(black, 0.35);
+}
+
+.floating-side headerbar {
+    background: none;
+    box-shadow: none;
+    min-height: 48px;
+}
+
+.floating-side .navigation-sidebar {
+    background: none;
+}
+
+.floating-side .navigation-sidebar > row:selected:not(:hover) {
+    background-color: @window_bg_color;
+}
+
 headerbar .linked button.numa-primary:not(:first-child),
 headerbar .linked menubutton.before-more > button {
     padding-left: 4px;
@@ -515,29 +816,23 @@ headerbar .linked menubutton.before-more > button {
     opacity: 0.45;
 }
 
-/* UX-055: a how-to line in the label grey, legible, not faded below it. */
 .profile-note.hint {
     color: @numa_label;
     opacity: 1;
 }
 
-
-/* UX-009: the strip under the canvas. The current frame is marked by its
-   border rather than by a tint, so the thumbnail keeps its own colour — which
-   is the thing being judged. */
 .filmstrip {
     background: alpha(black, 0.25);
 }
 
-/* UX-029: the strip's handle — its line, with room above and below to take
-   hold of it. */
-.filmstrip-handle {
-    padding: 3px 0;
+.tape-band .filmstrip {
+    background: none;
 }
 
-/* PERF-052: the strip is a list view, which draws nothing of its own here:
-   the ground is the strip's, and the frames are 6 px apart with 8 px at
-   either end, as they were in a box. */
+.filmstrip-handle {
+    padding: 0 0 4px;
+}
+
 listview.filmstrip-frames {
     background: none;
     color: inherit;
@@ -559,16 +854,11 @@ listview.filmstrip-frames > row {
     border: 2px solid transparent;
 }
 
-/* LIB-003: the marks on a filmstrip frame sit closer to its corners than on
-   a card: the frame is 64 px tall. */
 .filmstrip-frame .card-badge,
 .filmstrip-frame .strip-badge {
     margin: 4px;
 }
 
-/* LIB-003, UX-024: the bar's stars and flags, RatingAndFlags. Quiet until
-   set; set, they are white — Numa's accent on every client, not the system's
-   — and a rejected frame's stars and its cross are the reject's red. */
 .bar-rating button {
     padding-left: 4px;
     padding-right: 4px;
@@ -590,7 +880,6 @@ listview.filmstrip-frames > row {
     color: @numa_reject;
 }
 
-/* MASK-004: what the panel is currently about. */
 .mask-scope button {
     min-height: 26px;
     padding: 2px 6px;
@@ -600,17 +889,6 @@ listview.filmstrip-frames > row {
     font-weight: 600;
 }
 
-/* UX-033: a choice among a few is a row of chips (`chip_row`) — the panel's
-   RGB | R | G | B, Presets | LUTs, the grade's ranges, the crop's aspects,
-   retouch's tools, the filter's rows, the mask bar's tools and Add | Subtract.
-   UX-054: and the Masks tab's found things, Subject, Sky…, which make a mask
-   rather than choose one, in the same form so the panel has one.
-   At rest a quiet fill rather than a raised button: the only thing drawn as a
-   *button* should be something that does something when pressed. Chosen, the
-   accent with its ink on it — white on the dark scheme.
-
-   TOOL-002: tight padding, so four aspects fit a 240-pixel panel rather than
-   making the panel as wide as the row. */
 .chip-row > button,
 .chip-row > menubutton > button,
 .found-chips > flowboxchild > button {
@@ -620,12 +898,11 @@ listview.filmstrip-frames > row {
     min-height: 28px;
     font-size: 13px;
     font-weight: 600;
-    background: alpha(currentColor, 0.1);
+    background: @raised_bg_color;
     box-shadow: none;
     border-color: transparent;
 }
 
-/* A flowbox's child pads 3 px round its button; a chip is its button. */
 .found-chips > flowboxchild {
     padding: 0;
 }
@@ -645,40 +922,33 @@ listview.filmstrip-frames > row {
     background: alpha(@numa_accent, 0.9);
 }
 
-/* The mask bar's tools, set tighter where the bar is short of room. */
+.chip-row > button.numa-primary {
+    background: @numa_accent;
+    color: @numa_on_accent;
+}
+
+.chip-row > button.numa-primary:hover {
+    background: alpha(@numa_accent, 0.9);
+}
+
 .chip-row.tight > button {
     padding-left: 8px;
     padding-right: 8px;
 }
 
-/* UX-032: while a mask is edited, its Done is the screen's one white button;
-   the header's Export steps back to an ordinary one. UX-048: and while the
-   crop is open, whose Done it is then. And a primary that cannot be pressed
-   is an ordinary insensitive button — the grid's Export with nothing
-   selected, Deliver… while the kind of shoot is asked — where white and
-   dimmed it was the brightest block in the header. Deliver… is ordinary
-   too until there is a pick to deliver. */
 .masking button.numa-primary.export-primary,
 .cropping button.numa-primary.export-primary,
 button.numa-primary.unready,
 button.numa-primary:disabled {
-    background-color: alpha(currentColor, 0.1);
+    background-color: @raised_bg_color;
     color: inherit;
 }
 
-/* The same arithmetic as the row above, on the mask panel: four ways to make a
-   mask across a 306-pixel panel, where the default padding puts their combined
-   minimum at 331 and GTK clips the last of them. These stay drawn as buttons —
-   each of them does something rather than choosing between four states. */
 .mask-add button {
     padding-left: 6px;
     padding-right: 6px;
 }
 
-/* UX-012: the path across the top of the editor. Flat buttons that read as
-   text, because a row of framed buttons reads as a toolbar and this is a
-   position, not a set of commands; "Libraries" and the library are steps,
-   the photograph's name is text, set where a button's would be. */
 .breadcrumbs button,
 .breadcrumbs > label {
     padding-left: 6px;
@@ -690,15 +960,10 @@ button.numa-primary:disabled {
     opacity: 0.4;
 }
 
-/* "Libraries", and the editor's library name after it: quiet, in the name
-   grey rather than `.dim-label`, whose 55 % falls to 3.2:1 on the light
-   header. */
 .crumb-quiet {
     color: @numa_name;
 }
 
-/* MASK-005: what a mask is made of, under the mask it belongs to. Quieter than
-   the list above it: these are the parts of one row, not siblings of it. */
 .mask-part {
     font-size: 13px;
     min-height: 34px;
@@ -708,13 +973,6 @@ button.numa-primary:disabled {
     opacity: 0.8;
 }
 
-/* ADJ-007: the hue slider carries the wheel it selects from. A hue picker
-   without colour on it is a number between 0 and 360, which nobody can aim —
-   the whole point of the control is that you reach for the colour you want.
-
-   The stops are the six corners of the wheel plus the wrap back to red, so the
-   position under the handle is the colour it returns. */
-/* PANEL_PLAN P1: at hairline height with the rest of them. */
 .adjustment scale.hue-slider trough {
     min-height: 2px;
     border-radius: 999px;
@@ -723,80 +981,41 @@ button.numa-primary:disabled {
         #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%);
 }
 
-/* The filled part would paint over the gradient, and there is nothing for it
-   to mean here: a hue has no neutral to fill from. */
 .adjustment scale.hue-slider highlight {
     background: none;
 }
 
-/* Against a full-strength gradient the usual translucent handle disappears.
-   White with a dark ring reads on every hue. */
 .adjustment scale.hue-slider slider {
     min-width: 10px;
     min-height: 10px;
-    margin: -4px;
+    margin: -4px 0;
     background: white;
     border: 2px solid alpha(black, 0.45);
 }
 
-/* ADJ-005: the colour mixer's tracks.
-
-   The panel used to be a tab per channel over eight named bands, which asks
-   which *operation* you want before which colour you want it on. Nobody thinks
-   "I would like to change some hues"; they think "the sky is too cyan". So the
-   colour is picked first, as a colour, and the three sliders below describe it.
-
-   Every gradient here is generated from the band's own hue in BANDS, so the
-   swatch, the track and the arithmetic cannot drift apart. The hue track runs
-   thirty degrees either side, which is how far the slider reaches. */
-
-/* A floor above zero, not at it. `.linked` pulls every child but the first
-   back by a pixel so their borders overlap, and against a minimum of 0 that
-   arithmetic lands on -1 — which GTK reports once per button and then draws
-   anyway. Eight swatches, seven complaints, which is the tell. */
-/* UX-014: round, spaced, and small. The colour is still the whole of the
-   button — this is the one control where the thing itself is the label — but a
-   dot says "pick one of these" where a bar of eight touching rectangles says
-   "look at me". */
 .mixer-bands button {
     min-width: 20px;
     min-height: 20px;
     padding: 0;
     border: none;
     border-radius: 50%;
-    box-shadow: none;
-    opacity: 0.55;
+    box-shadow: inset 0 0 0 1px @numa_name;
 }
 
-.mixer-bands button:hover {
-    opacity: 0.85;
-}
-
-/* The ring sits outside the dot rather than over it, so the chosen colour is
-   not the one with a bite taken out of it. */
 .mixer-bands button:checked {
-    opacity: 1;
-    outline: 2px solid alpha(currentColor, 0.85);
-    outline-offset: 2px;
+    outline: 1px solid @numa_accent;
+    outline-offset: 3px;
 }
 
-/* PANEL_PLAN P1: one slider row everywhere. These were 5 px bars with a 13 px
-   white handle while every other row on the page was a 2 px hairline with a
-   10 px dot — three rows shouting in a panel built to be quiet. The gradient
-   stays, at hairline height: it is what makes a hue aimable. */
 .adjustment scale.mixer-track trough {
     min-height: 2px;
     border-radius: 999px;
 }
 
-/* The filled part would paint over the gradient, and these have no neutral to
-   fill from — the handle's position is the value, as on the hue slider. */
 .adjustment scale.mixer-track highlight {
     background: none;
 }
 
-/* ADJ-006: a point colour just picked, lit once so it is seen where it
-   landed; the fade is the transition back. */
 .point-section {
     border-radius: 8px;
     transition: background 700ms ease-out;
@@ -810,14 +1029,12 @@ button.numa-primary:disabled {
 .adjustment scale.mixer-track slider {
     min-width: 10px;
     min-height: 10px;
-    margin: -4px;
+    margin: -5px 0;
     background: white;
     border: 1px solid alpha(black, 0.45);
 }
 
-
-/* Red */
-.mixer-bands button.band-0 { background: #ff0000; }
+.mixer-bands button.band-0 { background: #b8534d; }
 .adjustment scale.track-hue.band-0 trough {
     background: linear-gradient(to right, #ff0080, #ff0000, #ff8000);
 }
@@ -828,8 +1045,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #2e0000, #ff0000, #ffbfbf);
 }
 
-/* Orange */
-.mixer-bands button.band-1 { background: #ff8000; }
+.mixer-bands button.band-1 { background: #b87440; }
 .adjustment scale.track-hue.band-1 trough {
     background: linear-gradient(to right, #ff0000, #ff8000, #ffff00);
 }
@@ -840,8 +1056,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #2e1700, #ff8000, #ffdfbf);
 }
 
-/* Yellow */
-.mixer-bands button.band-2 { background: #ffff00; }
+.mixer-bands button.band-2 { background: #a89a45; }
 .adjustment scale.track-hue.band-2 trough {
     background: linear-gradient(to right, #ff8000, #ffff00, #80ff00);
 }
@@ -852,8 +1067,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #2e2e00, #ffff00, #ffffbf);
 }
 
-/* Green */
-.mixer-bands button.band-3 { background: #00ff00; }
+.mixer-bands button.band-3 { background: #5f9050; }
 .adjustment scale.track-hue.band-3 trough {
     background: linear-gradient(to right, #80ff00, #00ff00, #00ff80);
 }
@@ -864,8 +1078,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #002e00, #00ff00, #bfffbf);
 }
 
-/* Aqua */
-.mixer-bands button.band-4 { background: #00ffff; }
+.mixer-bands button.band-4 { background: #4c8f8c; }
 .adjustment scale.track-hue.band-4 trough {
     background: linear-gradient(to right, #00ff80, #00ffff, #0080ff);
 }
@@ -876,8 +1089,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #002e2e, #00ffff, #bfffff);
 }
 
-/* Blue */
-.mixer-bands button.band-5 { background: #0000ff; }
+.mixer-bands button.band-5 { background: #5868b0; }
 .adjustment scale.track-hue.band-5 trough {
     background: linear-gradient(to right, #0080ff, #0000ff, #8000ff);
 }
@@ -888,8 +1100,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #00002e, #0000ff, #bfbfff);
 }
 
-/* Purple */
-.mixer-bands button.band-6 { background: #8000ff; }
+.mixer-bands button.band-6 { background: #8458ad; }
 .adjustment scale.track-hue.band-6 trough {
     background: linear-gradient(to right, #0000ff, #8000ff, #ff00ff);
 }
@@ -900,8 +1111,7 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #17002e, #8000ff, #dfbfff);
 }
 
-/* Magenta */
-.mixer-bands button.band-7 { background: #ff00ff; }
+.mixer-bands button.band-7 { background: #a8558f; }
 .adjustment scale.track-hue.band-7 trough {
     background: linear-gradient(to right, #8000ff, #ff00ff, #ff0080);
 }
@@ -912,94 +1122,23 @@ button.numa-primary:disabled {
     background: linear-gradient(to right, #2e002e, #ff00ff, #ffbfff);
 }
 
-/* UX-017 on the Colour page. These come last because the mixer's band rules
-   above carry three classes each, and the only way to win against them at
-   equal specificity is to be written later.
-
-   The rule: colour stays where the colour says what the slider does — the hue
-   tracks — and goes everywhere else until a hand arrives. The mixer's dots are
-   the same eight colours at a third of their strength, the chosen one at full;
-   its saturation and luminance tracks are grey at rest and coloured on hover;
-   the grading wheel is grey while the saturation that would apply it is zero.
-   The coloured tracks keep their white handle at rest: a hue track with no
-   handle on it is a rainbow, not a value. */
-.adjustment .quiet .mixer-bands button {
-    opacity: 0.3;
-}
-
-.adjustment .quiet .mixer-bands button:hover {
-    opacity: 0.85;
-}
-
-.adjustment .quiet .mixer-bands button:checked {
-    opacity: 1;
-}
-
-.adjustment .quiet scale.track-saturation trough,
-.adjustment .quiet scale.track-luminance trough,
-.adjustment .quiet scale.hue-slider.idle trough {
-    background: alpha(currentColor, 0.07);
-    transition: background 120ms ease-out, border-color 120ms ease-out;
-}
-
-.adjustment .quiet scale.track-saturation slider,
-.adjustment .quiet scale.track-luminance slider,
-.adjustment .quiet scale.hue-slider.idle slider {
-    background: transparent;
-    border-color: transparent;
-    transition: background 120ms ease-out, border-color 120ms ease-out;
-}
-
-.adjustment .quiet scale.track-saturation:hover slider,
-.adjustment .quiet scale.track-luminance:hover slider,
-.adjustment .quiet scale.hue-slider.idle:hover slider {
-    background: white;
-    border-color: alpha(black, 0.45);
-}
-
-.adjustment .quiet scale.track-saturation:hover trough,
-.adjustment .quiet scale.track-luminance:hover trough {
-    background: alpha(currentColor, 0.14);
-}
-
-/* UX-052: the mixer's hue rainbow stays, at about 40 % under a wash of the
-   panel's own ground, and comes up whole under the hand. An inset shadow
-   rather than opacity, which would take the white handle down with it. */
-.adjustment .quiet scale.track-hue trough {
-    box-shadow: inset 0 0 0 8px alpha(@window_bg_color, 0.6);
-    transition: box-shadow 120ms ease-out;
-}
-
-.adjustment .quiet scale.track-hue:hover trough {
-    box-shadow: none;
-}
-
-/* ADJ-005: the pipette beside the mixer's eight colours.
-   Not one of them: `.mixer-bands button` makes every button in that row a
-   coloured dot, and a dot with no colour assigned is a dot nobody can see —
-   which is what this was until it was moved out of the row. */
 .band-pipette {
-    min-width: 26px;
-    min-height: 26px;
+    min-width: 24px;
+    min-height: 24px;
     padding: 0;
-    border-radius: 6px;
-    opacity: 0.55;
+    border-radius: 999px;
+    color: @numa_name;
 }
 
-.band-pipette:hover { opacity: 0.9; }
-
-/* A pipette that is down is chosen. */
 .band-pipette:checked {
     opacity: 1;
     background: @numa_accent;
     color: @numa_on_accent;
 }
 
-/* UX-038: a print in a stack of three (`places::fan`): radius-print, the back
-   two darkened to 0.8 and 0.9, a shadow under each. */
 .print {
     border-radius: 6px;
-    background: @numa_ground_raised;
+    background: @raised_bg_color;
     box-shadow: 0 2px 6px alpha(black, 0.55);
 }
 
@@ -1019,8 +1158,6 @@ button.numa-primary:disabled {
     box-shadow: 0 8px 20px alpha(black, 0.6);
 }
 
-/* HOME-030: Numa Home offered once at the head of the Libraries page; the
-   house in a white disc, as under a stack kept at Numa Home. */
 .home-invite {
     padding: 16px 12px 16px 16px;
 }
@@ -1036,13 +1173,18 @@ button.numa-primary:disabled {
     padding: 4px;
 }
 
-/* LIB-014, LIB-038: a face, round as Numa Home draws one. */
+@keyframes sync-turning {
+    to { -gtk-icon-transform: rotate(360deg); }
+}
+
+.sync-turning {
+    animation: sync-turning 1200ms linear infinite;
+}
+
 .face-portrait {
   border-radius: 999px;
 }
 
-/* LIB-037: the side list's entries — a library's tint (8 px, where this
-   computer's libraries mix in Photos), a person's face — as Numa Home's. */
 .library-tint {
     min-width: 8px;
     min-height: 8px;
@@ -1060,7 +1202,7 @@ button.numa-primary:disabled {
 
 .side-face {
     border-radius: 999px;
-    background: @numa_ground_raised;
+    background: @raised_bg_color;
 }
 
 .side-fold {
@@ -1069,19 +1211,16 @@ button.numa-primary:disabled {
     padding: 0;
 }
 
-/* LIB-044: an entry's peek beside the side list, as Home's. */
 .side-peek > contents {
     padding: 16px;
 }
 
-/* LIB-059: Places, as Numa Home's — the list beside the map; over the map
-   the chips, the zoom and the credit; each place a stack with its count. */
 .place-list-head {
-    padding: 16px 16px 8px 16px;
+    padding: 16px 24px 8px 24px;
 }
 
 .place-list-foot {
-    padding: 12px 16px;
+    padding: 12px 24px;
 }
 
 .map-chips,
@@ -1100,7 +1239,6 @@ button.numa-primary:disabled {
     background: alpha(@window_bg_color, 0.8);
 }
 
-/* The streets around new places on their way, quiet in the map's corner. */
 .map-coming {
     margin: 8px 12px;
     padding: 4px 8px;
@@ -1132,7 +1270,6 @@ button.numa-primary:disabled {
     font-weight: 700;
 }
 
-/* LIB-060: a photograph's small map in its info, and the dot of its spot. */
 .mini-map {
     border-radius: 8px;
 }
@@ -1145,24 +1282,71 @@ button.numa-primary:disabled {
     box-shadow: 0 0 0 2px @numa_ground_hud;
 }
 
-/* LIB-039: a place's head over its photographs, above the chip row. */
 .place-head {
-    padding: 12px 16px 0 12px;
+    padding: 0 4px 0 0;
 }
 
-/* LIB-040: Just Arrived's strip — prints, pressed to open. */
+.hero-scrim {
+    background: linear-gradient(to bottom, alpha(@window_bg_color, 0) 30%, alpha(@window_bg_color, 0.72) 70%, @window_bg_color 97%);
+}
+
+.today-fade {
+    min-height: 88px;
+    background: linear-gradient(to bottom, @window_bg_color, alpha(@window_bg_color, 0.9) 40%, alpha(@window_bg_color, 0.6) 65%, alpha(@window_bg_color, 0));
+}
+
+toolbarview.see-through .top-bar {
+    background: none;
+    box-shadow: none;
+}
+
+toolbarview.see-through windowtitle .subtitle {
+    opacity: 0.85;
+}
+
+.hero-words label {
+    color: @window_fg_color;
+}
+
+.hero-words label.caption {
+    color: alpha(@window_fg_color, 0.8);
+}
+
+.hero-title {
+    font-size: 48px;
+    font-weight: 700;
+    letter-spacing: -0.8px;
+}
+
+.hero-words label.hero-when {
+    font-size: 13px;
+    color: alpha(@window_fg_color, 0.8);
+    font-feature-settings: "tnum";
+}
+
+.hero-actions {
+    background: @raised_bg_color;
+    border-radius: 12px;
+    padding: 6px;
+}
+
+.today-card {
+    background: @raised_bg_color;
+    border-radius: 12px;
+    padding: 16px;
+    min-height: 64px;
+}
+
 .strip-photo {
     padding: 0;
 }
 
-/* LIB-041: Tidy Up's frames, as Numa Home's: what is kept has Numa's ring
-   and a tick; what goes is dimmed, as a reject is; Numa's pick in a pill. */
 .tidy-frame,
 .tidy-frame:hover,
 .tidy-frame:checked {
     padding: 0;
     border-radius: 6px;
-    background: @numa_ground_raised;
+    background: @raised_bg_color;
 }
 
 .tidy-frame picture {
@@ -1184,8 +1368,6 @@ button.numa-primary:disabled {
     outline-offset: 1px;
 }
 
-/* LIB-041, LIB-043: a tick on what is kept or chosen — a frame of a set,
-   a library's stack. */
 .chosen-tick {
     margin: 8px;
     padding: 4px;
@@ -1204,76 +1386,47 @@ button.numa-primary:disabled {
     font-weight: 600;
 }
 
-/* PANEL_PLAN P1: the rail. 66 px, a hairline on its right, and 54x54 tabs
-   4 px apart — an icon over its name, which is what six unlabelled icons
-   across the top could not be. */
-/* No border here. The artboard draws the hairline on the rail's right, but the
-   rail is top-aligned and its border stops where the tabs do — so the line ran
-   half way down beside a page whose own `.adjustment` border ran all the way,
-   and on the two together it was two lines. The content's left edge is the one
-   that is always full height, so it carries it. */
 .rail {
-    min-width: 66px;
+    min-width: 68px;
     padding-top: 8px;
     padding-bottom: 8px;
 }
 
-/* UX-023: between the rail's three groups. */
-.rail-rule {
-    margin: 2px 16px;
-    background: alpha(currentColor, 0.1);
-}
-
-/* `button.rail-tab` rather than `.rail-tab`: Adwaita's own `button` rule has
-   horizontal padding and the two selectors were equally specific, so the tab
-   came out 68 wide where the artboard says 54. */
 button.rail-tab {
-    min-width: 54px;
-    min-height: 54px;
+    min-width: 60px;
+    min-height: 60px;
     padding: 0;
     border: none;
-    border-radius: 10px;
+    border-radius: 16px;
     background: transparent;
-    color: alpha(@window_fg_color, 0.56);
+    color: @numa_name;
 }
 
 .rail-tab:hover {
-    background: alpha(@window_fg_color, 0.06);
+    background: @raised_bg_color;
 }
 
-/* 10 px, not the artboard's 9.5: GTK renders 9.5 as 9 px of ink, and 9 px on
-   a 27" at 1080p is the wrong side of legible. The artboard has the note. */
 .rail-label {
     font-size: 10px;
 }
 
-/* The longest name is "Retouch", and at 10 px it fits inside 54. This is the
-   floor under that: a theme with a wider font shortens the word rather than
-   widening the tab and bending the column. */
 .rail-tab label {
     margin-left: 2px;
     margin-right: 2px;
 }
 
-/* A tab with work in it: the dot in the accent, its ink on the chosen tab. */
 .rail-dot {
-    min-width: 5px;
-    min-height: 5px;
-    border-radius: 3px;
+    min-width: 4px;
+    min-height: 4px;
+    border-radius: 2px;
     background: @numa_accent;
 }
 
-/* ---------- PANEL_PLAN P2b: editing a mask ---------- */
-
-/* The line above the rail: whose sliders these are. Quiet — no tint and no
-   border, which the plan took away from the panel. */
-/* LIB-027: a camera clock found off, offered — a state, so a banner at the
-   top of the library, with the two frames that show it (the sketch's). */
 .clock-offer {
     margin: 8px 16px 0 16px;
     padding: 8px 12px 8px 16px;
     border-radius: 14px;
-    background: alpha(currentColor, 0.05);
+    background: @raised_bg_color;
 }
 
 .clock-offer-frame {
@@ -1284,12 +1437,10 @@ button.rail-tab {
     min-height: 34px;
     padding: 0 2px 0 10px;
     border-radius: 8px;
-    background: alpha(currentColor, 0.05);
+    background: @raised_bg_color;
     font-size: 13px;
 }
 
-/* The power switch, small: a full button filled the 34 px line top to
-   bottom, where the artboard has it at 26 with the line's air round it. */
 .mask-scope > button {
     min-height: 26px;
     min-width: 26px;
@@ -1304,13 +1455,17 @@ button.rail-tab {
 
 .mask-chip .mask-name {
     font-weight: 700;
+    color: @numa_ink;
+}
+
+.mask-chip .section-header {
+    color: @numa_name;
 }
 
 .mask-thumb {
     border-radius: 5px;
 }
 
-/* The items of the mask chip's popover. */
 .popover-item {
     padding: 6px 12px;
     font-weight: normal;
@@ -1320,114 +1475,83 @@ button.rail-tab {
     font-weight: 700;
 }
 
-/* PANEL_PLAN: a button inside the panel — "Pick a neutral", "Auto", the mask's
-   verbs. 34 px tall and 13 px text, so it sits in the same rhythm as a slider
-   row rather than shouting over one. */
 .panel-action {
-    min-height: 34px;
-    padding-left: 14px;
-    padding-right: 14px;
-    border-radius: 8px;
+    min-height: 32px;
+    padding: 0 16px;
+    border-radius: 999px;
     font-size: 13px;
     font-weight: 600;
+    box-shadow: none;
 }
 
-/* PANEL_PLAN P2: the range mask's spin rows in a 306 px panel. Adwaita gives
-   a spin button's entry 4.5 em and its title whatever it asks for, which adds
-   up to a row that will not go below 349 — so the panel grew to fit it and
-   every other page's readout was cut off at the window's edge. The entry
-   holds three digits; this is the room for three digits. */
+.pass-word {
+    font-size: 12px;
+    color: @numa_name;
+    font-feature-settings: "tnum";
+}
+
+.note.problem {
+    color: @numa_name;
+}
+
 .range-row spinbutton > text {
     min-width: 2.5em;
 }
 
-/* PANEL_PLAN P3: the preset card. A photograph with a corner on it, quiet
-   enough that a grid of forty reads as a grid rather than as forty pictures
-   shouting at once. */
 .preset-card {
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.35);
 }
 
-/* LIB-006: the chosen preset and its Strength, together on a quiet fill so
-   they read as one thing. */
-.strength-card {
-    padding: 10px 12px 6px 12px;
-    margin-bottom: 8px;
-    border-radius: 8px;
-    background: alpha(@window_fg_color, 0.06);
+.look-name {
+    font-size: 13px;
+    color: @numa_name;
 }
 
-/* The Presets page is the one page not wrapped in a scroller, so it carries
-   the panel's own edge. Padding rather than a margin: a margin would take the
-   hairline with it. */
+.applied .look-name {
+    color: @numa_ink;
+}
+
 .presets-page {
     padding: 6px 14px 12px 14px;
 }
 
-/* UX-study: editor */
-
-/* UX-030, UX-033: white is Numa's accent inside its own content — the
-   design system's second signature. What is touched or chosen is `numa_accent`
-   with `numa_on_accent` on it: white and #141414 on the dark scheme, the
-   other way round on the light one. Adwaita's chrome keeps the system accent;
-   a screen's one primary command is `.numa-primary` (UX-032). */
-
-/* A moved slider: its dot in the accent (its fill is `paint_track`'s). */
 .adjustment scale.touched slider,
-.quiet scale.touched slider,
 scale.numa-slider.touched slider {
     background: @numa_accent;
 }
 
-.adjustment scale.touched:hover slider,
-.quiet scale.touched:hover slider,
-scale.numa-slider.touched:hover slider {
-    background: alpha(@numa_accent, 0.85);
-}
-
-/* The selected rail tab: the accent, its icon and name in the accent's ink.
-   The icon is drawn in the tab's foreground colour, so the colour carries it. */
 button.rail-tab:checked {
     background: @numa_accent;
     color: @numa_on_accent;
 }
 
 button.rail-tab:checked:hover {
-    background: alpha(@numa_accent, 0.9);
+    background: @numa_accent;
 }
 
 .rail-tab:checked .rail-dot {
     background: @numa_on_accent;
 }
 
-/* "This one" in Numa's lists — the mask being edited (MASK-004), the step on
-   screen (DOC-004), a point colour just picked — a neutral tint, not blue. */
 .current-mask,
 .current-step {
-    background: alpha(@window_fg_color, 0.1);
+    background: @raised_bg_color;
 }
 
-/* Held Before: the photograph as shot is what is chosen. */
 button.before-toggle:checked {
     background: @numa_accent;
     color: @numa_on_accent;
 }
 
-/* The filmstrip's current frame: a ring in the accent, nothing blue beside
-   the photograph. */
 .filmstrip-frame.current {
     border-color: @numa_accent;
 }
 
-/* UX-033: the loupe's AF point and its picked frame, drawn in this colour —
-   white on the photograph in both schemes. */
 .photo-mark {
     color: white;
 }
 
-/* CULL-015: a burst side by side in the loupe — the frame with the keys ringed
-   as the grid rings a selection, a rejected one dimmed as its card is. */
 .loupe-group > aspectframe > overlay {
     border-radius: 3px;
 }
@@ -1441,13 +1565,10 @@ button.before-toggle:checked {
     opacity: 0.35;
 }
 
-/* UX-028, UX-035: the histogram on the photograph, on the photo-side card. */
 .photo-card .histogram {
     background: none;
 }
 
-/* UX-029: a command at the end of a section's label — Auto on Tone — small
-   enough to sit on the label's line, as the pipette does on White balance. */
 .label-action {
     min-height: 24px;
     padding: 0 8px;
@@ -1455,7 +1576,6 @@ button.before-toggle:checked {
     font-weight: 600;
 }
 
-/* The same line's icons — Presets' + and ⋯ — at the label's size. */
 button.label-action.image-button,
 menubutton.label-action > button {
     min-width: 24px;
@@ -1463,51 +1583,38 @@ menubutton.label-action > button {
     padding: 0;
 }
 
-/* FLOW-018: a burst's frames held together in the strip — closer, square
-   where they meet, one line under them all. The gap is the frames' own, not
-   the list's rows', so a joined side can drop it: a class put on a row while
-   the list binds it made the list report a height of a billion pixels. */
 listview.filmstrip-frames > row { margin: 0; }
 .filmstrip-frame { margin: 0 3px; }
 .filmstrip-frame.joined-left { margin-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .filmstrip-frame.joined-right { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .filmstrip-frame.burst:not(.current) { border-bottom-color: @numa_label; }
 
-/* UX-030: focus inside Numa's panel in the same ink as the rest of it. */
 .adjustment button:focus-visible {
     outline-color: alpha(@window_fg_color, 0.5);
 }
 
-/* MASK-022: the mask's bar, on the window's own ground — nothing blue under
-   or round the photograph. */
 .mask-toolbar {
     min-height: 56px;
     background: @window_bg_color;
     border-bottom: 1px solid alpha(currentColor, 0.1);
 }
 
-/* The chip holds two lines now — EDITING MASK over the name — in the bar's
-   row of 56. */
 .mask-chip {
     min-height: 44px;
     padding-top: 2px;
     padding-bottom: 2px;
 }
 
-/* MASK-022: while a mask is edited, a white edge round where the photograph
-   is shown — the photographer's border of 21 September, in Numa's accent
-   since the design system made that white. Transparent outside a mask, so
-   entering one moves nothing. */
 .canvas-viewport {
     border: 2px solid transparent;
+
+    background: @numa_surround_dark;
 }
 
 .canvas-viewport.editing-mask {
     border-color: alpha(white, 0.85);
 }
 
-/* Size and Softness (UX-034): Numa's slider (`scale.numa-slider`), its name
-   and value coming up to ink once moved, as a panel row's do. */
 .mask-inline {
     font-size: 12px;
     color: alpha(@window_fg_color, 0.72);
@@ -1521,18 +1628,12 @@ listview.filmstrip-frames > row { margin: 0; }
     font-feature-settings: "tnum";
 }
 
-/* Strength, Feather and Edge in the chip's popover: the panel's sliders
-   without the panel's ground and edge. */
 .adjustment.mask-shape {
     background: none;
     border: none;
     margin: 8px 6px 0 6px;
 }
 
-/* TOOL-002: the value HUD over the photograph while the angle moves — the
-   design system's ValueHUD: #141414 at 55 %, 22 px round, the name as a
-   section label, the number white and tabular. Dark in both schemes: it sits
-   on the photograph. */
 .value-hud {
     background: rgba(20, 20, 20, 0.55);
     border-radius: 22px;
@@ -1553,8 +1654,6 @@ listview.filmstrip-frames > row { margin: 0; }
     color: white;
 }
 
-/* IO-030: the card's previews in the Import dialog — the grid's tiles, small,
-   the frames left on the card dimmed as its rejects are. */
 .card-strip > overlay {
     border-radius: 3px;
 }
@@ -1569,7 +1668,6 @@ listview.filmstrip-frames > row { margin: 0; }
     font-size: 10px;
 }
 
-/* IO-027: Safe to Format's check, in Numa's accent. */
 .import-safe {
     min-width: 56px;
     min-height: 56px;
@@ -1578,15 +1676,10 @@ listview.filmstrip-frames > row { margin: 0; }
     color: @numa_on_accent;
 }
 
-
-/* LIB-031: Tonight's first few, the grid's tiles small. */
 .card-strip > picture {
     border-radius: 3px;
 }
 
-/* DOC-008: How It Was Made, on the photo-side card — a row a step; what is
-   in is white, what is coming is dimmed. Dark in both schemes: it sits on
-   the photograph. */
 .photo-card .section-header {
     color: @numa_photo_name;
 }
@@ -1644,10 +1737,40 @@ listview.filmstrip-frames > row { margin: 0; }
     font-feature-settings: "tnum";
 }
 
-/* LIB-035: a month's count beside its label over the grid, as Numa Home's
-   caption. */
 .month-count {
     font-size: 12px;
     color: @numa_label;
     font-feature-settings: "tnum";
+}
+
+.side-foot {
+    border-top: 1px solid @numa_rule;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    background: none;
+}
+
+.place-head button.head-small {
+    min-height: 16px;
+    min-width: 20px;
+    padding: 0;
+}
+
+.place-head entry {
+    min-height: 24px;
+}
+
+actionbar.floating-bar > revealer > box {
+    background: @raised_bg_color;
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px alpha(black, 0.35);
+    padding: 4px 6px;
+}
+
+button.scope-chevron,
+menubutton.scope-chevron > button {
+    min-height: 20px;
+    min-width: 20px;
+    padding: 0;
 }

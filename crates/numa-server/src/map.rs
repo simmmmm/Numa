@@ -153,7 +153,7 @@ pub struct Count {
 }
 
 pub async fn places(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>, Query(count): Query<Count>) -> Result<Json<Value>, Fail> {
-    let photos = crate::timeline::chosen(&server, &me.name, &wanted).await?;
+    let photos = crate::timeline::chosen(&server, &me, &wanted).await?;
     let (spots, looking) = spots(&server, &photos);
     let liked: Vec<(i64, bool)> = photos.iter().map(|photo| (photo.id, photo.rating >= 3 || crate::photos::flag_name(photo.flag) == "pick")).collect();
     let (towns, points, none) = answer(&liked, &spots);

@@ -29,3 +29,4 @@ rayon.workspace = true
 zip.workspace = true
 flate2 = "1"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+jpeg-encoder = "0.6"

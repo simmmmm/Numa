@@ -10,6 +10,47 @@ thread_local! {
     static OPEN: Cell<(Option<i64>, Option<&'static str>)> = const { Cell::new((None, None)) };
 
     static COMPARING: Cell<bool> = const { Cell::new(false) };
+
+    static LOOKING: Cell<bool> = const { Cell::new(false) };
+
+    static SCROLLED: Cell<Option<f64>> = const { Cell::new(None) };
+}
+
+fn scroller(state: &App) -> Option<gtk::ScrolledWindow> {
+    state.libraries.tidy.ancestor(gtk::ScrolledWindow::static_type()).and_downcast()
+}
+
+fn look_closer(state: &App, ids: &[i64], at: usize) {
+    SCROLLED.set(scroller(state).map(|scrolled| scrolled.vadjustment().value()));
+
+    state.loupe.group.plain.set(true);
+    today::open_these(state, ids, at);
+    let opened = state.loupe.at.get().is_some();
+    LOOKING.set(opened);
+    state.loupe.group.plain.set(opened);
+}
+
+pub(super) fn is_looking() -> bool {
+    LOOKING.get()
+}
+
+pub(super) fn back_from_loupe(state: &App, to_grid: bool) {
+    if !LOOKING.replace(false) || !to_grid {
+        SCROLLED.set(None);
+        return;
+    }
+    let (library, _) = OPEN.get();
+    match library {
+        Some(library) => show_library_keeping(state, library),
+        None => show(state),
+    }
+}
+
+fn show_library_keeping(state: &App, library: i64) {
+    let (_, kind) = OPEN.get();
+    OPEN.set((Some(library), kind));
+    fill(state);
+    state.stack.set_visible_child_name("tidy");
 }
 
 struct Shelved {
@@ -144,6 +185,14 @@ fn fill(state: &App) {
         match library {
             Some(library) => library_sets(&state, &column, &library, found),
             None => libraries(&state, &column, &found),
+        }
+        if let Some(value) = SCROLLED.take() {
+
+            glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                if let Some(scrolled) = scroller(&state) {
+                    scrolled.vadjustment().set_value(value);
+                }
+            });
         }
     });
 }
@@ -460,7 +509,7 @@ fn frame(
     let ids = ids.to_vec();
     look.connect_clicked(glib::clone!(
         #[strong] state,
-        move |_| today::open_these(&state, &ids, at)
+        move |_| look_closer(&state, &ids, at)
     ));
     let lifted = gtk::Overlay::new();
     lifted.set_child(Some(&pick));

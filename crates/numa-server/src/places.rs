@@ -56,7 +56,7 @@ pub fn known(server: &Arc<Server>, photos: &[Photo]) -> (HashMap<i64, (&'static 
 }
 
 pub async fn library(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
-    let library = server.home.libraries(&me.name).into_iter().find(|library| library.id == id)
+    let library = server.home.libraries(&me).into_iter().find(|library| library.id == id)
         .ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
     let answer = tokio::task::spawn_blocking(move || {
         let photos = server.home.files(library.id);

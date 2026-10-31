@@ -84,7 +84,7 @@ fn sync_here(state: &App, libraries: Vec<Library>) {
         .flat_map(|library| state.catalog.at_home(library.id).unwrap_or_default().into_values())
         .fold((0usize, 0u64), |(count, bytes), (_, size)| (count + 1, bytes + size));
     let free = libraries.first().and_then(|library| {
-        let info = gio::File::for_path(&library.path).query_filesystem_info("filesystem::free", gio::Cancellable::NONE).ok()?;
+        let info = gio::File::for_path(home_sync::room_path(state, library)).query_filesystem_info("filesystem::free", gio::Cancellable::NONE).ok()?;
         Some(info.attribute_uint64("filesystem::free"))
     });
     let room = free.is_none_or(|free| free > bytes);
@@ -109,11 +109,23 @@ fn sync_here(state: &App, libraries: Vec<Library>) {
         if response != "sync" {
             return;
         }
-        for library in &libraries {
-            home_sync::keep_here(&state, library, true);
-            home_sync::sync_now(&state, library.clone());
-        }
-        redraw(&state);
+        let state = state.clone();
+        let libraries = libraries.clone();
+        home_sync::with_photos_root(&state.clone(), move |root| {
+            for library in &libraries {
+                let library = match home_sync::settle_here(&state, library, &root) {
+                    Ok(library) => library,
+                    Err(err) => {
+                        state.toast(&err);
+                        continue;
+                    }
+                };
+                home_sync::keep_here(&state, &library, true);
+                home_sync::sync_now(&state, library);
+            }
+            reload_libraries(&state);
+            redraw(&state);
+        });
     });
     dialog.present(Some(&window));
 }

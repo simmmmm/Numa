@@ -17,7 +17,7 @@
 @define-color numa_rule_sheet rgba(255, 255, 255, 0.08);
 @define-color numa_track rgba(255, 255, 255, 0.11);
 @define-color numa_track_hover rgba(255, 255, 255, 0.18);
-@define-color numa_thumb_rest rgba(255, 255, 255, 0.28);
+@define-color numa_thumb_rest rgba(255, 255, 255, 0.36);
 @define-color numa_rest_tick rgba(255, 255, 255, 0.35);
 @define-color numa_select_fill rgba(255, 255, 255, 0.16);
 @define-color numa_accent #ffffff;
@@ -66,7 +66,7 @@
 @define-color numa_photo_rule_sheet rgba(255, 255, 255, 0.08);
 @define-color numa_photo_track rgba(255, 255, 255, 0.11);
 @define-color numa_photo_track_hover rgba(255, 255, 255, 0.18);
-@define-color numa_photo_thumb_rest rgba(255, 255, 255, 0.28);
+@define-color numa_photo_thumb_rest rgba(255, 255, 255, 0.36);
 @define-color numa_photo_rest_tick rgba(255, 255, 255, 0.35);
 @define-color numa_photo_select_fill rgba(255, 255, 255, 0.16);
 @define-color numa_photo_accent #ffffff;
@@ -90,7 +90,7 @@
 @define-color numa_rule_sheet rgba(0, 0, 6, 0.08);
 @define-color numa_track rgba(0, 0, 6, 0.11);
 @define-color numa_track_hover rgba(0, 0, 6, 0.18);
-@define-color numa_thumb_rest rgba(0, 0, 6, 0.28);
+@define-color numa_thumb_rest rgba(0, 0, 6, 0.36);
 @define-color numa_rest_tick rgba(0, 0, 6, 0.35);
 @define-color numa_select_fill rgba(0, 0, 6, 0.08);
 @define-color numa_accent #141414;

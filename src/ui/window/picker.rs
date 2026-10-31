@@ -83,8 +83,15 @@ pub(super) fn current_place(state: &App) -> Place {
 }
 
 pub(super) fn show_place(state: &App, place: Place) {
-    state.stack.set_visible_child_name("library");
+    let started = std::time::Instant::now();
+
     choose_place(state, place);
+
+    library_page::show_head(state);
+    state.stack.set_visible_child_name("library");
+    sidebar::mark(state);
+
+    log::info!("a place: {} ms on the main thread", started.elapsed().as_millis());
 }
 
 pub(super) fn choose_place(state: &App, place: Place) {

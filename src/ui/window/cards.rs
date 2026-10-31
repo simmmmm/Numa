@@ -311,7 +311,7 @@ pub(super) fn save_edits(state: &App, when: Saving) {
             return;
         }
         match &photo.source {
-            Source::Photo { id, path } => state.catalog.save_edits(*id, &photo.document).and_then(|()| {
+            Source::Photo { id, path } => state.catalog.save_edits(*id, &photo.document).map_err(String::from).and_then(|()| {
 
                 let states: Vec<Document> = photo
                     .history

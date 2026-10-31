@@ -232,7 +232,7 @@ fn needs_full_resolution(state: &App, zoom: f64) -> bool {
 
 const PANEL_WIDTH: i32 = 372;
 
-const RAIL_WIDTH: i32 = 66;
+const RAIL_WIDTH: i32 = 68;
 
 const FILMSTRIP_STEP: f64 = 110.0;
 
@@ -451,16 +451,18 @@ fn recall_window_state(state: &App, window: &adw::ApplicationWindow) {
     }
 }
 
+pub(super) const PAGE_FADE: u32 = 150;
+
 fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
 
     watch_the_button(state, window);
 
     state.stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-    state.stack.set_transition_duration(300);
+    state.stack.set_transition_duration(PAGE_FADE);
     state.stack.add_named(&build_library_page(state, window), Some("library"));
 
+    state.stack.add_named(&today::page(state), Some("today"));
     for (column, name) in [
-        (&state.libraries.today, "today"),
         (&state.libraries.albums, "albums"),
         (&state.libraries.people, "people"),
         (&state.libraries.tidy, "tidy"),
@@ -490,10 +492,28 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
         move || startup::ensure_editor_page(&state)
     ));
 
-    let view = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    view.append(&build_header(state, window));
-    view.append(&banners(state));
-    view.append(&state.stack);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&build_header(state, window));
+    view.add_top_bar(&banners(state));
+    view.set_content(Some(&state.stack));
+
+    state.stack.connect_visible_child_name_notify(glib::clone!(
+        #[weak] view,
+        move |stack| {
+            let page = stack.visible_child_name();
+
+            match page.as_deref() {
+                Some("editor") => view.add_css_class("ruled"),
+                _ => view.remove_css_class("ruled"),
+            }
+            let today = page.as_deref() == Some("today");
+            view.set_extend_content_to_top_edge(today);
+            match today {
+                true => view.add_css_class("see-through"),
+                false => view.remove_css_class("see-through"),
+            }
+        }
+    ));
 
     state.toasts.set_child(Some(&sidebar::build(state, window, &view)));
     window.set_content(Some(&state.toasts));

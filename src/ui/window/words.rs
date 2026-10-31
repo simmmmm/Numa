@@ -25,7 +25,8 @@ pub(super) struct State {
     asked: Rc<Cell<bool>>,
 
     making: Rc<Cell<bool>>,
-    pub(super) bar: gtk::SearchBar,
+
+    pub(super) bar: gtk::Revealer,
     pub(super) entry: gtk::SearchEntry,
 
     pub(super) suggestions: tokens::Suggestions,
@@ -44,25 +45,38 @@ impl State {
             stopped: Rc::default(),
             asked: Rc::default(),
             making: Rc::default(),
-            bar: gtk::SearchBar::new(),
+            bar: gtk::Revealer::new(),
             entry: gtk::SearchEntry::new(),
             suggestions: tokens::Suggestions::new(),
         }
     }
 }
 
-pub(super) fn build_search_bar(state: &App) -> gtk::SearchBar {
+pub(super) fn build_search_bar(state: &App) -> gtk::Revealer {
     let words = &state.libraries.words;
     let entry = &words.entry;
     entry.set_placeholder_text(Some("Search by names or words"));
     entry.set_hexpand(true);
-    entry.set_width_chars(36);
+    entry.set_width_chars(30);
     let clamp = adw::Clamp::new();
-    clamp.set_maximum_size(520);
+    clamp.set_maximum_size(380);
     clamp.set_child(Some(entry));
     words.bar.set_child(Some(&clamp));
-    words.bar.connect_entry(entry);
-    words.bar.set_show_close_button(true);
+
+    words.bar.set_transition_type(gtk::RevealerTransitionType::SlideLeft);
+    words.bar.set_transition_duration(150);
+    words.bar.set_reveal_child(false);
+
+    entry.connect_stop_search(glib::clone!(
+        #[strong] state,
+        move |entry| {
+            if entry.text().is_empty() {
+                state.libraries.words.bar.set_reveal_child(false);
+            } else {
+                entry.set_text("");
+            }
+        }
+    ));
 
     tokens::install(state, entry);
     entry.connect_search_changed(glib::clone!(
@@ -86,10 +100,12 @@ pub(super) fn build_search_bar(state: &App) -> gtk::SearchBar {
         }
     ));
 
-    words.bar.connect_search_mode_enabled_notify(glib::clone!(
+    words.bar.connect_reveal_child_notify(glib::clone!(
         #[strong] state,
         move |bar| {
-            if !bar.is_search_mode() {
+            if bar.reveals_child() {
+                state.libraries.words.entry.grab_focus();
+            } else {
                 tokens::hide(&state);
                 stop_words(&state);
             }
@@ -115,9 +131,13 @@ pub(super) fn install_search_action(state: &App, window: &adw::ApplicationWindow
             if state.stack.visible_child_name().as_deref() != Some("library") || state.grid.welcome.is_visible() {
                 return;
             }
-            let bar = &state.libraries.words.bar;
-            bar.set_search_mode(true);
-            state.libraries.words.entry.grab_focus();
+            let words = &state.libraries.words;
+
+            if words.bar.reveals_child() {
+                words.entry.select_region(0, -1);
+            }
+            words.bar.set_reveal_child(true);
+            words.entry.grab_focus();
         }
     ));
     window.add_action(&action);
@@ -131,7 +151,7 @@ pub(super) fn search_button(state: &App) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
     button.set_icon_name("system-search-symbolic");
     button.set_tooltip_text(Some("Search by names or words (Ctrl+F)"));
-    button.bind_property("active", &state.libraries.words.bar, "search-mode-enabled").bidirectional().sync_create().build();
+    button.bind_property("active", &state.libraries.words.bar, "reveal-child").bidirectional().sync_create().build();
     button
 }
 
@@ -189,7 +209,7 @@ pub(super) fn forget_query(state: &App) {
     if !words.entry.text().is_empty() {
         words.entry.set_text("");
     }
-    words.bar.set_search_mode(false);
+    words.bar.set_reveal_child(false);
 }
 
 fn stop_words(state: &App) {
@@ -212,7 +232,7 @@ pub(super) fn chips(state: &App) -> (Option<String>, Option<&'static str>) {
 fn offer(state: &App) {
     let words = &state.libraries.words;
     if words.asked.replace(true) {
-        state.toast("Search by words needs its download — Preferences has it under Add-ons");
+        state.toast("Search by words needs its download — Preferences has it under Models");
         return;
     }
     downloads::ask_for(

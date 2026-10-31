@@ -47,6 +47,15 @@ The build has no network.
 
 ## Build it
 
+`dev/flatpak-offline.sh` does the three steps below in one go: it regenerates
+`cargo-sources.json` from `Cargo.lock`, fetches the sources, then builds with no
+network (flatpak-builder's default; the script refuses a manifest that asks for
+it). It builds on 26 October 2026 (1 min 44 s with the sources cached), with
+libgphoto2, protobuf-c and libshumate as modules, which the reference lacked
+since Places.
+
+By hand:
+
 ```sh
 flatpak run org.flatpak.Builder --force-clean --disable-rofiles-fuse \
     --state-dir=target/flathub-ref/state --repo=target/flathub-ref/repo \

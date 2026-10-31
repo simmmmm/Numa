@@ -4,9 +4,11 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::grants::{Grants, Level};
+
 pub struct Store(Mutex<Connection>);
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct Account {
     pub name: String,
     pub admin: bool,
@@ -14,6 +16,9 @@ pub struct Account {
     pub manage: bool,
 
     pub must_change: bool,
+
+    #[serde(skip)]
+    pub sight: std::sync::Arc<crate::grants::Sight>,
 }
 
 pub const IDLE: i64 = 90 * 86_400;
@@ -73,10 +78,19 @@ impl Store {
         }
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN address TEXT", []);
         let _ = conn.execute("ALTER TABLE accounts ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0", []);
+
+        let _ = conn.execute("ALTER TABLE accounts ADD COLUMN access INTEGER NOT NULL DEFAULT 2", []);
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS grants (
+                 account TEXT NOT NULL COLLATE NOCASE, kind TEXT NOT NULL, target TEXT NOT NULL, level INTEGER NOT NULL,
+                 PRIMARY KEY (account, kind, target))",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
         Ok(Self(Mutex::new(conn)))
     }
 
-    fn with<R>(&self, work: impl FnOnce(&Connection) -> rusqlite::Result<R>) -> Result<R, String> {
+    pub(crate) fn with<R>(&self, work: impl FnOnce(&Connection) -> rusqlite::Result<R>) -> Result<R, String> {
         let conn = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         work(&conn).map_err(|err| err.to_string())
     }
@@ -92,17 +106,52 @@ impl Store {
     pub fn accounts(&self) -> Result<Vec<Account>, String> {
         self.with(|conn| {
             let mut statement = conn.prepare("SELECT name, admin, manage, must_change FROM accounts ORDER BY name COLLATE NOCASE")?;
-            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)? }))?;
+            let rows = statement.query_map([], |row| Ok(Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)?, ..Account::default() }))?;
             rows.collect()
         })
     }
 
     pub fn add_account(&self, name: &str, hash: &str, admin: bool, only_if_first: bool) -> Result<bool, String> {
         let sql = match only_if_first {
-            true => "INSERT INTO accounts (name, hash, admin) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM accounts)",
-            false => "INSERT OR IGNORE INTO accounts (name, hash, admin) VALUES (?1, ?2, ?3)",
+            true => "INSERT INTO accounts (name, hash, admin, access) SELECT ?1, ?2, ?3, ?4 WHERE NOT EXISTS (SELECT 1 FROM accounts)",
+            false => "INSERT OR IGNORE INTO accounts (name, hash, admin, access) VALUES (?1, ?2, ?3, ?4)",
         };
-        self.with(|conn| conn.execute(sql, params![name, hash, admin])).map(|changed| changed == 1)
+        let access = if admin { Level::Edit } else { Level::None };
+        self.with(|conn| conn.execute(sql, params![name, hash, admin, access.number()])).map(|changed| changed == 1)
+    }
+
+    pub fn grants(&self, name: &str) -> Result<Grants, String> {
+        self.with(|conn| {
+            let access: Option<i64> = conn.query_row("SELECT access FROM accounts WHERE name = ?1", [name], |row| row.get(0)).optional()?;
+            let mut grants = Grants { access: Level::from_number(access.unwrap_or(0)), ..Grants::default() };
+            let mut statement = conn.prepare("SELECT kind, target, level FROM grants WHERE account = ?1")?;
+            let rows = statement.query_map([name], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))?;
+            for row in rows {
+                let (kind, target, level) = row?;
+                match (kind.as_str(), target.parse::<i64>()) {
+                    ("library", Ok(id)) => drop(grants.libraries.insert(id, Level::from_number(level))),
+                    ("album", _) => drop(grants.albums.insert(target, Level::from_number(level))),
+                    _ => {}
+                }
+            }
+            Ok(grants)
+        })
+    }
+
+    pub fn set_grants(&self, name: &str, grants: &Grants) -> Result<bool, String> {
+        let mut conn = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let work = conn.transaction().and_then(|tx| {
+            if tx.execute("UPDATE accounts SET access = ?2 WHERE name = ?1", params![name, grants.access.number()])? == 0 {
+                return Ok(false);
+            }
+            tx.execute("DELETE FROM grants WHERE account = ?1", [name])?;
+            let libraries = grants.libraries.iter().map(|(id, level)| ("library", id.to_string(), level));
+            for (kind, target, level) in libraries.chain(grants.albums.iter().map(|(key, level)| ("album", key.clone(), level))) {
+                tx.execute("INSERT INTO grants (account, kind, target, level) VALUES (?1, ?2, ?3, ?4)", params![name, kind, target, level.number()])?;
+            }
+            tx.commit().map(|()| true)
+        });
+        work.map_err(|err| err.to_string())
     }
 
     pub fn account(&self, name: &str) -> Option<(String, String, bool)> {
@@ -132,7 +181,7 @@ impl Store {
             let sql = "SELECT a.name, a.admin, a.manage, a.must_change, COALESCE(s.seen, s.made) FROM sessions s JOIN accounts a ON a.name = s.name WHERE s.token = ?1";
             let found = conn
                 .query_row(sql, [digest], |row| {
-                    Ok((Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)? }, row.get::<_, i64>(4)?))
+                    Ok((Account { name: row.get(0)?, admin: row.get(1)?, manage: row.get(2)?, must_change: row.get(3)?, ..Account::default() }, row.get::<_, i64>(4)?))
                 })
                 .optional()?;
             let Some((account, seen)) = found else { return Ok(None) };
@@ -484,6 +533,28 @@ pub fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grants_are_kept() {
+        let file = std::env::temp_dir().join(format!("numa-home-grants-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let old = Connection::open(&file).unwrap();
+        old.execute_batch("CREATE TABLE accounts (name TEXT PRIMARY KEY COLLATE NOCASE, hash TEXT NOT NULL, admin INTEGER NOT NULL);
+                           INSERT INTO accounts VALUES ('Sam', 'hash', 0);").unwrap();
+        drop(old);
+        let store = Store::open(&file).unwrap();
+        assert_eq!(store.grants("sam").unwrap().access, Level::Edit, "nothing changes for a household");
+        assert!(store.add_account("Alex", "hash", false, false).unwrap());
+        assert_eq!(store.grants("Alex").unwrap(), Grants::default(), "a new account starts with none");
+        let given = Grants { access: Level::None, libraries: HashMap::from([(3, Level::View)]), albums: HashMap::from([("1a".into(), Level::Edit)]) };
+        assert!(store.set_grants("alex", &given).unwrap());
+        assert_eq!(store.grants("Alex").unwrap(), given);
+        assert!(!store.set_grants("Nobody", &given).unwrap());
+        drop(store);
+        for end in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{end}", file.display()));
+        }
+    }
 
     #[test]
     fn sessions_end_when_idle() {

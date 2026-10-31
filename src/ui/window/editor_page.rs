@@ -369,6 +369,7 @@ pub(super) fn fill_header(state: &App) {
 fn build_before_group(state: &App) -> gtk::Box {
     let group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     group.add_css_class("linked");
+    group.add_css_class("raised-control");
 
     let before = &state.editor_page.before;
     before.set_label("Before");
@@ -550,6 +551,7 @@ fn build_history_group(state: &App) -> gtk::Box {
 
     let history_group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     history_group.add_css_class("linked");
+    history_group.add_css_class("raised-control");
     for (icon, tooltip, redo) in [
         ("edit-undo-symbolic", "Undo (Ctrl+Z)", false),
         ("edit-redo-symbolic", "Redo (Ctrl+Shift+Z)", true),

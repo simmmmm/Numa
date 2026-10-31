@@ -426,6 +426,23 @@ pub(super) fn write_rest_of_panel(state: &App) {
     reference::follow_photo(state);
 }
 
+fn stand_at(state: &App, id: i64) {
+    let Some(at) = state.grid.order.borrow().iter().position(|card| *card == id) else { return };
+    let wall = state.grid.wall.clone();
+    if !wall.is_selected(at) {
+        wall.select_only(at);
+    }
+    let frames = Cell::new(0);
+    wall.add_tick_callback(move |wall, _| {
+        wall.reveal(at);
+        frames.set(frames.get() + 1);
+        match frames.get() < 30 {
+            true => glib::ControlFlow::Continue,
+            false => glib::ControlFlow::Break,
+        }
+    });
+}
+
 pub(super) fn close_editor(state: &App) {
     save_open_edits(state);
 
@@ -433,6 +450,7 @@ pub(super) fn close_editor(state: &App) {
         Some(Source::Photo { id, .. }) => Some(numa::io::catalog::library_of(*id)),
         _ => None,
     };
+    let looked_at = open_id(state);
 
     clear_reference(state);
     if let Some(photo) = state.open.borrow().as_ref() {
@@ -450,9 +468,15 @@ pub(super) fn close_editor(state: &App) {
     state.render.draft_source.take();
     state.render.coming.take();
     *state.open.borrow_mut() = None;
-    state.stack.set_visible_child_name("library");
+    let in_grid = !today::back_from_editor(state);
+    if in_grid {
+        state.stack.set_visible_child_name("library");
+    }
     if state.grid.stale.replace(false) {
         reload_grid(state);
+    }
+    if let Some(id) = looked_at.filter(|_| in_grid) {
+        stand_at(state, id);
     }
     if let Some(library) = edited {
         home_sync::edited(state, library);

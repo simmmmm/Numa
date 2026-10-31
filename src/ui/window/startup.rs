@@ -57,6 +57,8 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
 
 pub(super) fn show_editor(state: &App) {
     ensure_editor_page(state);
+
+    super::filmstrip::back_home(state);
     state.stack.set_visible_child_name("editor");
     key_toast(
         state,

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::grants::Level;
 use crate::manage::{may_manage, within};
 use crate::store::Account;
 use crate::{Fail, Server};
@@ -36,7 +37,9 @@ pub fn prepare(server: &Server) -> HashMap<&'static str, usize> {
     let found = copies(server, true);
     *server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(found));
     server.tidy.stale.store(false, std::sync::atomic::Ordering::Relaxed);
-    let everyone = Account { name: String::new(), admin: true, manage: true, must_change: false };
+    let libraries = server.home.all_libraries();
+    let sight = crate::grants::resolve(true, std::path::Path::new(""), &server.home.photos, &libraries, &Default::default(), &[]);
+    let everyone = Account { admin: true, manage: true, sight: Arc::new(sight), ..Account::default() };
     let mut counts = HashMap::new();
     for card in cards(server, &everyone, None, None) {
         *counts.entry(card.kind).or_default() += 1;
@@ -105,13 +108,13 @@ pub async fn mine(server: &Arc<Server>, me: &Account, everyone: bool) -> Result<
     if everyone || server.store.accounts().map_err(Fail::internal)?.len() < 2 {
         return Ok(None);
     }
-    let owners = crate::by::owners(server, &server.home.libraries(&me.name)).await?;
+    let owners = crate::by::owners(server, &server.home.editable(me)).await?;
     Ok(Some(owners.into_iter().filter(|(_, owner)| owner.eq_ignore_ascii_case(&me.name)).map(|(photo, _)| photo).collect()))
 }
 
 fn sets(server: &Server, me: &Account, copies: &[Vec<i64>], mine: Option<&HashSet<i64>>, only: Option<i64>) -> Vec<Card> {
-    let ours: Vec<Library> = server.home.libraries(&me.name).into_iter().filter(|library| may_manage(server, me, library)).collect();
-    let copies: Vec<Vec<Photo>> = copies.iter().map(|group| group.iter().filter_map(|id| server.home.photo(&me.name, *id).ok()).collect()).collect();
+    let ours: Vec<Library> = server.home.libraries(me).into_iter().filter(|library| may_manage(server, me, library)).collect();
+    let copies: Vec<Vec<Photo>> = copies.iter().map(|group| group.iter().filter_map(|id| server.home.photo(me, *id, Level::View).ok()).collect()).collect();
     shared::cards(&Shelved(server), &ours, &copies, &server.store.settled(), mine, only)
 }
 
@@ -120,7 +123,7 @@ async fn nobodys(server: &Arc<Server>, me: &Account, only: Option<i64>, accounts
         return Ok(Vec::new());
     }
     let settled = server.store.settled();
-    let libraries: Vec<Library> = server.home.libraries(&me.name).into_iter().filter(|library| only.is_none_or(|only| library.id == only)).collect();
+    let libraries: Vec<Library> = server.home.editable(me).into_iter().filter(|library| only.is_none_or(|only| library.id == only)).collect();
     let owners = crate::by::owners(server, &libraries).await?;
     let ids: Vec<i64> = libraries.iter().map(|library| library.id).collect();
     let bodies: HashMap<i64, String> =
@@ -166,7 +169,8 @@ pub struct Asked {
 
 pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed, Query(asked): Query<Asked>) -> Result<Json<Value>, Fail> {
     let everyone = matches!(asked.everyone.as_deref(), Some("1" | "true"));
-    let seen = server.home.libraries(&me.name);
+
+    let seen = server.home.editable(&me);
     let only = match asked.library {
         Some(id) => Some(seen.iter().find(|library| library.id == id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?),
         None => None,
@@ -232,6 +236,9 @@ pub struct Kept {
 
 pub async fn keep(State(server): State<Arc<Server>>, Signed(me): Signed, Json(kept): Json<Kept>) -> Result<Json<Value>, Fail> {
     if kept.key.starts_with("who:") {
+        if server.home.editable(&me).is_empty() {
+            return Err(Fail(StatusCode::NOT_FOUND, "There is no such set.".into()));
+        }
         server.store.settle(&[kept.key]);
         return Ok(Json(json!({ "trashed": 0 })));
     }
@@ -247,7 +254,7 @@ pub async fn keep(State(server): State<Arc<Server>>, Signed(me): Signed, Json(ke
         let mut photos = Vec::new();
         for id in server.home.with_twins(&going) {
             let library = server.home.library(library_of(id)).ok_or_else(|| Fail::internal("a photograph without its library"))?;
-            photos.push((library, server.home.photo(&me.name, id)?));
+            photos.push((library, server.home.photo(&me, id, Level::Edit)?));
         }
         let trashed = crate::manage::trash(&server, photos);
         server.store.settle(&card.settle);

@@ -8,7 +8,10 @@ thread_local! {
 
     static FETCHING: RefCell<HashMap<i64, f64>> = RefCell::default();
 
-    static LOUPE_PILL: RefCell<Option<(gtk::Box, gtk::Button, gtk::ProgressBar)>> = const { RefCell::new(None) };
+    static LOUPE_PILL: RefCell<Option<(gtk::Box, gtk::Button, gtk::ProgressBar, gtk::Button)>> = const { RefCell::new(None) };
+
+    static STOPS: RefCell<HashMap<i64, Running>> = RefCell::default();
+    static CANCELLED: RefCell<std::collections::HashSet<i64>> = RefCell::default();
 }
 
 pub(super) fn progress(id: i64) -> Option<f64> {
@@ -41,10 +44,30 @@ pub(super) fn loupe_pill(state: &App) -> gtk::Box {
     ));
     let bar = progress_on("photo-fetch");
     bar.set_valign(gtk::Align::Center);
+
+    let stop = gtk::Button::with_label("Cancel");
+    stop.set_tooltip_text(Some("Stop getting the original"));
+    stop.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Some(id) = state.loupe.at.get().and_then(|at| id_at(&state, at)) {
+                cancel(id);
+            }
+        }
+    ));
     pill.append(&get);
     pill.append(&bar);
-    LOUPE_PILL.with(|kept| kept.replace(Some((pill.clone(), get, bar))));
+    pill.append(&stop);
+    LOUPE_PILL.with(|kept| kept.replace(Some((pill.clone(), get, bar, stop))));
     pill
+}
+
+pub(super) fn cancel(id: i64) {
+    let running = STOPS.with(|stops| stops.borrow().get(&id).cloned());
+    if let Some(process) = running.as_ref().and_then(|running| running.borrow().clone()) {
+        CANCELLED.with(|cancelled| cancelled.borrow_mut().insert(id));
+        process.force_exit();
+    }
 }
 
 pub(super) fn paint_loupe(state: &App) {
@@ -53,17 +76,21 @@ pub(super) fn paint_loupe(state: &App) {
     let coming = id.and_then(progress);
     let review = state.loupe.tape.review.pill.reveals_child();
     LOUPE_PILL.with(|pill| {
-        if let Some((pill, get, bar)) = pill.borrow().as_ref() {
+        if let Some((pill, get, bar, stop)) = pill.borrow().as_ref() {
             pill.set_visible(at_home && !review);
             get.set_visible(coming.is_none());
             bar.set_visible(coming.is_some());
+            stop.set_visible(coming.is_some());
             bar.set_fraction(coming.unwrap_or(0.0));
         }
     });
 }
 
 pub(super) fn preview(state: &App, id: i64, near: impl Fn(&App) -> bool + 'static, apply: impl Fn(&App, gtk::gdk::Texture) + 'static) -> bool {
-    let Some((server, _)) = state.grid.at_home.borrow().get(&id).cloned() else { return false };
+
+    let found = state.grid.at_home.borrow().get(&id).cloned();
+    let found = found.or_else(|| state.catalog.at_home(numa::io::catalog::library_of(id)).ok().and_then(|all| all.get(&id).cloned()));
+    let Some((server, _)) = found else { return false };
     let library = state.libraries.all.borrow().iter().find(|library| library.id == numa::io::catalog::library_of(id)).cloned();
     let Some(library) = library else { return false };
     let file = home_preview(&library.path, &server);
@@ -124,7 +151,12 @@ pub(super) fn fetch_first(state: &App, id: i64, then: impl FnOnce(&App) + 'stati
     let theirs = remote(&library, &photo.path, photo.mtime, server, size);
     let state = state.clone();
     glib::spawn_future_local(async move {
-        match fetch_one(&state, &account, &library, id, &theirs).await {
+        let result = fetch_one(&state, &account, &library, id, &theirs).await;
+
+        if CANCELLED.with(|cancelled| cancelled.borrow_mut().remove(&id)) {
+            return;
+        }
+        match result {
             Ok(()) => then(&state),
             Err(failure) => failed(&state, failure, &account),
         }
@@ -153,6 +185,7 @@ async fn fetch_one(state: &App, account: &Account, library: &Library, id: i64, t
         PathBuf::from(part)
     });
     let size = theirs.size.max(1) as f64;
+    let leftover = part.clone();
     glib::timeout_add_local(
         std::time::Duration::from_millis(250),
         glib::clone!(
@@ -168,7 +201,17 @@ async fn fetch_one(state: &App, account: &Account, library: &Library, id: i64, t
             }
         ),
     );
-    let mut fetched = home_sync::download(account, &library.path, theirs, &Running::default()).await;
+    let running = Running::default();
+    STOPS.with(|stops| stops.borrow_mut().insert(id, running.clone()));
+    let mut fetched = home_sync::download(account, &library.path, theirs, &running).await;
+    STOPS.with(|stops| stops.borrow_mut().remove(&id));
+
+    if CANCELLED.with(|cancelled| cancelled.borrow().contains(&id)) {
+        if let Some(part) = &leftover {
+            let _ = std::fs::remove_file(part);
+        }
+        fetched = Err(Failure::Said(String::from("cancelled")));
+    }
     if let (Ok(()), Some(file)) = (&fetched, sync::inside(&library.path, &theirs.path)) {
 
         let read = gio::spawn_blocking(move || {

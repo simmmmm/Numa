@@ -36,6 +36,10 @@ pub(super) fn report_panel(state: &App) {
                 #[strong] state,
                 move || {
 
+                    if std::env::var_os("NUMA_OPEN").is_some() && state.open.borrow().is_none() {
+                        return glib::ControlFlow::Continue;
+                    }
+
                     super::startup::ensure_editor_page(&state);
 
                     if let Ok(index) = std::env::var("NUMA_MASK") {
@@ -266,12 +270,19 @@ pub(super) fn open_requested(state: &App) {
     let Some(id) = open_at else { return };
 
     let delay = std::env::var("NUMA_OPEN_DELAY").ok().and_then(|ms| ms.parse().ok()).unwrap_or(100);
+    let asked = Cell::new(false);
     glib::timeout_add_local(
         std::time::Duration::from_millis(delay),
         glib::clone!(
             #[strong] state,
             move || {
                 if !state.grid.cards.borrow().contains_key(&id) {
+
+                    let library = state.libraries.all.borrow().iter().find(|library| library.id == id >> 32).cloned();
+                    if let Some(library) = library.filter(|_| !asked.get()) {
+                        asked.set(true);
+                        show_place(&state, Place::Library(library));
+                    }
                     return glib::ControlFlow::Continue;
                 }
                 open_photo(&state, id);

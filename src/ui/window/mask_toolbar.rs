@@ -31,6 +31,15 @@ pub(super) struct Toolbar {
     refine: adw::SplitButton,
     refine_again: gio::Menu,
 
+    refine_looks: gio::Menu,
+
+    pub(super) subtract_menu: gio::Menu,
+    pub(super) refine_actions: gio::SimpleActionGroup,
+
+    pub(super) power_item: gtk::Button,
+    pub(super) undo_part: gtk::Button,
+    pub(super) parts_status: gtk::Label,
+
     eye: gtk::ToggleButton,
 }
 
@@ -76,6 +85,12 @@ impl Toolbar {
             points: gtk::CheckButton::with_label("Points"),
             refine: adw::SplitButton::new(),
             refine_again: gio::Menu::new(),
+            refine_looks: gio::Menu::new(),
+            subtract_menu: gio::Menu::new(),
+            refine_actions: gio::SimpleActionGroup::new(),
+            power_item: gtk::Button::with_label("Turn Off"),
+            undo_part: gtk::Button::with_label("Undo Last Part"),
+            parts_status: gtk::Label::new(None),
             eye: gtk::ToggleButton::new(),
         }
     }
@@ -108,20 +123,27 @@ pub(super) fn build_mask_toolbar(state: &App) -> adw::BreakpointBin {
         "Search for the real edge, from where Edge puts it — slower, and worth it on a subject",
     ));
     let looks = gio::Menu::new();
-    looks.append(Some("Edge"), Some("win.refine-edge"));
-    looks.append(Some("Hair, Fur and Feathers"), Some("win.refine-hair"));
+    looks.append_section(None, &bar.refine_looks);
     looks.append_section(None, &bar.refine_again);
+
+    let cut = gio::Menu::new();
+    cut.append_submenu(Some("Subtract"), &bar.subtract_menu);
+    looks.append_section(None, &cut);
     bar.refine.set_menu_model(Some(&looks));
-    bar.refine.connect_clicked(glib::clone!(
+
+    let refine = gio::SimpleAction::new("refine", None);
+    refine.connect_activate(glib::clone!(
         #[strong] state,
-        move |_| refine_selected_mask(&state)
+        move |_, _| refine_selected_mask(&state)
     ));
+    bar.refine_actions.add_action(&refine);
+    bar.refine.set_action_name(Some("mask.refine"));
     let again = gio::SimpleAction::new("search-again", None);
     again.connect_activate(glib::clone!(
         #[strong] state,
         move |_, _| refine_selected_mask(&state)
     ));
-    let actions = gio::SimpleActionGroup::new();
+    let actions = bar.refine_actions.clone();
     actions.add_action(&again);
     bar.refine.insert_action_group("mask", Some(&actions));
     row.append(&bar.refine);
@@ -307,6 +329,11 @@ fn as_popover_heading(heading: &gtk::Label) {
 
 fn popover_item(label: &str, popover: &gtk::Popover) -> gtk::Button {
     let button = gtk::Button::with_label(label);
+    as_popover_item(&button, popover);
+    button
+}
+
+fn as_popover_item(button: &gtk::Button, popover: &gtk::Popover) {
     button.add_css_class("flat");
     button.add_css_class("popover-item");
     if let Some(label) = button.child().and_downcast::<gtk::Label>() {
@@ -316,7 +343,6 @@ fn popover_item(label: &str, popover: &gtk::Popover) -> gtk::Button {
         #[weak] popover,
         move |_| popover.popdown()
     ));
-    button
 }
 
 fn build_chip(state: &App) -> gtk::MenuButton {
@@ -377,17 +403,56 @@ fn build_chip(state: &App) -> gtk::MenuButton {
     header.set_text("THIS MASK");
     as_popover_heading(&header);
     column.append(&header);
+
+    let status = bar.parts_status.clone();
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    status.add_css_class("note");
+    status.set_margin_start(10);
+    status.set_margin_end(10);
+    column.append(&status);
     state.masks.mask_parts.set_selection_mode(gtk::SelectionMode::None);
     state.masks.mask_parts.add_css_class("boxed-list");
     column.append(&state.masks.mask_parts);
+    as_popover_item(&bar.undo_part, &popover);
+    bar.undo_part.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| undo_last_part(&state)
+    ));
+    column.append(&bar.undo_part);
     column.append(&build_shape(state));
 
     column.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    for (label, action) in [("Invert", "win.invert-mask"), ("Duplicate", "win.duplicate-mask"), ("Delete Mask", "win.delete-mask")] {
-        let item = popover_item(label, &popover);
-        item.set_action_name(Some(action));
-        column.append(&item);
-    }
+
+    let invert = popover_item("Invert", &popover);
+    invert.set_action_name(Some("win.invert-mask"));
+    column.append(&invert);
+    as_popover_item(&bar.power_item, &popover);
+    bar.power_item.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            let Some(index) = state.mask_overlay.selected_mask.get() else { return };
+            let visible = mask_at(&state, index).is_some_and(|mask| mask.visible);
+            set_mask_visible(&state, index, !visible);
+        }
+    ));
+    column.append(&bar.power_item);
+    let duplicate = popover_item("Duplicate", &popover);
+    duplicate.set_action_name(Some("win.duplicate-mask"));
+    column.append(&duplicate);
+    let rename = popover_item("Rename…", &popover);
+    rename.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| {
+            if let Some(index) = state.mask_overlay.selected_mask.get() {
+                ask_mask_name(&state, index);
+            }
+        }
+    ));
+    column.append(&rename);
+    let delete = popover_item("Delete Mask", &popover);
+    delete.set_action_name(Some("win.delete-mask"));
+    column.append(&delete);
 
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -669,7 +734,6 @@ fn build_shape(state: &App) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
     column.add_css_class("adjustment");
-    column.add_css_class("quiet");
     column.add_css_class("mask-shape");
     for (name, scale, readout, rest) in [
         ("Strength", &state.masks.strength, Readout::Positive(0), 100.0),
@@ -783,7 +847,17 @@ pub(super) fn refresh_mask_toolbar(state: &App) {
         _ => false,
     };
     let can_refine = subject && numa::render::matte::is_installed() && segment::is_installed();
-    bar.refine.set_visible(can_refine);
+
+    let can_cut = masks.len() > 1 || segment::is_installed();
+    bar.refine.set_visible(can_refine || can_cut);
+    if let Some(edge) = bar.refine_actions.lookup_action("refine").and_downcast::<gio::SimpleAction>() {
+        edge.set_enabled(can_refine);
+    }
+    bar.refine_looks.remove_all();
+    if can_refine {
+        bar.refine_looks.append(Some("Edge"), Some("win.refine-edge"));
+        bar.refine_looks.append(Some("Hair, Fur and Feathers"), Some("win.refine-hair"));
+    }
     bar.refine_again.remove_all();
     if can_refine && mask.matte {
         bar.refine_again.append(Some("Search Again"), Some("mask.search-again"));

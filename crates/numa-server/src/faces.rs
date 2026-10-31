@@ -12,10 +12,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::store::Account;
 use crate::{Fail, Server};
 
-fn seen(server: &Server, account: &str) -> Vec<i64> {
-    server.home.libraries(account).iter().map(|library| library.id).collect()
+fn seen(server: &Server, me: &Account) -> Vec<i64> {
+    server.home.editable(me).iter().map(|library| library.id).collect()
 }
 
 fn recognised(catalog: &Catalog, library: i64) -> (Vec<StoredFace>, Vec<Option<String>>) {
@@ -30,23 +31,24 @@ static COUNTED: Mutex<Vec<(String, Instant, usize)>> = Mutex::new(Vec::new());
 
 const FRESH: Duration = Duration::from_secs(10 * 60);
 
-pub async fn waiting(server: &Arc<Server>, account: &str) -> Result<usize, Fail> {
+pub async fn waiting(server: &Arc<Server>, me: &Account) -> Result<usize, Fail> {
+    let account = me.name.as_str();
     let known = {
         let counted = COUNTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         counted.iter().find(|(name, at, _)| name == account && at.elapsed() < FRESH).map(|(.., count)| *count)
     };
     match known {
         Some(count) => Ok(count),
-        None => Ok(groups(server, account).await?.len()),
+        None => Ok(groups(server, me).await?.len()),
     }
 }
 
 pub async fn unnamed(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
-    Ok(Json(groups(&server, &me.name).await?))
+    Ok(Json(groups(&server, &me).await?))
 }
 
-async fn groups(server: &Arc<Server>, account: &str) -> Result<Vec<Value>, Fail> {
-    let libraries = seen(server, account);
+async fn groups(server: &Arc<Server>, me: &Account) -> Result<Vec<Value>, Fail> {
+    let (account, libraries) = (me.name.as_str(), seen(server, me));
     let groups = server
         .home
         .ask(move |catalog| {
@@ -71,7 +73,7 @@ async fn groups(server: &Arc<Server>, account: &str) -> Result<Vec<Value>, Fail>
 }
 
 pub async fn portrait(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Response, Fail> {
-    if !seen(&server, &me.name).contains(&library_of(id)) {
+    if !seen(&server, &me).contains(&library_of(id)) {
         return Err(Fail(StatusCode::NOT_FOUND, "There is no such face.".into()));
     }
     let face = server.home.ask(move |catalog| catalog.faces(library_of(id)).unwrap_or_default().into_iter().find(|face| face.id == id)).await?;
@@ -88,9 +90,9 @@ pub struct Named {
     name: String,
 }
 
-async fn chosen(server: &Arc<Server>, account: &str, ids: Vec<i64>) -> Result<Vec<(i64, [f32; cull::people::LENGTH])>, Fail> {
+async fn chosen(server: &Arc<Server>, me: &Account, ids: Vec<i64>) -> Result<Vec<(i64, [f32; cull::people::LENGTH])>, Fail> {
     let libraries: HashSet<i64> = ids.iter().map(|id| library_of(*id)).collect();
-    let seen = seen(server, account);
+    let seen = seen(server, me);
     if ids.is_empty() || !libraries.iter().all(|library| seen.contains(library)) {
         return Err(Fail(StatusCode::NOT_FOUND, "There are no such faces.".into()));
     }
@@ -113,7 +115,7 @@ pub async fn name(State(server): State<Arc<Server>>, Signed(me): Signed, Json(na
     if name.is_empty() || name.chars().count() > 80 {
         return Err(Fail::bad("A name, please, of at most 80 characters."));
     }
-    let faces = chosen(&server, &me.name, named.faces).await?;
+    let faces = chosen(&server, &me, named.faces).await?;
     server
         .home
         .ask(move |catalog| faces.iter().try_for_each(|(photo, embedding)| catalog.name_face(*photo, embedding, &name)))
@@ -123,7 +125,7 @@ pub async fn name(State(server): State<Arc<Server>>, Signed(me): Signed, Json(na
 }
 
 pub async fn ignore(State(server): State<Arc<Server>>, Signed(me): Signed, Json(named): Json<Named>) -> Result<StatusCode, Fail> {
-    let faces = chosen(&server, &me.name, named.faces).await?;
+    let faces = chosen(&server, &me, named.faces).await?;
     server.home.ask(move |catalog| catalog.ignore_faces(&faces)).await?.map_err(Fail::internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -97,6 +97,8 @@ impl Waiting {
 }
 
 pub(super) fn word_or_spinner(button: &gtk::Button, word: &str, waiting: &Waiting) {
+
+    button.add_css_class("raised-control");
     let (word, spinner) = (gtk::Label::new(Some(word)), waiting.spinner.clone());
     let content = gtk::Stack::new();
     content.add_child(&word);

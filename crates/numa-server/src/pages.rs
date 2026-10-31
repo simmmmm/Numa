@@ -16,22 +16,25 @@ fn kept(kind: &'static str, body: &'static [u8]) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], body)
 }
 
+pub const FONTS: [(&str, &[u8]); 7] = [
+    ("0-255.pbf", include_bytes!("../../../data/map/fonts/0-255.pbf")),
+    ("256-511.pbf", include_bytes!("../../../data/map/fonts/256-511.pbf")),
+    ("512-767.pbf", include_bytes!("../../../data/map/fonts/512-767.pbf")),
+    ("768-1023.pbf", include_bytes!("../../../data/map/fonts/768-1023.pbf")),
+    ("1024-1279.pbf", include_bytes!("../../../data/map/fonts/1024-1279.pbf")),
+    ("7680-7935.pbf", include_bytes!("../../../data/map/fonts/7680-7935.pbf")),
+    ("8192-8447.pbf", include_bytes!("../../../data/map/fonts/8192-8447.pbf")),
+];
+
 async fn glyphs(Path((_, range)): Path<(String, String)>) -> impl IntoResponse {
-    const FONTS: [(&str, &[u8]); 7] = [
-        ("0-255.pbf", include_bytes!("../../../data/map/fonts/0-255.pbf")),
-        ("256-511.pbf", include_bytes!("../../../data/map/fonts/256-511.pbf")),
-        ("512-767.pbf", include_bytes!("../../../data/map/fonts/512-767.pbf")),
-        ("768-1023.pbf", include_bytes!("../../../data/map/fonts/768-1023.pbf")),
-        ("1024-1279.pbf", include_bytes!("../../../data/map/fonts/1024-1279.pbf")),
-        ("7680-7935.pbf", include_bytes!("../../../data/map/fonts/7680-7935.pbf")),
-        ("8192-8447.pbf", include_bytes!("../../../data/map/fonts/8192-8447.pbf")),
-    ];
     kept("application/x-protobuf", FONTS.iter().find(|(name, _)| *name == range).map_or(&[], |(_, glyphs)| glyphs))
 }
 
 pub fn routes() -> Router<Arc<Server>> {
     Router::new()
         .route("/", get(|| async { file("text/html; charset=utf-8", include_bytes!("web/index.html")) }))
+
+        .route("/robots.txt", get(|| async { file("text/plain; charset=utf-8", b"User-agent: *\nDisallow: /\n") }))
         .route("/app.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/app.js")) }))
         .route("/strings.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/strings.js")) }))
         .route("/scrubber.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/scrubber.js")) }))

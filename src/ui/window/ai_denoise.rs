@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use numa::core::panel::{PassFacts, PassState};
 use numa::io::denoised;
 use numa::render::ai_denoise;
 
@@ -83,6 +84,61 @@ thread_local! {
     static CONTROLS: RefCell<[Option<(gtk::Switch, gtk::Scale)>; 2]> = const { RefCell::new([None, None]) };
 
     static RUNNING: Cell<bool> = const { Cell::new(false) };
+
+    static ROWS: RefCell<[Option<PassRow>; 2]> = const { RefCell::new([None, None]) };
+    static STOP: RefCell<Option<(Pass, Cancel)>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone)]
+struct PassRow {
+    command: gtk::Button,
+    spinner: gtk::Spinner,
+    word: gtk::Label,
+    note: gtk::Label,
+}
+
+fn row_of(pass: Pass) -> Option<PassRow> {
+    ROWS.with_borrow(|rows| rows[pass.index()].clone())
+}
+
+fn show_rows(running: Option<Pass>, stopping: bool) {
+    for pass in Pass::BOTH {
+        let Some(row) = row_of(pass) else { continue };
+        let on = controls(pass).is_some_and(|(switch, _)| switch.is_active());
+        let this = running == Some(pass);
+        row.spinner.set_visible(this);
+        row.spinner.set_spinning(this);
+        row.word.set_visible(this);
+        let facts = PassFacts {
+            on,
+            installed: pass.installed(),
+            running: this,
+            stopping,
+            other_running: running.is_some() && !this,
+            ..Default::default()
+        };
+        let (label, sensitive) = match PassState::of(facts) {
+            PassState::Running(_) => ("Stop", true),
+            PassState::Stopping => ("Stopping…", false),
+            PassState::On => ("Remove", true),
+            PassState::Idle | PassState::Failed => (pass.verb(), true),
+            PassState::Missing | PassState::Busy => (pass.verb(), false),
+        };
+        row.command.set_label(label);
+        row.command.set_sensitive(sensitive);
+        let tip = match running {
+            Some(other) if other != pass => format!("One pass at a time: {} is running", other.name()),
+            _ => pass.about().to_string(),
+        };
+        row.command.set_tooltip_text(Some(&tip));
+    }
+}
+
+fn say_under(pass: Pass, text: Option<&str>) {
+    if let Some(row) = row_of(pass) {
+        row.note.set_label(text.unwrap_or_default());
+        row.note.set_visible(text.is_some());
+    }
 }
 
 fn controls(pass: Pass) -> Option<(gtk::Switch, gtk::Scale)> {
@@ -92,33 +148,58 @@ fn controls(pass: Pass) -> Option<(gtk::Switch, gtk::Scale)> {
 pub(super) fn build(state: &App, pass: Pass) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     {
+
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        header.set_margin_top(6);
-        header.set_margin_bottom(6);
+        header.add_css_class("named-row");
+        header.add_css_class("pass-row");
         let title = gtk::Label::new(Some(pass.name()));
         title.set_xalign(0.0);
         title.set_hexpand(true);
         title.add_css_class("slider-name");
+        let room = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        room.set_size_request(80, -1);
+        let spinner = gtk::Spinner::new();
+        spinner.set_visible(false);
+        let word = gtk::Label::new(Some("Reading…"));
+        word.add_css_class("pass-word");
+        word.set_visible(false);
+        room.append(&spinner);
+        room.append(&word);
 
         let switch = gtk::Switch::new();
         let button = gtk::Button::with_label(pass.verb());
+        button.add_css_class("panel-action");
+        button.add_css_class("pass-command");
+        button.set_size_request(88, -1);
         button.set_valign(gtk::Align::Center);
         button.update_property(&[gtk::accessible::Property::Label(pass.name())]);
         button.connect_clicked(glib::clone!(
             #[weak] switch,
-            move |_| switch.set_active(!switch.is_active())
-        ));
-        switch.connect_active_notify(glib::clone!(
-            #[weak] button,
-            move |switch| {
+            move |_| {
 
-                button.set_label(if switch.is_active() { "Remove" } else { pass.verb() });
+                let running = STOP.with_borrow(|stop| stop.as_ref().filter(|(running, _)| *running == pass).map(|(_, cancel)| cancel.clone()));
+                if let Some(cancel) = running {
+                    cancel.stop();
+                    show_rows(Some(pass), true);
+                    return;
+                }
+                switch.set_active(!switch.is_active())
             }
         ));
+        switch.connect_active_notify(move |_| show_rows(STOP.with_borrow(|stop| stop.as_ref().map(|(pass, _)| *pass)), false));
         header.set_tooltip_text(Some(pass.about()));
         header.append(&title);
+        header.append(&room);
         header.append(&button);
         column.append(&header);
+        let note = gtk::Label::new(None);
+        note.set_xalign(0.0);
+        note.set_wrap(true);
+        note.add_css_class("note");
+        note.add_css_class("problem");
+        note.set_visible(false);
+        column.append(&note);
+        ROWS.with_borrow_mut(|rows| rows[pass.index()] = Some(PassRow { command: button.clone(), spinner, word, note }));
 
         let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
         amount.set_value(100.0);
@@ -152,7 +233,10 @@ pub(super) fn write(state: &App) {
         }
         set_amount_sensitive(&amount, value > 0.0);
         state.applying.set(was);
+
+        say_under(pass, (!pass.installed()).then(|| pass.missing()));
     }
+    show_rows(STOP.with_borrow(|stop| stop.as_ref().map(|(pass, _)| *pass)), false);
     start_what_is_owed(state);
 }
 
@@ -250,8 +334,13 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
     }
 
     let cancel = Cancel::default();
-    let (toast, text, bar) = progress_toast(state, &cancel);
-    text.set_text(&format!("{} — reading the photograph", pass.name()));
+    STOP.with_borrow_mut(|stop| *stop = Some((pass, cancel.clone())));
+    say_under(pass, None);
+    show_rows(Some(pass), false);
+    let word = row_of(pass).map(|row| row.word);
+    if let Some(word) = &word {
+        word.set_label("Reading…");
+    }
 
     let done = Arc::new(AtomicUsize::new(0));
     let total = Arc::new(AtomicUsize::new(0));
@@ -264,10 +353,10 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
                 stop.store(true, Ordering::Relaxed);
             }
             let (done, total) = (done.load(Ordering::Relaxed), total.load(Ordering::Relaxed));
-            if total > 0 && done > 0 {
+            if let (true, Some(word)) = (total > 0 && done > 0, &word) {
                 let left = started.elapsed().as_secs_f64() / done as f64 * (total - done) as f64;
-                text.set_text(&format!("{} — about {} min left", pass.name(), (left / 60.0).ceil().max(1.0)));
-                bar.set_fraction(done as f64 / total as f64);
+                word.set_label(&format!("{} %", done * 100 / total));
+                word.set_tooltip_text(Some(&format!("{} — about {} min left", pass.name(), (left / 60.0).ceil().max(1.0))));
             }
             glib::ControlFlow::Continue
         })
@@ -309,8 +398,9 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
             Err(err) => (Err(err), None),
         };
         ticker.remove();
-        toast.dismiss();
         RUNNING.set(false);
+        STOP.with_borrow_mut(|stop| *stop = None);
+        show_rows(None, false);
 
         let still_open = state.open.borrow().as_ref().and_then(photo_path).is_some_and(|open| open == path);
         match result {
@@ -331,14 +421,15 @@ fn run(state: &App, path: PathBuf, pass: Pass, on_denoised: bool) {
             Ok(Ok(true)) => {}
             Ok(Ok(false)) if still_open => set_switch(&state, pass, false),
             Ok(Ok(false)) => {}
+
             Ok(Err(err)) => {
                 log::warn!("{}: {}: {err}", path.display(), pass.name());
-                state.toast(&format!("{} failed: {err}", pass.name()));
+                say_under(pass, Some(&format!("{} failed: {err}", pass.name())));
                 if still_open {
                     set_switch(&state, pass, false);
                 }
             }
-            Err(_) => state.toast(&format!("{} failed", pass.name())),
+            Err(_) => say_under(pass, Some(&format!("{} failed", pass.name()))),
         }
     });
 }

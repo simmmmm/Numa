@@ -13,6 +13,10 @@ pub fn description(settings: &ExportSettings, about: &Description, extra: Option
     if !settings.copyright.trim().is_empty() {
         let rights = escape(settings.copyright.trim());
         elements += &format!(r#"<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">{rights}</rdf:li></rdf:Alt></dc:rights>"#);
+        attributes += r#" xmpRights:Marked="True""#;
+    }
+    if settings.no_ai_training {
+        attributes += r#" plus:DataMining="http://ns.useplus.org/ldf/vocab/DMI-PROHIBITED-AIMLTRAINING""#;
     }
     if settings.keywords {
         if about.rating > 0 {
@@ -34,7 +38,7 @@ pub fn description(settings: &ExportSettings, about: &Description, extra: Option
         return None;
     }
     Some(format!(
-        r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"{attributes}>{elements}</rdf:Description>"#
+        r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmlns:plus="http://ns.useplus.org/ldf/xmp/1.0/"{attributes}>{elements}</rdf:Description>"#
     ))
 }
 
@@ -70,8 +74,10 @@ mod tests {
         assert!(text.contains("© 2026 T &amp; co"));
         assert!(text.contains("<dc:subject><rdf:Bag><rdf:li>Anna</rdf:li><rdf:li>Portfolio</rdf:li></rdf:Bag></dc:subject>"));
         assert!(text.contains("<Iptc4xmpExt:PersonInImage><rdf:Bag><rdf:li>Anna</rdf:li>"));
+        assert!(text.contains(r#"xmpRights:Marked="True""#), "a copyright marks the file as rights-managed");
+        assert!(text.contains(r#"plus:DataMining="http://ns.useplus.org/ldf/vocab/DMI-PROHIBITED-AIMLTRAINING""#), "no AI training, by default");
 
-        let quiet = ExportSettings { keywords: false, ..ExportSettings::default() };
+        let quiet = ExportSettings { keywords: false, no_ai_training: false, ..ExportSettings::default() };
         assert_eq!(description(&quiet, &about, None), None, "nothing asked for, nothing written");
     }
 }

@@ -328,19 +328,25 @@ pub(super) fn rename_library(state: &App, library: &Library) {
         if response != "rename" {
             return;
         }
-        close_if_inside(&state, std::slice::from_ref(&library));
-        match state.catalog.rename_library_folder(library.id, field.text().trim()) {
-            Ok(_) => {
-                let_go(&state);
-                reload_libraries(&state);
-                if state.stack.visible_child_name().as_deref() == Some("libraries") {
-                    show_folders(&state);
-                }
-            }
-            Err(err) => state.toast(&format!("Could not rename: {err}")),
-        }
+        rename_now(&state, &library, field.text().trim());
     });
     dialog.present(Some(&window));
+}
+
+pub(super) fn rename_now(state: &App, library: &Library, name: &str) {
+    close_if_inside(state, std::slice::from_ref(library));
+    match state.catalog.rename_library_folder(library.id, name) {
+        Ok(_) => {
+            let_go(state);
+            reload_libraries(state);
+            if state.stack.visible_child_name().as_deref() == Some("libraries") {
+                show_folders(state);
+            } else {
+                select_library(state, library.id);
+            }
+        }
+        Err(err) => state.toast(&format!("Could not rename: {err}")),
+    }
 }
 
 fn confirm_remove(state: &App) {

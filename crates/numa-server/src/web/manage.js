@@ -137,11 +137,19 @@ function selectToggle() {
   } }, S.select);
 }
 
-// What may change these: an admin anything, an account its own Sent Home.
+// What may change these: an admin anything, an account its own Sent Home;
+// HOME-003 (#56) one an admin lets, in the libraries it may edit.
 async function mayManage(ids) {
-  if (state.me.admin || state.me.manage) return true;
-  const mine = (await libraries().catch(() => [])).filter(library => library.mine).map(library => library.id);
+  if (state.me.admin) return true;
+  const mine = (await libraries().catch(() => [])).filter(library => library.mine || (state.me.manage && library.level === 'edit')).map(library => library.id);
   return [...ids].every(id => mine.includes(libraryOf(id)));
+}
+
+// HOME-003 (#56): whether every one of these may be edited, by its library.
+async function mayEdit(ids) {
+  if (state.me.admin) return true;
+  const edits = (await libraries().catch(() => [])).filter(library => library.level === 'edit').map(library => library.id);
+  return [...ids].every(id => edits.includes(libraryOf(id)));
 }
 
 // What can be done to these photographs, as menu items: the bar's star and
@@ -196,7 +204,8 @@ function chosenActions(ids, manage, own = {}) {
     rate: stars => marks({ rating: stars }),
     flag,
     album: () => item(S.albumEll, () => albumDialog(ids)),
-    downloads: () => downloadItems(`/api/v1/photos/zip?ids=${ids.join(',')}`, `/api/v1/photos/zip?ids=${ids.join(',')}&as=jpeg`),
+    // HOME-003 (#56): the originals are an editor's.
+    downloads: () => downloadItems(own.edit !== false && `/api/v1/photos/zip?ids=${ids.join(',')}`, `/api/v1/photos/zip?ids=${ids.join(',')}&as=jpeg`).filter(Boolean),
     marks: () => [
       h('div', { class: 'section-label' }, S.starsLabel),
       h('div', { class: 'star-row' }, [1, 2, 3, 4, 5].map(stars => h('button', { title: `${stars} (${stars})`, 'aria-label': starsOf(stars), onclick: () => marks({ rating: stars }) },
@@ -208,6 +217,7 @@ function chosenActions(ids, manage, own = {}) {
     more: () => [
       item(S.takenBy, () => byDialog(ids)),
       item(S.forABook, () => bookDialog(`ids=${ids.join(',')}`)),
+      item(S.shareProofsEll, () => shareDialog({ ids })),
       manage && h('div', { class: 'rule' }),
       manage && item(S.moveEll, () => moveDialog(ids, refresh)),
       manage && item(S.removeFromLibraryEll, async () => {
@@ -265,9 +275,9 @@ async function selectionBar() {
     bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, picked.album ? phrase('choosePhotosFor', { album: picked.album }) : S.choosePhotos), everything));
     return;
   }
-  const manage = await mayManage(ids);
+  const [manage, edit] = await Promise.all([mayManage(ids), mayEdit(ids)]);
   if (!bar.isConnected) return;
-  const actions = chosenActions(ids, manage);
+  const actions = chosenActions(ids, manage, { edit });
   picked.erase = actions.erase;
   // Two groups, so a phone's bar breaks between them and not in the middle of one.
   bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('chosenN', { n: grouped(n) })), everything),
@@ -406,6 +416,7 @@ async function albumDialog(ids) {
 // An album renamed or deleted, from its page's ⋯ and its right-click in the side
 // list. Deleting takes the album only, never its photographs.
 const albumItems = album => [
+  h('button', { onclick: () => shareDialog({ album: album.key, name: album.name }) }, S.shareProofsEll),
   h('button', { onclick: async () => {
     const asked = await dialog(S.renameAlbum, null, [h('input', { type: 'text', name: 'name', value: album.name, required: true, autocomplete: 'off' })], S.rename);
     const name = (asked?.name || '').trim();
@@ -624,6 +635,7 @@ async function libraryBar(list) {
     n === 1 && button(S.open, () => go('/', { library: ids[0] })),
     n === 1 && button(S.renameEll, () => renameLibrary(chosen[0])),
     h('button', { class: 'round small', 'aria-label': S.more, title: S.more, onclick: event => { event.stopPropagation(); menuOver(event.currentTarget, [
+      n === 1 && state.me.admin && !chosen[0].mine && item(S.whoSeesEll, () => whoSees(chosen[0])),
       item(S.combineEll, () => combineDialog(chosen, list.filter(library => !library.mine), send)),
       h('div', { class: 'rule' }),
       item(S.removeFromNumaEll, async () => {

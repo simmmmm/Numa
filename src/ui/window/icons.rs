@@ -165,13 +165,13 @@ pub(super) fn build_rail(state: &App) -> gtk::Box {
         tab.add_css_class("rail-tab");
 
         tab.set_halign(gtk::Align::Center);
-        tab.set_size_request(54, 54);
+        tab.set_size_request(60, 60);
 
         let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         dot.add_css_class("rail-dot");
         dot.set_halign(gtk::Align::End);
         dot.set_valign(gtk::Align::Start);
-        dot.set_margin_top(7);
+        dot.set_margin_top(8);
         dot.set_margin_end(8);
         dot.set_visible(false);
         RAIL_DOTS.with(|dots| dots.borrow_mut().push((name, dot.clone())));
@@ -209,13 +209,13 @@ pub(super) fn build_rail(state: &App) -> gtk::Box {
         tabs.append(&tab);
 
         if matches!(name, "presets" | "detail") {
-            let line = gtk::Separator::new(gtk::Orientation::Horizontal);
-            line.add_css_class("rail-rule");
+            let gap = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            gap.set_size_request(-1, 8);
 
             if let Some((_, looks)) = state.panel.tabs.borrow().first() {
-                looks.bind_property("visible", &line, "visible").sync_create().build();
+                looks.bind_property("visible", &gap, "visible").sync_create().build();
             }
-            tabs.append(&line);
+            tabs.append(&gap);
         }
     }
 

@@ -13,17 +13,13 @@ pub(super) fn build(state: &App) -> gtk::Box {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
     let line = gtk::Label::new(None);
-    line.set_xalign(1.0);
-    line.set_justify(gtk::Justification::Right);
+    line.set_xalign(0.0);
     line.set_wrap(true);
-    line.add_css_class("slider-value");
+    line.add_css_class("note");
     let switch = gtk::Switch::new();
     switch.set_valign(gtk::Align::Center);
-    switch.update_property(&[gtk::accessible::Property::Label("As Shot")]);
-    let end = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    end.append(&line);
-    end.append(&switch);
-    let head = named_row("As Shot", &end);
+    switch.update_property(&[gtk::accessible::Property::Label("Camera Look")]);
+    let head = named_row("Camera Look", &switch);
     head.set_tooltip_text(Some("Follow this photo's own camera JPEG: its film simulation and recipe"));
     switch.connect_active_notify(glib::clone!(
         #[strong] state,
@@ -34,10 +30,10 @@ pub(super) fn build(state: &App) -> gtk::Box {
         }
     ));
     section.append(&head);
+    section.append(&line);
 
     let strength = strength_scale();
     let row = slider_row(state, "Strength", &strength, Readout::Positive(0));
-    row.set_margin_top(4);
     strength.connect_value_changed(glib::clone!(
         #[strong] state,
         move |strength| {

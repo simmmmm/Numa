@@ -14,6 +14,42 @@ fn a_menu_entry_starts_the_appimage_it_was_written_for() {
 }
 
 #[test]
+fn a_slider_resting_at_its_top_fills_from_the_left() {
+
+    assert_eq!(fill_span(0.0, 100.0, 100.0, 100.0), (0.0, 100.0, false));
+    assert_eq!(fill_span(0.0, 100.0, 100.0, 40.0), (0.0, 40.0, true));
+
+    assert_eq!(fill_span(-100.0, 100.0, 0.0, 50.0), (50.0, 75.0, true));
+    assert_eq!(fill_span(-100.0, 100.0, 0.0, -50.0), (25.0, 50.0, true));
+    assert!(!fill_span(-100.0, 100.0, 0.0, 0.0).2);
+
+    assert_eq!(fill_span(0.0, 100.0, 25.0, 50.0), (25.0, 50.0, true));
+}
+
+#[test]
+fn a_typed_value_reads_as_the_readout_writes_it() {
+    for (readout, value) in [
+        (Readout::Signed(2), -1.25),
+        (Readout::Signed(0), 15.0),
+        (Readout::Kelvin, 5293.0),
+        (Readout::OffsetKelvin, -800.0),
+        (Readout::Positive(0), 40.0),
+        (Readout::Radius, 1.5),
+        (Readout::Degrees, 210.0),
+        (Readout::Middle, 50.0),
+    ] {
+        assert_eq!(readout.parse(&readout.format(value)), Some(value), "{}", readout.format(value));
+    }
+    assert_eq!(Readout::Signed(2).parse("-0,5"), Some(-0.5));
+    assert_eq!(Readout::Positive(0).parse(" 30 "), Some(30.0));
+    assert_eq!(Readout::Positive(0).parse("much"), None);
+    assert_eq!(Readout::Positive(0).parse(""), None);
+
+    let travel = brush_travel(0.1);
+    assert_eq!(Readout::BrushSize.parse("10 %"), Some(travel));
+}
+
+#[test]
 fn a_restored_snapshot_is_the_snapshot() {
     use numa::core::grading::Grading;
     use numa::core::mixer::Mixer;
@@ -84,7 +120,7 @@ fn the_curve_editor_stays_inside_its_box() {
             [1.0, 1.0],
         ]);
         let curves = [curve.clone(), curve.clone(), curve.clone(), curve];
-        draw_curve(&context, width, height, Some(&curves), 1, None);
+        draw_curve(&context, width, height, Some(&curves), 1, None, None);
     }
 
     let stride = surface.stride() as usize;

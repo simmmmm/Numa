@@ -280,7 +280,7 @@ fn mark_found(state: &App, ids: &[i64], frames: usize, how: MakeThem, album: &st
                 None => match state.catalog.create_album(album) {
                     Ok(key) => (key, album.to_string(), true),
                     Err(err) => {
-                        state.toast(&err);
+                        state.toast(&err.to_string());
                         return;
                     }
                 },

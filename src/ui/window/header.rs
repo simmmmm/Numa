@@ -3,14 +3,21 @@ use super::*;
 pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw::HeaderBar {
     let header = adw::HeaderBar::new();
 
+    header.add_css_class("flat");
+
+    header.add_css_class("content-bar");
+
     header.pack_start(&state.libraries.side.toggle);
-    let start = build_header_start(state, window);
+    let start = build_header_start(state);
     header.pack_start(&start);
 
     let (title, named) = build_header_title(state);
-    header.set_title_widget(Some(&title));
+    header.set_show_title(false);
+    header.pack_start(&title);
+    align_title(state, &title);
 
     install_header_actions(state, window);
+    today::install(state, window);
 
     let (menu_button, main_menu) = build_header_menu();
 
@@ -18,28 +25,57 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     menu_button.set_menu_model(Some(&library_menu));
     cullbar::back_to_grid(state, &menu_button);
 
+    let today_menu = gio::Menu::new();
+    let today_section = gio::Menu::new();
+    today_section.append(Some("Only My Photographs"), Some("win.today-mine"));
+    today_section.append(Some("Whose…"), Some("win.today-whose"));
+    today_menu.append_section(Some("Today"), &today_section);
+    today_menu.append_section(None, &main_menu);
     let editor_menu = state.editor_page.photo_menu.clone();
     editor_menu.append_section(None, &main_menu);
     install_shortcuts(state, window, &main_menu, &library_menu, &editor_menu);
     header.insert_action_group("editor", Some(&state.editor_page.actions));
     header.pack_end(&menu_button);
     let end = gtk::Stack::new();
-    end.set_transition_type(gtk::StackTransitionType::Crossfade);
-    end.set_transition_duration(300);
+
+    end.set_transition_type(gtk::StackTransitionType::None);
 
     end.set_hhomogeneous(false);
 
-    let library_end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let library_end = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     library_end.append(&state.grid.header_end);
+
+    let search = words::search_button(state);
+
+    let shown = glib::clone!(
+        #[weak] search,
+        #[weak(rename_to = loupe)] state.loupe.reveal,
+        #[weak(rename_to = bar)] state.libraries.words.bar,
+        move || search.set_visible(!loupe.reveals_child() && !bar.reveals_child())
+    );
+    shown();
+    let again = shown.clone();
+    state.loupe.reveal.connect_reveal_child_notify(move |_| again());
+    state.libraries.words.bar.connect_reveal_child_notify(move |_| shown());
+    library_end.append(&state.libraries.words.bar);
+    library_end.append(&search);
     end.add_named(&library_end, Some("library"));
     end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("folders"));
     end.add_named(&state.editor_page.header_end, Some("editor"));
     header.pack_end(&end);
 
+    let loupe = state.loupe.reveal.clone();
+    loupe.connect_reveal_child_notify(glib::clone!(
+        #[weak] start,
+        #[weak(rename_to = stack)] state.stack,
+        move |loupe| start.set_visible(loupe.reveals_child() || stack.visible_child_name().as_deref() == Some("editor"))
+    ));
+    start.set_visible(false);
     state.stack.connect_visible_child_name_notify(move |stack| {
-        if let Some(name) = stack.visible_child_name() {
+        if let Some(page) = stack.visible_child_name() {
 
-            named.set_title(match name.as_str() {
+            named.set_title(match page.as_str() {
+                "today" => "Today",
                 "libraries" => "Libraries",
                 "albums" => "Albums",
                 "people" => "People",
@@ -47,16 +83,23 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
                 "places" => "Places",
                 _ => "",
             });
-            let name = match name.as_str() {
-                "library" | "editor" => name.as_str(),
+            named.set_subtitle(&match page.as_str() {
+                "today" => today::day().map(|date| today::said(&date)).unwrap_or_default(),
+                _ => String::new(),
+            });
+            let name = match page.as_str() {
+                "library" | "editor" => page.as_str(),
                 _ => "folders",
             };
             title.set_visible_child_name(name);
             start.set_visible_child_name(name);
+
+            start.set_visible(name == "editor" || (name == "library" && loupe.reveals_child()));
             end.set_visible_child_name(name);
             menu_button.set_menu_model(Some(match name {
                 "editor" => &editor_menu,
                 "library" => &library_menu,
+                _ if page == "today" => &today_menu,
                 _ => &main_menu,
             }));
         }
@@ -85,54 +128,32 @@ fn install_shortcuts(state: &App, window: &adw::ApplicationWindow, main: &gio::M
     }
 }
 
-fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stack {
-    let add = gtk::Button::from_icon_name("folder-open-symbolic");
-    add.set_tooltip_text(Some("Add folder to library"));
-    add.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] window,
-        move |_| add_library_dialog(&state, &window)
-    ));
+fn build_header_start(state: &App) -> gtk::Stack {
 
     let library_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    library_actions.append(&add);
 
-    let import = gtk::Button::from_icon_name("camera-photo-symbolic");
-    import.set_tooltip_text(Some("Import from a card or camera"));
-    import.connect_clicked(glib::clone!(
+    let back_out = gtk::Button::from_icon_name("go-previous-symbolic");
+    back_out.set_valign(gtk::Align::Center);
+    back_out.set_visible(false);
+    back_out.connect_clicked(glib::clone!(
         #[strong] state,
-        #[weak] window,
-        move |_| import_dialog(&state, &window, None)
+        move |_| close_loupe(&state)
     ));
-    library_actions.append(&import);
+    state.loupe.reveal.bind_property("reveal-child", &back_out, "visible").sync_create().build();
 
-    let search = words::search_button(state);
-    library_actions.append(&search);
+    back_out.set_has_tooltip(true);
+    back_out.connect_query_tooltip(|_, _, _, _, tip| {
+        tip.set_text(Some(if tidy::is_looking() { "Back to Tidy Up (Esc)" } else { "Back to the grid (Esc)" }));
+        true
+    });
+    library_actions.prepend(&back_out);
 
     let rating = build_loupe_rating(state);
     library_actions.append(&rating);
     state.loupe.reveal.bind_property("reveal-child", &rating, "visible").sync_create().build();
-    for button in [add.upcast_ref::<gtk::Widget>(), search.upcast_ref()] {
-        state.loupe.reveal.bind_property("reveal-child", button, "visible").invert_boolean().sync_create().build();
-    }
 
     let pill = camera_pill();
-    library_actions.insert_child_after(&pill, Some(&import));
-    let reveal = state.loupe.reveal.clone();
-    let one_camera = glib::clone!(
-        #[weak] import,
-        #[weak] pill,
-        move || import.set_visible(!reveal.reveals_child() && !pill.is_visible())
-    );
-    pill.connect_visible_notify(glib::clone!(
-        #[strong] one_camera,
-        move |_| one_camera()
-    ));
-    state.loupe.reveal.connect_reveal_child_notify(glib::clone!(
-        #[strong] one_camera,
-        move |_| one_camera()
-    ));
-    one_camera();
+    library_actions.append(&pill);
 
     let back = gtk::Button::from_icon_name("go-previous-symbolic");
     back.set_tooltip_text(Some("Back to the library"));
@@ -143,23 +164,9 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     ));
 
     let folder_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    for (icon, tip, import) in [("folder-open-symbolic", "Add folder to library", false), ("camera-photo-symbolic", "Import from a card or camera", true)] {
-        let button = gtk::Button::from_icon_name(icon);
-        button.set_tooltip_text(Some(tip));
-        button.connect_clicked(glib::clone!(
-            #[strong] state,
-            #[weak] window,
-            move |_| match import {
-                true => import_dialog(&state, &window, None),
-                false => add_library_dialog(&state, &window),
-            }
-        ));
-        folder_actions.append(&button);
-    }
 
     let start = gtk::Stack::new();
-    start.set_transition_type(gtk::StackTransitionType::Crossfade);
-    start.set_transition_duration(300);
+    start.set_transition_type(gtk::StackTransitionType::None);
     start.add_named(&library_actions, Some("library"));
     start.add_named(&folder_actions, Some("folders"));
 
@@ -169,15 +176,56 @@ fn build_header_start(state: &App, window: &adw::ApplicationWindow) -> gtk::Stac
     start.add_named(&editor_start, Some("editor"));
     start.set_visible_child_name("library");
 
+    start.set_hhomogeneous(false);
     start
+}
+
+fn align_title(state: &App, title: &gtk::Stack) {
+    const INSET: i32 = 10;
+    let toggle = state.libraries.side.toggle.clone();
+    let place = glib::clone!(
+        #[weak] title,
+        #[weak(rename_to = stack)] state.stack,
+        #[weak] toggle,
+        move || {
+            let editor = stack.visible_child_name().as_deref() == Some("editor");
+            title.set_margin_start(if toggle.is_visible() || editor { 0 } else { INSET });
+        }
+    );
+    place();
+    state.stack.connect_visible_child_name_notify(glib::clone!(
+        #[strong] place,
+        move |_| place()
+    ));
+    toggle.connect_visible_notify(move |_| place());
 }
 
 fn build_header_title(state: &App) -> (gtk::Stack, adw::WindowTitle) {
     let title = gtk::Stack::new();
-    title.set_transition_type(gtk::StackTransitionType::Crossfade);
-    title.set_transition_duration(300);
+    title.set_transition_type(gtk::StackTransitionType::None);
     let named = adw::WindowTitle::new("", "");
-    title.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("library"));
+    named.set_halign(gtk::Align::Start);
+
+    fn left(widget: &gtk::Widget) {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            label.set_xalign(0.0);
+        }
+        widget.set_halign(gtk::Align::Start);
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            left(&widget);
+            child = widget.next_sibling();
+        }
+    }
+    left(named.upcast_ref());
+
+    let search = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    search.set_hexpand(true);
+    search.append(&state.libraries.head_slot);
+
+    state.loupe.reveal.bind_property("reveal-child", &state.libraries.head_slot, "visible").invert_boolean().sync_create().build();
+    state.loupe.reveal.bind_property("reveal-child", &state.libraries.words.bar, "visible").invert_boolean().sync_create().build();
+    title.add_named(&search, Some("library"));
     title.add_named(&named, Some("folders"));
     title.add_named(&build_crumbs(state), Some("editor"));
     title.set_visible_child_name("library");

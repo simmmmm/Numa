@@ -45,8 +45,8 @@ fn list(text: Option<&str>) -> Vec<i64> {
 async fn plan(server: &Arc<Server>, me: &Account, asked: &Asked, wanted: &Wanted) -> Result<Book, Fail> {
     let ids = list(asked.ids.as_deref());
     let photos: Vec<Photo> = match ids.is_empty() {
-        false => crate::selection::chosen(server, me, &ids, false, false)?.into_iter().map(|(_, photo)| photo).collect(),
-        true => crate::timeline::chosen(server, &me.name, wanted).await?.into_iter().filter(|photo| photo.flag == Flag::Picked).collect(),
+        false => crate::selection::chosen(server, me, &ids, false, false, crate::grants::Level::View)?.into_iter().map(|(_, photo)| photo).collect(),
+        true => crate::timeline::chosen(server, me, wanted).await?.into_iter().filter(|photo| photo.flag == Flag::Picked).collect(),
     };
     if photos.is_empty() {
         return Err(Fail::bad("Pick the photographs for the book first (P), or choose them."));
@@ -75,7 +75,7 @@ async fn plan(server: &Arc<Server>, me: &Account, asked: &Asked, wanted: &Wanted
 
     let first = library_of(photos[0].id);
     let name = match photos.iter().all(|photo| library_of(photo.id) == first) {
-        true => server.home.libraries(&me.name).into_iter().find(|library| library.id == first).map(|library| format!("{} Book", library.label())),
+        true => server.home.libraries(me).into_iter().find(|library| library.id == first).map(|library| format!("{} Book", library.label())),
         false => None,
     };
     Ok(Book {
@@ -114,6 +114,7 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(as
     let runtime = tokio::runtime::Handle::current();
     let (photos, edits, scratch) = (book.photos, book.edits, server.data.join("tmp"));
     let renders = server.clone();
+    let settings = crate::photos::jpeg_settings(&server);
     tokio::task::spawn_blocking(move || {
         let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, Pipe(tx)));
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -126,7 +127,7 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(as
                     serde_json::to_string(&numa_core::document::Document::new(photo.path.to_string_lossy().into_owned())).unwrap_or_default()
                 });
 
-                let developed = runtime.block_on(renders.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| develop(photo, edge, &edits, &scratch));
+                let developed = runtime.block_on(renders.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| develop(photo, edge, &edits, &scratch, &settings));
                 let name = format!("{folder}/{}.jpg", book::file(number + 1, &photo.path));
                 match developed {
                     Ok(bytes) => {
@@ -151,7 +152,7 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(as
     Ok(response)
 }
 
-pub(crate) fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path) -> Result<Vec<u8>, String> {
+pub(crate) fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path, settings: &numa_io::export::ExportSettings) -> Result<Vec<u8>, String> {
     let mut image = numa_io::thumbs::render(&photo.path, edge, edits)?;
     if edge < u32::MAX && image.width().max(image.height()) < edge {
         let whole = numa_io::thumbs::render(&photo.path, u32::MAX, edits)?;
@@ -163,7 +164,7 @@ pub(crate) fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
     let file = scratch.join(format!("book-{}-{}-{at}.jpg", std::process::id(), photo.id));
     std::fs::create_dir_all(scratch).map_err(|err| err.to_string())?;
-    let settings = numa_io::export::ExportSettings { quality: 95, ..Default::default() };
+    let settings = numa_io::export::ExportSettings { quality: 95, ..settings.clone() };
     let written = numa_io::export::save(&image, &file, &settings, Some(&photo.path));
     let bytes = written.and_then(|()| std::fs::read(&file).map_err(|err| err.to_string()));
     let _ = std::fs::remove_file(&file);

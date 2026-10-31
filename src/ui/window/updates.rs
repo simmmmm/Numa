@@ -107,19 +107,44 @@ pub(super) fn key_toast(state: &App, key: &'static str, text: &str) {
         #[strong] state,
         move |_| mark_seen(&state, key)
     ));
+
+    let page = state.stack.visible_child_name();
+    let leaving = Rc::new(RefCell::new(None));
+    *leaving.borrow_mut() = Some(state.stack.connect_visible_child_name_notify(glib::clone!(
+        #[weak] toast,
+        move |stack| {
+            if stack.visible_child_name() != page {
+                toast.dismiss();
+            }
+        }
+    )));
+    toast.connect_dismissed(glib::clone!(
+        #[weak(rename_to = stack)] state.stack,
+        move |_| {
+            if let Some(handler) = leaving.borrow_mut().take() {
+                stack.disconnect(handler);
+            }
+        }
+    ));
     state.toasts.add_toast(toast);
 }
 
-pub(super) fn banners(state: &App) -> gtk::Box {
+pub(super) fn banners(state: &App) -> gtk::Revealer {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
     column.append(&tether_banner());
     for banner in [&state.grid.card_banner, &state.grid.extras_banner, &state.grid.update_banner] {
         column.append(banner);
     }
+
+    let slide = gtk::Revealer::new();
+    slide.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+    slide.set_transition_duration(PAGE_FADE);
+    slide.set_reveal_child(true);
+    slide.set_child(Some(&column));
     state.stack.connect_visible_child_name_notify(glib::clone!(
-        #[weak] column,
-        move |stack| column.set_visible(stack.visible_child_name().as_deref() != Some("editor"))
+        #[weak] slide,
+        move |stack| slide.set_reveal_child(stack.visible_child_name().as_deref() != Some("editor"))
     ));
-    column
+    slide
 }

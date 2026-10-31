@@ -518,7 +518,10 @@ pub(super) fn open_loupe(state: &App) {
         return;
     };
     if selected.len() > 1 {
-        state.loupe.few.borrow_mut().selection = selected;
+        let mut few = state.loupe.few.borrow_mut();
+        few.selection = selected;
+        few.side_by_side = true;
+        drop(few);
     }
     show_loupe(state, at);
 }
@@ -563,7 +566,7 @@ pub(super) fn show_loupe(state: &App, at: usize) {
     }
     loupe_zoom::stepped(state, centre);
     read_af(state, at);
-    tape::follow(state);
+    filmstrip::into_loupe(state);
 }
 
 fn wanted(state: &App) -> Vec<usize> {
@@ -722,6 +725,7 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
 
 pub(super) fn close_loupe(state: &App) {
     tape::reset(state);
+    filmstrip::back_home(state);
     loupe_group::reset(state);
     leave_visit(state);
     let at = state.loupe.at.take();
@@ -755,6 +759,10 @@ pub(super) fn close_loupe(state: &App) {
         }
     }
     state.loupe.few.take();
+    if was_open {
+        state.loupe.group.plain.set(false);
+        tidy::back_from_loupe(state, back_to_grid);
+    }
 }
 
 fn cull(state: &App, flag: Flag) {
@@ -844,6 +852,8 @@ pub(super) fn in_reach(state: &App, index: usize) -> bool {
 pub(super) struct Few {
 
     pub(super) selection: Vec<usize>,
+
+    pub(super) side_by_side: bool,
 }
 
 pub(super) fn id_at(state: &App, at: usize) -> Option<i64> {

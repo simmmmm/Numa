@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::{self, Signed};
+use crate::grants::{Grants, Level};
 use crate::store::{now, Account};
 use crate::{Fail, Server};
 
@@ -18,6 +20,10 @@ pub struct NewAccount {
     password: String,
     #[serde(default)]
     admin: bool,
+
+    code: Option<String>,
+
+    access: Option<Level>,
 }
 
 #[derive(Deserialize)]
@@ -27,11 +33,24 @@ pub struct Login {
     device: Option<String>,
 }
 
-pub async fn status(State(server): State<Arc<Server>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "setup": !server.store.has_accounts() }))
+pub async fn status(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap) -> Json<serde_json::Value> {
+    let setup = !server.store.has_accounts();
+    let code = setup && !auth::in_house(peer, &headers);
+    Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "setup": setup, "code": code }))
 }
 
-pub async fn setup(State(server): State<Arc<Server>>, Json(new): Json<NewAccount>) -> Result<StatusCode, Fail> {
+pub async fn setup(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(new): Json<NewAccount>) -> Result<StatusCode, Fail> {
+    if !auth::in_house(peer, &headers) {
+        let keys = auth::limit_keys("setup", auth::client(peer, &headers).0);
+        let left = server.limit.left(&keys, now());
+        if left > 0 {
+            return Err(Fail(StatusCode::TOO_MANY_REQUESTS, format!("Too many wrong codes. {}", auth::try_again(left))));
+        }
+        if !auth::same_code(new.code.as_deref().unwrap_or(""), &server.setup_code) {
+            server.limit.fail(&keys, now());
+            return Err(Fail(StatusCode::FORBIDDEN, "Set up Numa Home from your home network, or give the setup code its log shows.".into()));
+        }
+    }
     let made = make(&server, new.name.trim(), &new.password, true, true).await?;
     crate::start::begin(&server, new.name.trim()).map_err(Fail::internal)?;
     Ok(made)
@@ -41,12 +60,19 @@ pub async fn add_user(State(server): State<Arc<Server>>, Signed(me): Signed, Jso
     if !me.admin {
         return Err(Fail(StatusCode::FORBIDDEN, "Only an admin makes accounts.".into()));
     }
-    make(&server, new.name.trim(), &new.password, new.admin, false).await
+    let made = make(&server, new.name.trim(), &new.password, new.admin, false).await?;
+    if let Some(access) = new.access.filter(|_| !new.admin) {
+        server.store.set_grants(new.name.trim(), &Grants { access, ..Grants::default() }).map_err(Fail::internal)?;
+    }
+    Ok(made)
 }
 
 pub async fn users(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Account>>, Fail> {
 
-    let accounts = server.store.accounts().map_err(Fail::internal)?;
+    let mut accounts = server.store.accounts().map_err(Fail::internal)?;
+    if !me.sight.household {
+        accounts.retain(|account| account.name.eq_ignore_ascii_case(&me.name));
+    }
     Ok(Json(
         accounts
             .into_iter()
@@ -65,6 +91,43 @@ pub async fn set_user(State(server): State<Arc<Server>>, Signed(me): Signed, Pat
         return Err(Fail(StatusCode::FORBIDDEN, "Only an admin gives an account its rights.".into()));
     }
     match server.store.set_manage(&name, rights.manage).map_err(Fail::internal)? {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(Fail(StatusCode::NOT_FOUND, "There is no account with that name.".into())),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GivenGrants {
+    access: Level,
+    #[serde(default)]
+    libraries: HashMap<i64, Level>,
+    #[serde(default)]
+    albums: HashMap<String, Level>,
+}
+
+pub async fn grants(State(server): State<Arc<Server>>, Signed(me): Signed, Path(name): Path<String>) -> Result<Json<Value>, Fail> {
+    if !me.admin {
+        return Err(Fail(StatusCode::FORBIDDEN, "Only an admin says what an account sees.".into()));
+    }
+    if server.store.account(&name).is_none() {
+        return Err(Fail(StatusCode::NOT_FOUND, "There is no account with that name.".into()));
+    }
+    let given = server.store.grants(&name).map_err(Fail::internal)?;
+    let mut libraries: Vec<_> = server.home.all_libraries().into_iter().filter(|library| library.path.starts_with(&server.home.photos)).collect();
+    libraries.sort_by_key(|library| library.label().to_lowercase());
+    let libraries: Vec<Value> =
+        libraries.iter().map(|library| json!({ "id": library.id, "name": library.label(), "level": given.libraries.get(&library.id) })).collect();
+    let albums = server.home.ask(|catalog| catalog.albums().unwrap_or_default()).await?;
+    let albums: Vec<Value> = albums.into_iter().map(|(key, name)| json!({ "level": given.albums.get(&key), "key": key, "name": name })).collect();
+    Ok(Json(json!({ "access": given.access, "libraries": libraries, "albums": albums })))
+}
+
+pub async fn set_grants(State(server): State<Arc<Server>>, Signed(me): Signed, Path(name): Path<String>, Json(given): Json<GivenGrants>) -> Result<StatusCode, Fail> {
+    if !me.admin {
+        return Err(Fail(StatusCode::FORBIDDEN, "Only an admin says what an account sees.".into()));
+    }
+    let grants = Grants { access: given.access, libraries: given.libraries, albums: given.albums };
+    match server.store.set_grants(&name, &grants).map_err(Fail::internal)? {
         true => Ok(StatusCode::NO_CONTENT),
         false => Err(Fail(StatusCode::NOT_FOUND, "There is no account with that name.".into())),
     }
@@ -220,6 +283,8 @@ pub async fn me(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<s
     let mut answer = serde_json::to_value(&me).unwrap_or_default();
     answer["start"] = start.into();
     answer["first_start"] = crate::start::step(&server, &me.name).into();
+
+    answer["household"] = me.sight.household.into();
     Json(answer)
 }
 

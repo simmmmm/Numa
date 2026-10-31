@@ -57,7 +57,7 @@ pub(super) fn install_album_actions(state: &App, window: &adw::ApplicationWindow
                         refresh_places(&state);
                         add_selection_to_album(&state, &key);
                     }
-                    Err(err) => state.toast(&err),
+                    Err(err) => state.toast(&err.to_string()),
                 }
             });
             ask.present(Some(&window));
@@ -134,7 +134,7 @@ pub(super) fn into_new_album(state: &App) {
     if ids.is_empty() {
         return;
     }
-    let made = state.catalog.create_album(&name).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key));
+    let made = state.catalog.create_album(&name).map_err(String::from).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key));
     match made {
         Ok(key) => {
             state.libraries.new_album.replace(None);
@@ -198,7 +198,7 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
             #[strong] key,
             move |row| match state.catalog.rename_album(&key, &row.text()) {
                 Ok(()) => refresh_places(&state),
-                Err(err) => state.toast(&err),
+                Err(err) => state.toast(&err.to_string()),
             }
         ));
 

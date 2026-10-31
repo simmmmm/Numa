@@ -85,12 +85,13 @@ impl State {
 }
 
 pub(super) fn build_masks(state: &App) -> gtk::Box {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let add = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    add.add_css_class("linked");
-    add.add_css_class("mask-add");
+    let add = chip_row();
+    add.add_css_class("four");
+    add.set_homogeneous(true);
 
+    let clicks = segment::is_installed() || sam::is_installed();
     for (label, kind) in [
         ("Linear", MaskKind::Linear),
         ("Radial", MaskKind::Radial),
@@ -98,9 +99,9 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
         ("Click", MaskKind::Click),
     ] {
         let button = gtk::Button::with_label(label);
-        button.set_hexpand(true);
+        button.add_css_class("panel-action");
 
-        if kind == MaskKind::Click && !segment::is_installed() && !sam::is_installed() {
+        if kind == MaskKind::Click && !clicks {
             button.set_sensitive(false);
             button.set_tooltip_text(Some("Needs a model — see Preferences"));
         }
@@ -112,29 +113,22 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
     }
     column.append(&add);
 
-    let found = state.masks.found_box.clone();
-    found.set_selection_mode(gtk::SelectionMode::None);
-    found.set_max_children_per_line(2);
-    found.set_homogeneous(true);
-    found.set_row_spacing(4);
-    found.set_column_spacing(4);
-
-    found.add_css_class("found-chips");
-    if segment::is_installed() {
-        column.append(&section_header("In this photograph"));
-        column.append(&found);
+    if !clicks {
+        column.append(&mask_note("Click needs a model. Preferences says which and where.", true));
     }
 
-    column.append(&section_header("Find by range"));
-    let ranges = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    ranges.add_css_class("linked");
+    let ranges = chip_row();
+    ranges.set_homogeneous(true);
     for (label, kind, tooltip) in [
-        ("Colour", MaskKind::ColourRange, "Every pixel of one colour, wherever it is"),
-        ("Brightness", MaskKind::LuminanceRange, "Every pixel between two brightnesses"),
+        ("Colour Range", MaskKind::ColourRange, "Every pixel of one colour, wherever it is"),
+        ("Brightness Range", MaskKind::LuminanceRange, "Every pixel between two brightnesses"),
     ] {
         let button = gtk::Button::with_label(label);
-        button.set_hexpand(true);
-        button.set_tooltip_text(Some(tooltip));
+        button.add_css_class("panel-action");
+        button.set_tooltip_text(Some(&format!(
+            "{tooltip}. Then click the photograph to add what is under the cursor; \
+             Shift-click, Shift-drag or Shift-lasso takes it away again."
+        )));
         button.connect_clicked(glib::clone!(
             #[strong] state,
             move |_| add_mask(&state, kind)
@@ -143,35 +137,51 @@ pub(super) fn build_masks(state: &App) -> gtk::Box {
     }
     column.append(&ranges);
 
-    ranges.set_tooltip_text(Some(
-        "Then click the photograph to add what is under the cursor. \
-         Shift-click, Shift-drag or Shift-lasso takes it away again.",
-    ));
-    let note = gtk::Label::new(Some(if segment::is_installed() {
-        ""
-    } else {
-        "No model installed — Preferences (Ctrl+,) says which and where."
-    }));
-    note.set_visible(!segment::is_installed());
-    note.set_xalign(0.0);
-    note.set_wrap(true);
-    note.add_css_class("profile-note");
-    column.append(&note);
-
     column.append(&section_header("Your masks"));
     state.masks.mask_list.set_selection_mode(gtk::SelectionMode::None);
     state.masks.mask_list.add_css_class("boxed-list");
+
+    state.masks.mask_list.connect_row_activated(glib::clone!(
+        #[strong] state,
+        move |_, row| select_mask(&state, Some(row.index() as usize))
+    ));
     column.append(&state.masks.mask_list);
 
     let empty = state.masks.mask_empty.clone();
 
-    empty.set_text("No masks yet.");
+    empty.set_text("No Masks Yet");
     empty.set_xalign(0.0);
     empty.set_wrap(true);
-    empty.add_css_class("profile-note");
+    empty.add_css_class("note");
     column.append(&empty);
 
+    column.append(&section_header("In this photograph"));
+    let found = state.masks.found_box.clone();
+    found.set_selection_mode(gtk::SelectionMode::None);
+    found.set_max_children_per_line(2);
+    found.set_homogeneous(true);
+    found.set_row_spacing(8);
+    found.set_column_spacing(8);
+
+    found.add_css_class("found-chips");
+    if segment::is_installed() {
+        column.append(&found);
+    } else {
+        column.append(&mask_note("Finding things needs the same model as Click.", true));
+    }
+
     column
+}
+
+fn mask_note(text: &str, problem: bool) -> gtk::Label {
+    let note = gtk::Label::new(Some(text));
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.add_css_class("note");
+    if problem {
+        note.add_css_class("problem");
+    }
+    note
 }
 
 pub(super) fn build_wash(alpha: &numa::core::mask::Stored, inverted: bool) -> Option<gtk::cairo::ImageSurface> {
@@ -211,10 +221,7 @@ pub(super) fn set_panel_scope(state: &App) {
         widget.set_visible(masked == *in_a_mask);
     }
 
-    state.light.curve_area.set_content_height(match masked {
-        true => CURVE_EDGE - 56,
-        false => CURVE_EDGE,
-    });
+    state.light.curve_area.set_content_height(CURVE_EDGE);
 
     state.crop.controls.set_visible(cropping);
 

@@ -191,6 +191,8 @@ struct Page {
     overlay: gtk::Overlay,
     note: adw::StatusPage,
 
+    hollow: Cell<bool>,
+
     world: Coming,
     again: gtk::Button,
     streets: Coming,
@@ -248,16 +250,13 @@ fn tally(state: &App, page: &Page, all: &[Photo]) {
 }
 
 pub(super) fn build(state: &App) -> gtk::Box {
-    let title = gtk::Label::new(Some("Places"));
-    title.add_css_class("title-2");
-    title.set_xalign(0.0);
-    title.set_hexpand(true);
+
     let countries = gtk::Label::new(None);
+    countries.set_xalign(0.0);
     countries.add_css_class("caption");
     countries.add_css_class("dim-label");
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.add_css_class("place-list-head");
-    head.append(&title);
     head.append(&countries);
     let list = gtk::ListBox::new();
     list.add_css_class("navigation-sidebar");
@@ -293,6 +292,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
     stage.set_hexpand(true);
     stage.set_vexpand(true);
     stage.add_named(&note, Some("note"));
+    stage.add_named(&bare(state), Some("bare"));
     let overlay = gtk::Overlay::new();
     overlay.set_hexpand(true);
     overlay.set_child(Some(&stage));
@@ -325,6 +325,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
         stage,
         overlay: overlay.clone(),
         note,
+        hollow: Cell::new(false),
         world,
         again,
         streets,
@@ -386,6 +387,22 @@ pub(super) fn build(state: &App) -> gtk::Box {
     box_.append(&overlay);
     PAGE.with(|slot| slot.replace(Some(page)));
     box_
+}
+
+fn bare(state: &App) -> adw::StatusPage {
+    let bare = adw::StatusPage::new();
+    bare.set_icon_name(Some("map-symbolic"));
+    bare.set_title("No Places Yet");
+    bare.set_description(Some("None of these photographs says where it was taken. Photographs from a phone, or a camera with GPS, appear here on their own."));
+    let look = primary_button("Look Again");
+    look.add_css_class("pill");
+    look.set_halign(gtk::Align::Center);
+    look.connect_clicked(glib::clone!(
+        #[strong] state,
+        move |_| fill(&state)
+    ));
+    bare.set_child(Some(&look));
+    bare
 }
 
 fn note(state: &App) -> (adw::StatusPage, Coming, gtk::Button) {
@@ -499,6 +516,7 @@ fn fill(state: &App) {
             None => {}
         }
     }
+    let hollow = !looking && points.is_empty() && shown.len() == all.len();
     let tree = tree(&points);
     if !looking {
         tally(state, &page, &all);
@@ -520,6 +538,7 @@ fn fill(state: &App) {
         page.chosen.replace(None);
         page.pop.popdown();
     }
+    page.hollow.set(hollow);
     show_chips(state, &page);
     fill_list(state, &page);
     show_map(state, &page);
@@ -594,7 +613,8 @@ fn fill_list(state: &App, page: &Rc<Page>) {
         count.add_css_class("dim-label");
         count.add_css_class("numeric");
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        line.set_margin_start(depth * 16);
+
+        line.set_margin_start(8 + depth * 16);
         line.append(&name);
         line.append(&count);
         let open = page.open.borrow().contains(&node.key);
@@ -637,6 +657,10 @@ fn fill_list(state: &App, page: &Rc<Page>) {
 }
 
 fn show_map(state: &App, page: &Rc<Page>) {
+    if page.hollow.get() {
+        page.stage.set_visible_child_name("bare");
+        return;
+    }
     let file = map_view::file();
     if !numa::io::map::ready(&file) {
 

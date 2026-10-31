@@ -211,7 +211,7 @@ async function changePassword() {
   try { await api('me/password', { method: 'PUT', body: JSON.stringify({ old: asked.old, new: asked.new }) }); toast(S.passwordChanged); } catch (error) { toast(error.message); }
 }
 
-// HOME-037: what Safe at Home › Devices calls this browser, "Firefox on Mac".
+// HOME-037: what Settings › Devices calls this browser, "Firefox on Mac".
 function browserName() {
   const agent = navigator.userAgent;
   const browser = [['Edg/', 'Edge'], ['Firefox/', 'Firefox'], ['Chrome/', 'Chrome'], ['Safari/', 'Safari']].find(([mark]) => agent.includes(mark))?.[1] || S.browser;
@@ -258,8 +258,8 @@ window.addEventListener('hashchange', () => { if (state.me) render(); });
 
 // One title per page, so a tab, the history and a screen reader say where you
 // are: "Photos · Numa Home".
-const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/places': S.places, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash,
-  '/safe': S.safeAtHome, '/activity': S.safeAtHome, '/accounts': S.safeAtHome, '/devices': S.safeAtHome, '/cameras': S.safeAtHome };
+const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/places': S.places, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash, '/proofs': S.proofs,
+  '/safe': S.settings, '/activity': S.settings, '/accounts': S.settings, '/devices': S.settings, '/cameras': S.settings };
 const titled = page => { document.title = page ? `${page} · ${S.numaHome}` : S.numaHome; };
 function pageTitle(path, params) {
   if (['/accounts', '/cameras'].includes(path) && !state.me.admin) path = '/';
@@ -285,6 +285,7 @@ function render() {
   if (path === '/activity') return activityPage(main);
   if (path === '/import') return importPage(main);
   if (path === '/trash') return trashPage(main);
+  if (path === '/proofs') return proofsPage(main);
   if (path === '/tidy') return tidyPage(main, params);
   if (path === '/people') return people(main);
   if (path === '/albums') return albums(main);
@@ -324,15 +325,15 @@ function header(path, params) {
 const OWNERS = { library: '/libraries', album: '/albums', person: '/people' };
 function placesNav(path, params) {
   const owner = path === '/' && Object.keys(OWNERS).find(key => params.get(key));
-  // HOME-035: Accounts, Cameras and Activity are Safe at Home's tabs.
+  // HOME-035: Safe at Home, Accounts, Cameras and Activity are Settings' tabs.
   const here = owner ? OWNERS[owner] : SAFE.includes(path) ? '/safe' : path;
   const place = (label, to, extra) => h('button', { class: 'place-link' + (here === to ? ' chosen' : '') + (extra ? ' extra' : ''),
     'aria-current': here === to ? 'page' : null, onclick: () => go(to) }, label);
   const rest = [
     h('div', { class: 'section-label extra' }, S.archive),
-    place(S.importPage, '/import', true), place(S.tidyUp, '/tidy', true), place(S.trash, '/trash', true),
+    place(S.importPage, '/import', true), place(S.tidyUp, '/tidy', true), place(S.trash, '/trash', true), place(S.proofs, '/proofs', true),
     h('div', { class: 'section-label extra' }, S.household),
-    place(S.safeAtHome, '/safe', true),
+    place(S.settings, '/safe', true),
   ];
   // HOME-031: on a wide screen Libraries, People and Albums fold open to
   // every one of them: a library with its tint, a person with their face,
@@ -389,7 +390,7 @@ function placesNav(path, params) {
   }, () => {});
   const nav = h('nav', { class: 'places-nav', 'aria-label': S.places },
     place(S.today, '/today'), place(S.photosPage, '/'), group(S.libraries, '/libraries', 'library'), group(S.people, '/people', 'person'), albums, places, rest);
-  const extras = ['/albums', '/places', '/import', '/tidy', '/trash', '/safe'];
+  const extras = ['/albums', '/places', '/import', '/tidy', '/trash', '/proofs', '/safe'];
   nav.append(h('button', { class: 'place-link more' + (extras.includes(here) ? ' chosen' : ''), 'aria-haspopup': 'menu', onclick: event => {
     event.stopPropagation();
     menu(nav, [place(S.albums, '/albums'), place(S.places, '/places'), ...rest].filter(Boolean).map(one => one.tagName === 'BUTTON'
@@ -490,7 +491,7 @@ function menu(parent, items) {
 // What a download gives, as Export in the apps: the file as it is, or
 // developed with its edits at full size or at 2048 px on the long edge.
 const downloadItems = (original, jpeg) => [
-  h('a', { href: original, download: '' }, S.original),
+  original && h('a', { href: original, download: '' }, S.original),
   h('a', { href: jpeg, download: '' }, S.jpegFull),
   h('a', { href: `${jpeg}${jpeg.includes('?') ? '&' : '?'}edge=2048`, download: '' }, phrase('jpegEdge', { edge: 2048 })),
 ];
@@ -643,7 +644,11 @@ async function filterRow(params, narrowed) {
     h('div', { class: 'act' }, book,
       // HOME-019: a library's own Tidy Up, beside its book.
       owner === 'library' && library && tidyEntry(library),
-      owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'chip', onclick: () => renameLibrary(library) }, S.renameEll),
+      owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {
+        event.stopPropagation();
+        const at = event.currentTarget.getBoundingClientRect();
+        menuAt(at.left, at.bottom + 6, [h('button', { onclick: () => renameLibrary(library) }, S.renameEll), h('button', { onclick: () => whoSees(library) }, S.whoSeesEll)]);
+      } }, icon('more')),
       owner === 'album' && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {
         event.stopPropagation();
         const at = event.currentTarget.getBoundingClientRect();
@@ -1031,28 +1036,112 @@ async function givePassword(user) {
   } catch (error) { toast(error.message); }
 }
 
+// HOME-003 (#56): what an account sees, a tick per library and album, and
+// once ticked a May edit switch; New libraries too is the account's level
+// for every library without a grant of its own, made later too. Every row is
+// written as a grant: ticked View or Edit, unticked None. An admin sees
+// everything.
+function seesRow(label, level) {
+  const sees = h('input', { type: 'checkbox', checked: level !== 'none' });
+  const edits = h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: level === 'edit', 'aria-label': phrase('mayEditOf', { name: label }) });
+  const may = h('label', { class: 'check may', hidden: !sees.checked }, edits, S.mayEdit);
+  sees.addEventListener('change', () => { may.hidden = !sees.checked; });
+  const row = h('div', { class: 'grant' }, h('label', { class: 'check' }, sees, h('span', {}, label)), may);
+  row.level = () => !sees.checked ? 'none' : edits.checked ? 'edit' : 'view';
+  return row;
+}
+
+const grantsOf = name => api(`users/${encodeURIComponent(name)}/grants`);
+// The grants as they stand: what the account has by a grant of its own.
+const grantsBody = given => ({
+  access: given.access,
+  libraries: Object.fromEntries(given.libraries.filter(library => library.level).map(library => [library.id, library.level])),
+  albums: Object.fromEntries(given.albums.filter(album => album.level && album.level !== 'none').map(album => [album.key, album.level])),
+});
+const putGrants = (name, body) => api(`users/${encodeURIComponent(name)}/grants`, { method: 'PUT', body: JSON.stringify(body) });
+
+async function giveAccess(user) {
+  let given;
+  try { given = await grantsOf(user.name); } catch (error) { return toast(error.message); }
+  const libraries = given.libraries.map(library => Object.assign(seesRow(library.name, library.level || given.access), { id: library.id }));
+  const shown = given.albums.filter(album => album.level && album.level !== 'none');
+  const albumRow = album => Object.assign(seesRow(album.name, album.level || 'view'), { key: album.key });
+  const albums = h('div', { class: 'grants-albums' }, shown.map(albumRow));
+  const rest = given.albums.filter(album => !shown.includes(album));
+  const add = rest.length > 0 && h('select', { 'aria-label': S.addAlbumEll, onchange: () => {
+    const album = rest.find(one => one.key === add.value);
+    if (album) { albums.append(albumRow(album)); add.selectedOptions[0].remove(); }
+    add.value = '';
+    add.hidden = add.options.length < 2;
+  } }, h('option', { value: '' }, S.addAlbumEll), rest.map(album => h('option', { value: album.key }, album.name)));
+  const later = seesRow(S.newLibrariesToo, given.access);
+  const fields = [h('div', { class: 'grants' },
+    libraries.length > 0 && h('div', { class: 'section-label' }, S.librariesLabel), libraries,
+    given.albums.length > 0 && h('div', { class: 'section-label' }, S.albumsLabel), albums, add,
+    h('div', { class: 'rule' }), later),
+    h('p', { class: 'caption' }, S.nasNote)];
+  if (!await dialog(phrase('accessQ', { name: user.name }), S.accessText, fields, S.done)) return;
+  const body = { access: later.level(), libraries: {}, albums: {} };
+  for (const row of libraries) body.libraries[row.id] = row.level();
+  for (const row of albums.children) if (row.level() !== 'none') body.albums[row.key] = row.level();
+  try {
+    await putGrants(user.name, body);
+    toast(phrase('accessSaved', { name: user.name }));
+  } catch (error) { toast(error.message); }
+}
+
+// HOME-003: the same ticks for one library, a row per account; an admin
+// always sees everything. Only the accounts whose tick changed are written.
+async function whoSees(library) {
+  let users, given;
+  try {
+    users = await api('users');
+    given = await Promise.all(users.filter(user => !user.admin).map(async user => ({ user, grants: await grantsOf(user.name) })));
+  } catch (error) { return toast(error.message); }
+  const rows = given.map(({ user, grants }) => {
+    const own = grants.libraries.find(one => one.id === library.id);
+    const level = own?.level || grants.access;
+    return Object.assign(seesRow(user.name, level), { user, grants, was: level });
+  });
+  const admins = users.filter(user => user.admin).map(user => h('div', { class: 'grant' }, h('span', {}, user.name), h('span', { class: 'caption' }, S.seesEverything)));
+  const fields = [h('div', { class: 'grants' }, rows, admins, rows.length === 0 && h('p', { class: 'body' }, S.onlyAdmins)), h('p', { class: 'caption' }, S.nasNote)];
+  if (!await dialog(phrase('whoSeesQ', { name: library.name }), S.whoSeesText, fields, S.done)) return;
+  try {
+    for (const row of rows.filter(row => row.level() !== row.was)) {
+      const body = grantsBody(row.grants);
+      body.libraries[library.id] = row.level();
+      await putGrants(row.user.name, body);
+    }
+    toast(phrase('whoSeesSaved', { name: library.name }));
+  } catch (error) { toast(error.message); }
+}
+
 async function accounts(main) {
   const users = await api('users').catch(error => (main.append(empty(S.accounts, error.message, true)), null));
   if (!users) return;
   const name = h('input', { type: 'text', placeholder: S.name, required: true, autocomplete: 'off' });
   const password = h('input', { type: 'password', placeholder: S.passwordHint, required: true, autocomplete: 'new-password' });
+  const sees = h('select', { 'aria-label': S.otherLibraries },
+    [['none', S.newSeesNone], ['view', S.newSeesView], ['edit', S.newSeesEdit]].map(([value, text]) => h('option', { value }, text)));
   const admin = h('input', { type: 'checkbox' });
   const said = h('p', { class: 'said', role: 'status', style: { textAlign: 'left' } });
   const form = h('form', { onsubmit: async event => {
     event.preventDefault();
     try {
-      await api('users', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, admin: admin.checked }) });
+      await api('users', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, admin: admin.checked, access: sees.value }) });
       render();
     } catch (error) { said.textContent = error.message; }
-  } }, h('div', { class: 'section-label' }, S.newAccount), name, password,
+  } }, h('div', { class: 'section-label' }, S.newAccount), name, password, sees,
   h('label', { class: 'check' }, admin, S.canMake), h('button', { class: 'primary', type: 'submit' }, S.makeAccount), said);
   main.append(h('div', { class: 'accounts' },
     h('div', {}, h('div', { class: 'section-label' }, S.accounts),
       h('ul', {}, users.map(user => h('li', {}, h('span', {}, user.name, user.must_change && h('span', { class: 'caption' }, ` · ${S.mustChange}`)),
         h('div', { class: 'acts' }, user.admin ? h('span', { class: 'caption' }, S.admin) : rights(user, said),
+          !user.admin && h('button', { class: 'chip', onclick: () => giveAccess(user) }, S.accessEll),
           user.name.toLowerCase() !== state.me.name.toLowerCase() && h('button', { class: 'chip', onclick: () => givePassword(user) }, S.givePasswordEll)))))),
     form,
-    h('p', { class: 'body' }, S.accountsText)));
+    h('p', { class: 'body' }, S.accountsText),
+    h('p', { class: 'caption' }, S.nasNote)));
 }
 
 // The photograph large: arrow keys, a swipe on a phone, its information, and
@@ -1082,7 +1171,9 @@ function openViewer(section, at) {
     h('button', { class: 'round', 'aria-label': S.download, onclick: event => {
       event.stopPropagation();
       const id = current().id;
-      menu(corner, downloadItems(`/api/v1/photos/${id}/original`, `/api/v1/photos/${id}/jpeg`));
+      // HOME-003 (#56): the original is an editor's.
+      const original = state.viewer.detail?.level !== 'view' && `/api/v1/photos/${id}/original`;
+      menu(corner, downloadItems(original, `/api/v1/photos/${id}/jpeg`).filter(Boolean));
     } }, icon('download')));
   const bar = h('div', { class: 'loupe-bar', role: 'toolbar', 'aria-label': S.thisPhoto });
   const stage = h('div', { class: 'stage' }, image, hud, badge, noticed,
@@ -1144,6 +1235,9 @@ function show() {
     if (state.viewer !== viewer || viewer.photo.id !== photo.id) return detail;
     viewer.detail = detail;
     viewer.manage = manage;
+    // HOME-003 (#56): a viewer sees Edit, greyed, and why.
+    viewer.editButton.disabled = detail.level === 'view';
+    viewer.editButton.title = detail.level === 'view' ? S.onlyEditors : S.editTip;
     viewer.el.setAttribute('aria-label', named(detail));
     paintBar();
     if (!viewer.info.hidden) fillInfo();

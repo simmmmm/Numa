@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) fn build_grade(state: &App, global_only: &dyn Fn(&gtk::Widget)) -> gtk::Box {
     let grade = page_column();
-    grade.add_css_class("quiet");
 
     let header = section_header("Colour grading");
     grade.append(&header);
@@ -44,9 +43,11 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
     let wheel = build_grading_wheel(state);
 
     let ranges = chip_row();
-    ranges.set_margin_bottom(6);
+    ranges.add_css_class("four");
+    ranges.set_homogeneous(true);
     let mut first: Option<gtk::ToggleButton> = None;
-    for (index, name) in ["Shadow", "Mid", "High", "All"].iter().enumerate() {
+
+    for (index, name) in [(3, "All"), (0, "Shadow"), (1, "Mid"), (2, "High")] {
         let tab = gtk::ToggleButton::with_label(name);
         tab.set_hexpand(true);
         match &first {
@@ -75,7 +76,8 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
     }
     column.append(&ranges);
 
-    wheel.set_margin_bottom(6);
+    wheel.set_margin_top(12);
+    wheel.set_margin_bottom(12);
     column.append(&wheel);
 
     let names = [("Hue", Readout::Degrees), ("Saturation", Readout::Positive(0)), ("Luminance", Readout::Signed(0))];
@@ -98,14 +100,10 @@ pub(super) fn build_grading(state: &App) -> gtk::Box {
                 }
             }
         ));
-        let row = slider_row(state, name, scale, readout);
-
-        if index == 1 {
-            row.add_css_class("lead");
-        }
-        column.append(&row);
+        column.append(&slider_row(state, name, scale, readout));
     }
 
+    column.append(&section_header("Blending"));
     let shaping = [
         ("Blending", Readout::Positive(0)),
         ("Balance", Readout::Signed(0)),

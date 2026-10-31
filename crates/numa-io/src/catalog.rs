@@ -1,3 +1,4 @@
+use crate::error::{Error, Named};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ mod at_home;
 
 mod tidy;
 pub use at_home::{home_preview, home_thumb, AtHome};
-use schema::{migrate, HOME_SCHEMA, LEGACY_SCHEMA, LIBRARY_SCHEMA};
+use schema::{migrate, upgrade, user_version, HOME_MIGRATIONS, HOME_SCHEMA, HOME_VERSION, LEGACY_SCHEMA, LIBRARY_MIGRATIONS, LIBRARY_SCHEMA, LIBRARY_VERSION};
 
 pub type Measured = (i64, numa_cull::Frame, Option<u32>, Option<f32>, Vec<([f32; people::LENGTH], Option<Vec<u8>>)>);
 
@@ -133,6 +134,8 @@ pub struct Glance {
     pub last: Option<i64>,
 
     pub covers: Vec<(PathBuf, i64, Option<String>)>,
+
+    pub ids: Vec<i64>,
 }
 
 pub const COVERS: usize = 48;
@@ -310,9 +313,9 @@ struct OpenLibrary {
 
 impl OpenLibrary {
 
-    fn connected(&self) -> Result<(), String> {
+    fn connected(&self) -> Result<(), Error> {
         match self.offline {
-            true => Err(format!("{} is not connected", self.root.display())),
+            true => Err(Error::NotConnected { root: self.root.clone() }),
             false => Ok(()),
         }
     }
@@ -366,6 +369,10 @@ impl Catalog {
         }
         home.execute_batch(HOME_SCHEMA).map_err(text)?;
 
+        if user_version(&home) <= HOME_VERSION {
+            upgrade(&home, HOME_MIGRATIONS, HOME_VERSION)?;
+        }
+
         let catalog = Self { home, home_path, opened: RefCell::new(HashMap::new()), came_back: RefCell::new(HashMap::new()) };
         if legacy {
             catalog.split_legacy()?;
@@ -391,91 +398,24 @@ impl Catalog {
         let dir = root.join(LIBRARY_DIR);
         std::fs::create_dir_all(&dir)
             .map_err(|err| format!("cannot keep a catalog in {}: {err}", dir.display()))?;
-        let conn = Connection::open(dir.join("catalog.db")).map_err(text)?;
+        let file = dir.join("catalog.db");
+        let mut conn = Connection::open(&file).map_err(text)?;
+
+        let newer = user_version(&conn) > LIBRARY_VERSION;
+        if newer {
+            log::warn!("{} is from a newer Numa (version {}): opened read-only", file.display(), user_version(&conn));
+            conn = Connection::open_with_flags(&file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(text)?;
+        }
         conn.execute_batch(LIBRARY_SCHEMA).map_err(text)?;
-
-        let has_portrait = conn
-            .prepare("SELECT * FROM faces LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"portrait"))
-            .unwrap_or(true);
-        if !has_portrait {
-            conn.execute("ALTER TABLE faces ADD COLUMN portrait BLOB", []).map_err(text)?;
+        let before_versions = user_version(&conn) == 0;
+        if before_versions {
+            schema::add_missing_columns(&conn)?;
+            at_home::migrate(&conn)?;
+            clocks::migrate(&conn)?;
         }
-
-        let has_tone = conn
-            .prepare("SELECT * FROM analysis LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"colourfulness"))
-            .unwrap_or(true);
-        if !has_tone {
-            conn.execute_batch(
-                "ALTER TABLE analysis ADD COLUMN brightness REAL; \
-                 ALTER TABLE analysis ADD COLUMN contrast REAL; \
-                 ALTER TABLE analysis ADD COLUMN colourfulness REAL;",
-            )
-            .map_err(text)?;
+        if !newer {
+            upgrade(&conn, LIBRARY_MIGRATIONS, LIBRARY_VERSION)?;
         }
-
-        let has_shape = conn
-            .prepare("SELECT * FROM analysis LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"shape"))
-            .unwrap_or(true);
-        if !has_shape {
-            conn.execute_batch(
-                "ALTER TABLE analysis ADD COLUMN shape INTEGER; \
-                 ALTER TABLE analysis ADD COLUMN echo INTEGER;",
-            )
-            .map_err(text)?;
-        }
-
-        let has_exposure = conn
-            .prepare("SELECT * FROM analysis LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"exposure"))
-            .unwrap_or(true);
-        if !has_exposure {
-            conn.execute_batch(
-                "ALTER TABLE analysis ADD COLUMN exposure REAL; \
-                 ALTER TABLE analysis ADD COLUMN focal35 REAL;",
-            )
-            .map_err(text)?;
-        }
-
-        let has_raw_levels = conn
-            .prepare("SELECT * FROM analysis LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"raw_clipped"))
-            .unwrap_or(true);
-        if !has_raw_levels {
-            conn.execute_batch(
-                "ALTER TABLE analysis ADD COLUMN raw_clipped REAL; \
-                 ALTER TABLE analysis ADD COLUMN raw_dark REAL;",
-            )
-            .map_err(text)?;
-        }
-
-        let has_eyes = conn
-            .prepare("SELECT * FROM analysis LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"eyes_closed"))
-            .unwrap_or(true);
-        if !has_eyes {
-            conn.execute("ALTER TABLE analysis ADD COLUMN eyes_closed INTEGER", []).map_err(text)?;
-        }
-
-        let has_taken = conn
-            .prepare("SELECT * FROM photos LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"taken"))
-            .unwrap_or(true);
-        if !has_taken {
-            conn.execute("ALTER TABLE photos ADD COLUMN taken INTEGER", []).map_err(text)?;
-        }
-
-        let has_aspect = conn
-            .prepare("SELECT * FROM photos LIMIT 0")
-            .map(|statement| statement.column_names().contains(&"aspect"))
-            .unwrap_or(true);
-        if !has_aspect {
-            conn.execute("ALTER TABLE photos ADD COLUMN aspect REAL", []).map_err(text)?;
-        }
-        at_home::migrate(&conn)?;
-        clocks::migrate(&conn)?;
         back_up_weekly(&conn, &dir);
 
         let open = Rc::new(OpenLibrary { conn, root, offline: false });
@@ -921,6 +861,34 @@ impl Catalog {
             tx.commit().map_err(text)?;
         }
         Ok(())
+    }
+
+    pub fn mine(&self, cameras: &[String], me: Option<&str>) -> crate::import::Mine {
+        let mut bodies = HashMap::new();
+        let mut with_me = Vec::new();
+        for library in self.libraries().unwrap_or_default() {
+            bodies.extend(self.bodies(library.id).unwrap_or_default());
+            if let Some(name) = me {
+                for (who, ids) in self.people(library.id).unwrap_or_default() {
+                    if who.eq_ignore_ascii_case(name) {
+                        with_me.extend(ids);
+                    }
+                }
+            }
+        }
+        crate::import::Mine::new(cameras.iter().cloned(), bodies, with_me)
+    }
+
+    pub fn all_cameras(&self) -> Vec<(String, i64)> {
+        let mut seen: HashMap<String, i64> = HashMap::new();
+        for library in self.libraries().unwrap_or_default() {
+            for camera in self.cameras(library.id).unwrap_or_default() {
+                *seen.entry(camera.key).or_default() += camera.photos;
+            }
+        }
+        let mut all: Vec<(String, i64)> = seen.into_iter().collect();
+        all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        all
     }
 
     pub fn people(&self, library_id: i64) -> Result<Vec<(String, Vec<i64>)>, String> {
@@ -1374,6 +1342,14 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn taken_of(&self, photo_id: i64) -> Option<i64> {
+        let (open, local) = self.photo(photo_id).ok()?;
+        open.conn
+            .query_row("SELECT COALESCE(taken, mtime) FROM photos WHERE id = ?1", [local], |row| row.get(0))
+            .optional()
+            .ok()?
+    }
+
     pub fn photo_count(&self, library_id: i64) -> Result<i64, String> {
         self.library(library_id)?
             .conn
@@ -1451,13 +1427,15 @@ impl Catalog {
             })
             .map_err(text)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(text)?
+            .map_err(text)?;
+        let ids = covers.iter().map(|(.., local)| global_id(library_id, *local)).collect();
+        let covers = covers
             .into_iter()
 
             .map(|(path, mtime, edits, local)| (path, mtime, self.composed_json(global_id(library_id, local), edits)))
             .collect();
 
-        Ok(Glance { photos, first, last, covers })
+        Ok(Glance { photos, first, last, covers, ids })
     }
 
     pub fn set_library_name(&self, id: i64, name: &str) -> Result<(), String> {
@@ -1471,15 +1449,15 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn rename_library_folder(&self, id: i64, name: &str) -> Result<PathBuf, String> {
+    pub fn rename_library_folder(&self, id: i64, name: &str) -> Result<PathBuf, crate::error::Error> {
         let name = name.trim();
         if name.is_empty() || name == "." || name == ".." || name.contains(std::path::MAIN_SEPARATOR) {
-            return Err(format!("“{name}” cannot be a folder name"));
+            return Err(Error::NotAFolderName { name: name.to_string() });
         }
         let from: String = self
             .home
             .query_row("SELECT path FROM libraries WHERE id = ?1", params![id], |row| row.get(0))
-            .map_err(|_| format!("no library {id}"))?;
+            .map_err(|_| Error::NoSuchLibrary { id })?;
         let from = PathBuf::from(from);
         let to = from.with_file_name(name);
         if to == from {
@@ -1488,7 +1466,7 @@ impl Catalog {
         }
 
         if to.exists() {
-            return Err(format!("{} already exists", to.display()));
+            return Err(Error::AlreadyExists { path: to });
         }
         std::fs::rename(&from, &to).map_err(|err| format!("could not rename {}: {err}", from.display()))?;
 
@@ -1500,14 +1478,15 @@ impl Catalog {
         if let Err(err) = updated {
 
             let _ = std::fs::rename(&to, &from);
-            return Err(text(err));
+            return Err(text(err).into());
         }
         Ok(to)
     }
 
-    pub fn relocate_library(&self, id: i64, to: &Path) -> Result<(), String> {
+    pub fn relocate_library(&self, id: i64, to: &Path) -> Result<(), crate::error::Error> {
+        use crate::error::Error;
         if !to.is_dir() {
-            return Err(format!("{} is not a folder", to.display()));
+            return Err(Error::NotAFolder { path: to.to_path_buf() });
         }
 
         let taken: Option<i64> = self
@@ -1520,7 +1499,7 @@ impl Catalog {
             .optional()
             .map_err(text)?;
         if taken.is_some() {
-            return Err(format!("{} is already in the catalog", to.display()));
+            return Err(Error::AlreadyInCatalog { path: to.to_path_buf() });
         }
         self.opened.borrow_mut().remove(&id);
         self.home
@@ -1682,7 +1661,7 @@ impl Catalog {
         rows.collect::<Result<_, _>>().map_err(text)
     }
 
-    pub fn create_album(&self, name: &str) -> Result<String, String> {
+    pub fn create_album(&self, name: &str) -> Result<String, Error> {
         let name = album_name(name)?;
 
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(text)?.as_nanos();
@@ -1693,7 +1672,7 @@ impl Catalog {
         Ok(key)
     }
 
-    pub fn rename_album(&self, key: &str, name: &str) -> Result<(), String> {
+    pub fn rename_album(&self, key: &str, name: &str) -> Result<(), Error> {
         let name = album_name(name)?;
         self.home
             .execute("UPDATE albums SET name = ?1 WHERE key = ?2", params![name, key])
@@ -2041,7 +2020,7 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn save_edits(&self, photo_id: i64, document: &Document) -> Result<(), String> {
+    pub fn save_edits(&self, photo_id: i64, document: &Document) -> Result<(), Error> {
         match document.moment.and_then(|record| self.layers(library_of(photo_id), record)) {
             Some(layers) => {
                 let stored = self.own_edits(photo_id).ok().flatten();
@@ -2051,7 +2030,7 @@ impl Catalog {
         }
     }
 
-    pub fn save_own_edits(&self, photo_id: i64, document: &Document) -> Result<(), String> {
+    pub fn save_own_edits(&self, photo_id: i64, document: &Document) -> Result<(), Error> {
         let json = match document.is_untouched() {
             true => None,
             false => Some(serde_json::to_string(document).map_err(text)?),
@@ -2067,7 +2046,7 @@ impl Catalog {
             return Ok(());
         }
         if document.schema > SCHEMA || stored.as_deref().is_some_and(|stored| schema_of(stored) > SCHEMA) {
-            return Err("This photograph was edited in a newer version of Numa — update Numa to change it here".to_string());
+            return Err(Error::EditedInNewerVersion);
         }
         let (open, local) = self.photo(photo_id)?;
         open.connected()?;
@@ -2076,23 +2055,23 @@ impl Catalog {
     }
 }
 
-fn album_name(name: &str) -> Result<&str, String> {
+fn album_name(name: &str) -> Result<&str, Error> {
     match name.trim() {
-        "" => Err("An album needs a name".to_string()),
+        "" => Err(Error::NeedsAName { of: Named::Album }),
         name => Ok(name),
     }
 }
 
-fn album_taken(err: rusqlite::Error, name: &str) -> String {
+fn album_taken(err: rusqlite::Error, name: &str) -> Error {
     match err.sqlite_error_code() {
-        Some(rusqlite::ErrorCode::ConstraintViolation) => format!("There is already an album called “{name}”"),
-        _ => err.to_string(),
+        Some(rusqlite::ErrorCode::ConstraintViolation) => Error::AlbumExists { name: name.to_string() },
+        _ => err.to_string().into(),
     }
 }
 
-fn snapshot_name(name: &str) -> Result<&str, String> {
+fn snapshot_name(name: &str) -> Result<&str, Error> {
     match name.trim() {
-        "" => Err("A snapshot needs a name".to_string()),
+        "" => Err(Error::NeedsAName { of: Named::Snapshot }),
         name => Ok(name),
     }
 }
@@ -3686,7 +3665,7 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         let c = catalog.photos(second.id, &Filter::default()).unwrap().remove(0);
 
         let key = catalog.create_album(" Trip ").unwrap();
-        assert!(catalog.create_album("trip").unwrap_err().contains("already"), "one name, whatever its case");
+        assert!(catalog.create_album("trip").unwrap_err().to_string().contains("already"), "one name, whatever its case");
         assert!(catalog.create_album("  ").is_err());
         assert_eq!(catalog.albums().unwrap(), [(key.clone(), "Trip".to_string())]);
 
@@ -3883,6 +3862,62 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
         assert_eq!(photos[0].aspect, Some(0.667));
         assert_eq!(photos[1].aspect, None);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_catalog_has_a_version() {
+        let version = |catalog: &Catalog, id: i64| user_version(&catalog.library(id).unwrap().conn);
+
+        let old = temp_dir("version-old");
+        std::fs::write(old.join("a.RAF"), b"x").unwrap();
+        let dir = old.join(LIBRARY_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("catalog.db")).unwrap();
+        conn.execute_batch(&LIBRARY_SCHEMA.replace("edits  TEXT,", "edits  TEXT").replace("aspect REAL\n", "")).unwrap();
+        conn.execute("INSERT INTO photos (path, mtime, rating) VALUES ('a.RAF', 1, 4)", []).unwrap();
+        assert_eq!(user_version(&conn), 0);
+        drop(conn);
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&old).unwrap();
+        assert_eq!(version(&catalog, library.id), LIBRARY_VERSION);
+        let photos = catalog.photos(library.id, &Filter::default()).unwrap();
+        assert_eq!((photos.len(), photos[0].rating), (1, 4), "the rows come across");
+
+        let new = temp_dir("version-new");
+        let made = catalog.add_library(&new).unwrap();
+        assert_eq!(version(&catalog, made.id), LIBRARY_VERSION);
+
+        let ahead = temp_dir("version-ahead");
+        std::fs::write(ahead.join("a.RAF"), b"x").unwrap();
+        let dir = ahead.join(LIBRARY_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("catalog.db")).unwrap();
+        conn.execute_batch(LIBRARY_SCHEMA).unwrap();
+        conn.execute("INSERT INTO photos (path, mtime) VALUES ('a.RAF', 1)", []).unwrap();
+        conn.execute_batch("PRAGMA user_version = 99").unwrap();
+        drop(conn);
+        let other = catalog.add_library(&ahead).unwrap();
+        assert_eq!(catalog.photos(other.id, &Filter::default()).unwrap().len(), 1, "it can be read");
+        assert_eq!(version(&catalog, other.id), 99, "and is left as it was");
+        assert!(catalog.library(other.id).unwrap().conn.execute("UPDATE photos SET rating = 1", []).is_err(), "but not written");
+        for dir in [old, new, ahead] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn migrations_run_in_order_and_stop_at_a_failure() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (id INTEGER); PRAGMA user_version = 1;").unwrap();
+        let steps = [(2, "ALTER TABLE t ADD COLUMN a TEXT"), (3, "ALTER TABLE t ADD COLUMN a TEXT"), (4, "ALTER TABLE t ADD COLUMN b TEXT")];
+        let err = upgrade(&conn, &steps, 4).unwrap_err();
+        assert!(err.contains("version 3"), "{err}");
+        assert_eq!(user_version(&conn), 2, "version 2 held");
+        assert!(conn.prepare("SELECT a FROM t").is_ok() && conn.prepare("SELECT b FROM t").is_err());
+
+        upgrade(&conn, &[(2, "ALTER TABLE t ADD COLUMN a TEXT"), (4, "ALTER TABLE t ADD COLUMN b TEXT")], 4).unwrap();
+        assert_eq!(user_version(&conn), 4);
+        assert!(conn.prepare("SELECT b FROM t").is_ok());
     }
 
     #[test]

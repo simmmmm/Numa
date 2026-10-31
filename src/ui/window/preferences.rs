@@ -3,9 +3,13 @@ use super::*;
 pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_search_enabled(true);
+
+    dialog.set_content_width(800);
     let folder_row = |title: &str, dir: PathBuf| folder_row(window, title, dir);
     dialog.add(&general_page(state, &dialog));
-    dialog.add(&addons_page(state, &dialog, &folder_row));
+    dialog.add(&home_page(state, &dialog));
+    dialog.add(&page_of("Models", "application-x-addon-symbolic", &downloads::models_group(&dialog, &folder_row)));
+    dialog.add(&profiles_page(state, &dialog, &folder_row));
     dialog.add(&storage_page(state, &folder_row));
     dialog.present(Some(window));
 }
@@ -57,8 +61,7 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
     ));
     imports.add(&import_done::recheck_row(state));
     page.add(&imports);
-
-    page.add(&home::preferences_group(state, dialog));
+    page.add(&downloads::gpu_group(state, dialog));
 
     if let Some(path) = appimage() {
         let menu = adw::PreferencesGroup::new();
@@ -103,21 +106,29 @@ fn general_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::Preference
     page
 }
 
-fn addons_page(
+fn page_of(title: &str, icon: &str, group: &adw::PreferencesGroup) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title(title);
+    page.set_icon_name(Some(icon));
+    page.add(group);
+    page
+}
+
+fn home_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
+    let page = page_of(home::NUMA_HOME, "go-home-symbolic", &home::preferences_group(state, dialog));
+    page.add(&photos_group(state));
+    page
+}
+
+fn profiles_page(
     state: &App,
     dialog: &adw::PreferencesDialog,
     folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow,
 ) -> adw::PreferencesPage {
-    let page = adw::PreferencesPage::new();
-    page.set_title("Add-ons");
-    page.set_icon_name(Some("application-x-addon-symbolic"));
-    page.add(&downloads::models_group(dialog, folder_row));
-    page.add(&downloads::gpu_group(state, dialog));
     let profiles = downloads::profiles_group(dialog, folder_row);
 
     profiles.add(&own_profile::row(state, dialog));
-    page.add(&profiles);
-    page
+    page_of("Profiles", "camera-photo-symbolic", &profiles)
 }
 
 fn storage_page(state: &App, folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRow) -> adw::PreferencesPage {
@@ -164,6 +175,46 @@ fn storage_page(state: &App, folder_row: &dyn Fn(&str, PathBuf) -> adw::ActionRo
     )));
     page.add(&uninstall);
     page
+}
+
+fn photos_group(state: &App) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Photographs from Numa Home");
+    group.set_description(Some(
+        "Only a library synced on this device, or one whose months were brought, keeps its originals here. \
+         The others are read from Numa Home. Libraries already here stay where they are.",
+    ));
+    let row = adw::ActionRow::new();
+    row.set_title("Folder");
+    let show = |row: &adw::ActionRow, path: Option<PathBuf>| match path {
+        Some(path) => set_row_subtitle(row, &path.display().to_string()),
+        None => set_row_subtitle(row, "Asked the first time"),
+    };
+    show(&row, home_sync::photos_root(state));
+    let choose = gtk::Button::with_label("Choose…");
+    choose.set_valign(gtk::Align::Center);
+    choose.connect_clicked(glib::clone!(
+        #[strong] state,
+        #[weak] row,
+        move |button| {
+            let Some(window) = button.root().and_downcast::<gtk::Window>() else { return };
+            let picker = gtk::FileDialog::new();
+            picker.set_title("Where should photographs from Numa Home be kept?");
+            glib::spawn_future_local(glib::clone!(
+                #[strong] state,
+                #[weak] row,
+                async move {
+                    let Ok(file) = picker.select_folder_future(Some(&window)).await else { return };
+                    let Some(path) = file.path() else { return };
+                    home_sync::set_photos_root(&state, &path);
+                    set_row_subtitle(&row, &path.display().to_string());
+                }
+            ));
+        }
+    ));
+    row.add_suffix(&choose);
+    group.add(&row);
+    group
 }
 
 const PREVIEW_STOPS: [u64; 7] = [0, 512 << 20, 1 << 30, 2 << 30, 5 << 30, 10 << 30, 20 << 30];
@@ -495,7 +546,7 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     editor_group.add(&row("Copy this photograph's edits", "Ctrl+C"));
     editor_group.add(&row("Copy the edited picture", "Ctrl+Shift+C"));
     editor_group.add(&row("Paste edits onto this photograph", "Ctrl+V"));
-    editor_group.add(&row("Leave the mask", "Esc"));
+    editor_group.add(&row("Leave the mask, and then the photograph", "Esc"));
     editor_group.add(&row("Undo", "Ctrl+Z"));
     editor_group.add(&row("Redo", "Ctrl+Shift+Z"));
     page.add(&editor_group);

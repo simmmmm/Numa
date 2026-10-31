@@ -4,6 +4,8 @@ pub mod profile;
 pub mod beautify;
 pub mod curve;
 pub mod mask;
+pub mod mask_parts;
+pub mod panel;
 pub mod plane;
 pub mod space;
 pub mod grading;

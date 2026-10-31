@@ -810,14 +810,75 @@ fn what_a_drag_costs() {
         }
         let plan_ms = {
             let at = std::time::Instant::now();
-            for _ in 0..10 {
+            for _ in 0..40 {
                 std::hint::black_box(numa_render::card::plan(document, &raw, &inputs, scale).unwrap());
             }
-            at.elapsed().as_secs_f64() * 100.0
+            at.elapsed().as_secs_f64() * 25.0
         };
         println!(
             "{what}: processor (half draft) {:.1} ms, {:.3} CPU-s, {:.2} J a frame | card {:.1} ms (plan {plan_ms:.1}), {:.3} CPU-s, {:.2} J ({:.2} J the card's)",
             cpu.0, cpu.1, cpu.2, card.0, card.1, card.2, card.3
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs a card, and the kernel log (journalctl -k)"]
+fn the_dmabuf_hand_over_does_not_fault_the_card() {
+    std::env::set_var("NUMA_GPU_RENDER", "1");
+    std::env::set_var("NUMA_GPU_DMABUF", "1");
+    let _ = env_logger::builder().is_test(true).try_init();
+    if !numa_gpu::open_now(false) {
+        assert!(!numa_gpu::broken(), "the develop did not build on this card");
+        println!("skipped: no card");
+        return;
+    }
+    let kernel_log = |since: &str| {
+        let out = std::process::Command::new("journalctl").args(["-k", "--no-pager", "-o", "cat", "--since", since]).output().expect("journalctl");
+        assert!(out.status.success(), "the kernel log cannot be read: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).lines().filter(|line| line.contains("amdgpu") && (line.contains("page fault") || line.contains("gfxhub") || line.contains("VM_L2_PROTECTION"))).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let started = std::process::Command::new("date").arg("+%Y-%m-%d %H:%M:%S").output().expect("date");
+    let started = String::from_utf8_lossy(&started.stdout).trim().to_string();
+    let mut on_the_card = 0;
+    let mut read_back = 0;
+    let sizes: Vec<(u32, u32)> = match std::env::var("NUMA_DMABUF_SIZE") {
+
+        Ok(size) => size.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).into_iter().collect(),
+        Err(_) => vec![(1920, 1277), (1, 1), (63, 65), (4000, 2999), (1279, 1281), (2401, 1601), (640, 427), (1280, 1281)],
+    };
+    for (width, height) in sizes {
+        let image = LinearImage::new(width, height, vec![0.2; (width * height * 3) as usize]);
+        let document = Document::new(String::new());
+        let plan = numa_render::card::plan(&document, &image, &Default::default(), 1.0).expect("the card has an untouched photograph");
+        for _ in 0..40 {
+            let rendered = numa_gpu::render(&image, &plan, 0, false, numa_gpu::Output::Dmabuf).expect("the card renders");
+            assert_eq!((rendered.width, rendered.height), (width, height));
+            match rendered.pixels {
+                numa_gpu::Pixels::Dmabuf(_) => on_the_card += 1,
+                numa_gpu::Pixels::Rgba { .. } => read_back += 1,
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        println!("{width} x {height}: {} fault lines so far", kernel_log(&started).len());
+    }
+
+    if std::env::var_os("NUMA_DMABUF_CHURN").is_some() {
+        for round in 0..400u32 {
+            let (width, height) = (600 + (round * 37) % 900, 400 + (round * 53) % 900);
+            let image = LinearImage::new(width, height, vec![0.2; (width * height * 3) as usize]);
+            let document = Document::new(String::new());
+            let plan = numa_render::card::plan(&document, &image, &Default::default(), 1.0).expect("the card has an untouched photograph");
+            if let numa_gpu::Pixels::Dmabuf(_) = numa_gpu::render(&image, &plan, 0, false, numa_gpu::Output::Dmabuf).expect("the card renders").pixels {
+                on_the_card += 1;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    println!("{on_the_card} frames left on the card as a dmabuf, {read_back} read back");
+    let faults = kernel_log(&started);
+    assert!(faults.is_empty(), "the card faulted:\n{}", faults.join("\n"));
+    assert!(on_the_card > 0, "no frame went as a dmabuf (no driver support here?): nothing was tested");
 }
