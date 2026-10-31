@@ -3,7 +3,7 @@ pub mod faces;
 pub mod learn;
 pub mod people;
 pub mod measure;
-pub mod tape;
+pub mod pace;
 
 pub const VERSION: i64 = 4;
 

@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "numa"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "byteorder",
  "dirs",
@@ -2340,7 +2340,7 @@ dependencies = [
 
 [[package]]
 name = "numa-core"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "dirs",
  "image",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "numa-cull"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "image",
  "log",
@@ -2366,7 +2366,7 @@ dependencies = [
 
 [[package]]
 name = "numa-gpu"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "bytemuck",
  "env_logger",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "numa-infer"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "image",
  "log",
@@ -2395,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "numa-io"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "avif-serialize",
  "byteorder",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "numa-render"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "image",
  "log",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "numa-server"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "argon2",
  "axum",
@@ -3535,7 +3535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -4306,9 +4306,9 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zip"
-version = "9.1.3"
+version = "9.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
+checksum = "3f5b58784007ff6e5f280ec82c8596686a3b9b5dd5836c63288d4479f84728b9"
 dependencies = [
  "crc32fast",
  "flate2",

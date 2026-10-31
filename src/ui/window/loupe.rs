@@ -34,7 +34,7 @@ pub(super) fn build_loupe(state: &App) -> gtk::Revealer {
 
     let whole = gtk::Box::new(gtk::Orientation::Vertical, 0);
     whole.append(&loupe);
-    whole.append(&tape::build(state));
+    whole.append(&band::build(state));
 
     let reveal = state.loupe.reveal.clone();
     reveal.set_transition_type(gtk::RevealerTransitionType::Crossfade);
@@ -129,7 +129,7 @@ fn build_stage(state: &App) -> gtk::Overlay {
 
 fn place(state: &App, stage: &gtk::Overlay, child: &gtk::Widget) -> Option<gtk::gdk::Rectangle> {
     let (width, height) = (stage.width(), stage.height());
-    if child == state.loupe.tape.review.pill.upcast_ref::<gtk::Widget>()
+    if child == state.loupe.band.review.pill.upcast_ref::<gtk::Widget>()
         || child.has_css_class("loupe-group")
         || child.has_css_class("photo-pill")
     {
@@ -532,7 +532,7 @@ pub(super) fn show_loupe(state: &App, at: usize) {
     }
 
     let arriving = id_at(state, at);
-    if !state.loupe.tape.quiet.get() {
+    if !state.loupe.band.quiet.get() {
         if state.loupe.visit.get().is_some_and(|(id, _, _)| Some(id) != arriving) {
             leave_visit(state);
         }
@@ -546,7 +546,7 @@ pub(super) fn show_loupe(state: &App, at: usize) {
 
     home_fetch::paint_loupe(state);
     if !state.loupe.reveal.reveals_child() {
-        tape::rebuild(state);
+        band::rebuild(state);
     }
     state.loupe.reveal.set_visible(true);
     state.loupe.reveal.set_reveal_child(true);
@@ -558,7 +558,7 @@ pub(super) fn show_loupe(state: &App, at: usize) {
     refresh_loupe_bar(state);
 
     let own = [Some(at), beside(state, at, 1), beside(state, at, 2), beside(state, at, -1)].into_iter().flatten();
-    for index in own.chain(tape::held(state).into_iter().rev()) {
+    for index in own.chain(review::ahead(state).into_iter().rev()) {
         hold(state, index);
     }
     for index in loupe_group::wanted(state) {
@@ -573,7 +573,7 @@ fn wanted(state: &App) -> Vec<usize> {
     let Some(at) = state.loupe.at.get() else { return Vec::new() };
 
     let mut wanted: Vec<usize> = [beside(state, at, -1), Some(at), beside(state, at, 1), beside(state, at, 2)].into_iter().flatten().collect();
-    wanted.extend(tape::held(state));
+    wanted.extend(review::ahead(state));
     wanted.extend(loupe_group::wanted(state));
     wanted
 }
@@ -680,7 +680,7 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
     let reviewing = review::running(state);
     if !held_down {
         review::stop(state);
-        tape::settle(state);
+        band::settle(state);
     }
     match key {
         Key::space | Key::Escape if reviewing => return glib::Propagation::Stop,
@@ -688,7 +688,6 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
             review::toggle(state);
             return glib::Propagation::Stop;
         }
-        _ if !reviewing && tape::range_key(state, key, modifiers) => return glib::Propagation::Stop,
         _ => {}
     }
     match key {
@@ -724,7 +723,7 @@ pub(super) fn loupe_key(state: &App, key: gtk::gdk::Key, modifiers: gtk::gdk::Mo
 }
 
 pub(super) fn close_loupe(state: &App) {
-    tape::reset(state);
+    band::reset(state);
     filmstrip::back_home(state);
     loupe_group::reset(state);
     leave_visit(state);
@@ -1021,7 +1020,7 @@ pub(super) fn echo_note(state: &App, at: usize) -> Option<String> {
 pub(super) fn refresh_loupe_bar(state: &App) {
     state.loupe.picked_frame.queue_draw();
     let Some(at) = state.loupe.at.get() else { return };
-    tape::refresh(state);
+    band::refresh(state);
     let Some(id) = id_at(state, at) else { return };
     let name = {
         let cards = state.grid.cards.borrow();
@@ -1106,7 +1105,7 @@ pub(super) struct State {
 
     pub(super) asked: Rc<RefCell<std::collections::HashSet<i64>>>,
 
-    pub(super) tape: tape::State,
+    pub(super) band: band::State,
 
     pub(super) zoom: loupe_zoom::State,
 
@@ -1151,7 +1150,7 @@ impl State {
             animation: Rc::new(RefCell::new(None)),
             textures: Rc::new(RefCell::new(std::collections::HashMap::new())),
             asked: Rc::default(),
-            tape: tape::State::new(),
+            band: band::State::new(),
             zoom: loupe_zoom::State::new(),
             group: loupe_group::State::new(),
             marker: gtk::DrawingArea::new(),

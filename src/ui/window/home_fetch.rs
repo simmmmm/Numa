@@ -74,7 +74,7 @@ pub(super) fn paint_loupe(state: &App) {
     let id = state.loupe.at.get().and_then(|at| id_at(state, at));
     let at_home = id.is_some_and(|id| state.grid.at_home.borrow().contains_key(&id));
     let coming = id.and_then(progress);
-    let review = state.loupe.tape.review.pill.reveals_child();
+    let review = state.loupe.band.review.pill.reveals_child();
     LOUPE_PILL.with(|pill| {
         if let Some((pill, get, bar, stop)) = pill.borrow().as_ref() {
             pill.set_visible(at_home && !review);

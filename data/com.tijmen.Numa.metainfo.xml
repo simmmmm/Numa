@@ -51,6 +51,12 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.48.1" date="2026-10-31">
+      <description>
+        <p>Numa on the Mac, the iPad and the iPhone follows Numa on Linux more closely: Today first, Import from any page, Settings in each system's own form, and the Mac's menu bar has everything. On the iPad and the Mac, Places is a full map with the list floating over it. Numa Home's side list is glass, with more room around its rows.</p>
+        <p>The tape under the loupe is gone; its thumbnails stay. A library that reads archives was updated.</p>
+      </description>
+    </release>
     <release version="0.48.0" date="2026-10-31">
       <description>
         <p>Numa has a new design on Linux, the Mac, the iPad and the iPhone: the editor's panel in cards, Today with the photograph of the day, and Preferences with a tab for each subject. Numa Home's Today has the new design too.</p>

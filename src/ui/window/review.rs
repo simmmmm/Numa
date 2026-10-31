@@ -37,7 +37,7 @@ impl State {
 }
 
 pub(super) fn build_button(state: &App) -> gtk::Button {
-    let review = &state.loupe.tape.review;
+    let review = &state.loupe.band.review;
     let button = review.button.clone();
     label(&button, false);
     button.set_tooltip_text(Some("Run through the shoot at full size, about six a second — any key stops (Shift+Space)"));
@@ -56,7 +56,7 @@ fn label(button: &gtk::Button, running: bool) {
 }
 
 pub(super) fn build_pill(state: &App) -> gtk::Revealer {
-    let review = &state.loupe.tape.review;
+    let review = &state.loupe.band.review;
     review.words.add_css_class("photo-pill");
     let pill = review.pill.clone();
     pill.set_child(Some(&review.words));
@@ -69,7 +69,7 @@ pub(super) fn build_pill(state: &App) -> gtk::Revealer {
 }
 
 pub(super) fn running(state: &App) -> bool {
-    state.loupe.tape.review.running.get()
+    state.loupe.band.review.running.get()
 }
 
 pub(super) fn toggle(state: &App) {
@@ -80,17 +80,14 @@ pub(super) fn toggle(state: &App) {
 }
 
 fn start(state: &App) {
-    let review = &state.loupe.tape.review;
-    let count = tape::shot_count(state);
-    let Some(here) = tape::current(state).filter(|_| count > 0) else { return };
-    let (from, end) = match tape::range(state) {
-        Some(range) => range,
+    let review = &state.loupe.band.review;
+    let count = band::shot_count(state);
+    let Some(here) = band::current(state).filter(|_| count > 0) else { return };
 
-        None if here + 1 >= count => (0, count - 1),
-        None => (here, count - 1),
-    };
+    let from = if here + 1 >= count { 0 } else { here };
+    let end = count - 1;
 
-    tape::settle(state);
+    band::settle(state);
     leave_visit(state);
 
     if loupe_zoom::zoomed(state) {
@@ -103,8 +100,8 @@ fn start(state: &App) {
     review.waited.set(0);
     label(&review.button, true);
 
-    if let Some(card) = tape::card_of(state, from) {
-        tape::show_quietly(state, card);
+    if let Some(card) = band::card_of(state, from) {
+        band::show_quietly(state, card);
     }
     say(state, from);
     review.pill.set_transition_duration(200);
@@ -117,11 +114,11 @@ pub(super) fn stop(state: &App) {
         return;
     }
     halt(state);
-    tape::settle(state);
+    band::settle(state);
 }
 
 pub(super) fn halt(state: &App) {
-    let review = &state.loupe.tape.review;
+    let review = &state.loupe.band.review;
     if !review.running.replace(false) {
         return;
     }
@@ -143,12 +140,12 @@ pub(super) fn halt(state: &App) {
 }
 
 fn pace(state: &App, shot: usize) -> u32 {
-    cull::tape::pace_ms(&state.loupe.tape.times.borrow(), shot)
+    cull::pace::pace_ms(&state.loupe.band.times.borrow(), shot)
 }
 
 fn say(state: &App, shot: usize) {
     let rate = (1000.0 / pace(state, shot) as f64).round();
-    state.loupe.tape.review.words.set_text(&format!("Reviewing \u{b7} {rate} a second"));
+    state.loupe.band.review.words.set_text(&format!("Reviewing \u{b7} {rate} a second"));
 }
 
 fn next_in(state: &App, ms: u32) {
@@ -157,19 +154,19 @@ fn next_in(state: &App, ms: u32) {
         glib::clone!(
             #[strong] state,
             move || {
-                state.loupe.tape.review.timer.take();
+                state.loupe.band.review.timer.take();
                 step(&state);
             }
         ),
     );
-    *state.loupe.tape.review.timer.borrow_mut() = Some(timer);
+    *state.loupe.band.review.timer.borrow_mut() = Some(timer);
 }
 
 fn step(state: &App) {
-    let review = &state.loupe.tape.review;
-    let Some(here) = tape::current(state).filter(|_| running(state)) else { return };
+    let review = &state.loupe.band.review;
+    let Some(here) = band::current(state).filter(|_| running(state)) else { return };
     let next = here + 1;
-    let Some(card) = tape::card_of(state, next).filter(|_| here < review.end.get()) else {
+    let Some(card) = band::card_of(state, next).filter(|_| here < review.end.get()) else {
         stop(state);
         return;
     };
@@ -179,14 +176,14 @@ fn step(state: &App) {
         next_in(state, WAIT_MS);
         return;
     }
-    tape::show_quietly(state, card);
+    band::show_quietly(state, card);
     review.shown.set(review.shown.get() + 1);
     say(state, next);
     next_in(state, pace(state, next));
 }
 
 pub(super) fn ahead(state: &App) -> Vec<usize> {
-    let Some(here) = tape::current(state).filter(|_| running(state)) else { return Vec::new() };
-    let end = state.loupe.tape.review.end.get();
-    (here + 1..=end.min(here + AHEAD)).filter_map(|shot| tape::card_of(state, shot)).collect()
+    let Some(here) = band::current(state).filter(|_| running(state)) else { return Vec::new() };
+    let end = state.loupe.band.review.end.get();
+    (here + 1..=end.min(here + AHEAD)).filter_map(|shot| band::card_of(state, shot)).collect()
 }

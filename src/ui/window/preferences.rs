@@ -512,8 +512,6 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     library_group.add(&row("Reject the rest of the burst and go on to the next", "Shift+Down"));
     library_group.add(&row("The neighbours beside the photograph in the loupe, on or off", "F"));
     library_group.add(&row("Review the shoot at full size, and stop", "Shift+Space"));
-    library_group.add(&row("Choose frames on the tape up to the one clicked", "Shift+click"));
-    library_group.add(&row("Let the frames chosen on the tape go", "Escape"));
     library_group.add(&row("Compare the selection side by side", "C"));
     library_group.add(&row("Select all", "Ctrl+A"));
     library_group.add(&row("Clear the selection and stop choosing", "Escape / Ctrl+Shift+A"));

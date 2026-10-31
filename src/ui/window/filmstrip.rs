@@ -215,7 +215,7 @@ thread_local! {
 pub(super) fn into_loupe(state: &App) {
     startup::ensure_editor_page(state);
     let scroller = &state.filmstrip.scroller;
-    let slot = &state.loupe.tape.slot;
+    let slot = &state.loupe.band.slot;
     if scroller.parent().as_ref() != Some(slot.upcast_ref()) {
         if let Some(home) = scroller.parent().and_downcast::<gtk::Box>() {
             HOME.with(|kept| kept.replace(Some((home.clone(), scroller.prev_sibling()))));

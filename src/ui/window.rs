@@ -95,7 +95,7 @@ mod merge;
 mod loupe;
 mod loupe_zoom;
 mod loupe_group;
-mod tape;
+mod band;
 mod review;
 mod importing;
 mod import_done;

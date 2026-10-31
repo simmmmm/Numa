@@ -739,21 +739,10 @@ entry.curve-value:focus-within {
     opacity: 1;
 }
 
-.tape-band {
+.loupe-band {
     background: @view_bg_color;
     border-top: 1px solid @numa_rule;
     padding: 8px 16px 12px;
-}
-
-.tape-title {
-    font-size: 13px;
-    color: @numa_name;
-    font-feature-settings: "tnum";
-}
-
-.tape {
-    color: @numa_accent;
-    font-size: 12px;
 }
 
 toolbarview.ruled .top-bar {
@@ -825,7 +814,7 @@ headerbar .linked menubutton.before-more > button {
     background: alpha(black, 0.25);
 }
 
-.tape-band .filmstrip {
+.loupe-band .filmstrip {
     background: none;
 }
 
