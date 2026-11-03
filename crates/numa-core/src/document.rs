@@ -1131,6 +1131,30 @@ mod tests {
         assert!(serde_json::from_str::<Document>(unknown_operation).is_err(), "an unknown operation read");
     }
 
+    const SHAPE: (u32, &str) = (
+        0,
+        "ai_denoise ai_sharpen basic.blacks basic.blue_hue basic.blue_saturation basic.clarity basic.contrast basic.defringe basic.dehaze basic.denoise_colour basic.denoise_contrast basic.denoise_detail basic.denoise_luma basic.exposure basic.grain basic.grain_roughness basic.grain_size basic.green_hue basic.green_saturation basic.hdr basic.highlights basic.lens_distortion basic.lens_vignetting basic.mist basic.moire basic.red_hue basic.red_saturation basic.saturation basic.shadow_tint basic.shadows basic.sharpen basic.sharpen_masking basic.sharpen_radius basic.temperature basic.texture basic.tint basic.vibrance basic.vignette basic.vignette_feather basic.vignette_midpoint basic.vignette_roundness basic.whites colour_profile film_simulation operations source source.path white_balance working_space",
+    );
+
+    #[test]
+    fn a_changed_stack_shape_needs_a_schema_bump() {
+        fn keys(prefix: &str, value: &serde_json::Value, out: &mut Vec<String>) {
+            if let Some(map) = value.as_object() {
+                for (key, inner) in map {
+                    out.push(format!("{prefix}{key}"));
+                    keys(&format!("{prefix}{key}."), inner, out);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        keys("", &serde_json::to_value(Document::new("a.RAF".into())).unwrap(), &mut found);
+        keys("basic.", &serde_json::to_value(Basic::default()).unwrap(), &mut found);
+        found.sort();
+        let (schema, shape) = SHAPE;
+        assert_eq!(schema, SCHEMA, "SCHEMA was bumped: write the shape below for the new number");
+        assert_eq!(found.join(" "), shape, "the stored shape changed with SCHEMA at {SCHEMA}: bump document::SCHEMA, then update SHAPE");
+    }
+
     #[test]
     fn a_stack_says_which_schema_wrote_it() {
         let plain = serde_json::to_string(&Document::new("a.RAF".into())).unwrap();

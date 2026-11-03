@@ -1,14 +1,9 @@
-// HOME-034: Numa Home's first start, gone through once by the admin who made
-// the first account, right after making it: the account, the photographs
-// found in the photos folder, accounts for the household, and the address
-// for the phones. The server keeps the step, so a reload comes back to it;
-// Skip on any step, or Done on the last, ends it on Today.
 'use strict';
 
 const FIRST_STEPS = ['account', 'photographs', 'household', 'phones'];
 const enc = encodeURIComponent;
 const capital = text => text.charAt(0).toUpperCase() + text.slice(1);
-// The camera's own clock, read as Numa reads it: as if it were UTC.
+
 const monthOf = new Intl.DateTimeFormat(S.locale, { month: 'short', year: 'numeric', timeZone: 'UTC' });
 const yearOf = seconds => new Date(seconds * 1000).getUTCFullYear();
 
@@ -23,7 +18,6 @@ function firstStart(step) {
   ({ account: accountStep, photographs: photographsStep, household: householdStep, phones: phonesStep })[step](page);
 }
 
-// Back, Skip and the one white button, at the foot of every step.
 function stepFoot({ back, skip = true, next, label = S.continue, note }) {
   return h('div', { class: 'foot' },
     back ? h('button', { class: 'chip', type: 'button', onclick: () => moveOn(back) }, S.back) : h('span'),
@@ -41,11 +35,10 @@ async function moveOn(step, out) {
   render();
 }
 
-// 1. The first account, an admin, as the gate made it before.
 function accountStep(page) {
   const name = h('input', { type: 'text', autocomplete: 'username', placeholder: S.name, required: true, autocapitalize: 'words' });
   const password = h('input', { type: 'password', autocomplete: 'new-password', placeholder: S.passwordHint, required: true, minlength: 8 });
-  // HOME-037 (#60): set up from outside the house, Home asks the code its log said.
+
   const code = h('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: S.setupCode, hidden: true });
   api('status', { quiet: true }).then(status => { code.hidden = !status.code; code.required = !!status.code; }).catch(() => {});
   const said = h('p', { class: 'said', role: 'status' });
@@ -61,8 +54,6 @@ function accountStep(page) {
   name.focus();
 }
 
-// 2. Every library found, ticked; the counts and the estimate fill in as
-// each library is read, one at a time, as a NAS's disks read best.
 async function photographsStep(page) {
   page.append(h('h1', {}, S.yourPhotographs), h('p', { class: 'body' }, S.photographsText));
   let found;
@@ -108,14 +99,13 @@ function libraryRow(row, paint) {
       const [from, to] = [monthOf.format(first * 1000), monthOf.format(last * 1000)];
       span.textContent = from === to ? from : yearOf(first) === yearOf(last) ? String(yearOf(first)) : `${yearOf(first)} – ${yearOf(last)}`;
     }
-    // The first taken in front, as on Today.
+
     show.forEach((file, at) => stack.children[2 - at].append(h('img', { src: `/api/v1/start/thumb?folder=${enc(row.folder)}&file=${enc(file)}`, alt: '', loading: 'lazy' })));
   };
   facts();
   return h('label', { class: 'lib' }, box, stack, h('span', { class: 'what' }, h('span', { class: 'name' }, row.name), caption), span);
 }
 
-// 3. Accounts for the others in the house; none is fine.
 async function householdStep(page) {
   const name = h('input', { type: 'text', placeholder: S.name, required: true, autocomplete: 'off', autocapitalize: 'words' });
   const password = h('input', { type: 'password', placeholder: S.passwordHint, required: true, minlength: 8, autocomplete: 'new-password' });
@@ -132,7 +122,7 @@ async function householdStep(page) {
       event.preventDefault();
       said.textContent = '';
       try {
-        // HOME-003 (#56): the household edits every library; a guest is made on Accounts.
+
         await api('users', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), password: password.value, admin: admin.checked, access: 'edit' }) });
         [name.value, password.value, admin.checked] = ['', '', false];
         await list();
@@ -144,7 +134,6 @@ async function householdStep(page) {
   await list();
 }
 
-// 4. The address as the browser reached Numa Home, as text and as a QR code.
 function phonesStep(page) {
   const address = location.origin;
   page.append(h('h1', {}, S.thePhones), h('p', { class: 'body' }, S.phonesText),

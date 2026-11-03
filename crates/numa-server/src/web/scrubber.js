@@ -1,13 +1,7 @@
-// HOME-011: the timeline's scrubber — a bar on the right, the years and
-// months down it as long as the photographs they hold, each library's part
-// in its own quiet tint, so a trip is found at a glance. Hover or drag for
-// the month and its count; let go and the page is there, its month loaded.
 'use strict';
 
 const TINTS = 8;
 
-// Each library's tint, in the order the timeline first meets it (newest
-// first), so trips that follow one another differ.
 function tintsOf(months) {
   const order = new Map();
   for (const month of months) for (const library of month.libraries || []) if (!order.has(library.id)) order.set(library.id, order.size % TINTS);
@@ -26,9 +20,6 @@ function scrubber(months, sections) {
   const bar = h('div', { class: 'scrubber', role: 'slider', 'aria-label': S.timeline, 'aria-orientation': 'vertical', 'aria-valuemin': 0, 'aria-valuemax': months.length - 1, 'aria-valuenow': 0, tabindex: '0' },
     labels, track, hover, thumb, pill);
 
-  // Where each month starts and ends, 0..1 down the bar: as long as its
-  // photographs, but never thinner than FLOOR, so a month of a few — often
-  // the oldest — can still be seen, hovered and dragged to.
   const FLOOR = 0.006;
   const shares = months.map(month => Math.max(FLOOR, month.count / total));
   const sum = shares.reduce((a, b) => a + b, 0);
@@ -44,7 +35,7 @@ function scrubber(months, sections) {
     track.append(h('div', { class: 'scrub-month', style: { top: span.top * 100 + '%', height: (span.bottom - span.top) * 100 + '%' } },
       libraries.map(library => h('div', { style: { flexGrow: library.count, background: library.id == null ? '' : tint(library.id) } }))));
   }
-  // A year's label where its newest month starts, unless too near the last.
+
   const room = () => track.clientHeight || 1;
   function placeYears() {
     labels.replaceChildren();
@@ -66,8 +57,6 @@ function scrubber(months, sections) {
   };
   const headerHeight = () => document.querySelector('header')?.offsetHeight || 0;
 
-  // The library under the pointer: the month's tints stand in its order,
-  // each as long as its photographs.
   function libraryAt(span, fraction) {
     const libraries = span.month.libraries || [];
     let into = (fraction - span.top) / Math.max(1e-9, span.bottom - span.top) * span.month.count;
@@ -86,7 +75,6 @@ function scrubber(months, sections) {
     pill.style.top = fraction * room() + 'px';
   }
 
-  // The page at a point of the bar: the month's section, as far into it.
   function jump(fraction) {
     const span = spanAt(fraction);
     const section = sections[spans.indexOf(span)];
@@ -96,7 +84,6 @@ function scrubber(months, sections) {
     return { section, go };
   }
 
-  // Where the page is, on the bar.
   function follow() {
     if (!bar.isConnected) return removeEventListener('scroll', onScroll);
     if (dragging) return;
@@ -123,7 +110,7 @@ function scrubber(months, sections) {
   let dragging = false, landed = null;
   bar.addEventListener('pointerdown', event => {
     event.preventDefault();
-    try { bar.setPointerCapture(event.pointerId); } catch (_) { /* a synthetic pointer */ }
+    try { bar.setPointerCapture(event.pointerId); } catch (_) {  }
     dragging = true;
     bar.classList.add('active');
     move(event);
@@ -145,8 +132,7 @@ function scrubber(months, sections) {
     dragging = false;
     bar.classList.remove('active');
     pill.hidden = true;
-    // Its month and the next two loaded, then there again: what loaded above
-    // moved it where the browser does not hold the place (Safari).
+
     const target = landed;
     if (!target) return;
     const index = sections.indexOf(target.section);

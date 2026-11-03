@@ -1,7 +1,3 @@
-// HOME-010: the background work — a small ring and a word in the main
-// navigation while anything runs (an import from a card and the models'
-// downloads too), and the Activity page it opens: every job in plain words,
-// how far, where, how long is left, the models on their way, and Pause.
 'use strict';
 
 const megabytes = bytes => `${grouped(Math.round(bytes / 1e6))} MB`;
@@ -11,7 +7,6 @@ function duration(seconds) {
   return phrase('aboutHours', { n: Math.round(seconds / 3600) });
 }
 
-// How far the work in hand is, 0..1, or null when nothing is.
 function share(activity) {
   const busy = activity.jobs.filter(job => ['running', 'waiting', 'paused'].includes(job.state) && job.total > 0);
   const total = busy.reduce((sum, job) => sum + job.total, 0);
@@ -21,7 +16,6 @@ function share(activity) {
   return bytes ? fetching.reduce((sum, item) => sum + item.done, 0) / bytes : null;
 }
 
-// The ring's word: what runs, short enough for the navigation.
 const SHORT = { scan: S.scanning, thumbnails: S.thumbnails, analyse: S.faces, words: S.words, things: S.things, night: S.night, import: S.importing, copy: S.copying };
 function badgeWord(activity) {
   if (activity.paused) return S.paused;
@@ -42,10 +36,6 @@ function ring(fraction, paused) {
   return svg;
 }
 
-// The header's indicator: shown while anything runs, waits or is paused.
-// render() and the Activity page both ask; they share one request, the
-// badge is looked up once the answer is in (a render on the way replaces
-// the header), and the next ask is always set, whatever came back.
 let activityTimer = null, activityAsked = null;
 async function activityBadge() {
   clearTimeout(activityTimer);
@@ -65,7 +55,7 @@ async function activityBadge() {
     }
   }
   if (route().path === '/activity') drawActivity(activity, error);
-  // Places while the map comes: how far, every half second.
+
   const map = activity && route().path === '/places' && mapProgress(activity);
   clearTimeout(activityTimer);
   activityTimer = setTimeout(activityBadge, map ? 500 : route().path === '/activity' || activity?.busy || !activity ? 2000 : 30000);
@@ -75,33 +65,29 @@ function badgeButton() {
   return h('button', { class: 'chip activity', hidden: true, 'aria-label': S.activity, onclick: () => go('/activity') });
 }
 
-// The page's frame at once — heading, Pause, "Loading…" — and the jobs
-// when the answer comes. Made once and kept: redrawn every two seconds, a
-// button under the pointer would be gone before the click.
 function activityPage(main) {
   const said = h('span', { class: 'said' });
   const page = h('div', { class: 'activity-page' });
   const toggle = h('button', { class: 'primary', hidden: true, onclick: async () => {
     try { await api('background/' + (page.paused ? 'resume' : 'pause'), { method: 'POST' }); activityBadge(); } catch (error) { said.textContent = error.message; }
   } });
-  // Its heading is Settings', over the tabs.
+
   page.append(h('div', { class: 'head' }, h('div', {},
     h('p', { class: 'body' }, S.activityText)), toggle),
   said, h('span', { class: 'said late' }), h('div', { class: 'list' }, h('p', { class: 'body' }, S.loading)));
   main.append(page);
+  if (state.me.admin) signInsBox(page);
   activityBadge();
 }
 
 function drawActivity(activity, error) {
   const page = document.querySelector('.activity-page');
   if (!page) return;
-  // An answer that failed leaves the last one standing, the reason over it;
-  // with none yet, the reason stands in for "Loading…".
+
   const late = page.querySelector('.late');
   late.textContent = error && page.querySelector('.job') ? error.message : '';
   if (!activity) return error && page.querySelector('.list').replaceChildren(fault(error.message));
-  // Over every photograph when the job knows them all (done and to do),
-  // else this round's; waiting for its model, nothing is counted.
+
   const row = job => {
     const todo = Math.min(job.total - job.done, job.all);
     const whole = job.all > 0 && job.state !== 'waits';
@@ -136,8 +122,6 @@ function drawActivity(activity, error) {
   ].filter(Boolean));
 }
 
-// HOME-020: what the night's round did, and what needs a person, each
-// linking to where to act.
 function lastNight(night) {
   if (!night) return [];
   const at = seconds => new Date(seconds * 1000).toLocaleTimeString(S.locale, { hour: '2-digit', minute: '2-digit' });
@@ -154,13 +138,9 @@ function lastNight(night) {
   ];
 }
 
-// HOME-035: Safe at Home — whether everything that should come home did,
-// room for it, and last night: the first tab of Settings, whose others are
-// Activity, Accounts, Devices and Cameras, a chip row under its title. The
-// paths stay /safe and the rest, so links and the apps keep working.
-const SAFE = ['/safe', '/accounts', '/devices', '/cameras', '/activity'];
+const SAFE = ['/safe', '/accounts', '/devices', '/cameras', '/reach', '/activity'];
 function safeHead(path) {
-  const tabs = [[S.safeAtHome, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'],
+  const tabs = [[S.safeAtHome, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'], state.me.admin && [S.reachable, '/reach'],
     [S.activity, '/activity']].filter(Boolean);
   if (!tabs.some(([, to]) => to === path)) return null;
   return h('div', { class: 'safe-head' }, h('h1', {}, S.settings),
@@ -168,7 +148,6 @@ function safeHead(path) {
       'aria-current': to === path ? 'page' : null, onclick: () => go(to) }, label))));
 }
 
-// As the server says a disk's size: 120 GB, 3.8 TB.
 const diskSize = bytes => bytes >= 1e12 ? `${(bytes / 1e12).toFixed(1)} TB` : `${grouped(Math.round(bytes / 1e9))} GB`;
 function ago(at) {
   const seconds = Date.now() / 1000 - at;
@@ -184,7 +163,7 @@ async function safePage(main) {
   const [safe, activity, rights] = await Promise.all([api('safe'), api('background').catch(() => null), state.me.admin ? api('rights').catch(() => null) : null])
     .catch(error => (page.replaceChildren(fault(error.message)), []));
   if (!safe) return;
-  // `attention` only on what asks for a person, always with its words.
+
   const top = safe.attention.length
     ? safe.attention.map(item => h('div', { class: 'attention' }, h('i', { class: 'signal' }), h('span', {}, item.text)))
     : safe.devices.length > 0 && h('p', { class: 'all-home' }, S.allHome);
@@ -196,7 +175,7 @@ async function safePage(main) {
     h('div', { class: 'caption' }, phrase('freeOf', { total: diskSize(one.total), names: one.names.join(', ') })),
     h('div', { class: 'meter' }, h('div', { class: 'fill', style: filled(one.total ? 1 - one.free / one.total : 0) })));
   const night = activity && activity.night;
-  // What this account may do, and who does the rest (P14).
+
   page.replaceChildren(h('p', { class: 'body role' }, safe.role), ...[top].flat().filter(Boolean), h('div', { class: 'boxes' },
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.devices), safe.devices.length
       ? h('ul', {}, safe.devices.map(device))
@@ -208,12 +187,10 @@ async function safePage(main) {
       h('ul', { class: 'done' }, night.done.slice(0, 4).map(line => h('li', {}, line))),
       h('button', { class: 'chip', onclick: () => go('/activity') }, S.activity)),
     h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.numaHome), h('div', { class: 'big' }, safe.version),
-      // The licences, where the version is (and where an Updates tab will hold them): P15, a visible route.
+
       h('a', { class: 'caption', href: '/licences', target: '_blank', rel: 'noopener' }, S.licences))));
 }
 
-// IO-005: an admin's — who made and owns the JPEGs Numa Home makes, written
-// into each with "no AI training"; the place and serial numbers stay out.
 function homeRights(rights) {
   const creator = h('input', { type: 'text', placeholder: S.creator, 'aria-label': S.creator, value: rights.creator, autocomplete: 'off' });
   const copyright = h('input', { type: 'text', placeholder: S.copyright, 'aria-label': S.copyright, value: rights.copyright, autocomplete: 'off' });
@@ -228,9 +205,6 @@ function homeRights(rights) {
     creator, copyright, h('p', { class: 'caption' }, S.inHomesJpegsText), h('button', { class: 'chip', type: 'submit' }, S.save));
 }
 
-// HOME-036: the second copy — when it was last made whole, what it holds
-// and where, the database's nightly copies, Copy Now (an admin's; greyed and
-// saying so for the rest, P14) and how to put things back, in the guide.
 const GUIDE_RESTORE = 'https://guide.numa.photo/numa-home#restore';
 function secondCopy(copy) {
   const amount = bytes => bytes >= 1e9 ? diskSize(bytes) : megabytes(bytes);
@@ -256,9 +230,6 @@ function secondCopy(copy) {
     h('div', { class: 'copy-acts' }, now, h('a', { class: 'caption', href: GUIDE_RESTORE, target: '_blank', rel: 'noopener' }, S.howToRestore)));
 }
 
-// HOME-037: Settings › Devices — every device signed in to this account
-// (an admin: to every account), when it signed in, was last seen and last
-// sent home, and from where; Sign Out for each, and Sign Out Everywhere Else.
 async function devicesPage(main) {
   const page = h('div', { class: 'safe devices' }, h('p', { class: 'body' }, S.loading));
   main.append(page);

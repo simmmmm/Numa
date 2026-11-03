@@ -31,6 +31,7 @@ pub fn copy_hashed(from: &Path, to: &Path) -> io::Result<u128> {
         let mut source = File::open(from)?;
         let meta = source.metadata()?;
         let mut out = File::create(&part)?;
+        uncache_writes(&out);
         let (hash, length) = hash_through(&mut source, Some(&mut out))?;
         if length != meta.len() {
             return Err(io::Error::new(
@@ -85,7 +86,23 @@ fn uncache(file: &File) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_vendor = "apple")]
+fn uncache(file: &File) {
+    use std::os::fd::AsRawFd;
+    unsafe {
+        libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1);
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn uncache_writes(file: &File) {
+    uncache(file);
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn uncache_writes(_: &File) {}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
 fn uncache(_: &File) {}
 
 pub fn second_folder(root: &Path, folder: &Path) -> PathBuf {

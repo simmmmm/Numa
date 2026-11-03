@@ -33,6 +33,8 @@ struct Shelf {
     files: HashMap<i64, Vec<i64>>,
 
     twins: HashMap<i64, Vec<i64>>,
+
+    holds: HashMap<i64, i64>,
 }
 
 pub fn found_under(root: &Path) -> Vec<PathBuf> {
@@ -199,6 +201,14 @@ impl Home {
         self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner()).photos.get(&id).cloned()
     }
 
+    pub fn hold_of(&self, still: i64) -> Option<i64> {
+        self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner()).holds.get(&still).copied()
+    }
+
+    pub fn live(&self) -> std::collections::HashSet<i64> {
+        self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner()).holds.keys().copied().collect()
+    }
+
     pub fn with_twins(&self, ids: &[i64]) -> Vec<i64> {
         let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut all = ids.to_vec();
@@ -237,11 +247,19 @@ impl Home {
             }
 
             let twins = numa_io::analysis::twins(photos.iter().map(|photo| (photo.id, photo.path.as_path(), photo.taken)), numa_io::raw::is_raw);
-            shelf.order.insert(library, photos.iter().map(|photo| photo.id).filter(|id| !twins.contains_key(id)).collect());
+
+            let held = numa_io::video::holds(photos.iter().map(|photo| (photo.id, photo.path.as_path())), |path| numa_io::raw::is_supported(path));
+            let hidden: std::collections::HashSet<i64> = held.values().copied().collect();
+            shelf.order.insert(library, photos.iter().map(|photo| photo.id).filter(|id| !twins.contains_key(id) && !hidden.contains(id)).collect());
             shelf.twins.retain(|raw, _| library_of(*raw) != library);
+            shelf.holds.retain(|still, _| library_of(*still) != library);
             for (twin, raw) in twins {
                 shelf.twins.entry(raw).or_default().push(twin);
             }
+            for (&still, &video) in &held {
+                shelf.twins.entry(still).or_default().push(video);
+            }
+            shelf.holds.extend(held);
             shelf.files.insert(library, photos.iter().map(|photo| photo.id).collect());
             ids.extend(photos.iter().map(|photo| photo.id));
             shelf.photos.extend(photos.into_iter().map(|photo| (photo.id, photo)));

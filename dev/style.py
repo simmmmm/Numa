@@ -49,12 +49,10 @@ cairo_colour = re.compile(r'\b(?:set_source_rgba?|RGBA::new)\(\s*-?[0-9.]')
 css_size = re.compile(r'^\s*(font-size|border-radius|padding(?:-\w+)?|margin(?:-\w+)?)\s*:\s*([^;]+);', re.M)
 busy_widget = re.compile(r'\b(?:gtk|adw)::(?:Spinner|ProgressBar)::(?:new|builder)\b')
 number = re.compile(r'(-?[0-9.]+)(px|em|rem|%)?')
-# UX-078: Rust layout calls with a numeric literal. The scale is the CSS one.
 layout_one = re.compile(
     r'\b(?:set_)?(?:margin_(?:top|bottom|start|end)|spacing|row_spacing|column_spacing|width_request|height_request)\(\s*(-?\d+)\s*\)'
     r'|\bBox::new\(\s*(?:gtk::)?Orientation::\w+\s*,\s*(-?\d+)\s*\)')
 layout_both = re.compile(r'\bset_size_request\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)')
-
 
 def off_scale(prop, value):
     """How many of the values in one declaration are off their scale."""
@@ -67,19 +65,16 @@ def off_scale(prop, value):
             off += 1
     return off
 
-
 def off_layout(text):
     """How many numeric literals in Rust layout calls are off the spacing scale."""
     numbers = [n for match in layout_one.findall(text) for n in match if n]
     numbers += [n for match in layout_both.findall(text) for n in match]
     return sum(1 for n in numbers if int(n) not in SPACING and int(n) != -1)
 
-
 def strip_comments(text, css):
     if css:
         return re.sub(r'/\*.*?\*/', lambda m: "\n" * m.group().count("\n"), text, flags=re.S)
     return "\n".join(line.split("//")[0] if not line.lstrip().startswith("///") else "" for line in text.splitlines())
-
 
 def measure(root):
     debts = {check: {} for check in CHECKS}
@@ -104,7 +99,6 @@ def measure(root):
                 debts[check][key] = count
     return debts
 
-
 def read_baseline():
     base = {check: {} for check in CHECKS}
     if BASELINE.exists():
@@ -115,7 +109,6 @@ def read_baseline():
             base[check][key] = int(count)
     return base
 
-
 def write_baseline(debts):
     rows = ["# style baseline — what the design system replaces, per file. May only shrink.",
             "# check\tcount\tfile"]
@@ -124,10 +117,8 @@ def write_baseline(debts):
             rows.append(f"{check}\t{count}\t{key}")
     BASELINE.write_text("\n".join(rows) + "\n")
 
-
 def totals(debts):
     return {check: sum(d.values()) for check, d in debts.items()}
-
 
 def main():
     args = sys.argv[1:]
@@ -162,7 +153,6 @@ def main():
     print("\nstyle: " + ", ".join(f"{c} {n}" for c, n in totals(debts).items())
           + (f"; {len(shrunk)} shrank — run --baseline to lock them in" if shrunk else ""))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

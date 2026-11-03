@@ -121,6 +121,7 @@ pub async fn month(
                 let aspect = photo.aspect.or_else(|| {
                     numa_io::thumbs::cached_size(&photo.path, photo.mtime, numa_io::thumbs::LIBRARY_EDGE).map(|(w, h)| w as f32 / h as f32)
                 });
+                let aspect = aspect.or_else(|| numa_io::video::probe(&photo.path).and_then(|film| film.size).map(|(w, h)| w as f32 / h as f32));
                 let mut row = marks.tile(photo);
                 row["aspect"] = json!(aspect.unwrap_or(1.5));
                 row
@@ -134,11 +135,12 @@ pub async fn month(
 
 struct Marks {
     bursts: HashMap<(i64, i64), usize>,
+    live: HashSet<i64>,
 }
 
 impl Marks {
     fn of<'a>(server: &Server, photos: impl IntoIterator<Item = &'a Photo>) -> Self {
-        let mut marks = Marks { bursts: HashMap::new() };
+        let mut marks = Marks { bursts: HashMap::new(), live: server.home.live() };
         for library in photos.into_iter().map(|photo| library_of(photo.id)).collect::<HashSet<i64>>() {
             let files = server.home.files(library);
             for burst in files.iter().filter_map(|photo| photo.burst) {
@@ -152,11 +154,21 @@ impl Marks {
         let library = library_of(photo.id);
         let stack = photo.burst.filter(|_| photo.best_of_burst).and_then(|burst| self.bursts.get(&(library, burst)));
 
-        json!({
+        let mut row = json!({
             "id": photo.id, "name": photo.path.file_name().map(|name| name.to_string_lossy()), "taken": when(photo),
             "rating": photo.rating, "flag": crate::photos::flag_name(photo.flag), "edited": photo.edited, "raw": numa_io::raw::is_raw(&photo.path),
             "stack": stack,
-        })
+        });
+
+        if numa_io::video::is_video(&photo.path) {
+            row["video"] = json!(true);
+            row["seconds"] = json!(numa_io::video::probe(&photo.path).and_then(|film| film.seconds));
+            row["poster"] = json!(crate::video::ffmpeg().is_some());
+        }
+        if self.live.contains(&photo.id) {
+            row["live"] = json!(true);
+        }
+        row
     }
 }
 
@@ -308,7 +320,11 @@ pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
 
     let rows = albums.into_iter().filter_map(|(ids, key, name)| {
         let count = ids.iter().filter(|id| shown.contains(id)).count();
-        (count > 0).then(|| json!({ "key": key, "name": name, "count": count }))
+        let owner = server.store.album_owner(&key);
+        let mine = owner.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(&me.name));
+        let people = server.store.album_people(&key).len();
+        let add = crate::shared::may_add(&server.store, &me, &key);
+        (count > 0).then(|| json!({ "key": key, "name": name, "count": count, "owner": owner, "mine": mine, "people": people, "add": add }))
     });
     Ok(Json(rows.collect()))
 }
@@ -324,11 +340,15 @@ async fn seen(server: &Arc<Server>, me: &Account, key: &str) -> Result<(), Fail>
         let key = key.to_string();
         move |catalog| catalog.albums().unwrap_or_default().iter().any(|(have, _)| *have == key)
     });
-    if !known.await? || !me.admin && !ids.iter().any(|id| me.sight.level(*id) >= Level::View) {
+
+    let owner = server.store.album_owner(key);
+    let owns = owner.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(&me.name));
+    if !known.await? || !me.admin && !owns && !ids.iter().any(|id| me.sight.level(*id) >= Level::View) {
         return Err(Fail(StatusCode::NOT_FOUND, "There is no such album.".into()));
     }
-    match me.admin || ids.iter().all(|id| me.sight.level(*id) == Level::Edit) {
+    match me.admin || owns || owner.is_none() && ids.iter().all(|id| me.sight.level(*id) == Level::Edit) {
         true => Ok(()),
+        false if owner.is_some() => Err(Fail(StatusCode::FORBIDDEN, "Only the album's owner changes this album.".into())),
         false => Err(Fail(StatusCode::FORBIDDEN, "Only someone who may edit every photograph in it changes this album.".into())),
     }
 }
@@ -343,7 +363,9 @@ pub async fn rename_album(State(server): State<Arc<Server>>, Signed(me): Signed,
 
 pub async fn delete_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>) -> Result<Json<Value>, Fail> {
     seen(&server, &me, &key).await?;
+    let gone = key.clone();
     server.home.ask(move |catalog| catalog.delete_album(&key)).await?.map_err(Fail::bad)?;
+    server.store.forget_album(&gone);
     server.home.forget_albums();
     Ok(Json(json!({ "deleted": true })))
 }
@@ -469,6 +491,8 @@ pub struct Since {
     gone: Option<u8>,
 
     synced: Option<u8>,
+
+    videos: Option<u8>,
 }
 
 pub async fn in_step(
@@ -484,10 +508,12 @@ pub async fn in_step(
     let library = library.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
     let since = asked.since.unwrap_or(0);
     let updated = server.store.updated();
+    let videos = asked.videos == Some(1);
     let photos = server.home.files(id);
     let mut rows = tokio::task::spawn_blocking(move || {
         photos
             .iter()
+            .filter(|photo| videos || !numa_io::video::is_video(&photo.path))
             .filter_map(|photo| {
                 let changed = updated.get(&photo.id).copied().unwrap_or(0).max(photo.mtime);
                 (changed > since).then(|| {

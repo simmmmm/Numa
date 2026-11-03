@@ -19,8 +19,9 @@ use crate::{Fail, Server};
 pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {
     let photo = server.home.photo(&me, id, Level::View)?;
     let path = photo.path.clone();
+    let video = numa_io::video::is_video(&path);
 
-    let (summary, spot) = {
+    let (summary, spot) = if video { (None, None) } else {
         let (server, photo) = (server.clone(), photo.clone());
         tokio::task::spawn_blocking(move || (numa_io::raw::summary(&path), crate::map::spot_of(&server, &photo))).await.map_err(Fail::internal)?
     };
@@ -48,8 +49,11 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
     .flatten()
     .collect();
     let size = summary.map(|summary| summary.sensor).filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| format!("{w} × {h}"));
+    let film = video.then(|| numa_io::video::probe(&photo.path)).flatten();
     let mut said = json!({
         "id": id,
+        "video": video.then(|| json!({ "seconds": film.and_then(|film| film.seconds), "size": film.and_then(|film| film.size).map(|(w, h)| format!("{w} × {h}")), "type": numa_io::video::content_type(&photo.path) })),
+        "live": server.home.hold_of(id).is_some(),
         "name": photo.path.file_name().map(|name| name.to_string_lossy()),
         "taken": when(&photo),
         "camera": summary.and_then(|summary| summary.camera.clone()),
@@ -69,6 +73,9 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
 
         "level": me.sight.level(id),
     });
+    if let Some((w, h)) = film.and_then(|film| film.size) {
+        said["size"] = json!(format!("{w} × {h}"));
+    }
     said.as_object_mut().expect("an object").extend(crate::map::said(spot).as_object().cloned().unwrap_or_default());
     Ok(Json(said))
 }
@@ -86,7 +93,7 @@ pub async fn sharpness_now(State(server): State<Arc<Server>>, Signed(me): Signed
         let (frame, faces, face_sharpness, _) = tokio::task::spawn_blocking(move || numa_io::analysis::measure_photo(&path))
             .await
             .map_err(Fail::internal)?
-            .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not read this photograph: {err}")))?;
+            .map_err(Fail::unreadable)?;
 
         photo.sharpness = Some(frame.sharpness);
         photo.blown = Some(frame.blown);
@@ -129,7 +136,14 @@ pub(crate) async fn edits(server: &Server, photo: &Photo) -> Result<Option<Strin
 
 async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, edge: u32, headers: HeaderMap) -> Result<Response, Fail> {
     let photo = server.home.photo(&me, id, Level::View)?;
-    let edits = edits(&server, &photo).await?;
+
+    let video = numa_io::video::is_video(&photo.path);
+    let edge = match (video, edge <= thumbs::LIBRARY_EDGE) {
+        (false, _) => edge,
+        (true, true) => thumbs::LIBRARY_EDGE,
+        (true, false) => thumbs::STEPS[0],
+    };
+    let edits = if video { None } else { edits(&server, &photo).await? };
     let tag = format!("\"{:x}\"", fnv(&format!("{}\0{}\0{edge}\0{}", photo.path.display(), photo.mtime, edits.as_deref().unwrap_or(""))));
     if headers.get(header::IF_NONE_MATCH).is_some_and(|asked| asked.as_bytes() == tag.as_bytes()) {
         return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag)]).into_response());
@@ -144,7 +158,10 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
         None => {
             let _turn = server.decodes.acquire().await.map_err(Fail::internal)?;
             tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-                let image = thumbs::load(&photo.path, photo.mtime, edge, edits.as_deref())?;
+                let image = match video {
+                    true => crate::video::poster(&photo.path, photo.mtime, edge).unwrap_or_else(|_| crate::video::placeholder(&photo.path, edge)),
+                    false => thumbs::load(&photo.path, photo.mtime, edge, edits.as_deref())?,
+                };
 
                 if let Some(bytes) = thumbs::cached(&photo.path, photo.mtime, edge, edits.as_deref()).and_then(|file| std::fs::read(file).ok()) {
                     return Ok(bytes);
@@ -155,7 +172,7 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
             })
             .await
             .map_err(Fail::internal)?
-            .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not read this photograph: {err}")))?
+            .map_err(Fail::unreadable)?
         }
     };
     reshape(&server, id, kept, &bytes).await;

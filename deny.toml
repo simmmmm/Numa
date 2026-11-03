@@ -12,3 +12,8 @@ allow = [
     "CDLA-Permissive-2.0", "Unlicense", "IJG", "LGPL-2.1-only",
 ]
 unused-allowed-license = "allow"
+
+# RUSTSEC-2024-0436: paste is unmaintained, a proc-macro pulled in by rav1e
+# (numa-io's AVIF encoder). No newer rav1e drops it; it is not a vulnerability.
+[advisories]
+ignore = ["RUSTSEC-2024-0436"]

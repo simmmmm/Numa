@@ -23,7 +23,7 @@ pub struct Into {
     dir: Option<String>,
 }
 
-fn file_name(asked: &str) -> Result<String, Fail> {
+pub(crate) fn file_name(asked: &str) -> Result<String, Fail> {
     let name = asked.rsplit(['/', '\\']).next().unwrap_or_default().trim();
     let fine = !name.is_empty() && name.len() <= 255 && !name.starts_with('.') && !name.chars().any(char::is_control);
     match fine {
@@ -55,8 +55,8 @@ pub async fn send(
     body: Body,
 ) -> Result<Response, Fail> {
     let name = file_name(&asked)?;
-    if !numa_io::raw::is_supported(FilePath::new(&name)) {
-        return Err(Fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("{name} is not a photograph Numa reads.")));
+    if !numa_io::raw::is_supported(FilePath::new(&name)) && !numa_io::video::is_video(FilePath::new(&name)) {
+        return Err(Fail(StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("{name} is not a photograph or video Numa reads.")));
     }
 
     let told = match headers.get("x-numa-sha256") {
@@ -84,18 +84,29 @@ pub async fn send(
     tokio::fs::create_dir_all(&incoming).await.map_err(Fail::internal)?;
     sweep(&incoming);
     let part = Part(incoming.join(format!("{}-{name}", &auth::token().0[..16])));
-    let got = receive(body, &part.0).await?;
+    let got = receive(body, &part.0, LARGEST, "That file is larger than any photograph.").await?;
     if told.as_ref().is_some_and(|told| *told != got) {
         return Err(Fail::bad("The file changed on the way: its SHA-256 is not the one sent with it."));
     }
     if let Some(id) = already(&got) {
         return duplicate(id);
     }
+
+    if folder.is_none() {
+        let (files, name, part, got) = (server.home.files(library.id), name.clone(), part.0.clone(), got.clone());
+        let found = tokio::task::spawn_blocking(move || same_file(files.iter().map(|photo| (photo.id, photo.path.as_path())), &name, &part, &got)).await.map_err(Fail::internal)?;
+        if let Some(id) = found {
+            if let Some(token) = auth::presented(&headers) {
+                server.store.note_arrival(&auth::digest(&token));
+            }
+            return duplicate(id);
+        }
+    }
     let sha256 = got;
 
     let placed = {
         let (part, library, name, sha256) = (part.0.clone(), library.clone(), name.clone(), sha256.clone());
-        tokio::task::spawn_blocking(move || place(&part, &library, folder, &name, &sha256, hinted)).await.map_err(Fail::internal)?
+        tokio::task::spawn_blocking(move || place(&part, &library, folder, &name, &sha256, hinted, true)).await.map_err(Fail::internal)?
     }?;
     let (target, duplicate) = placed;
     let kept = target.strip_prefix(&library.path).unwrap_or(&target).to_string_lossy().into_owned();
@@ -114,7 +125,7 @@ pub async fn send(
     Ok((status, Json(serde_json::json!({ "id": id, "duplicate": duplicate }))).into_response())
 }
 
-struct Part(PathBuf);
+pub(crate) struct Part(pub(crate) PathBuf);
 
 impl Drop for Part {
     fn drop(&mut self) {
@@ -133,7 +144,7 @@ fn sweep(incoming: &FilePath) {
     }
 }
 
-async fn destination(server: &Arc<Server>, me: &crate::store::Account, asked: Option<i64>) -> Result<Library, Fail> {
+pub(crate) async fn destination(server: &Arc<Server>, me: &crate::store::Account, asked: Option<i64>) -> Result<Library, Fail> {
     let account = me.name.as_str();
     let seen = server.home.libraries(me);
     if let Some(id) = asked {
@@ -156,7 +167,7 @@ async fn destination(server: &Arc<Server>, me: &crate::store::Account, asked: Op
         .map_err(Fail::internal)
 }
 
-async fn receive(body: Body, part: &FilePath) -> Result<String, Fail> {
+pub(crate) async fn receive(body: Body, part: &FilePath, largest: u64, too_large: &str) -> Result<String, Fail> {
     let mut file = tokio::fs::File::create(part).await.map_err(Fail::internal)?;
     let mut hasher = Sha256::new();
     let mut length = 0u64;
@@ -164,8 +175,8 @@ async fn receive(body: Body, part: &FilePath) -> Result<String, Fail> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| Fail::bad("The file stopped arriving part-way."))?;
         length += chunk.len() as u64;
-        if length > LARGEST {
-            return Err(Fail(StatusCode::PAYLOAD_TOO_LARGE, "That file is larger than any photograph.".into()));
+        if length > largest {
+            return Err(Fail(StatusCode::PAYLOAD_TOO_LARGE, too_large.into()));
         }
         hasher.update(&chunk);
         file.write_all(&chunk).await.map_err(Fail::internal)?;
@@ -175,7 +186,7 @@ async fn receive(body: Body, part: &FilePath) -> Result<String, Fail> {
     Ok(auth::hex(&hasher.finalize()))
 }
 
-fn place(part: &FilePath, library: &Library, folder: Option<PathBuf>, name: &str, sha256: &str, hinted: Option<i64>) -> Result<(PathBuf, bool), Fail> {
+pub(crate) fn place(part: &FilePath, library: &Library, folder: Option<PathBuf>, name: &str, sha256: &str, hinted: Option<i64>, compare: bool) -> Result<(PathBuf, bool), Fail> {
     let folder = match folder {
         Some(folder) => library.path.join(folder),
         None => {
@@ -191,10 +202,16 @@ fn place(part: &FilePath, library: &Library, folder: Option<PathBuf>, name: &str
         let _ = std::fs::remove_file(part);
         return Err(Fail::bad("That folder is not inside the library."));
     }
-    land(part, &folder, name, sha256)
+    land(part, &folder, name, sha256, compare)
 }
 
-fn land(part: &FilePath, folder: &FilePath, name: &str, sha256: &str) -> Result<(PathBuf, bool), Fail> {
+fn same_file<'a>(files: impl Iterator<Item = (i64, &'a FilePath)>, name: &str, part: &FilePath, sha256: &str) -> Option<i64> {
+    let size = std::fs::metadata(part).ok()?.len();
+    let mut named = files.filter(|(_, path)| path.file_name().is_some_and(|there| there == name));
+    named.find(|(_, path)| std::fs::metadata(path).is_ok_and(|meta| meta.len() == size) && auth::sha256_of(path).is_ok_and(|there| there == sha256)).map(|(id, _)| id)
+}
+
+fn land(part: &FilePath, folder: &FilePath, name: &str, sha256: &str, compare: bool) -> Result<(PathBuf, bool), Fail> {
     let path = FilePath::new(name);
     let (stem, extension) = (path.file_stem().unwrap_or_default().to_string_lossy(), path.extension().map(|ext| ext.to_string_lossy()));
     for n in 1..1000 {
@@ -214,27 +231,46 @@ fn land(part: &FilePath, folder: &FilePath, name: &str, sha256: &str) -> Result<
             }
             Err(_) => {}
         }
-        if auth::sha256_of(&candidate).is_ok_and(|there| there == sha256) {
+        if compare && auth::sha256_of(&candidate).is_ok_and(|there| there == sha256) {
             let _ = std::fs::remove_file(part);
             return Ok((candidate, true));
         }
     }
-    let _ = std::fs::remove_file(part);
-    Err(Fail::bad("There are too many files of that name in that folder."))
+
+    let tag = &sha256[..sha256.len().min(16)];
+    let candidate = match &extension {
+        Some(extension) => folder.join(format!("{stem} ({tag}).{extension}")),
+        None => folder.join(format!("{stem} ({tag})")),
+    };
+    match std::fs::hard_link(part, &candidate) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(part);
+            Ok((candidate, false))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(part);
+            Ok((candidate, true))
+        }
+        Err(err) => Err(Fail::internal(err)),
+    }
 }
 
-async fn catalogue(server: &Arc<Server>, library: &Library, target: PathBuf) -> Result<i64, Fail> {
+pub(crate) async fn catalogue(server: &Arc<Server>, library: &Library, target: PathBuf) -> Result<i64, Fail> {
     let (library, home) = (library.clone(), server.clone());
     let stamp = {
         let target = target.clone();
-        tokio::task::spawn_blocking(move || numa_io::exif::stamp(&target)).await.map_err(Fail::internal)?
+        tokio::task::spawn_blocking(move || match numa_io::video::is_video(&target) {
+            true => numa_io::video::stamp(&target),
+            false => numa_io::exif::stamp(&target),
+        })
+        .await.map_err(Fail::internal)?
     };
     let mtime = std::fs::metadata(&target)
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |since| since.as_secs() as i64);
-    let scan = Scan { files: vec![(target.clone(), mtime, stamp)], complete: false, unchanged: false, folders: Vec::new() };
+    let scan = Scan { files: vec![(target.clone(), mtime, stamp)], complete: false, ..Scan::default() };
     server
         .home
         .ask(move |catalog| {
@@ -273,7 +309,7 @@ mod tests {
             let part = folder.join(format!("part-{}", bytes.len()));
             std::fs::write(&part, bytes).unwrap();
             let sha256 = auth::sha256_of(&part).unwrap();
-            let landed = land(&part, &folder, "IMG_0001.HEIC", &sha256).unwrap();
+            let landed = land(&part, &folder, "IMG_0001.HEIC", &sha256, true).unwrap();
             assert!(!part.exists(), "the part is gone once placed");
             landed
         };
@@ -281,6 +317,56 @@ mod tests {
         assert_eq!(send(b"second"), (folder.join("IMG_0001 (2).HEIC"), false));
         assert_eq!(send(b"first"), (folder.join("IMG_0001.HEIC"), true));
         assert_eq!(std::fs::read(folder.join("IMG_0001.HEIC")).unwrap(), b"first");
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_not_lost_for_the_want_of_a_name() {
+        let folder = std::env::temp_dir().join(format!("numa-land-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let part = |bytes: &[u8]| {
+            let part = folder.join("part");
+            std::fs::write(&part, bytes).unwrap();
+            (part.clone(), auth::sha256_of(&part).unwrap())
+        };
+        let (first, sha) = part(b"one");
+        assert_eq!(land(&first, &folder, "IMG.HEIC", &sha, false).unwrap(), (folder.join("IMG.HEIC"), false));
+        let (again, sha) = part(b"one");
+        assert_eq!(land(&again, &folder, "IMG.HEIC", &sha, false).unwrap(), (folder.join("IMG (2).HEIC"), false), "not compared: a second file");
+        let (again, sha) = part(b"one");
+        assert_eq!(land(&again, &folder, "IMG.HEIC", &sha, true).unwrap(), (folder.join("IMG.HEIC"), true), "compared: the one already there");
+        for n in 3..1000 {
+            std::fs::write(folder.join(format!("IMG ({n}).HEIC")), b"other").unwrap();
+        }
+        let (last, sha) = part(b"the thousandth");
+        let (placed, duplicate) = land(&last, &folder, "IMG.HEIC", &sha, false).unwrap();
+        assert!(!duplicate && placed == folder.join(format!("IMG ({}).HEIC", &sha[..16])), "{placed:?}");
+        assert_eq!(std::fs::read(&placed).unwrap(), b"the thousandth");
+        assert!(!last.exists());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn the_same_file_is_found_in_another_folder() {
+        let folder = std::env::temp_dir().join(format!("numa-same-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(folder.join("japan")).unwrap();
+        std::fs::create_dir_all(folder.join("italy")).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = folder.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let part = write("part", b"first");
+        let sha256 = auth::sha256_of(&part).unwrap();
+        let same = write("japan/IMG.RAF", b"first");
+        let other_bytes = write("italy/IMG.RAF", b"other");
+        let renamed = write("japan/OTHER.RAF", b"first");
+        let found = |files: &[(i64, &FilePath)]| same_file(files.iter().copied(), "IMG.RAF", &part, &sha256);
+        assert_eq!(found(&[(1, &other_bytes), (2, &same)]), Some(2));
+        assert_eq!(found(&[(1, &other_bytes), (3, &renamed)]), None);
         std::fs::remove_dir_all(&folder).unwrap();
     }
 

@@ -75,7 +75,7 @@ pub fn embedded_preview(path: &Path) -> Result<Option<DynamicImage>, String> {
             .or_else(|| embedded(decoder.thumbnail_image(&source, &params).ok().flatten())),
     };
 
-    let image = image.or_else(|| orf::maker_note_jpeg(path).and_then(|jpeg| image::load_from_memory(&jpeg).ok()));
+    let image = image.or_else(|| orf::maker_note_jpeg(path).and_then(|jpeg| decode_bounded(&jpeg).ok()));
     let Some(image) = image else { return Ok(None) };
 
     let orientation = decoder
@@ -211,7 +211,7 @@ fn heif_preview(
         return heif_item(context, item);
     }
     let data = context.item_data(item).map_err(|err: heic_rs::Error| err.to_string())?;
-    let image = image::load_from_memory(&data).map_err(|err| err.to_string())?;
+    let image = decode_bounded(&data)?;
     let turns = match props.transforms.is_empty() {
         true => transforms,
         false => &props.transforms,
@@ -275,6 +275,11 @@ fn heif_item(
         let config = props.hvcc.as_ref().ok_or("no HEVC configuration")?;
         let data = context.item_data(item).map_err(text)?;
         let slices = config.split_nals(&data).map_err(text)?;
+
+        let seen = heic_rs::hevc::probe(&config.parameter_sets()).map_err(text)?;
+        if u64::from(seen.width) * u64::from(seen.height) > limit {
+            return Err(too_many_pixels(seen.width, seen.height));
+        }
         let frame = heic_rs::hevc::decode_still(&config.parameter_sets(), &slices).map_err(text)?;
         frame.validate().map_err(text)?;
         Ok(frame)
@@ -303,6 +308,20 @@ fn heif_item(
         .ok_or_else(|| "decoded buffer has the wrong size".to_string())
 }
 
+pub const MAX_PIXELS: u64 = heic_rs::DEFAULT_MAX_PIXELS;
+
+pub fn header_pixels(path: &Path) -> Option<u64> {
+    use image::ImageDecoder;
+
+    let decoder = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_decoder().ok()?;
+    let (width, height) = decoder.dimensions();
+    Some(u64::from(width) * u64::from(height))
+}
+
+fn too_many_pixels(width: u32, height: u32) -> String {
+    format!("{width} x {height} pixels is more than the {} megapixels a photograph may have", MAX_PIXELS / 1_000_000)
+}
+
 fn orient_image(mut image: DynamicImage, orientation: rawler::Orientation) -> DynamicImage {
     let (transpose, flip_x, flip_y) = orientation.to_flips();
 
@@ -319,6 +338,21 @@ fn orient_image(mut image: DynamicImage, orientation: rawler::Orientation) -> Dy
     image
 }
 
+const MAX_DECODE: u64 = 1 << 30;
+
+pub(crate) fn bounded(decoder: &impl image::ImageDecoder) -> Result<(), String> {
+    match decoder.total_bytes() <= MAX_DECODE {
+        true => Ok(()),
+        false => Err(format!("a picture of {}x{} is too large to open", decoder.dimensions().0, decoder.dimensions().1)),
+    }
+}
+
+pub(crate) fn decode_bounded(bytes: &[u8]) -> Result<DynamicImage, String> {
+    let decoder = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|err| err.to_string())?.into_decoder().map_err(|err| err.to_string())?;
+    bounded(&decoder)?;
+    DynamicImage::from_decoder(decoder).map_err(|err| err.to_string())
+}
+
 fn open_upright(path: &Path) -> Result<(image::DynamicImage, ColourSpace), String> {
     use image::ImageDecoder;
 
@@ -332,6 +366,12 @@ fn open_upright(path: &Path) -> Result<(image::DynamicImage, ColourSpace), Strin
         .map_err(|err| fail(err.to_string()))?
         .into_decoder()
         .map_err(|err| fail(err.to_string()))?;
+
+    let (width, height) = decoder.dimensions();
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(fail(too_many_pixels(width, height)));
+    }
+    bounded(&decoder).map_err(fail)?;
 
     let orientation = decoder.orientation().map_err(|err| fail(err.to_string()))?;
     let space = decoder.icc_profile().ok().flatten().map_or(ColourSpace::Srgb, |icc| icc_space(&icc));
@@ -373,6 +413,26 @@ pub fn load_scaled(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PIXEL_BOMB: [u8; 47] = [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0xea, 0x60, 0x00, 0x00, 0xea, 0x60, 0x01, 0x00, 0x00, 0x00, 0x00, 0xa8, 0xa9, 0x48, 0xef, 0x00, 0x00, 0x00, 0x02, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x62, 0xa4, 0x91, 0x2b,
+    ];
+
+    #[test]
+    fn a_header_that_declares_billions_of_pixels_is_refused() {
+        let dir = std::env::temp_dir().join(format!("numa-bomb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bomb = dir.join("bomb.png");
+        std::fs::write(&bomb, PIXEL_BOMB).unwrap();
+        assert_eq!(header_pixels(&bomb), Some(3_600_000_000));
+        let refused = load_scaled(&bomb, 256).unwrap_err();
+        assert!(refused.contains("megapixels a photograph may have"), "{refused}");
+        let fine = dir.join("fine.png");
+        image::RgbImage::from_pixel(64, 48, image::Rgb([9, 9, 9])).save(&fine).unwrap();
+        assert_eq!(header_pixels(&fine), Some(64 * 48));
+        assert_eq!(load_scaled(&fine, 256).unwrap().dimensions(), (64, 48));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     pub(crate) fn cc0_raws() -> std::path::PathBuf {
         std::env::var_os("NUMA_CC0_RAWS").map_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../raws-cc0"), std::path::PathBuf::from)

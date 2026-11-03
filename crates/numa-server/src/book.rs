@@ -44,10 +44,11 @@ fn list(text: Option<&str>) -> Vec<i64> {
 
 async fn plan(server: &Arc<Server>, me: &Account, asked: &Asked, wanted: &Wanted) -> Result<Book, Fail> {
     let ids = list(asked.ids.as_deref());
-    let photos: Vec<Photo> = match ids.is_empty() {
+    let mut photos: Vec<Photo> = match ids.is_empty() {
         false => crate::selection::chosen(server, me, &ids, false, false, crate::grants::Level::View)?.into_iter().map(|(_, photo)| photo).collect(),
         true => crate::timeline::chosen(server, me, wanted).await?.into_iter().filter(|photo| photo.flag == Flag::Picked).collect(),
     };
+    photos.retain(|photo| !numa_io::video::is_video(&photo.path));
     if photos.is_empty() {
         return Err(Fail::bad("Pick the photographs for the book first (P), or choose them."));
     }

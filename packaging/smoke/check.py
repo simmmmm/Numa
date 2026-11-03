@@ -7,18 +7,15 @@ from PIL import Image
 
 name, out, release, table = sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 
-
 def read(file):
     path = out / file
     return path.read_text(errors="replace").strip() if path.exists() else ""
-
 
 def last_error(text):
     lines = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("+ ")]
     pattern = re.compile(r"error|^E:|failed|not found|no match|cannot|unable|nothing provides|no answer", re.I)
     found = [line for line in lines if pattern.search(line)]
     return (found or lines or ["no output"])[-1][:300]
-
 
 stage, why, status, log = read("stage"), read("why"), read("exit"), read("self-test.log")
 package = read("package")

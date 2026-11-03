@@ -1,24 +1,15 @@
-// HOME-040: search with tokens. One field holds the page's filters as
-// tokens, then the words being typed. Typing suggests things, places,
-// people, cameras, dates and libraries, each with how many photographs it
-// keeps among the tokens already there. A token is the Filter menu's chip:
-// the same parameter of the address, shown in both places.
 'use strict';
 
-// What a token can be, in the order they stand (FILTERS'), and its kind's word.
 const TOKEN_KINDS = { library: S.library, person: S.person, place: S.placeLabel, region: S.placeLabel, camera: S.camera, date: S.date, thing: S.thing };
 const tokensOf = params => FILTERS.filter(key => TOKEN_KINDS[key] && params.get(key));
 const tokenSaid = (key, value, list = state.libraries) => key === 'library'
   ? libraryName(list?.find(one => String(one.id) === value) || { name: S.library })
   : key === 'date' ? dateName(value) : value;
-// Set before a token changes the page: the new page's field takes the focus,
-// so the keys go on where they were. Not on touch, where it would raise the keyboard.
+
 let refocus = false;
 
-// Folded for matching: no case and no accents, so "sao" finds São Paulo.
 const fold = text => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-// Where each typed word starts a word of `name` ("bea" in Beasain, "sao pa"
-// in São Paulo), as [from, to] in its characters; null when one does not.
+
 function matched(name, words) {
   const chars = [...name], at = [];
   let low = '';
@@ -36,7 +27,7 @@ function matched(name, words) {
   }
   return spans;
 }
-// A name with the typed part in bold.
+
 function emphasised(label, spans) {
   const parts = [];
   [...label].forEach((c, i) => {
@@ -47,9 +38,6 @@ function emphasised(label, spans) {
   return parts.map(part => part.bold ? h('b', {}, part.text) : part.text);
 }
 
-// What the suggestions are made of, asked once the field is typed in: the
-// Filter menu's choices, where the photographs were taken (regions too) and
-// their months, each counted among the page's filters but its own.
 function suggestionData(params) {
   const but = (...keys) => narrowedBy(params).filter(([key]) => key !== 'q' && !keys.includes(key));
   const ask = (path, pairs) => api(path + '?' + new URLSearchParams(pairs), { quiet: true }).catch(() => null);
@@ -62,7 +50,6 @@ function suggestionData(params) {
   };
 }
 
-// Countries, regions and towns, each with how many photographs were taken there.
 function placeRows(places, row) {
   const counts = new Map();
   const add = (key, value, label) => {
@@ -78,8 +65,6 @@ function placeRows(places, row) {
   return [...counts.values()].map(([key, value, label, n]) => row(key, value, value, n, label));
 }
 
-// A year, a month ("2025-03", "March 2025", "mar 2025") or a day ("2025-03-14"),
-// offered only when photographs were taken then.
 async function dateRows(data, months, text, row) {
   months = (months || []).filter(({ month }) => /^\d{4}-\d{2}$/.test(month));
   const years = new Map();
@@ -93,7 +78,6 @@ async function dateRows(data, months, text, row) {
   return rows;
 }
 
-// The sections in the spec's order, each its three that keep the most.
 async function suggestions(data, text) {
   const words = fold(text).split(/\s+/).filter(Boolean);
   const [filters, places, months, list] = await Promise.all([data.filters, data.places, data.months, libraries().catch(() => [])]);
@@ -115,8 +99,6 @@ async function suggestions(data, text) {
   return sections.map(([label, rows]) => [label, best(rows)]).filter(([, rows]) => rows.length);
 }
 
-// The header's field: the tokens, the words, and under it what typing
-// suggests: a combobox and its listbox, the focus staying in the field.
 function searchField(params) {
   const tokens = tokensOf(params);
   const field = h('input', {
@@ -125,7 +107,7 @@ function searchField(params) {
   });
   const box = h('div', { class: 'menu suggest', id: 'suggestions', role: 'listbox', 'aria-label': S.suggestions, hidden: true,
     onmousedown: event => event.preventDefault(),
-    // On a phone the list is the screen's height: its empty part closes it.
+
     onclick: event => { if (event.target === box) field.blur(); } });
   let data = null, options = [], at = -1;
   const highlight = to => {

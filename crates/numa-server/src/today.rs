@@ -102,7 +102,7 @@ pub async fn today(State(server): State<Arc<Server>>, Signed(me): Signed, Query(
             if let Some(at) = new.iter().map(|id| arrived[id]).max().filter(|_| named.contains_key(&library.id)) {
                 came.push((at, library.id, new));
             }
-            taken.extend(shelf.iter().filter(|photo| !own.is_set() || own.keeps(photo.id)).map(|photo| (photo.id, when(photo), photo.rating, photo.flag)));
+            taken.extend(shelf.iter().filter(|photo| !numa_io::video::is_video(&photo.path) && (!own.is_set() || own.keeps(photo.id))).map(|photo| (photo.id, when(photo), photo.rating, photo.flag)));
             if let Some((name, mine)) = named.get(&library.id).filter(|_| !shelf.is_empty()) {
                 let front: Vec<i64> = shelf.iter().take(3).map(|photo| photo.id).collect();
                 shelves.push(json!({ "library": library.id, "name": name, "mine": mine, "count": shelf.len(), "ids": front }));

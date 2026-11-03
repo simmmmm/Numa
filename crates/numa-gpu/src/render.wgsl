@@ -1,80 +1,41 @@
-// RENDER-017: the proxy's render on the card — numa-render's arithmetic, step
-// for step, from its own source (`to_working_space`, `detail::denoise_colour`,
-// `apply_basic`, `Look::apply`, `encode`). What each stage is for is written
-// there; here is only how the card does it. `numa_render::card::plan` makes
-// every table and constant, and says when the document asks for a stage this
-// file does not have.
-//
-// One index per pixel: `colour` over the proxy (the camera's values into
-// linear sRGB, into `lin`), `geometry` (the mirror, the quarter turn and the
-// crop, into `work`, only when there are any), `blur_rows` (the first half of
-// colour noise reduction's box, only when it is on) and `finish` (the rest of
-// the stack, the eight bits, the histogram of every fourth pixel and the
-// clipping overlay), those three over the frame rendered: `lin`, or `work`
-// with geometry. `lin` is kept: a render whose colour stage is the last one's
-// (any slider but the white balance and the profile) starts from it.
-//
-// RENDER-020: with masks, `finish` leaves the photograph's own adjustments in
-// `work`; each mask is then a `mask` pass over it (after `mask_rows` where it
-// has colour noise reduction of its own), faded in by its field, and `encode`
-// does what comes after the masks and the eight bits.
-//
-// A mask with luminance noise reduction or HDR, Clarity or Texture of its own
-// works on a copy of the frame in `planes`, as `apply_masks` does: `mask_copy`
-// (the copy with its white balance, and its log luminance), the luminance
-// passes on it; `mask` up to its tone map, into the copy; the tone map on it;
-// `mask` from there, faded in.
-//
-// RENDER-021: the passes that read a pixel's neighbourhood work on planes of
-// one value — log luminance, its box blurs, a guided filter's a and b — in
-// `planes`, each pass told by its `step` what to read and write. Luminance
-// noise reduction runs between the geometry and colour noise reduction
-// (`luma_log`, a guided filter, `luma_apply` into `work`); HDR, Clarity and
-// Texture after `finish` (which then also writes the log luminance): a
-// quarter-size plane, its guided filter, the glow, Texture's guided filter
-// over the frame, the base's mean (`pivot_sum`, `pivot_total`) and
-// `tone_apply`.
-
-// One set of per-pixel adjustments: the photograph's (`p.adjust`) or a
-// mask's (`masks`). Offsets are into `tables`.
 struct Adjust {
-    flags: vec4<u32>,          // what it does, the tone curve's offset and length, the mixer table's offset
-    basic: vec4<f32>,          // gain, contrast slope, saturation, vibrance
+    flags: vec4<u32>,
+    basic: vec4<f32>,
     mix_dims: vec4<u32>,
     mix_in: array<vec4<f32>, 3>,
     mix_out: array<vec4<f32>, 3>,
-    places: vec4<u32>,         // the points' offset and count, the highlighted point's offset + 1, the grade's offset
-    more: vec4<u32>,           // black and white's offset; a mask's curves' offset, field's offset, colour NR's radius
-    gains: vec4<f32>,          // a mask's white balance gains, its colour NR's amount
-    tint: vec4<f32>,           // a mask's Color at a luminance of 1, its strength
-    grain: vec4<f32>,          // a mask's grain: strength, lattice cell, roughness
+    places: vec4<u32>,
+    more: vec4<u32>,
+    gains: vec4<f32>,
+    tint: vec4<f32>,
+    grain: vec4<f32>,
 };
 
 struct Params {
-    size: vec4<u32>,           // width, height, flags, groups_x: the frame rendered
-    src: vec4<u32>,            // the proxy's width, height, its groups_x, geometry flags
-    out_info: vec4<u32>,       // row stride in pixels, overlay (1 shadows, 2 highlights), map offset, look offset
-    mult: vec4<f32>,           // white balance multipliers, the lowest of them
-    misc: vec4<f32>,           // clip (0 = none), colour NR amount, its radius, the base curve's toe
-    m_in: array<vec4<f32>, 3>, // to ProPhoto (a profile), or the camera matrix
-    m_out: array<vec4<f32>, 3>,// ProPhoto to linear sRGB
-    map_dims: vec4<u32>,       // hue, saturation, value divisions, sRGB value axis
+    size: vec4<u32>,
+    src: vec4<u32>,
+    out_info: vec4<u32>,
+    mult: vec4<f32>,
+    misc: vec4<f32>,
+    m_in: array<vec4<f32>, 3>,
+    m_out: array<vec4<f32>, 3>,
+    map_dims: vec4<u32>,
     look_dims: vec4<u32>,
-    whites: vec4<f32>,         // the map's white, the look's
-    curves: vec4<u32>,         // composite, red, green, blue: 1 where there is one
-    curves_at: vec4<u32>,      // their offset
-    tone_axis: vec4<f32>,      // ToneCurve's LOW and STEP
-    crop: vec4<f32>,           // the crop's width and height, its centre in the turned frame
-    crop2: vec4<f32>,          // the turned frame's half size, sin and cos of the angle
-    keystone: vec4<f32>,       // vertical, horizontal, stretch
-    vignette: array<vec4<f32>, 2>, // `effects::vignette_shape`
-    grain: array<vec4<f32>, 2>,    // the grain's strength, lattice cell, roughness; the whole frame at full resolution
+    whites: vec4<f32>,
+    curves: vec4<u32>,
+    curves_at: vec4<u32>,
+    tone_axis: vec4<f32>,
+    crop: vec4<f32>,
+    crop2: vec4<f32>,
+    keystone: vec4<f32>,
+    vignette: array<vec4<f32>, 2>,
+    grain: array<vec4<f32>, 2>,
     adjust: Adjust,
-    base: array<vec4<f32>, 14>,// the base curve's 53 values
+    base: array<vec4<f32>, 14>,
 };
 
-const CAMERA: u32 = 1u;      // a raw: balance, clipping, profile
-const RENDERING: u32 = 2u;   // with a DNG profile, else the matrix
+const CAMERA: u32 = 1u;
+const RENDERING: u32 = 2u;
 const MAP: u32 = 4u;
 const LOOK: u32 = 8u;
 const CLIP: u32 = 16u;
@@ -83,14 +44,13 @@ const DISPLAY_REFERRED: u32 = 64u;
 const GEOMETRY: u32 = 128u;
 const VIGNETTE: u32 = 256u;
 const MASKS: u32 = 512u;
-const LUMA: u32 = 1024u;    // luminance noise reduction: the frame is in `work` after it
-const LOCAL: u32 = 2048u;   // HDR, Clarity or Texture: `finish` into `work`, `encode` after
-const DEHAZE: u32 = 4096u;  // dehaze: the frame is in `work` after it
+const LUMA: u32 = 1024u;
+const LOCAL: u32 = 2048u;
+const DEHAZE: u32 = 4096u;
 const GRAIN: u32 = 8192u;
-const KEPT: u32 = 16384u;   // the stages before the operations kept: `settle` into `kept`, `finish` from there
-const AGX: u32 = 32768u;    // AgX in the base curve's place
+const KEPT: u32 = 16384u;
+const AGX: u32 = 32768u;
 
-// `Adjust.flags.x`.
 const BASIC: u32 = 1u;
 const SLOPE: u32 = 2u;
 const TONE: u32 = 4u;
@@ -103,10 +63,9 @@ const GAINS: u32 = 256u;
 const MASK_DENOISE: u32 = 512u;
 const CURVES: u32 = 1024u;
 const TINT: u32 = 2048u;
-const CURVE_ONE: u32 = 4096u; // and the next three: composite, red, green, blue
+const CURVE_ONE: u32 = 4096u;
 const MASK_GRAIN: u32 = 65536u;
 
-// `p.src.w`: how the frame is turned.
 const MIRROR: u32 = 1u;
 const TRANSPOSE: u32 = 2u;
 const FLIP_X: u32 = 4u;
@@ -116,14 +75,12 @@ const CROP: u32 = 16u;
 const MIDDLE_GREY: f32 = 0.18;
 const LOOKUP: u32 = 256u;
 
-// What one dispatch is asked, `STEP` bytes apart in their buffer: offsets
-// are into `planes`.
 struct Step {
-    what: vec4<u32>,           // the mask, its phase, whether its copy holds its start, the copy's offset; a plane pass's feed and emit
-    at: vec4<u32>,             // source, destination, guide, second source
-    shape: vec4<u32>,          // the plane's width, height, the radius, groups_x
-    more: vec4<u32>,           // tone_apply: the glow's, Texture's band's and the pivot's offsets (0: none)
-    numbers: vec4<f32>,        // the guided filter's edge; luma_apply: contrast, amount; tone_apply: its four scales
+    what: vec4<u32>,
+    at: vec4<u32>,
+    shape: vec4<u32>,
+    more: vec4<u32>,
+    numbers: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -133,15 +90,11 @@ struct Step {
 @group(0) @binding(4) var<storage, read_write> rows: array<f32>;
 @group(0) @binding(5) var<storage, read_write> out: array<u32>;
 @group(0) @binding(6) var<storage, read_write> hist: array<atomic<u32>>;
-// RENDER-020: which mask this pass is (a dynamic offset), every mask's
-// adjustments, and their fields, two sixteen-bit weights a word.
 @group(0) @binding(7) var<uniform> step: Step;
 @group(0) @binding(8) var<storage, read> masks: array<Adjust>;
 @group(0) @binding(9) var<storage, read> fields: array<u32>;
 @group(0) @binding(10) var<storage, read_write> lin: array<f32>;
 @group(0) @binding(11) var<storage, read_write> planes: array<f32>;
-// RENDER-020: the frame the stages before the operations leave, kept from
-// one render to the next while only what comes after them moves.
 @group(0) @binding(12) var<storage, read_write> kept: array<f32>;
 
 fn has(flag: u32) -> bool {
@@ -168,7 +121,6 @@ fn luminance(v: vec3<f32>) -> f32 {
     return 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z;
 }
 
-// f32::rem_euclid(6.0), for the hues in sixths of a turn.
 fn rem6(x: f32) -> f32 {
     let r = x - 6.0 * floor(x / 6.0);
     return select(r, 0.0, r >= 6.0);
@@ -222,13 +174,11 @@ fn srgb_encode(value: f32) -> f32 {
     return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
 }
 
-// `Table::at`: value-major, then hue, then saturation.
 fn entry(start: u32, dims: vec4<u32>, h: u32, s: u32, v: u32) -> vec3<f32> {
     let at = start + ((v * dims.x + h) * dims.y + s) * 3u;
     return vec3<f32>(tables[at], tables[at + 1u], tables[at + 2u]);
 }
 
-// `Table::lookup`.
 fn lookup(start: u32, dims: vec4<u32>, hsv: vec3<f32>) -> vec3<f32> {
     let hue = hsv.x * f32(dims.x) / 6.0;
     let hf = floor(hue);
@@ -266,7 +216,6 @@ fn lookup(start: u32, dims: vec4<u32>, hsv: vec3<f32>) -> vec3<f32> {
     return mix(plane0, mix(a1, b1, ht), vt);
 }
 
-// `Table::apply`, looked up at `white` (`Rendering::through`).
 fn apply_table(start: u32, dims: vec4<u32>, white: f32, rgb_in: vec3<f32>) -> vec3<f32> {
     let rgb = rgb_in / white;
     var hsv = rgb_to_hsv(rgb);
@@ -280,7 +229,6 @@ fn apply_table(start: u32, dims: vec4<u32>, white: f32, rgb_in: vec3<f32>) -> ve
     return hsv_to_rgb(hsv) * white;
 }
 
-// `to_working_space`, for one pixel.
 @compute @workgroup_size(256)
 fn colour(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = source_index_of(wid, lid);
@@ -292,7 +240,6 @@ fn colour(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) l
     if (has(CAMERA)) {
         let mult = p.mult.xyz;
         var balanced = camera * mult;
-        // `neutralise_clipping`.
         if (has(CLIP)) {
             let clip = p.misc.x;
             let highest = max(max(camera.x, camera.y), camera.z);
@@ -325,8 +272,6 @@ fn turned(flag: u32) -> bool {
     return (p.src.w & flag) != 0u;
 }
 
-// `LinearImage::oriented`, twice: a pixel of the mirrored and turned frame
-// back to the proxy's, as an index into `lin`.
 fn from_turned(x: u32, y: u32) -> u32 {
     let w = p.src.x;
     let h = p.src.y;
@@ -353,7 +298,6 @@ fn turned_pixel(x: i32, y: i32, tw: i32, th: i32) -> vec3<f32> {
     return vec3<f32>(lin[at], lin[at + 1u], lin[at + 2u]);
 }
 
-// `LinearImage::sample` over the turned frame: bilinear, black beyond it.
 fn sample(x: f32, y: f32, tw: i32, th: i32) -> vec3<f32> {
     if (x < -1.0 || y < -1.0 || x > f32(tw) || y > f32(th)) {
         return vec3<f32>(0.0);
@@ -373,7 +317,6 @@ fn sample(x: f32, y: f32, tw: i32, th: i32) -> vec3<f32> {
     return top + (bottom - top) * ty;
 }
 
-// `geometry_of`: the mirror, the quarter turn and `LinearImage::cropped`.
 @compute @workgroup_size(256)
 fn geometry(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -391,7 +334,6 @@ fn geometry(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id)
             tw = i32(p.src.y);
             th = i32(p.src.x);
         }
-        // `source_map`.
         let dy = f32(row) - p.crop.y / 2.0 + 0.5;
         let dx = f32(column) - p.crop.x / 2.0 + 0.5;
         let sin = p.crop2.z;
@@ -423,7 +365,6 @@ fn work_at(j: u32) -> vec3<f32> {
     return vec3<f32>(work[j * 3u], work[j * 3u + 1u], work[j * 3u + 2u]);
 }
 
-// The frame the colour stage left, turned and cropped where it is.
 fn turned_at(j: u32) -> vec3<f32> {
     if (has(GEOMETRY)) {
         return work_at(j);
@@ -431,7 +372,6 @@ fn turned_at(j: u32) -> vec3<f32> {
     return vec3<f32>(lin[j * 3u], lin[j * 3u + 1u], lin[j * 3u + 2u]);
 }
 
-// The frame before luminance noise reduction: that, or dehaze's.
 fn shaped_at(j: u32) -> vec3<f32> {
     if (has(DEHAZE)) {
         return work_at(j);
@@ -439,7 +379,6 @@ fn shaped_at(j: u32) -> vec3<f32> {
     return turned_at(j);
 }
 
-// The frame before `finish`: that, or luminance noise reduction's.
 fn frame_at(j: u32) -> vec3<f32> {
     if (has(LUMA)) {
         return work_at(j);
@@ -453,7 +392,6 @@ fn put_work(i: u32, pixel: vec3<f32>) {
     work[i * 3u + 2u] = pixel.z;
 }
 
-// RENDER-020: a mask's own copy of the frame, at `step.what.w` in `planes`.
 fn copy_at(j: u32) -> vec3<f32> {
     let at = step.what.w + j * 3u;
     return vec3<f32>(planes[at], planes[at + 1u], planes[at + 2u]);
@@ -466,8 +404,6 @@ fn put_copy(i: u32, pixel: vec3<f32>) {
     planes[at + 2u] = pixel.z;
 }
 
-// Where a mask's copy starts: the frame with its white balance — or, once its
-// luminance noise reduction has run, the copy.
 fn mask_start(j: u32, m: Adjust) -> vec3<f32> {
     if (step.what.z != 0u) {
         return copy_at(j);
@@ -478,8 +414,6 @@ fn mask_start(j: u32, m: Adjust) -> vec3<f32> {
     return work_at(j);
 }
 
-// Colour noise reduction, first half: the box along the row — of the frame,
-// or of a mask's own copy.
 fn box_row(i: u32, r: i32, gains: vec3<f32>, masked: bool) {
     let width = p.size.x;
     let x = i32(i % width);
@@ -518,8 +452,6 @@ fn mask_rows(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id
     }
 }
 
-// `detail::blur_colour`'s second half: the box down the column of `rows`,
-// and its colour put back at the pixel's own brightness.
 fn recolour(pixel: vec3<f32>, i: u32, r: i32, amount: f32) -> vec3<f32> {
     let width = p.size.x;
     let x = i % width;
@@ -537,7 +469,6 @@ fn recolour(pixel: vec3<f32>, i: u32, r: i32, amount: f32) -> vec3<f32> {
     return max(pixel + (recoloured - pixel) * amount, vec3<f32>(0.0));
 }
 
-// `ToneCurve::gain`.
 fn tone_gain(a: Adjust, luma: f32) -> f32 {
     let last = f32(a.flags.z - 1u);
     let at = clamp((log2(max(luma, 1e-12)) - p.tone_axis.x) / p.tone_axis.y, 0.0, last);
@@ -553,7 +484,6 @@ fn does(a: Adjust, flag: u32) -> bool {
     return (a.flags.x & flag) != 0u;
 }
 
-// `apply_basic`, for one pixel.
 fn basic(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     var pixel = max(pixel_in * a.basic.x, vec3<f32>(0.0));
     if (does(a, SLOPE)) {
@@ -576,7 +506,6 @@ fn basic(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     return pixel;
 }
 
-// f32::rem_euclid(360.0).
 fn rem360(x: f32) -> f32 {
     let r = x - 360.0 * floor(x / 360.0);
     return select(r, 0.0, r >= 360.0);
@@ -586,7 +515,6 @@ fn cbrt(x: f32) -> f32 {
     return sign(x) * pow(abs(x), 1.0 / 3.0);
 }
 
-// `point::oklch` and `point::from_oklch`.
 fn oklch(rgb: vec3<f32>) -> vec3<f32> {
     let l = cbrt(0.41222147 * rgb.x + 0.53633255 * rgb.y + 0.05144599 * rgb.z);
     let m = cbrt(0.2119035 * rgb.x + 0.6806995 * rgb.y + 0.10739696 * rgb.z);
@@ -613,8 +541,6 @@ fn from_oklch(lch: vec3<f32>) -> vec3<f32> {
     );
 }
 
-// `PointColour::weight`: `target` is the lightness, chroma, hue and the range
-// as a fraction.
 fn point_weight(aim: vec4<f32>, lch: vec3<f32>) -> f32 {
     let wide = aim.w;
     let turned = rem360(lch.z - aim.z);
@@ -630,7 +556,6 @@ fn table4(at: u32) -> vec4<f32> {
     return vec4<f32>(tables[at], tables[at + 1u], tables[at + 2u], tables[at + 3u]);
 }
 
-// `apply_point_colours` in sRGB: `PointColours::apply`, floored.
 fn point_colours(rgb: vec3<f32>, a: Adjust) -> vec3<f32> {
     let original = oklch(rgb);
     if (original.x <= 1e-4) {
@@ -661,8 +586,6 @@ fn point_colours(rgb: vec3<f32>, a: Adjust) -> vec3<f32> {
     return max(out, vec3<f32>(0.0));
 }
 
-// `run_operations`' per-pixel part: the basic adjustments, the mixer's table
-// in ProPhoto (`Look::apply`), the point colours.
 fn adjust(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     var pixel = pixel_in;
     if (does(a, BASIC)) {
@@ -679,7 +602,6 @@ fn adjust(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     return pixel;
 }
 
-// `Mixer::grey_gain`: the band from the encoded hue, faded by the chroma.
 fn grey_gain(rgb: vec3<f32>, at: u32) -> f32 {
     let c = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     let high = max(max(c.x, c.y), c.z);
@@ -696,7 +618,6 @@ fn grey_gain(rgb: vec3<f32>, at: u32) -> f32 {
     } else {
         hue = (c.x - c.y) / chroma + 4.0;
     }
-    // `surrounding`, over `mixer::BANDS`' hues.
     let bands = array<f32, 8>(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0);
     let h = rem360(60.0 * hue);
     var below = 0u;
@@ -717,7 +638,6 @@ fn grey_gain(rgb: vec3<f32>, at: u32) -> f32 {
     return exp2(value * chroma / high);
 }
 
-// `Grading::apply`.
 fn grade(rgb: vec3<f32>, at: u32) -> vec3<f32> {
     let shape = table4(at + 16u);
     let shifted = pow(clamp(base_curve(max(luminance(rgb), 0.0)), 0.0, 1.0), shape.x);
@@ -734,7 +654,6 @@ fn grade(rgb: vec3<f32>, at: u32) -> vec3<f32> {
     return max(rgb * gain * exp2(stops), vec3<f32>(0.0));
 }
 
-// After the masks: black and white, then the grade.
 fn after(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     var pixel = pixel_in;
     if (does(a, MONO)) {
@@ -746,10 +665,6 @@ fn after(pixel_in: vec3<f32>, a: Adjust) -> vec3<f32> {
     return pixel;
 }
 
-// RENDER-020: FILTER-007, `effects::grain` — value noise on two turned
-// lattices, laid by where a pixel is in the whole frame at full resolution.
-// The processor's hash is in 64 bits; here in pairs of 32-bit words, low
-// first.
 fn mul_wide(a: u32, b: u32) -> vec2<u32> {
     let a0 = a & 0xffffu;
     let a1 = a >> 16u;
@@ -767,7 +682,6 @@ fn mul64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
     return vec2<u32>(low.x, low.y + a.x * b.y + a.y * b.x);
 }
 
-// Right by `n`, 0 < n < 32.
 fn shr64(v: vec2<u32>, n: u32) -> vec2<u32> {
     return vec2<u32>((v.x >> n) | (v.y << (32u - n)), v.y >> n);
 }
@@ -798,7 +712,6 @@ fn value_noise(x: f32, y: f32) -> f32 {
     return top + (bottom - top) * sy;
 }
 
-// `g`: the strength, the lattice's cell, the roughness.
 fn grain(pixel: vec3<f32>, x: u32, y: u32, g: vec4<f32>) -> vec3<f32> {
     let luma = luminance(pixel);
     if (luma <= 0.0) {
@@ -816,7 +729,6 @@ fn grain(pixel: vec3<f32>, x: u32, y: u32, g: vec4<f32>) -> vec3<f32> {
     return pixel * pow(grained / max(tone, 1e-6), 2.2);
 }
 
-// `effects::vignette` over the whole frame.
 fn vignette(pixel: vec3<f32>, x: u32, y: u32) -> vec3<f32> {
     let v0 = p.vignette[0];
     let v1 = p.vignette[1];
@@ -840,7 +752,6 @@ fn vignette(pixel: vec3<f32>, x: u32, y: u32) -> vec3<f32> {
     return pixel * exp2(v0.x * t * t * (3.0 - 2.0 * t));
 }
 
-// `tone::curve`: the cameras' curve in log2 exposure, between its quarter stops.
 fn base_curve(value: f32) -> f32 {
     let stops = log2(max(value, 1e-6) / MIDDLE_GREY);
     let at = (stops + 8.0) * 4.0;
@@ -861,15 +772,12 @@ fn base_at(k: u32) -> f32 {
     return p.base[k / 4u][k % 4u];
 }
 
-// `tone::scene_value_for`: the curve backwards, its segment found rather than
-// bisected for.
 fn scene_value_for(display: f32) -> f32 {
     let wanted = clamp(display, 1e-4, 1.0 - 1e-4);
     var at: f32;
     if (wanted <= base_at(0u)) {
         at = 4.0 * p.misc.w * log2(wanted / base_at(0u));
     } else {
-        // The last stop below: base_at(low) < wanted <= base_at(low + 1).
         var low = 0u;
         var high = 52u;
         for (var step = 0u; step < 6u; step++) {
@@ -893,7 +801,6 @@ fn srgb_decode(code: f32) -> f32 {
     return pow((c + 0.055) / 1.055, 2.4);
 }
 
-// `through`: one display value through a curve's lookup.
 fn through_at(start: u32, display: f32) -> f32 {
     let at = clamp(display, 0.0, 1.0) * f32(LOOKUP - 1u);
     let low = u32(floor(at));
@@ -906,7 +813,6 @@ fn through(curve: u32, display: f32) -> f32 {
     return through_at(p.curves_at.x + curve * LOOKUP, display);
 }
 
-// `finish_mask`'s curves: up to the display, through them, and back.
 fn mask_curves(pixel: vec3<f32>, a: Adjust) -> vec3<f32> {
     var out = pixel;
     for (var channel = 0u; channel < 3u; channel++) {
@@ -931,9 +837,6 @@ fn mask_curves(pixel: vec3<f32>, a: Adjust) -> vec3<f32> {
     return out;
 }
 
-// `tone::Agx` for linear sRGB, the only working space the card has: into
-// Rec.2020 and the inset as one matrix, the log2 sigmoid, the outset, and
-// back to sRGB.
 fn agx(pixel: vec3<f32>) -> vec3<f32> {
     let into = mat3x3<f32>(
         vec3<f32>(0.544814746, 0.140416948, 0.08881042),
@@ -958,7 +861,6 @@ fn agx(pixel: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(srgb_encode(linear.x), srgb_encode(linear.y), srgb_encode(linear.z));
 }
 
-// `encode`'s `shown`: `tone::shown` per channel, or AgX's for the pixel.
 fn shown(pixel: vec3<f32>) -> vec3<f32> {
     if (has(DISPLAY_REFERRED)) {
         return vec3<f32>(srgb_encode(pixel.x), srgb_encode(pixel.y), srgb_encode(pixel.z));
@@ -969,8 +871,6 @@ fn shown(pixel: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(base_curve(pixel.x), base_curve(pixel.y), base_curve(pixel.z));
 }
 
-// `encode`'s eight bits for one channel: the curves on what `shown` gave,
-// quantised.
 fn code(channel: u32, value: f32) -> u32 {
     var display = clamp(value, 0.0, 1.0);
     if (p.curves.x != 0u) {
@@ -984,8 +884,6 @@ fn code(channel: u32, value: f32) -> u32 {
 
 var<workgroup> local_hist: array<atomic<u32>, 770>;
 
-// Everything after the masks, the eight bits, the histogram of every fourth
-// pixel and the clipping overlay.
 fn show(i: u32, pixel_in: vec3<f32>) {
     let x = i % p.size.x;
     let y = i / p.size.x;
@@ -1011,7 +909,6 @@ fn show(i: u32, pixel_in: vec3<f32>) {
             atomicAdd(&local_hist[769u], 1u);
         }
     }
-    // `histogram::mark_clipping`, on the picture and not in its histogram.
     var packed = r8 | (g8 << 8u) | (b8 << 16u) | (255u << 24u);
     let overlay = p.out_info.y;
     if ((overlay & 2u) != 0u && (r8 == 255u || g8 == 255u || b8 == 255u)) {
@@ -1037,7 +934,6 @@ fn flush_hist(lid: vec3<u32>) {
     }
 }
 
-// The frame after colour noise reduction.
 fn denoised(i: u32) -> vec3<f32> {
     if (has(DENOISE)) {
         return recolour(frame_at(i), i, min(i32(p.misc.z), 64), p.misc.y);
@@ -1045,7 +941,6 @@ fn denoised(i: u32) -> vec3<f32> {
     return frame_at(i);
 }
 
-// RENDER-020: that, into `kept`, for the detail passes after it.
 @compute @workgroup_size(256)
 fn settle(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1064,8 +959,6 @@ fn put_kept(i: u32, pixel: vec3<f32>) {
     kept[i * 3u + 2u] = pixel.z;
 }
 
-// Colour noise reduction's column and recolouring, then everything after
-// `prefix`: straight to the eight bits, or — with masks — back into `work`.
 @compute @workgroup_size(256)
 fn finish(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     clear_hist(lid);
@@ -1092,15 +985,11 @@ fn finish(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) l
     flush_hist(lid);
 }
 
-// `mask`'s phases (`step.what.y`).
 const WHOLE: u32 = 0u;
-const TO_TONE: u32 = 1u;     // up to the tone map: the copy and its log luminance, every pixel
-const FROM_TONE: u32 = 2u;   // the rest, from the copy the tone map left
-// `step.what.z`: 1, the copy holds where the mask starts; `SETTLED`, its colour
-// noise reduction has run on it too.
+const TO_TONE: u32 = 1u;
+const FROM_TONE: u32 = 2u;
 const SETTLED: u32 = 2u;
 
-// A mask's copy after its colour noise reduction, for the detail passes after it.
 @compute @workgroup_size(256)
 fn mask_settle(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1114,8 +1003,6 @@ fn mask_settle(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_
     }
 }
 
-// A mask's copy of the frame where it starts, and its log luminance: what its
-// luminance noise reduction reads.
 @compute @workgroup_size(256)
 fn mask_copy(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1126,8 +1013,6 @@ fn mask_copy(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id
     }
 }
 
-// RENDER-020: one mask of `apply_masks` — its copy of the frame, worked out
-// where its field reaches and faded in by it.
 @compute @workgroup_size(256)
 fn mask(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1138,7 +1023,6 @@ fn mask(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     let phase = step.what.y;
     let pair = unpack2x16unorm(fields[m.more.z + i / 2u]);
     let weight = select(pair.x, pair.y, (i & 1u) != 0u);
-    // The tone map reads the whole copy, so all of it is made.
     if (weight <= 0.0 && phase != TO_TONE) {
         return;
     }
@@ -1172,7 +1056,6 @@ fn mask(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     put_work(i, base + (local - base) * weight);
 }
 
-// What comes after the masks, and the eight bits.
 @compute @workgroup_size(256)
 fn encode(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     clear_hist(lid);
@@ -1185,19 +1068,14 @@ fn encode(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) l
     flush_hist(lid);
 }
 
-// RENDER-021 ------------------------------------------------------------------
-
 fn log_luma(pixel: vec3<f32>) -> f32 {
     return log2(max(luminance(pixel), 1e-5));
 }
 
-// A step's own index over its plane.
 fn plane_index(wid: vec3<u32>, lid: vec3<u32>) -> u32 {
     return (wid.y * step.shape.w + wid.x) * 256u + lid.x;
 }
 
-// How `plane_rows` reads its source (`step.what.y`), and what `plane_cols`
-// makes of the two means (`step.what.z`).
 const FEED_ONE: u32 = 0u;
 const FEED_SQUARES: u32 = 1u;
 const FEED_PAIR: u32 = 2u;
@@ -1221,7 +1099,6 @@ fn feed(j: u32) -> vec2<f32> {
             return vec2<f32>(planes[at + j] - planes[step.at.w + j], 0.0);
         }
         case 4u: {
-            // A channel's chroma, the brightness divided out, for moiré.
             let pixel = tail_at(j);
             return vec2<f32>(pixel[step.what.x] / max(luminance(pixel), 1e-5), 0.0);
         }
@@ -1231,13 +1108,8 @@ fn feed(j: u32) -> vec2<f32> {
     }
 }
 
-// How many pixels one invocation of a column's box walks: the window is
-// summed once and then slid, as `plane::blur_columns` does down a whole
-// column. (Along a row the neighbours' reads are the ones next door, and one
-// invocation a pixel is faster.)
 const SEGMENT: u32 = 64u;
 
-// `plane::blur_rows`, of one or two values: always two out, side by side.
 @compute @workgroup_size(256)
 fn plane_rows(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = plane_index(wid, lid);
@@ -1261,9 +1133,6 @@ fn pair_at(j: u32) -> vec2<f32> {
     return vec2<f32>(planes[step.at.x + 2u * j], planes[step.at.x + 2u * j + 1u]);
 }
 
-// `plane::blur_columns` of what `plane_rows` left, and then: the mean; a
-// guided filter's a and b (`guided_by` with itself); or its answer, a × the
-// guide + b. One invocation a segment of a column.
 @compute @workgroup_size(256)
 fn plane_cols(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let t = plane_index(wid, lid);
@@ -1302,7 +1171,6 @@ fn plane_cols(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-// Luminance noise reduction's log luminance of the frame.
 @compute @workgroup_size(256)
 fn luma_log(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1311,8 +1179,6 @@ fn luma_log(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id)
     }
 }
 
-// `detail::denoise`'s gain: the smoothed log luminance (`at.y`), the coarse
-// band of what it took out put back (`at.z`), taken this much.
 @compute @workgroup_size(256)
 fn luma_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1328,11 +1194,9 @@ fn luma_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
         put_copy(i, max(copy_at(i) * gain, vec3<f32>(0.0)));
         return;
     }
-    // Read before written: with geometry the frame is `work` itself.
     put_work(i, max(shaped_at(i) * gain, vec3<f32>(0.0)));
 }
 
-// `plane::subsample`: the log luminance a quarter the size, box by box.
 @compute @workgroup_size(256)
 fn subsample(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = plane_index(wid, lid);
@@ -1353,7 +1217,6 @@ fn subsample(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id
     planes[step.at.y + i] = sum / f32(factor * factor);
 }
 
-// `plane::upsample` of a small plane, at one pixel of the frame.
 fn upsampled(at: u32, width: u32, height: u32, x: u32, y: u32) -> f32 {
     let fy = max((f32(y) + 0.5) * (f32(height) / f32(p.size.y)) - 0.5, 0.0);
     let y0 = min(u32(fy), height - 1u);
@@ -1380,8 +1243,6 @@ fn reduce(lid: vec3<u32>) {
     workgroupBarrier();
 }
 
-// The pivot: the mean of the base as it is laid over the frame — each
-// workgroup's sum, then (`pivot_total`) theirs.
 @compute @workgroup_size(256)
 fn pivot_sum(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1410,8 +1271,6 @@ fn pivot_total(@builtin(local_invocation_id) lid: vec3<u32>) {
     }
 }
 
-// `local::tone_map`'s recombination: the base about the pivot, the detail
-// (and Texture's band), the glow, as one gain on the pixel.
 @compute @workgroup_size(256)
 fn tone_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1441,13 +1300,6 @@ fn tone_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
     put_work(i, max(work_at(i) * exp2(mapped - original), vec3<f32>(0.0)));
 }
 
-// RENDER-020: FILTER-006, `effects::dehaze`, of the frame (into `work`) or of
-// a mask's copy (`step.what.w`). `step.shape`: the grid of patches across and
-// down, a patch's edge, how many of the haziest the airlight is taken from;
-// `step.at.x`: where its numbers are in `planes` — the patches' darkest
-// values, their means (three each), the transmission and a second one for
-// its blur, the airlight's grey.
-
 const HAZE_TAKE: u32 = 16u;
 
 var<workgroup> haze_dark: array<f32, 256>;
@@ -1463,7 +1315,6 @@ fn haze_source(j: u32) -> vec3<f32> {
     return turned_at(j);
 }
 
-// One workgroup a patch: its darkest channel and its mean.
 @compute @workgroup_size(256)
 fn haze_patches(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let cell = step.shape.z;
@@ -1499,7 +1350,6 @@ fn haze_patches(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation
     }
 }
 
-// `box_blur` of the transmission, from `source` into `to`.
 fn haze_blur(lid: u32, source: u32, to: u32) {
     let w = step.shape.x;
     let h = step.shape.y;
@@ -1518,9 +1368,6 @@ fn haze_blur(lid: u32, source: u32, to: u32) {
     }
 }
 
-// One workgroup: the haziest patches (the darkest channel highest, the first
-// of equals, as the processor's stable sort has them), the airlight's grey,
-// the transmission, blurred twice.
 @compute @workgroup_size(256)
 fn haze_air(@builtin(local_invocation_id) lid: vec3<u32>) {
     let cells = step.shape.x * step.shape.y;
@@ -1577,7 +1424,6 @@ fn haze_air(@builtin(local_invocation_id) lid: vec3<u32>) {
     haze_blur(lid.x, at + 5u * cells, at + 4u * cells);
 }
 
-// Each pixel unmixed from the airlight by the transmission where it is.
 @compute @workgroup_size(256)
 fn haze_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1618,10 +1464,6 @@ fn haze_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-// RENDER-020: `detail::passes` after colour noise reduction — DETAIL-001's
-// sharpening, OPTICS-003's defringe and DETAIL-006's moiré — on the frame
-// `settle` left in `kept`, or on a mask's copy (`step.what.w`).
-
 fn tail_at(j: u32) -> vec3<f32> {
     if (step.what.w != 0u) {
         return copy_at(j);
@@ -1645,9 +1487,6 @@ fn tail_log(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id)
     }
 }
 
-// `sharpen`: the log luminance (`at.x`) over its base — its blur at `below`
-// (`at.y`, or itself where `below` is nought) mixed towards the next radius's
-// (`at.z`) by `t` — a gain within a stop each way.
 @compute @workgroup_size(256)
 fn sharpen_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1673,8 +1512,6 @@ fn sharpen_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocatio
     put_tail(i, max(tail_at(i) * gain, vec3<f32>(0.0)));
 }
 
-// `defringe`: where the blurred log luminance (`at.y`) steps, a purple or
-// green cast pulled towards the channels it overran, the brightness kept.
 @compute @workgroup_size(256)
 fn defringe_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);
@@ -1714,9 +1551,6 @@ fn defringe_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocati
     put_tail(i, out);
 }
 
-// `moire`: the chroma's wobble about its near blur (`at.y`, three planes)
-// beyond the transition between that and its far one (`at.z`), settled to
-// the far one at the pixel's own brightness.
 @compute @workgroup_size(256)
 fn moire_apply(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = index_of(wid, lid);

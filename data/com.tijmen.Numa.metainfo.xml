@@ -51,6 +51,13 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.49.0" date="2026-11-03">
+      <description>
+        <p>Numa Home has shared albums. An album can have more than one owner, and you can invite people to add photographs to it. You can also collect photographs from guests: send a link, and they upload straight into an album.</p>
+        <p>Numa Home now keeps videos and Live Photos with your photographs. You can reach Numa Home from outside the house. You choose one of three modes, and sign-in protects it.</p>
+        <p>Many hardenings make Numa safer: stricter checks on files that come in from outside, and on damaged photographs and videos. Thumbnails and moved files are now saved in a way that survives a crash. Two cases where a sync could lose your edits are fixed.</p>
+      </description>
+    </release>
     <release version="0.48.1" date="2026-10-31">
       <description>
         <p>Numa on the Mac, the iPad and the iPhone follows Numa on Linux more closely: Today first, Import from any page, Settings in each system's own form, and the Mac's menu bar has everything. On the iPad and the Mac, Places is a full map with the list floating over it. Numa Home's side list is glass, with more room around its rows.</p>

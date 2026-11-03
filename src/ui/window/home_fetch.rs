@@ -253,6 +253,11 @@ pub(super) async fn bring_all(state: &App, library: &Library, cancel: &Cancel, s
         if cancel.stopped() {
             break;
         }
+
+        if let Some(sentence) = no_room(library) {
+            pause_said(state, &sentence);
+            break;
+        }
         say(at, wanted.len());
         match fetch_one(state, &account, library, *id, theirs).await {
             Ok(()) => came += 1,
@@ -261,6 +266,20 @@ pub(super) async fn bring_all(state: &App, library: &Library, cancel: &Cancel, s
         }
     }
     Ok(came)
+}
+
+fn no_room(library: &Library) -> Option<String> {
+    let info = gio::File::for_path(&library.path).query_filesystem_info("filesystem::free,filesystem::size", gio::Cancellable::NONE).ok()?;
+    let (free, total) = (info.attribute_uint64("filesystem::free"), info.attribute_uint64("filesystem::size"));
+    (total > 0 && sync::short_of_room(free, total)).then(|| format!("{}: paused, {} free on this disk. It goes on once there is more room.", library.label(), glib::format_size(free)))
+}
+
+fn pause_said(state: &App, sentence: &str) {
+    thread_local!(static SAID: Cell<bool> = const { Cell::new(false) });
+    log::info!("Numa Home: {sentence}");
+    if !SAID.with(|said| said.replace(true)) {
+        state.toast(sentence);
+    }
 }
 
 pub(super) fn fetch_paths(state: &App, library: Library, paths: Vec<String>, open: Option<String>) {

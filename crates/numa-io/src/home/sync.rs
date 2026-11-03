@@ -381,6 +381,8 @@ fn fresh(ours: &Local, theirs: &Remote) -> Option<Step> {
         true => (Parts::ALL, Parts::default()),
         false => (Parts::default(), Parts::ALL),
     };
+
+    down.edits = true;
     down.albums = albums.as_ref().is_some_and(|(merged, _)| moved(merged, &ours.albums));
     up.albums = albums.as_ref().is_some_and(|(merged, theirs)| moved(merged, theirs));
     Some(Step::Both { path: ours.path.clone(), id: theirs.id.clone(), theirs: Some(theirs.clone()), down, up, albums: albums.map(|(merged, _)| merged) })
@@ -413,6 +415,19 @@ pub fn settle(kept: &Kept, ours: &Local, theirs: Option<&str>, theirs_updated: i
         (true, true) if ours.changed > 0 && theirs_updated > ours.changed => Settled::DownKeepingOurs,
         (true, true) => Settled::UpKeepingTheirs,
     }
+}
+
+pub fn settle_new(ours: &Local, theirs: Option<&str>, theirs_updated: i64) -> Settled {
+    match canon(theirs).is_empty() && !canon(ours.edits.as_deref()).is_empty() {
+        true => Settled::Up,
+        false => settle(&Kept::default(), ours, theirs, theirs_updated),
+    }
+}
+
+pub const KEEP_EVERY: usize = 25;
+
+pub fn keep_now(steps_done: usize) -> bool {
+    steps_done > 0 && steps_done % KEEP_EVERY == 0
 }
 
 pub fn aside(from_home: bool, when: &str, device: &str) -> String {
@@ -616,6 +631,28 @@ pub fn albums_at_home(out: &str) -> Result<Vec<(String, String)>, Failure> {
         name: String,
     }
     Ok(parsed::<Vec<Album>>(answer(out)?)?.into_iter().map(|album| (album.key, album.name)).collect())
+}
+
+pub fn hash_photos(address: &str, ids: &[String]) -> Vec<OsString> {
+    post(address, "photos/hashes", &serde_json::json!({ "ids": numbers(ids) }))
+}
+
+pub fn photo_hashes(out: &str) -> Result<HashMap<String, String>, Failure> {
+    #[derive(Deserialize)]
+    struct Hashed {
+        #[serde(deserialize_with = "id_text")]
+        id: String,
+        hash: String,
+    }
+    Ok(parsed::<Vec<Hashed>>(answer(out)?)?.into_iter().map(|one| (one.id, one.hash)).collect())
+}
+
+pub fn short_of_room(free: u64, total: u64) -> bool {
+    free < (total / 10).max(20 * 1_000_000_000)
+}
+
+pub fn old_folders(folders: Vec<PathBuf>, kept: &[PathBuf]) -> Vec<PathBuf> {
+    folders.into_iter().filter(|folder| !kept.contains(folder)).collect()
 }
 
 pub fn stop_syncing(address: &str, library: &str) -> Vec<OsString> {

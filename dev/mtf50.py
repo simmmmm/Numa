@@ -32,15 +32,12 @@ def mtf50(roi, oversample=4):
     roi = roi - roi.min()
     roi = roi / (roi.max() + 1e-12)
     h, w = roi.shape
-    # 1. edge position per row: centroid of the derivative
     d = np.abs(np.diff(roi, axis=1))
     d = np.where(d > 0.2 * d.max(axis=1, keepdims=True), d, 0.0)   # keep the edge, drop the noise
     x = np.arange(w - 1) + 0.5
     pos = (d * x).sum(axis=1) / (d.sum(axis=1) + 1e-12)
-    # 2. straight line through the edge positions (the edge is assumed straight)
     rows = np.arange(h)
     slope, icpt = np.polyfit(rows, pos, 1)
-    # 3. project every pixel onto its distance from the edge -> oversampled ESF
     dist = (np.arange(w)[None, :] - (slope * rows[:, None] + icpt))
     bins = np.round(dist * oversample).astype(int)
     lo, hi = bins.min(), bins.max()
@@ -48,18 +45,15 @@ def mtf50(roi, oversample=4):
     np.add.at(esf, (bins - lo).ravel(), roi.ravel()); np.add.at(cnt, (bins - lo).ravel(), 1)
     ok = cnt > 0
     esf = np.interp(np.arange(len(esf)), np.flatnonzero(ok), esf[ok] / cnt[ok])
-    # 4. LSF, Hann window, |FFT| -> MTF, normalised at DC
     lsf = np.gradient(esf)
     lsf *= np.hanning(len(lsf))
     mtf = np.abs(np.fft.rfft(lsf)); mtf /= mtf[0]
     f = np.fft.rfftfreq(len(lsf), d=1.0 / oversample)   # cycles per original pixel
-    # 5. first crossing of 0.5
     i = np.argmax(mtf < 0.5)
     f50 = np.interp(0.5, [mtf[i], mtf[i - 1]], [f[i], f[i - 1]])
     return f50, f, mtf
 
 def selftest():
-    # A slanted edge blurred by a Gaussian of known sigma has MTF50 = sqrt(ln2 / (2 pi^2 sigma^2)).
     from math import log, pi, sqrt
     rng = np.random.default_rng(0)
     for sigma in (0.7, 1.0, 1.5, 2.5):

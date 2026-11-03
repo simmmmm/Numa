@@ -99,10 +99,19 @@ const FIRST_WAIT: i64 = 30;
 const LONGEST_WAIT: i64 = 15 * 60;
 const FORGET: i64 = 86_400;
 
-fn wait(failures: u32) -> i64 {
-    match failures.checked_sub(FREE) {
+const OUTSIDE: &str = "out-";
+const OUTSIDE_FREE: u32 = 3;
+const OUTSIDE_FIRST_WAIT: i64 = 60;
+const OUTSIDE_LONGEST_WAIT: i64 = 60 * 60;
+
+fn wait(key: &str, failures: u32) -> i64 {
+    let (free, first, longest) = match key.starts_with(OUTSIDE) {
+        true => (OUTSIDE_FREE, OUTSIDE_FIRST_WAIT, OUTSIDE_LONGEST_WAIT),
+        false => (FREE, FIRST_WAIT, LONGEST_WAIT),
+    };
+    match failures.checked_sub(free) {
         None => 0,
-        Some(past) => (FIRST_WAIT << past.min(5)).min(LONGEST_WAIT),
+        Some(past) => (first << past.min(6)).min(longest),
     }
 }
 
@@ -113,12 +122,16 @@ impl Limit {
 
     pub fn left(&self, keys: &[String], now: i64) -> i64 {
         let map = self.map();
-        keys.iter().filter_map(|key| map.get(key)).filter(|(_, last)| now - last < FORGET).map(|(failures, last)| last + wait(*failures) - now).max().unwrap_or(0).max(0)
+        Self::longest(&map, keys, now)
+    }
+
+    fn longest(map: &HashMap<String, (u32, i64)>, keys: &[String], now: i64) -> i64 {
+        keys.iter().filter_map(|key| map.get(key).map(|entry| (key, entry))).filter(|(_, (_, last))| now - last < FORGET).map(|(key, (failures, last))| last + wait(key, *failures) - now).max().unwrap_or(0).max(0)
     }
 
     pub fn reserve(&self, keys: &[String], now: i64) -> i64 {
         let mut map = self.map();
-        let left = keys.iter().filter_map(|key| map.get(key)).filter(|(_, last)| now - last < FORGET).map(|(failures, last)| last + wait(*failures) - now).max().unwrap_or(0).max(0);
+        let left = Self::longest(&map, keys, now);
         if left == 0 {
             Self::count(&mut map, keys, now);
         }
@@ -148,12 +161,17 @@ impl Limit {
     }
 }
 
-pub fn limit_keys(name: &str, address: IpAddr) -> [String; 2] {
+pub fn limit_keys(name: &str, address: IpAddr, outside: bool) -> [String; 2] {
     let address = match address {
         IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !(u64::MAX as u128)).into()),
         v4 => v4,
     };
-    [format!("name:{}", name.trim().to_lowercase()), format!("address:{address}")]
+    let from = if outside { OUTSIDE } else { "" };
+    [format!("{from}name:{}", name.trim().to_lowercase()), format!("{from}address:{address}")]
+}
+
+pub fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 pub fn local(address: IpAddr) -> bool {
@@ -167,10 +185,34 @@ pub fn in_house(peer: SocketAddr, headers: &HeaderMap) -> bool {
     in_house_among(peer.ip().to_canonical(), headers, proxies())
 }
 
+pub fn proxy_named() -> bool {
+    !proxies().is_empty()
+}
+
+pub fn is_named(address: &str) -> bool {
+    address.parse::<IpAddr>().is_ok_and(|address| proxies().iter().any(|proxy| within(address, *proxy)))
+}
+
+pub fn unnamed_forwarder(peer: SocketAddr, headers: &HeaderMap) -> Option<IpAddr> {
+    unnamed_among(peer.ip().to_canonical(), headers, proxies())
+}
+
+const PROXIED: [&str; 8] = ["x-forwarded-for", "forwarded", "x-real-ip", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-port", "via", "cf-connecting-ip"];
+
+fn proxied(headers: &HeaderMap) -> bool {
+    PROXIED.iter().any(|name| headers.contains_key(*name))
+}
+
+fn unnamed_among(peer: IpAddr, headers: &HeaderMap, proxies: &[(IpAddr, u8)]) -> Option<IpAddr> {
+    (proxied(headers) && !proxies.iter().any(|proxy| within(peer, *proxy))).then_some(peer)
+}
+
 fn in_house_among(peer: IpAddr, headers: &HeaderMap, proxies: &[(IpAddr, u8)]) -> bool {
+    if !proxied(headers) {
+        return local(peer);
+    }
     let named = proxies.iter().any(|proxy| within(peer, *proxy));
-    let forwarded = ["x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|name| headers.contains_key(*name));
-    (named || !forwarded) && local(client_among(peer, headers, proxies).0)
+    named && headers.contains_key("x-forwarded-for") && local(client_among(peer, headers, proxies).0)
 }
 
 pub fn setup_code() -> String {
@@ -180,7 +222,7 @@ pub fn setup_code() -> String {
 
 pub fn same_code(given: &str, code: &str) -> bool {
     let plain = |text: &str| text.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
-    !code.is_empty() && plain(given) == plain(code)
+    !code.is_empty() && same_bytes(plain(given).as_bytes(), plain(code).as_bytes())
 }
 
 pub fn try_again(seconds: i64) -> String {
@@ -221,9 +263,11 @@ pub fn client(peer: SocketAddr, headers: &HeaderMap) -> (IpAddr, bool) {
     client_among(peer.ip().to_canonical(), headers, proxies())
 }
 
+const UNKNOWN: IpAddr = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+
 fn client_among(peer: IpAddr, headers: &HeaderMap, proxies: &[(IpAddr, u8)]) -> (IpAddr, bool) {
     let trusted = |address: IpAddr| proxies.iter().any(|proxy| within(address, *proxy));
-    let values = |name: &str| headers.get_all(name).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).map(str::trim).collect::<Vec<_>>();
+    let values = |name: &str| headers.get_all(name).iter().flat_map(|value| String::from_utf8_lossy(value.as_bytes()).split(',').map(|part| part.trim().to_string()).collect::<Vec<_>>()).collect::<Vec<_>>();
     if !trusted(peer) {
         static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if headers.contains_key("x-forwarded-for") && !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -231,12 +275,16 @@ fn client_among(peer: IpAddr, headers: &HeaderMap, proxies: &[(IpAddr, u8)]) -> 
         }
         return (peer, false);
     }
-    let hops: Vec<IpAddr> = values("x-forwarded-for")
+
+    let hops: Vec<Option<IpAddr>> = values("x-forwarded-for")
         .into_iter()
-        .filter_map(|hop| hop.parse::<IpAddr>().ok().or_else(|| hop.parse::<SocketAddr>().ok().map(|socket| socket.ip())))
-        .map(|hop| hop.to_canonical())
+        .map(|hop| hop.parse::<IpAddr>().ok().or_else(|| hop.parse::<SocketAddr>().ok().map(|socket| socket.ip())).map(|hop| hop.to_canonical()))
         .collect();
-    let address = hops.iter().rev().find(|hop| !trusted(**hop)).or(hops.first()).copied().unwrap_or(peer);
+    let address = match hops.iter().rev().find(|hop| !hop.is_some_and(trusted)) {
+        Some(Some(hop)) => *hop,
+        Some(None) => UNKNOWN,
+        None => hops.first().copied().flatten().unwrap_or(peer),
+    };
     let https = values("x-forwarded-proto").first().is_some_and(|proto| proto.eq_ignore_ascii_case("https"));
     (address, https)
 }
@@ -261,6 +309,16 @@ mod tests {
     }
 
     #[test]
+    fn a_forwarder_nobody_named_is_found() {
+        let proxies = parse_proxies("172.18.0.1");
+        let mut headers = HeaderMap::new();
+        assert_eq!(unnamed_among("172.18.0.2".parse().unwrap(), &headers, &proxies), None, "no forwarding, no proxy");
+        headers.insert("x-forwarded-for", "93.184.216.34".parse().unwrap());
+        assert_eq!(unnamed_among("172.18.0.2".parse().unwrap(), &headers, &proxies), Some("172.18.0.2".parse().unwrap()));
+        assert_eq!(unnamed_among("172.18.0.1".parse().unwrap(), &headers, &proxies), None, "named");
+    }
+
+    #[test]
     fn only_the_house_sets_up_without_the_code() {
         let ip = |text: &str| text.parse::<IpAddr>().unwrap();
         let forwarded = |from: &str| {
@@ -276,6 +334,47 @@ mod tests {
         assert!(!in_house_among(ip("172.17.0.1"), &forwarded("192.168.1.9"), &[]), "a proxy not named is not believed either way");
         assert!(!in_house_among(ip("172.18.0.1"), &forwarded("203.0.113.7"), &proxies), "a stranger through a named proxy");
         assert!(in_house_among(ip("172.18.0.1"), &forwarded("192.168.1.9"), &proxies), "the house through a named proxy");
+    }
+
+    #[test]
+    fn a_hop_that_cannot_be_read_is_not_the_house() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let proxies = [(ip("127.0.0.1"), 32)];
+        let said = |value: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-for", axum::http::HeaderValue::from_bytes(value).unwrap());
+            headers
+        };
+        let peer = ip("127.0.0.1");
+        assert_eq!(client_among(peer, &said(b"\xff, 203.0.113.7"), &proxies).0, ip("203.0.113.7"), "the hop the proxy appended is read");
+        assert!(!in_house_among(peer, &said(b"\xff, 203.0.113.7"), &proxies));
+        assert!(!in_house_among(peer, &said(b"192.168.1.5, \xff"), &proxies), "an unreadable last hop is nobody's");
+        assert!(!in_house_among(peer, &said(b"192.168.1.5, unix:"), &proxies));
+        assert!(!in_house_among(peer, &said(b""), &proxies), "an empty line");
+        assert!(!in_house_among(peer, &said(b"192.168.1.5, 203.0.113.7"), &proxies), "a house address the client made up");
+        assert!(in_house_among(peer, &said(b"\xff, 192.168.1.5"), &proxies), "the house through the proxy still is");
+        assert!(in_house_among(peer, &HeaderMap::new(), &proxies), "no forwarding at all: the proxy's own host");
+    }
+
+    #[test]
+    fn a_proxied_request_without_an_address_is_not_the_house() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let proxies = [(ip("127.0.0.1"), 32), (ip("172.18.0.1"), 32)];
+        let with = |name: &'static str, value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, value.parse().unwrap());
+            headers
+        };
+        for name in PROXIED.iter().filter(|name| **name != "x-forwarded-for") {
+            assert!(!in_house_among(ip("127.0.0.1"), &with(name, "203.0.113.7"), &proxies), "named, {name} alone");
+            assert!(!in_house_among(ip("127.0.0.1"), &with(name, "https"), &[]), "unnamed, {name} alone");
+            assert_eq!(unnamed_among(ip("127.0.0.1"), &with(name, "https"), &[]), Some(ip("127.0.0.1")), "found: {name}");
+        }
+        assert!(in_house_among(ip("172.18.0.1"), &HeaderMap::new(), &proxies), "the gateway's LAN traffic");
+        assert!(in_house_among(ip("127.0.0.1"), &HeaderMap::new(), &[]), "this host");
+        let mut both = with("x-real-ip", "203.0.113.7");
+        both.insert("x-forwarded-for", "192.168.1.5".parse().unwrap());
+        assert!(in_house_among(ip("127.0.0.1"), &both, &proxies), "a named proxy that names the house");
     }
 
     #[test]
@@ -295,7 +394,7 @@ mod tests {
     #[test]
     fn sign_ins_at_once_are_counted_before_they_are_checked() {
         let limit = Limit::default();
-        let tom = limit_keys("tom", "203.0.113.7".parse().unwrap());
+        let tom = limit_keys("tom", "203.0.113.7".parse().unwrap(), false);
         assert_eq!((0..5).map(|_| limit.reserve(&tom, 3000)).collect::<Vec<_>>(), [0; 5]);
         assert_eq!(limit.reserve(&tom, 3000), 30);
         limit.clear(&tom);
@@ -304,10 +403,10 @@ mod tests {
 
     #[test]
     fn wrong_passwords_slow_down() {
-        assert_eq!((0..=11).map(wait).collect::<Vec<_>>(), [0, 0, 0, 0, 0, 30, 60, 120, 240, 480, 900, 900]);
+        assert_eq!((0..=11).map(|n| wait("name:x", n)).collect::<Vec<_>>(), [0, 0, 0, 0, 0, 30, 60, 120, 240, 480, 900, 900]);
         let limit = Limit::default();
         let here: IpAddr = "203.0.113.7".parse().unwrap();
-        let anna = limit_keys(" Anna", here);
+        let anna = limit_keys(" Anna", here, false);
         assert_eq!(anna, ["name:anna".to_string(), "address:203.0.113.7".to_string()]);
         for _ in 0..4 {
             limit.fail(&anna, 1000);
@@ -318,9 +417,9 @@ mod tests {
         assert_eq!(limit.left(&anna, 1029), 1);
         assert_eq!(limit.left(&anna, 1030), 0);
 
-        assert_eq!(limit.left(&limit_keys("ANNA", "198.51.100.1".parse().unwrap()), 1010), 20);
-        assert_eq!(limit.left(&limit_keys("Tom", here), 1010), 20);
-        assert_eq!(limit.left(&limit_keys("Tom", "198.51.100.1".parse().unwrap()), 1010), 0);
+        assert_eq!(limit.left(&limit_keys("ANNA", "198.51.100.1".parse().unwrap(), false), 1010), 20);
+        assert_eq!(limit.left(&limit_keys("Tom", here, false), 1010), 20);
+        assert_eq!(limit.left(&limit_keys("Tom", "198.51.100.1".parse().unwrap(), false), 1010), 0);
         limit.fail(&anna, 1030);
         assert_eq!(limit.left(&anna, 1030), 60);
         limit.clear(&anna);
@@ -333,12 +432,35 @@ mod tests {
         limit.fail(&anna, 2000 + FORGET);
         assert_eq!(limit.left(&anna, 2000 + FORGET), 0, "and counts from one again");
 
-        let six = |text: &str| limit_keys("x", text.parse().unwrap())[1].clone();
+        let six = |text: &str| limit_keys("x", text.parse().unwrap(), false)[1].clone();
         assert_eq!(six("2001:db8:1:2::5"), six("2001:db8:1:2:aaaa::9"));
         assert_ne!(six("2001:db8:1:2::5"), six("2001:db8:1:3::5"));
         assert_eq!(try_again(4), "Try again in 4 seconds.");
 
         assert_eq!(try_again(200), "Try again in 4 minutes.");
+    }
+
+    #[test]
+    fn outside_the_lock_is_harder_and_apart() {
+        assert_eq!((0..=11).map(|n| wait("out-name:x", n)).collect::<Vec<_>>(), [0, 0, 0, 60, 120, 240, 480, 960, 1920, 3600, 3600, 3600]);
+        let here: IpAddr = "203.0.113.7".parse().unwrap();
+        let (outer, inner) = (limit_keys("Sam", here, true), limit_keys("Sam", here, false));
+        assert_eq!(outer, ["out-name:sam".to_string(), "out-address:203.0.113.7".to_string()]);
+        let limit = Limit::default();
+        assert_eq!((0..3).map(|_| limit.reserve(&outer, 100)).collect::<Vec<_>>(), [0; 3]);
+        assert_eq!(limit.reserve(&outer, 100), 60, "the fourth waits a minute");
+        assert_eq!(limit.left(&limit_keys("SAM", "198.51.100.9".parse().unwrap(), true), 100), 60, "the name waits from any address");
+        assert_eq!(limit.left(&inner, 100), 0, "inside is not locked by outside");
+        assert_eq!(limit.reserve(&outer, 160), 0, "the lock ends");
+        assert_eq!(limit.reserve(&outer, 160), 120, "and the next is longer");
+        limit.clear(&outer);
+        assert_eq!(limit.left(&outer, 160), 0);
+    }
+
+    #[test]
+    fn same_bytes_tells_equal_from_different() {
+        assert!(same_bytes(b"abc", b"abc") && same_bytes(b"", b""));
+        assert!(!same_bytes(b"abc", b"abd") && !same_bytes(b"abc", b"ab") && !same_bytes(b"", b"a"));
     }
 
     #[test]

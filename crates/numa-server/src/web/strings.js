@@ -1,13 +1,7 @@
-// UX-079: every word Numa Home's page says, in one table, so another language
-// is one more column. A script says S.key; a sentence with a hole in it says
-// phrase('key', { hole: value }). The keys are short, the values English; the
-// words come from the design system's Words table. Nothing here changes what the
-// page does. Words the server writes (a job's name, a night's lines, an error
-// from the API) arrive in its own language and are not in this table.
 'use strict';
 
 const S = {
-  // shared
+
   locale: 'en-GB',
   numaHome: 'Numa Home',
   loading: 'Loading…',
@@ -22,14 +16,14 @@ const S = {
   signInFirst: 'Sign in first.',
   serverAnswered: 'The server answered {status}.',
   unreachable: 'Numa Home at {host} cannot be reached.',
-  // the gate
+
   name: 'Name',
   password: 'Password',
   signIn: 'Sign In',
   makeAccount: 'Make Account',
   makeFirst: 'Make the first account. It can make one for everyone else in the house.',
   signInText: "The household's photographs, as Numa shows them.",
-  // the places
+
   sentHome: 'Sent Home',
   syncedWith: 'Synced with {devices}',
   today: 'Today',
@@ -52,7 +46,7 @@ const S = {
   newAlbumEll: 'New Album…',
   everyOne: 'Every one of {label}',
   searchHint: 'Search by names or words',
-  // HOME-040: the field's tokens and what typing suggests
+
   suggestions: 'Suggestions',
   person: 'Person',
   thing: 'Thing',
@@ -62,7 +56,7 @@ const S = {
   startOnPhotos: 'Start on Photos',
   startOnToday: 'Start on Today',
   signOut: 'Sign Out',
-  // the timeline and its filters
+
   nothingToShow: 'Nothing to Show',
   nothingHere: 'Nothing Here',
   noFilterMatch: 'No photographs answer these filters.',
@@ -75,7 +69,7 @@ const S = {
   thingsNumaSaw: 'Things Numa Saw',
   bookTip: "The picks here, as a photo book's chapter folders",
   forABook: 'For a Book…',
-  // HOME-043: proof galleries
+
   shareProofsEll: 'Share as Proofs…',
   shareProofs: 'Share as Proofs',
   shareText: 'A link for a client to choose from. They see previews of 2048 px at most, watermarked across the whole photograph and marked with this link; no originals, no downloads, no names or places. Nothing stops a screenshot, but a copy is small, hard to clean and says where it came from. The link keeps the photographs it is made with: taking one out of the album later does not take it off the link. To take one away, revoke the link and make a new one.',
@@ -108,6 +102,52 @@ const S = {
   whoseEll: 'Whose Proof Is This?…',
   whoseFound: 'From “{title}”',
   whoseText: 'Shared {date}, watermarked “{watermark}”, {state}.',
+
+  shareAlbumEll: 'Share Album…',
+  shareAlbum: 'Share Album',
+  shareAlbumText: 'People you choose see this album, and the photographs of yours and theirs that are in it. May look only looks. May add also puts their own photographs in. Sent Home stays private except for the photographs in this album.',
+  notShared: 'Not shared',
+  mayLook: 'May look',
+  mayAdd: 'May add',
+  noPeopleToShare: 'There is no one else in the house to share with.',
+  albumShared: 'Album shared',
+  sharedBy: 'shared by {name}',
+  sharedWith: 'shared with {n}',
+
+  collectEll: 'Collect Photos…',
+  collect: 'Collect Photos',
+  collectText: 'A link for guests to add photographs, with no account. What they add waits here until you accept it into your Sent Home. Guests see nothing of your library.',
+  collectUpTo: 'Up to',
+  upToN: 'Up to {n} photographs',
+  collectOpenFor: 'Open for',
+  collectDays: 'Open for {n} days',
+  collectLinkOnce: 'Send it to your guests. Numa Home shows it only now; New Link on Proofs makes another and stops this one.',
+  guestUploads: 'Guest Uploads',
+  guestUploadsText: 'Links that collect photographs from guests, and what they sent.',
+  waitingN: '{n} waiting',
+  acceptedN: '{n} accepted',
+  review: 'Review',
+  nothingWaiting: 'Nothing is waiting.',
+  chooseAll: 'Choose All',
+  acceptChosen: 'Accept',
+  rejectChosen: 'Reject',
+  acceptedPhotos: '{n} accepted',
+  rejectedPhotos: '{n} rejected',
+  acceptText: 'Accepted photographs go to Guests/{folder} in your Sent Home. Rejected ones are deleted.',
+  fromGuest: 'from {name}',
+
+  guestHello: '{name} asks for your photographs',
+  addPhotos: 'Add Photos',
+  guestLeft: 'Room for {n} more photographs',
+  guestName: 'Your name (optional)',
+  guestByName: 'Name guests see',
+  guestSent: '{n} sent',
+  guestFailed: 'not sent',
+  guestOpenUntil: 'Open until {date}.',
+  guestPrivate: 'You see only what you send. Photographs wait for {name} to look at them.',
+  guestClosed: 'This link is not open.',
+  guestFull: 'This link has no room for more photographs.',
+  guestKinds: 'JPEG, HEIC, PNG, WebP and TIFF photographs.',
   proofFavourite: 'Favourite',
   proofChosen: '{n} chosen',
   proofUntil: 'open until {date}',
@@ -119,7 +159,7 @@ const S = {
   proofNext: 'Next',
   renameEll: 'Rename…',
   photograph: 'Photograph',
-  // the One filter and a tile's marks (UX-081)
+
   filter: 'Filter',
   photoSize: 'Photo Size',
   sortBy: 'Sort By',
@@ -148,7 +188,7 @@ const S = {
   noPlaces: 'No photograph here says where it was taken.',
   nothingToChoose: 'Nothing here to choose from.',
   edited: 'Edited',
-  // search, people, libraries, albums, accounts
+
   searchWaits: 'Search Waits',
   nothingFound: 'Nothing Found',
   tryOther: 'Try other words, or a name.',
@@ -173,7 +213,7 @@ const S = {
   canMake: 'Can make accounts too',
   admin: 'Admin',
   accountsText: 'An admin chooses what each person sees, library by library and album by album. What a person sends home is theirs alone.',
-  // HOME-003 (#56): what an account sees
+
   accessEll: 'Access…',
   setupCode: 'Setup code, from Numa Home’s log',
   accessQ: 'What {name} Sees',
@@ -197,7 +237,7 @@ const S = {
   albumsLabel: 'Albums',
   accessSaved: 'What {name} sees is saved.',
   onlyEditors: 'Only someone who may edit this library edits it.',
-  // the photograph
+
   info: 'Info',
   infoTip: 'Info (I)',
   edit: 'Edit',
@@ -241,7 +281,7 @@ const S = {
   size: 'Size',
   shownWithEdits: 'Shown with its edits in Numa.',
   byAsCamera: '{name}, as the camera says',
-  // Edit and Crop
+
   light: 'Light',
   exposure: 'Exposure',
   contrast: 'Contrast',
@@ -287,7 +327,7 @@ const S = {
   doneTip: 'Keep this frame (Enter)',
   done: 'Done',
   dragHint: 'Drag a corner, an edge or the middle of the frame.',
-  // Cameras
+
   cameras: 'Cameras',
   whoseCamera: 'Whose camera',
   linkTo: 'Link this camera to {name}',
@@ -296,7 +336,7 @@ const S = {
   serial: 'Serial {n}',
   camerasEmpty: 'Cameras show here once the archive has been looked through.',
   camerasText: 'A photograph is by whoever sent it home; otherwise by the person its camera is linked to here, or whose name its camera writes as the Artist. The rest are Unknown.',
-  // choosing and what is done to what is chosen
+
   select: 'Select',
   selectAll: 'Select All',
   chosenN: '{n} chosen',
@@ -335,7 +375,7 @@ const S = {
   moveN: 'Move {n} to Trash',
   movedN: 'Moved {photos} to Trash',
   saidCount: '{said} · {photos}',
-  // dialogs
+
   albumOption: 'A new album…',
   newAlbumName: 'Name of the new album',
   takeOut: 'Take them out of it instead',
@@ -410,7 +450,7 @@ const S = {
   combineWith: 'Combine {name} with…',
   combineText: 'The photographs move into the library chosen here, each in the folder it had, with their stars, flags, edits and albums. The emptied folders go to the Trash.',
   combined: '{photos} combined',
-  // the Trash
+
   trashEmpty: 'The Trash Is Empty',
   trashEmptyText: 'Photographs and libraries moved to the Trash wait here for 30 days, to be put back.',
   librariesInTrash: 'Libraries in the Trash',
@@ -420,7 +460,7 @@ const S = {
   libPutBack: '{name} put back',
   photosPutBack: '{photos} put back',
   trashText: 'Moved to the Trash; each is gone for good when its days are up. Choose what to put back.',
-  // Activity and Safe at Home
+
   underTwo: 'under 2 minutes',
   aboutMinutes: 'about {n} minutes',
   aboutHours: 'about {n} hours',
@@ -467,7 +507,7 @@ const S = {
   toDo: '{n} to do',
   ofTotal: '{done} of {total}',
   inLibrary: 'in {library}',
-  // the card and Import
+
   importingCard: 'Importing from the card',
   aCard: 'A card',
   aCardFrom: 'A card from the {camera}',
@@ -497,9 +537,16 @@ const S = {
   newPhotos: 'new photos',
   cardLine: '{from} · {n} {unit} · {days}',
   importSummary: '{from} · {photos}, {n} new. Copied, read back and checked against the card; Numa never changes the card.',
-  // Tidy Up
+
   copiesTitle: 'Exact Copies',
   copiesText: 'The same file more than once, byte for byte.',
+  video: 'Video',
+  live: 'Live',
+  livePhoto: 'Live Photo',
+  playLive: 'Play Live Photo',
+  length: 'Length',
+  cannotPlay: 'This browser cannot play this video.',
+  cannotPlayText: 'The file is kept as it was recorded. Download it to watch it in another player.',
   burstsTitle: 'The Same Frame',
   burstsText: 'Three frames or more of one moment.',
   unusableTitle: 'Unusable',
@@ -528,7 +575,7 @@ const S = {
   nothingOfYours: "Numa found nothing of yours to choose. Everyone's shows the whole household's photographs.",
   tidyTip: 'Copies, runs of the same frame and photographs past use, in this library',
   tidyRefused: 'Only an admin, or an account an admin lets delete and move photographs, can tidy a shared library.',
-  // Today
+
   cameToday: 'today',
   cameYesterday: 'yesterday',
   cameDays: '{n} days',
@@ -554,23 +601,23 @@ const S = {
   photoOfDayFrom: 'Photograph of the day, {from}',
   nextOne: 'Next One',
   todayEmpty: 'Photographs show here as they come home.',
-  // the scrubber
+
   timeline: 'Timeline',
-  // HOME-052: Send Home from the browser
+
   addPhotosEll: 'Add Photos…',
   dropText: 'Let go to send them into Sent Home, your own library.',
   sendingHome: 'Sending home',
   sentHomeN: '{photos} sent home.',
   thereAlready: '{photos} there already.',
   notSent: '{n} not sent: {error}',
-  // IO-005: Home's JPEGs
+
   inHomesJpegs: 'In Home\'s JPEGs',
   creator: 'Creator',
   copyright: 'Copyright',
   inHomesJpegsText: 'Written into every JPEG Numa Home makes, with "no AI training". Where a photograph was taken and the camera\'s serial numbers stay out. Originals stay as they are.',
   save: 'Save',
   rightsSaved: 'Saved. Home\'s JPEGs say so from now on.',
-  // HOME-036: the second copy
+
   secondCopy: 'Second Copy',
   copying: 'Copying',
   copyNow: 'Copy Now',
@@ -589,7 +636,57 @@ const S = {
   nightlyCopies: '{n} nightly copies in /data/backups, the newest {when}',
   databasesTonight: 'Copied into /data/backups every night, from tonight.',
   howToRestore: 'How to Restore',
-  // HOME-037: passwords and devices
+
+  reachable: 'Reachable',
+  reachText: 'Choose who can reach Numa Home from outside the house. Your home network and Tailscale always reach all of it.',
+  reachNow: 'Now',
+  reachModeOff: 'Closed',
+  reachModeOffText: 'Nothing answers from outside. This is the default.',
+  reachModeLinks: 'Share links only',
+  reachModeLinksText: 'Only the pages of share links open, and only over https. Sign-in, Photos and Settings stay inside the house.',
+  reachModeAll: 'All of Home',
+  reachModeAllText: 'Sign-in, browsing, editing, Send Home and Keep at Numa Home work from anywhere, over https only. Plain http from outside is refused.',
+  reachAllWarning: 'Opening all of Numa Home puts the sign-in on the internet. Anyone who finds the address can try passwords. Numa Home slows wrong guesses down, locks a name and an address that keep failing, and lists every try below, but a password is the only lock. Passkeys, a stronger sign-in, are planned. Use a long password on every account.',
+  reachAllConfirm: 'I understand that a password is all that stands between the internet and my photographs.',
+  reachAllNeedsCheck: 'Not yet checked: a request must come from outside over https to this address. Open share links, save, and open the check below from mobile data.',
+  reachAllChecked: 'Checked: a request came from outside over https {ago}.',
+  reachOpen: 'Share links are open to the outside, over https only.',
+  reachOpenAll: 'All of Numa Home is open to the outside, over https only.',
+  reachClosed: 'Closed to the outside.',
+  reachNoAddress: 'No address saved.',
+  reachAddressIs: 'The address is {address}.',
+  reachProxyNamed: 'Numa Home knows its reverse proxy.',
+  reachNoProxy: 'No reverse proxy is named. Set NUMA_HOME_PROXY to the address of yours.',
+  reachUnnamed: 'A request came through a proxy at {proxy} that NUMA_HOME_PROXY does not name. Add that address to NUMA_HOME_PROXY.',
+  reachSeen: 'A request came from outside over https {ago}.',
+  reachNotSeen: 'No request has come from outside yet.',
+  reachAddress: 'Address on the internet',
+  reachAddressHint: 'https://photos.example.com',
+  reachSaved: 'Saved.',
+  reachCloseNow: 'Back to Share Links Only',
+  reachTries: 'Sign-ins from outside',
+  reachNoTries: 'No sign-in has come from outside.',
+  reachTriesText: 'The newest tries. A name or an address that keeps failing is locked for longer each time, up to an hour.',
+  reachSessions: 'Sign out a device on the Devices tab.',
+  signInOk: 'Signed in',
+  signInWrong: 'Wrong password',
+  signInLocked: 'Locked',
+  signIns: 'Sign-ins',
+  signInFrom: 'from outside',
+  signInHere: 'in the house',
+  reachCheck: 'Check it',
+  reachCheckText: 'Turn Wi-Fi off on your phone and open this address. It must answer {"https":true,"outside":true}. If it says "outside":false, Numa Home takes that way in for the house and all of it is open: fix the proxy before you go on. Then choose Check Again here.',
+  reachCheckAgain: 'Check Again',
+  reachWays: 'Ways to get there',
+  reachProxyTitle: 'Your own domain through a reverse proxy',
+  reachProxyText: 'Point the proxy at port 8283 of this NAS and serve it over https. Add the proxy\'s address to NUMA_HOME_PROXY, so Numa Home believes who it forwards.',
+  reachTailscaleTitle: 'Tailscale',
+  reachTailscaleText: 'A device on your tailnet counts as the house: it needs no setting here. For Tailscale Funnel, name the address that passes its requests on in NUMA_HOME_PROXY, and use the check below.',
+  reachTunnelTitle: 'Cloudflare Tunnel',
+  reachTunnelText: 'The tunnel\'s provider carries your traffic. Whatever passes requests on to Numa Home is its proxy: name its address in NUMA_HOME_PROXY, and use the check below.',
+  reachWireguardTitle: 'WireGuard',
+  reachWireguardText: 'A device on your own VPN with a private address counts as the house. Nothing to set here.',
+
   changePasswordEll: 'Change Password…',
   changePassword: 'Change Password',
   changePasswordText: 'Your other devices are signed out; sign in on them again with the new password.',
@@ -619,7 +716,7 @@ const S = {
   signedOutOf: '{device} is signed out.',
   signedOutElsewhere: 'Signed out everywhere else.',
   signOutElsewhere: 'Sign Out Everywhere Else',
-  // HOME-034: the first start
+
   setUp: 'Set Up',
   accountStep: 'Account',
   photographsStep: 'Photographs',
@@ -652,7 +749,7 @@ const S = {
   address: 'Address',
   inTheApp: 'In the Numa app: Settings › Numa Home',
   qrOf: 'QR code of {address}',
-  // HOME-041: Places and the map
+
   countries: '{n} countries',
   oneCountry: '1 country',
   noPlace: '{n} photos have no place.',
@@ -673,10 +770,9 @@ const S = {
   placeLabel: 'Place',
   showOnMap: 'Show on Map',
   map: 'Map',
-  // the library units
+
   libraryOne: 'library',
   librariesMany: 'libraries',
 };
 
-// A sentence with holes: {name} is replaced by values.name.
 const phrase = (key, values = {}) => S[key].replace(/\{(\w+)\}/g, (_, name) => values[name]);

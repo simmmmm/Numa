@@ -8,7 +8,7 @@ pub(super) fn at_least(path: &Path, edge: u32) -> Option<DynamicImage> {
     std::panic::catch_unwind(|| {
         let source = RawSource::new(path).ok()?;
         let jpeg = smallest(&source, edge)?;
-        let image = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?;
+        let image = super::decode_bounded(jpeg).ok()?;
         let decoder = rawler::get_decoder(&source).ok()?;
         let orientation = decoder
             .raw_metadata(&source, &Default::default())

@@ -1,18 +1,12 @@
-// HOME-016/017: managing the archive from the pages. Photographs chosen on
-// the grid as on the desktop — a click once something is chosen, shift for
-// a run, Ctrl or ⌘ to start, Select on a phone — and what can be done to
-// them; new library folders, renaming one; the trash. HOME-021: libraries
-// chosen on their page the same way, and what can be done to them.
 'use strict';
 
 const picked = { ids: new Set(), anchor: null, mode: false, album: null };
 const libraryOf = id => Math.floor(id / 2 ** 32);
 
-// Whether the click chose (true) rather than opened.
 function pick(event, id) {
-  // The click a long press leaves behind: the press chose already.
+
   if (event.currentTarget?.dataset.held) { delete event.currentTarget.dataset.held; return true; }
-  // The click that ends a drag across the photographs chose already.
+
   if (picked.swallow) return true;
   const choosing = picked.mode || picked.ids.size > 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.target.closest?.('.check');
   if (!choosing) return false;
@@ -28,9 +22,6 @@ function pick(event, id) {
   return true;
 }
 
-// On a touch screen, a finger held on a photograph chooses it, as in the
-// phones' own Photos; a finger that moves is scrolling and lets go. With a
-// mouse, the right button opens Numa's menu for it (`chosenMenu`).
 function holdToChoose(el, id) {
   let timer = null, from = null, touch = false;
   const cancel = () => { clearTimeout(timer); timer = null; };
@@ -54,9 +45,6 @@ function holdToChoose(el, id) {
   return el;
 }
 
-// A drag with the mouse across the photographs chooses what it covers, as
-// in Numa; with Ctrl, ⌘ or Shift held it adds to what was chosen. Near the
-// top or the foot of the window the page scrolls along.
 document.addEventListener('pointerdown', down => {
   if (down.pointerType !== 'mouse' || down.button !== 0 || state.viewer || !down.target.closest?.('main .month, main > .grid')) return;
   const page = event => ({ x: event.clientX + scrollX, y: event.clientY + scrollY });
@@ -105,7 +93,7 @@ document.addEventListener('pointerdown', down => {
   addEventListener('pointermove', move);
   addEventListener('pointerup', up);
 });
-// A photograph is not dragged out of the page as a picture: the drag chooses.
+
 document.addEventListener('dragstart', event => { if (event.target.closest?.('main .tile')) event.preventDefault(); });
 
 function unpick() {
@@ -123,8 +111,6 @@ function paintPicked() {
   selectionBar();
 }
 
-// Every photograph of the page, the months not yet asked for included, which
-// is the chip in the bar and Ctrl or ⌘ + A.
 async function selectAll() {
   await Promise.allSettled(state.sections.map(section => section.load?.()));
   state.sections.flatMap(section => section.photos || []).forEach(photo => picked.ids.add(photo.id));
@@ -137,23 +123,18 @@ function selectToggle() {
   } }, S.select);
 }
 
-// What may change these: an admin anything, an account its own Sent Home;
-// HOME-003 (#56) one an admin lets, in the libraries it may edit.
 async function mayManage(ids) {
   if (state.me.admin) return true;
   const mine = (await libraries().catch(() => [])).filter(library => library.mine || (state.me.manage && library.level === 'edit')).map(library => library.id);
   return [...ids].every(id => mine.includes(libraryOf(id)));
 }
 
-// HOME-003 (#56): whether every one of these may be edited, by its library.
 async function mayEdit(ids) {
   if (state.me.admin) return true;
   const edits = (await libraries().catch(() => [])).filter(library => library.level === 'edit').map(library => library.id);
   return [...ids].every(id => edits.includes(libraryOf(id)));
 }
 
-// What can be done to these photographs, as menu items: the bar's star and
-// ⋯ menus, and the right-click menu, are made of the same ones.
 function chosenActions(ids, manage, own = {}) {
   const n = ids.length;
   const send = async (path, body, after) => {
@@ -165,9 +146,7 @@ function chosenActions(ids, manage, own = {}) {
     remark(ids);
     toast(phrase('saidCount', { said: markSaid(body), photos: counted(n) }));
   });
-  // Pick and Reject are toggles, as P and X are: a flag every one chosen has
-  // already is taken off, else it is set on all of them. The flags they had
-  // are kept for Undo.
+
   const flag = which => {
     const listed = new Map(state.sections.flatMap(section => section.photos || []).map(photo => [photo.id, photo]));
     const had = ids.map(id => listed.get(id)?.flag);
@@ -179,13 +158,13 @@ function chosenActions(ids, manage, own = {}) {
     });
   };
   const item = (label, onclick, title) => h('button', { onclick, title }, label);
-  // The loupe has its own (`own.erase`): it goes on to the next photograph.
+
   const erase = own.erase || (async () => {
     if (!await ask(phrase('trashQN', { photos: counted(n) }), S.trashTextN, n === 1 ? S.moveToTrash : phrase('moveN', { n: grouped(n) }))) return;
     const before = await trashIds();
     send('photos/delete', {}, async answer => { toast(phrase('movedN', { photos: counted(answer.trashed) }), await trashed(before)); refresh(); });
   });
-  // HOME-033: the raws among them, which may be kept as JPEGs instead.
+
   const raws = ids.filter(id => state.sections.some(section => section.photos?.some(photo => photo.id === id && photo.raw)));
   const keepJpegs = async () => {
     const m = raws.length;
@@ -204,7 +183,7 @@ function chosenActions(ids, manage, own = {}) {
     rate: stars => marks({ rating: stars }),
     flag,
     album: () => item(S.albumEll, () => albumDialog(ids)),
-    // HOME-003 (#56): the originals are an editor's.
+
     downloads: () => downloadItems(own.edit !== false && `/api/v1/photos/zip?ids=${ids.join(',')}`, `/api/v1/photos/zip?ids=${ids.join(',')}&as=jpeg`).filter(Boolean),
     marks: () => [
       h('div', { class: 'section-label' }, S.starsLabel),
@@ -230,7 +209,6 @@ function chosenActions(ids, manage, own = {}) {
   };
 }
 
-// What Undo does to a flag chosen on several: each goes back to the flag it had.
 async function putFlagsBack(ids, had) {
   try {
     for (const value of new Set(had)) await api('photos/marks', { method: 'POST', body: JSON.stringify({ ids: ids.filter((_, at) => had[at] === value), flag: value }) });
@@ -241,8 +219,6 @@ async function putFlagsBack(ids, had) {
   toast(S.flagsBack);
 }
 
-// HOME-033: the raws being kept as JPEGs, followed until the last is done,
-// then their months shown again.
 async function waitKept(ids) {
   for (;;) {
     await new Promise(done => setTimeout(done, 3000));
@@ -262,14 +238,13 @@ async function selectionBar() {
   const n = ids.length;
   const bar = h('div', { class: 'selection', role: 'toolbar', 'aria-label': S.chosenPhotos });
   document.body.append(bar);
-  // The few that are done most in sight; the rest under More, so the bar
-  // holds on a phone's width too.
+
   const close = h('button', { class: 'round small', 'aria-label': S.clearChoice, title: S.clearTip, onclick: unpick }, icon('close'));
   const round = (name, label, items) => h('button', { class: 'round small', 'aria-label': label, title: label, onclick: event => {
     event.stopPropagation();
     menuOver(event.currentTarget, items());
   } }, icon(name));
-  // Select All is in the bar, where it can be seen, not only under a key (P15).
+
   const everything = h('button', { class: 'chip', onclick: selectAll }, S.selectAll);
   if (!n) {
     bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, picked.album ? phrase('choosePhotosFor', { album: picked.album }) : S.choosePhotos), everything));
@@ -279,7 +254,7 @@ async function selectionBar() {
   if (!bar.isConnected) return;
   const actions = chosenActions(ids, manage, { edit });
   picked.erase = actions.erase;
-  // Two groups, so a phone's bar breaks between them and not in the middle of one.
+
   bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('chosenN', { n: grouped(n) })), everything),
     h('div', { class: 'acts' },
       picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album) }, phrase('addTo', { album: picked.album }))
@@ -289,8 +264,6 @@ async function selectionBar() {
       round('more', S.more, actions.more)));
 }
 
-// Right-click on a photograph: it is chosen (alone, unless it already was),
-// and Numa's own menu opens where the pointer is.
 async function chosenMenu(event, tile, id) {
   event.preventDefault();
   if (!picked.ids.has(id)) {
@@ -310,13 +283,10 @@ async function chosenMenu(event, tile, id) {
   ]);
 }
 
-// After a change to these photographs, the months that held them asked
-// again in place, so the page stays where it was; the search anew.
 async function refreshAround(ids) {
   const touched = state.sections.filter(section => section.el && section.photos?.some(photo => ids.includes(photo.id)));
   if (!touched.length) {
-    // A page without months of its own (a search, Today) is asked again whole;
-    // with a photograph open on it that waits until the loupe closes.
+
     const viewer = state.viewer;
     if (!viewer) return render();
     viewer.stale = true;
@@ -339,7 +309,7 @@ document.addEventListener('keydown', event => {
     event.preventDefault();
     selectAll();
   }
-  // The loupe's keys on the grid, for what is chosen: 0-5 give stars, P picks, X rejects, U clears the flag.
+
   else if (picked.ids.size && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const key = event.key.toLowerCase();
     const flag = { p: 'pick', x: 'reject', u: 'none' }[key];
@@ -354,10 +324,6 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('hashchange', () => { unpick(); unshelve(); });
 
-// An event, as a toast at the bottom centre: a short word, gone in two
-// seconds; a longer one (a reason something failed) stays as long as it takes
-// to read; with one action at most, Undo, which stays a little longer.
-// `toasts` is the live region app.js keeps in the page.
 function toast(text, action) {
   clearTimeout(toasts.timer);
   const el = h('div', { class: 'toast' }, h('span', {}, text),
@@ -366,8 +332,6 @@ function toast(text, action) {
   toasts.timer = setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 160); }, Math.max(action ? 6000 : 2200, text.length * 70));
 }
 
-// Moved to the Trash can be undone: the rows the Trash gained since `before`
-// are put back. (The delete answers with how many, not which.)
 const trashIds = () => api('trash', { quiet: true }).then(list => new Set(list.map(item => item.id)), () => null);
 async function trashed(before) {
   const now = await trashIds();
@@ -377,18 +341,14 @@ async function trashed(before) {
   } };
 }
 
-// What a change of stars or of the flag says.
 const markSaid = change => 'rating' in change
   ? (change.rating ? phrase('rated', { stars: starsOf(change.rating) }) : S.ratingCleared)
   : { pick: S.picked, reject: S.rejected, none: S.flagCleared }[change.flag];
 
-// The browser's own dialog: a title, a sentence, what goes in it, Cancel
-// and one button. Resolves to the form's fields by name, or null.
 function dialog(title, text, fields, button) {
   return new Promise(resolve => {
     const done = answer => { box.close(); box.remove(); holdLoupe(); resolve(answer); };
-    // Answered on submit, not on the dialog's close event, which a browser
-    // may hold back while its tab is in the background.
+
     const form = h('form', { onsubmit: event => { event.preventDefault(); done(Object.fromEntries(new FormData(form))); } },
       h('h2', {}, title), text && h('p', { class: 'body' }, text), ...fields,
       h('div', { class: 'buttons' },
@@ -403,7 +363,7 @@ const ask = async (title, text, button) => (await dialog(title, text, [], button
 
 async function albumDialog(ids) {
   const list = await api('albums').catch(() => []);
-  const select = h('select', { name: 'album', 'aria-label': S.album }, list.map(album => h('option', { value: album.key }, album.name)), h('option', { value: '' }, S.albumOption));
+  const select = h('select', { name: 'album', 'aria-label': S.album }, list.filter(album => album.add !== false).map(album => h('option', { value: album.key }, album.name)), h('option', { value: '' }, S.albumOption));
   const name = h('input', { type: 'text', name: 'name', placeholder: S.newAlbumName, hidden: list.length > 0 });
   select.addEventListener('change', () => { name.hidden = select.value !== ''; });
   const out = h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'out' }), S.takeOut);
@@ -413,10 +373,10 @@ async function albumDialog(ids) {
   try { await api('photos/album', { method: 'POST', body: JSON.stringify(body) }); toast(asked.out ? S.outOfAlbum : S.inAlbum); } catch (error) { toast(error.message); }
 }
 
-// An album renamed or deleted, from its page's ⋯ and its right-click in the side
-// list. Deleting takes the album only, never its photographs.
 const albumItems = album => [
   h('button', { onclick: () => shareDialog({ album: album.key, name: album.name }) }, S.shareProofsEll),
+  h('button', { onclick: () => shareAlbumDialog(album) }, S.shareAlbumEll),
+  h('button', { onclick: () => collectDialog({ album: album.key, name: album.name }) }, S.collectEll),
   h('button', { onclick: async () => {
     const asked = await dialog(S.renameAlbum, null, [h('input', { type: 'text', name: 'name', value: album.name, required: true, autocomplete: 'off' })], S.rename);
     const name = (asked?.name || '').trim();
@@ -429,15 +389,13 @@ const albumItems = album => [
   } }, S.deleteAlbumEll),
 ];
 
-// New Album…: its name first, then the photographs for it, chosen on
-// Photos, and Add to puts them in and opens it. An album is never empty.
 async function newAlbum() {
   const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' })], S.choosePhotosBtn);
   const name = (asked?.name || '').trim();
   if (!name) return;
   const start = () => { picked.mode = true; picked.album = name; paintPicked(); };
   if (location.hash === '#/') return start();
-  // After the page has changed, which lets go of any choice.
+
   addEventListener('hashchange', start, { once: true });
   go('/');
 }
@@ -448,15 +406,11 @@ async function intoNewAlbum(ids, name) {
   } catch (error) { toast(error.message); }
 }
 
-// HOME-023: For a Book — the picks of a trip, or the photographs chosen,
-// as the desktop's numbered chapter folders, developed on the NAS into one
-// zip that starts downloading with the first photograph. `query` is
-// `ids=…` or the timeline's filters.
 async function bookDialog(query) {
   let plan;
   try { plan = await api('book?' + query); } catch (error) { toast(error.message); return; }
   let kept = 0;
-  try { kept = Number(localStorage.getItem('numa-book-product')) || 0; } catch (_) { /* a private window */ }
+  try { kept = Number(localStorage.getItem('numa-book-product')) || 0; } catch (_) {  }
   const product = h('select', { name: 'product', 'aria-label': S.photoBook },
     plan.products.map((one, at) => h('option', { value: at, selected: at === kept }, one.name)));
   const list = h('div', { class: 'chapters' });
@@ -471,7 +425,7 @@ async function bookDialog(query) {
     S.bookText,
     [by, list, product], S.makeBook);
   if (!asked) return;
-  try { localStorage.setItem('numa-book-product', asked.product); } catch (_) { /* a private window */ }
+  try { localStorage.setItem('numa-book-product', asked.product); } catch (_) {  }
   const leave = plan.chapters.map((_, at) => at).filter(at => !asked[`c${at}`]);
   if (leave.length === plan.chapters.length) return toast(S.leaveOne);
   const link = h('a', { href: `/api/v1/book/zip?${query}&by=${plan.by}&mm=${plan.products[asked.product].mm}&leave=${leave.join(',')}`, download: '' });
@@ -481,7 +435,6 @@ async function bookDialog(query) {
   toast(S.bookDownloads);
 }
 
-// HOME-012: whose these are, said by hand; it wins over the camera's say.
 async function setBy(ids, account) {
   await api('photos/by', { method: 'POST', body: JSON.stringify({ ids, account: account || null }) });
 }
@@ -495,7 +448,6 @@ async function byDialog(ids) {
   try { await setBy(ids, asked.account); toast(asked.account ? phrase('byName', { name: asked.account }) : S.asCamera); } catch (error) { toast(error.message); }
 }
 
-// The info panel's By: a choice of the household, or the camera's say.
 async function byPicker(photo) {
   const users = await api('users').catch(() => []);
   const select = h('select', { class: 'by-pick', 'aria-label': S.photographer, onchange: async () => {
@@ -518,7 +470,6 @@ async function moveDialog(ids, after) {
   } catch (error) { toast(error.message); }
 }
 
-// HOME-016: the Libraries page's own commands.
 function libraryCommands(list) {
   const row = h('div', { class: 'filters' });
   if (state.me.admin) {
@@ -551,9 +502,6 @@ async function addFolder() {
   try { await api('libraries', { method: 'POST', body: JSON.stringify({ folder: asked.folder }) }); state.libraries = null; render(); } catch (error) { toast(error.message); }
 }
 
-// HOME-021: libraries chosen as photographs are — a click once one is
-// chosen, shift for a run, Ctrl or ⌘ to start, Select — and the bar of what
-// can be done to them. An admin's, for the libraries in the photos folder.
 const shelved = { ids: new Set(), anchor: null, mode: false };
 const librariesCounted = n => `${grouped(n)} ${n === 1 ? S.libraryOne : S.librariesMany}`;
 
@@ -649,9 +597,6 @@ async function libraryBar(list) {
     ]); } }, icon('more'))].filter(Boolean)));
 }
 
-// HOME-029: names from where the photographs were taken, by their GPS or
-// that of the household's photos of the same hours, as chips that fill
-// `field`. Gone again when there is nothing to offer.
 function nameIdeas(asked, field) {
   const box = h('div', { class: 'ideas' }, h('span', { class: 'caption' }, S.lookingWhere));
   asked.then(answer => {
@@ -673,8 +618,6 @@ async function renameLibrary(library) {
   try { await api('libraries/' + library.id, { method: 'PUT', body: JSON.stringify({ name: asked.name.trim() }) }); unshelve(); state.libraries = null; render(); } catch (error) { toast(error.message); }
 }
 
-// One library or more into another: the one chosen in the dialog keeps its
-// folder, the others' photographs move into it.
 async function combineDialog(chosen, archive, send) {
   const choices = chosen.length > 1 ? chosen : archive.filter(library => library.id !== chosen[0].id);
   if (!choices.length) return ask(S.combine, S.combineNone, S.ok);
@@ -685,14 +628,13 @@ async function combineDialog(chosen, archive, send) {
   send('libraries/combine', { ids: chosen.map(library => library.id), into: Number(asked.into) }, answer => phrase('combined', { photos: counted(answer.moved) }));
 }
 
-// HOME-017: the Trash — what was moved to it, for 30 days.
 async function trashPage(main) {
   let list;
   try { list = await api('trash'); } catch (error) { return main.append(empty(S.trash, error.message, true)); }
   const dropped = state.me.admin ? await api('trash/libraries').catch(() => []) : [];
   if (!main.isConnected) return;
   if (!list.length && !dropped.length) return main.append(empty(S.trashEmpty, S.trashEmptyText));
-  // HOME-021: whole libraries, each put back on its own.
+
   if (dropped.length) main.append(h('div', { class: 'import-page dropped' }, h('h1', {}, S.librariesInTrash), dropped.map(row => h('div', { class: 'shoot' }, h('div', { class: 'head' },
     h('span', { class: 'name' }, row.name), h('span', { class: 'caption' }, phrase('folderDays', { folder: row.folder, days: `${row.left} ${row.left === 1 ? S.day : S.days}` })),
     h('button', { class: 'chip', onclick: async () => {

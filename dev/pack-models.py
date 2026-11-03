@@ -25,11 +25,8 @@ import numpy as np
 
 FLOAT, FLOAT16 = 1, 10
 MAGIC = b"NUMAPACK"
-# --f16: only these ops' weight inputs, and only tensors this large. Scalars,
-# epsilons, shape and index arithmetic stay exactly as they are.
 WEIGHT_OPS = {"Conv": (1,), "ConvTranspose": (1,), "MatMul": (0, 1), "Gemm": (0, 1)}
 MIN_ELEMENTS = 1024
-
 
 def varint(buf, pos):
     shift = result = 0
@@ -40,7 +37,6 @@ def varint(buf, pos):
         if byte < 0x80:
             return result, pos
         shift += 7
-
 
 def fields(buf, start, end):
     """(field, wire type, value or (offset, length)) of one message."""
@@ -64,10 +60,8 @@ def fields(buf, start, end):
         else:
             raise ValueError(f"wire type {wire} at {pos}")
 
-
 def text(buf, span):
     return bytes(buf[span[0]:span[0] + span[1]]).decode()
-
 
 def tensor(buf, span):
     """TensorProto: name, type, element count, where its data is."""
@@ -91,7 +85,6 @@ def tensor(buf, span):
             entry = dict((f, text(buf, v)) for f, _, v in fields(buf, value[0], value[0] + value[1]))
             external[entry.get(1)] = entry.get(2)
     return name, kind, count, data, external
-
 
 def walk_graph(buf, span, tensors, consumers):
     for field, wire, value in fields(buf, span[0], span[0] + span[1]):
@@ -119,7 +112,6 @@ def walk_graph(buf, span, tensors, consumers):
                     elif f in (6, 11):  # g, graphs
                         walk_graph(buf, v, tensors, consumers)
 
-
 def model_tensors(path):
     with open(path, "rb") as file:
         buf = memoryview(mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ))
@@ -128,7 +120,6 @@ def model_tensors(path):
         if field == 7 and wire == 2:
             walk_graph(buf, value, tensors, consumers)
     return tensors, consumers
-
 
 def ranges(path, f16):
     """(offset, length, kind) of every float tensor's bytes in `path`."""
@@ -156,14 +147,12 @@ def ranges(path, f16):
     found.sort()
     return found
 
-
 def weight(name, consumers):
     """Whether every use of `name` is as a weight, through Identity copies."""
     uses = consumers.get(name, [])
     return bool(uses) and all(
         weight(outputs[0], consumers) if op == "Identity" else index in WEIGHT_OPS.get(op, ())
         for op, index, outputs in uses)
-
 
 def pack_range(data, kind):
     if kind == 1:
@@ -172,18 +161,15 @@ def pack_range(data, kind):
         return np.frombuffer(data, np.uint8).reshape(-1, 2).T.tobytes()
     return np.frombuffer(data, "<f4").astype("<f2").view(np.uint8).reshape(-1, 2).T.tobytes()
 
-
 def fits_half(data):
     with np.errstate(over="ignore"):
         return bool(np.isfinite(np.frombuffer(data, "<f4").astype("<f2")).all())
-
 
 def pack(path, found, out, level):
     """Write the container through `zstd` a range at a time; the SHA-256 of
     the file `unpack` will make of it, and how many bytes went to float16."""
     with open(path, "rb") as file:
         original = memoryview(mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ))
-    # A float32 range that does not fit in float16 stays float32.
     kept = [(o, n, 1 if k == 3 and not fits_half(original[o:o + n]) else k) for o, n, k in found]
     zstd = subprocess.Popen(["zstd", "-q", "-f", "-T0", f"-{level}", "-o", out], stdin=subprocess.PIPE)
     zstd.stdin.write(MAGIC + struct.pack("<I", len(kept)) + b"".join(struct.pack("<QQB", *r) for r in kept))
@@ -200,7 +186,6 @@ def pack(path, found, out, level):
     if zstd.wait():
         raise SystemExit(f"zstd failed on {path}")
     return digest.hexdigest(), sum(length for _, length, kind in kept if kind == 3)
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -224,7 +209,6 @@ def main():
         with open(out, "rb") as file:
             packed = hashlib.file_digest(file, "sha256").hexdigest()
         print(f"{name}\t{os.path.getsize(out)}\t{packed}\t{os.path.getsize(path)}\t{unpacked}\tf16 {lossy} B")
-
 
 if __name__ == "__main__":
     main()

@@ -108,7 +108,11 @@ pub struct Album {
 
 pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Album>) -> Result<Json<Value>, Fail> {
     let ids: Vec<i64> = chosen(&server, &me, &asked.ids, false, false, Level::Edit)?.into_iter().map(|(_, photo)| photo.id).collect();
+    if asked.album.as_deref().is_some_and(|key| !crate::shared::may_add(&server.store, &me, key)) {
+        return Err(Fail(StatusCode::FORBIDDEN, "You may look at this album, not add to it.".into()));
+    }
     let changed = ids.clone();
+    let asked_name_was_new = asked.album.is_none();
     let key = server
         .home
         .ask(move |catalog| {
@@ -122,6 +126,9 @@ pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(a
         .await?
         .map_err(Fail::bad)?;
     server.home.forget_albums();
+    if asked_name_was_new {
+        server.store.claim_album(&key, &me.name).map_err(Fail::internal)?;
+    }
 
     let updated = changed.iter().map(|id| server.store.touch(*id)).max();
     Ok(Json(json!({ "album": key, "updated": updated })))

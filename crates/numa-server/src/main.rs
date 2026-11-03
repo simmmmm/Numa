@@ -4,6 +4,7 @@ mod book;
 mod auth;
 mod by;
 mod cards;
+mod collect;
 mod copy;
 mod edit;
 mod faces;
@@ -21,18 +22,23 @@ mod safe;
 mod photos;
 mod places;
 mod proof;
+mod reach;
 mod selection;
+mod serve;
 mod send;
 mod share;
+mod shared;
+#[cfg(test)]
+mod shared_http;
 mod start;
 mod store;
 mod sync;
 mod tidy;
 mod timeline;
 mod today;
+mod video;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -116,6 +122,11 @@ impl Fail {
         Fail(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server; its log says what.".into())
     }
 
+    pub fn unreadable(why: impl std::fmt::Display) -> Self {
+        log::warn!("unreadable: {why}");
+        Fail(StatusCode::UNPROCESSABLE_ENTITY, "Numa could not read this photograph.".into())
+    }
+
     pub fn bad(why: impl Into<String>) -> Self {
         Fail(StatusCode::BAD_REQUEST, why.into())
     }
@@ -136,6 +147,16 @@ fn main() -> Result<(), String> {
     let photos = path_from("NUMA_HOME_PHOTOS", "/photos");
     let sent = path_from("NUMA_HOME_SENT", "/sent");
     let data = path_from("NUMA_HOME_DATA", "/data");
+
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command, name] = arguments.as_slice() {
+        if command == "reset-password" {
+            let store = store::Store::open(&data.join("server.db"))?;
+            let password = accounts::reset_password(&store, name)?;
+            println!("{name} has this password until the next sign-in, which asks for a new one, on Numa Home's page in a browser:\n{password}");
+            return Ok(());
+        }
+    }
     let port: u16 = std::env::var("NUMA_HOME_PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(8283);
 
     std::env::set_var("XDG_DATA_HOME", &data);
@@ -157,6 +178,7 @@ fn main() -> Result<(), String> {
 
     let store = store::Store::open(&data.join("server.db"))?;
     share::tables(&store)?;
+    shared::tables(&store)?;
     let server = Server::new(store, photos, sent, data)?;
     if !server.store.has_accounts() {
         log::warn!("Numa Home is not set up yet. Set it up from your home network, or from elsewhere with this code: {}", server.setup_code);
@@ -182,8 +204,8 @@ fn main() -> Result<(), String> {
     runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.map_err(|err| err.to_string())?;
         log::info!("Numa Home {} on port {port}", env!("CARGO_PKG_VERSION"));
-        let app = router(server).into_make_service_with_connect_info::<SocketAddr>();
-        axum::serve(listener, app).with_graceful_shutdown(stopped()).await.map_err(|err| err.to_string())
+        serve::serve(listener, router(server), serve::HEAD_TIME, serve::CONNECTIONS, stopped()).await;
+        Ok(())
     })
 }
 
@@ -231,6 +253,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/keep-jpeg", get(selection::keeping).post(selection::keep_jpeg))
         .route("/api/v1/photos/move", post(selection::moved))
         .route("/api/v1/photos/album", post(selection::album))
+        .route("/api/v1/photos/hashes", post(sync::hashes))
         .route("/api/v1/photos/marks", post(selection::marks))
         .route("/api/v1/photos/by", post(selection::by))
         .route("/api/v1/photos/zip", get(selection::zip))
@@ -245,6 +268,9 @@ fn router(server: Arc<Server>) -> Router {
 
         .route("/api/v1/background", get(activity::status))
         .route("/api/v1/safe", get(safe::show))
+        .route("/api/v1/reach", get(reach::show).put(reach::change))
+        .route("/api/v1/reach/ping", get(reach::ping))
+        .route("/api/v1/reach/signins", get(reach::sign_ins))
         .route("/api/v1/copy", post(copy::now_please))
         .route("/api/v1/background/pause", post(activity::pause))
         .route("/api/v1/background/resume", post(activity::resume))
@@ -272,6 +298,8 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/{id}/preview", get(photos::preview))
         .route("/api/v1/photos/{id}/sharpness", get(photos::sharpness_now))
         .route("/api/v1/photos/{id}/original", get(photos::original))
+        .route("/api/v1/photos/{id}/video", get(video::play))
+        .route("/api/v1/photos/{id}/live", get(video::live))
         .route("/api/v1/photos/{id}/jpeg", get(photos::jpeg))
         .route("/api/v1/photos/{id}/edit", get(edit::get).post(edit::post))
         .route("/api/v1/photos/{id}/frame", get(edit::frame))
@@ -285,6 +313,20 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/{*rest}", axum::routing::any(|| async { Fail(StatusCode::NOT_FOUND, "There is no such address in the API.".into()) }))
         .merge(pages::routes())
         .merge(share::routes())
+        .merge(shared::routes())
+        .merge(collect::routes())
         .layer(axum::middleware::from_fn_with_state(server.clone(), guard::guarded))
         .with_state(server)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_photograph_does_not_tell_its_path() {
+        let fail = Fail::unreadable("/nas/photos/2026/Secret trip/IMG_1.jpg: a picture of 65535x65535 is too large to open");
+        assert_eq!(fail.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!fail.1.contains("/nas") && !fail.1.contains("Secret"), "{}", fail.1);
+    }
 }

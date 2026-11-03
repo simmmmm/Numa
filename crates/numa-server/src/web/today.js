@@ -1,12 +1,7 @@
-// HOME-039: Today, Numa Home's front page: what was taken on this day in
-// earlier years, what came home in the last two weeks, what waits for a
-// person, and what the night did. A part with nothing in it is left out.
 'use strict';
 
-// The page an address without a route opens, and the mark goes to.
 const startPage = () => state.me?.start === 'photos' ? '/' : '/today';
 
-// Three prints, the first photograph in front; grey where there is none.
 const prints = ids => h('div', { class: 'stack' }, [2, 1, 0].map(at => h('div', { class: 'print' },
   ids[at] != null && h('img', { src: thumb(ids[at], 256), loading: 'lazy', alt: '' }))));
 const openIds = (ids, at) => openFrame({ photos: ids.map(id => ({ id })) }, at);
@@ -16,7 +11,6 @@ function cameAgo(at) {
   return days < 1 ? S.cameToday : days < 2 ? S.cameYesterday : phrase('cameDays', { n: days });
 }
 
-// `day` (MM-DD) shows another day's On This Day, for a test.
 async function today(main, params) {
   state.sections = [];
   const day = params.get('day');
@@ -28,7 +22,7 @@ async function today(main, params) {
   }
   const [report, home] = await Promise.all([night, safe]);
   if (!main.isConnected) return;
-  // HOME-035's one line: what needs a person first, else that all is home.
+
   const said = home && (home.attention[0]?.text || (home.devices.length > 0 && S.allHomeLine));
   const pill = said && h('a', { class: 'safe-pill', href: '#/safe' },
     h('i', { class: 'dot' + (home.attention.length ? ' attention' : '') }), said);
@@ -61,11 +55,9 @@ async function today(main, params) {
   ].filter(Boolean);
   const waiting = waits.length > 0 && h('section', { class: 'today-part waiting' }, heading(S.waitingForYou), waits);
 
-  // The night's first lines; Activity has the rest.
   const lastLines = report && h('section', { class: 'today-part' },
     lastNight({ ...report, done: report.done.slice(0, 3), needs: [] }), h('a', { class: 'caption', href: '#/activity' }, S.activity));
 
-  // #134: Your Libraries, last: where to go when today has nothing to say.
   const libraries = found.libraries.length > 0 && h('section', { class: 'today-part' },
     heading(S.yourLibraries),
     shelf(found.libraries.map(library => h('button', { class: 'place', onclick: () => go('/', { library: library.library }) }, prints(library.ids),
@@ -78,9 +70,6 @@ async function today(main, params) {
     h('div', { class: 'today-column' }, parts)));
 }
 
-// #134: the photograph of the day, the page's width and running into its
-// ground: what it is at the bottom left, what to do at the bottom right. Next
-// One goes through the day's best; tomorrow starts again from another.
 function todayHero(heroes, date, pill) {
   const head = h('div', { class: 'today-head' }, h('h1', {}, S.today), h('span', { class: 'caption' }, date), pill);
   if (!heroes.length) return h('div', { class: 'today-plain' }, head);

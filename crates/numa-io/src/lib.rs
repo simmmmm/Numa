@@ -45,6 +45,7 @@ pub mod tidy;
 pub mod track;
 pub mod update;
 pub mod upscale;
+pub mod video;
 pub mod words;
 pub mod xmp;
 

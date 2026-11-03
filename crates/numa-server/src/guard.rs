@@ -13,18 +13,27 @@ use crate::{auth, Fail, Server};
 const POLICY: &str = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 pub async fn guarded(State(server): State<Arc<Server>>, request: Request, next: Next) -> Response {
+    let api = request.uri().path().starts_with("/api/");
     let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0);
     let https = peer.is_some_and(|peer| auth::client(peer, request.headers()).1);
     let refused = match changes(request.method()) && !same_origin(request.headers()) {
         true => Some(Fail(StatusCode::FORBIDDEN, "That request came from another site.".into()).into_response()),
-        false => paced(&server, &request),
+        false => peer.and_then(|peer| crate::reach::gate(&server, peer, request.headers(), request.uri().path())).or_else(|| paced(&server, &request)),
     };
     let mut response = match refused {
         Some(refused) => refused,
         None => next.run(request).await,
     };
     tell(response.headers_mut(), https);
+    keep_private(api, response.headers_mut());
     response
+}
+
+fn keep_private(api: bool, headers: &mut HeaderMap) {
+    let json = headers.get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"application/json"));
+    if api && json {
+        headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
+    }
 }
 
 fn tell(headers: &mut HeaderMap, https: bool) {
@@ -86,6 +95,7 @@ fn cost(path: &str, query: Option<&str>) -> Option<f64> {
         "thumb" => Some(1.0),
         "preview" | "jpeg" => Some(4.0),
         "original" => Some(25.0),
+        "video" | "live" => Some(25.0),
         _ => None,
     }
 }
@@ -118,6 +128,8 @@ mod tests {
         assert_eq!(pace.take("c", 1.0, 1.0), Err(94), "and waits till the debt is paid");
         assert_eq!(cost("/api/v1/photos/12/thumb", Some("edge=512")), Some(1.0));
         assert_eq!(cost("/api/v1/photos/12/original", None), Some(25.0));
+        assert_eq!(cost("/api/v1/photos/12/video", None), Some(25.0));
+        assert_eq!(cost("/api/v1/photos/12/live", None), Some(25.0));
         assert_eq!(cost("/api/v1/photos/12/jpeg", Some("edge=2048")), Some(4.0));
         assert_eq!(cost("/api/v1/photos/zip", Some("ids=1,2,3&as=jpeg")), Some(75.0));
         assert_eq!(cost("/api/v1/photos/12", None), None);
@@ -137,6 +149,23 @@ mod tests {
         headers.insert("x-robots-tag", HeaderValue::from_static("noindex, noimageindex"));
         tell(&mut headers, false);
         assert_eq!(headers["x-robots-tag"], "noindex, noimageindex");
+    }
+
+    #[test]
+    fn json_of_the_api_is_not_kept() {
+        let mut json = HeaderMap::new();
+        json.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let mut own = json.clone();
+        own.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=5"));
+        let (mut page, mut other) = (json.clone(), json.clone());
+        keep_private(true, &mut json);
+        keep_private(true, &mut own);
+        keep_private(false, &mut page);
+        other.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+        keep_private(true, &mut other);
+        assert_eq!(json[header::CACHE_CONTROL], "no-store");
+        assert_eq!(own[header::CACHE_CONTROL], "private, max-age=5");
+        assert!(!page.contains_key(header::CACHE_CONTROL) && !other.contains_key(header::CACHE_CONTROL));
     }
 
     #[test]

@@ -73,7 +73,6 @@ if __name__ == "__main__":
     jpg = np.array([[float(r[n + "_jpg"]) for n in names] for r in rows])
     params, _ = fit(lin, jpg)
     report(lin, jpg, params, names)
-    # hold-out: fit on all but one, report on that one, for every frame
     print("\nleave-one-out RMS per frame:")
     for i, r in enumerate(rows):
         m = np.arange(len(rows)) != i

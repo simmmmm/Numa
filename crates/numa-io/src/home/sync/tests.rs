@@ -96,7 +96,7 @@ fn a_file_here_before_the_link_takes_the_side_with_something_on_it() {
         plan(&Link::default(), &[theirs.clone()], &[local("a.raf", None, 0)]),
         vec![both("a.raf", "9", Some(theirs.clone()), Parts::ALL, NONE)]
     );
-    assert_eq!(plan(&Link::default(), &[theirs.clone()], &[local("a.raf", None, 3)]), vec![both("a.raf", "9", Some(theirs), NONE, Parts::ALL)]);
+    assert_eq!(plan(&Link::default(), &[theirs.clone()], &[local("a.raf", None, 3)]), vec![both("a.raf", "9", Some(theirs), EDITS, Parts::ALL)]);
 }
 
 #[test]
@@ -260,7 +260,39 @@ fn a_photograph_put_back_comes_back_on_the_other_side() {
     assert_eq!(plan(&asked, &[], &[local("a.raf", None, 0)]), vec![]);
 
     let steps = plan(&after_here, &[back.clone()], &[local("a.raf", None, 3)]);
-    assert_eq!(steps, vec![Step::Both { path: "a.raf".into(), id: "7".into(), theirs: Some(back), down: NONE, up: Parts::ALL, albums: None }]);
+    assert_eq!(steps, vec![Step::Both { path: "a.raf".into(), id: "7".into(), theirs: Some(back), down: EDITS, up: Parts::ALL, albums: None }]);
+}
+
+#[test]
+fn a_merged_album_goes_up_and_does_not_come_back() {
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<String>>();
+    let agreed = names(&["Holiday", "Holiday at Home"]);
+    assert_eq!(albums(Some(&agreed), &names(&["Holiday"]), &agreed), names(&["Holiday"]));
+    let agreed = names(&["Holiday at Home"]);
+    assert_eq!(albums(Some(&agreed), &names(&["Holiday"]), &agreed), names(&["Holiday"]));
+}
+
+#[test]
+fn a_round_pauses_at_a_tenth_free_or_20_gb_whichever_is_more() {
+    const GB: u64 = 1_000_000_000;
+    assert!(short_of_room(19 * GB, 100 * GB));
+    assert!(!short_of_room(20 * GB, 100 * GB));
+    assert!(short_of_room(99 * GB, 1000 * GB));
+    assert!(!short_of_room(100 * GB, 1000 * GB));
+}
+
+#[test]
+fn an_old_folder_kept_on_purpose_is_not_offered() {
+    let (old, synced) = (PathBuf::from("/p/Numa Home/Holiday"), PathBuf::from("/p/Numa Home/Family"));
+    assert_eq!(old_folders(vec![old.clone(), synced.clone()], &[synced]), [old]);
+}
+
+#[test]
+fn an_answer_of_hashes_is_by_id_and_says_only_what_home_could_read() {
+    let out = "[{\"id\":7,\"hash\":\"ab\"}]\n200";
+    assert_eq!(photo_hashes(out).unwrap(), HashMap::from([("7".to_string(), "ab".to_string())]));
+    let cmd = hash_photos("http://home:8080", &["7".to_string()]).iter().map(|word| word.to_string_lossy().to_string()).collect::<Vec<_>>().join(" ");
+    assert!(cmd.contains("/api/v1/photos/hashes") && cmd.contains(r#"{"ids":[7]}"#), "{cmd}");
 }
 
 #[test]
@@ -351,4 +383,46 @@ fn the_way_is_kept_with_the_link() {
     assert_eq!(albums_at_home("[{\"key\":\"k1\",\"name\":\"Rome\",\"count\":3}]\n200"), Ok(vec![("k1".into(), "Rome".into())]));
     assert!(list_changes("nas", "1", 5, true).last().unwrap().to_string_lossy().ends_with("/libraries/1/photos?since=5&gone=1&synced=1"));
     assert!(delete_photos("nas", &["3".into()]).iter().any(|arg| arg == "{\"ids\":[3]}"));
+}
+
+#[test]
+fn a_pairing_looks_at_homes_edits_before_sending_ours() {
+    let ours = local("a.raf", Some("{\"exposure\":1}"), 0);
+    let theirs = Remote { edited: true, ..remote("1", "a.raf", 120) };
+    let steps = plan(&Link::default(), &[theirs.clone()], &[ours]);
+    assert_eq!(steps, vec![both("a.raf", "1", Some(theirs.clone()), EDITS, Parts::ALL)]);
+
+    let steps = plan(&Link::default(), &[theirs.clone()], &[local("a.raf", None, 3)]);
+    assert_eq!(steps, vec![both("a.raf", "1", Some(theirs), EDITS, Parts::ALL)]);
+}
+
+#[test]
+fn a_pairing_never_writes_over_homes_edits_unkept() {
+    let stack = |exposure: f32| {
+        let mut document = numa_core::document::Document::new("/home/a/a.raf".into());
+        let mut basic = document.basic();
+        basic.tone.exposure = exposure;
+        document.set_basic(basic);
+        serde_json::to_string(&document).unwrap()
+    };
+    let ours = Local { edits: Some(stack(2.0)), changed: 150, ..local("a.raf", None, 0) };
+    let home = |exposure: f32| stack(exposure).replace("/home/a/a.raf", "/photos/a.raf");
+    assert_eq!(settle_new(&ours, Some(&home(2.0)), 160), Settled::Same);
+    assert_eq!(settle_new(&ours, Some(&home(3.0)), 140), Settled::UpKeepingTheirs, "here later: Home's kept");
+    assert_eq!(settle_new(&ours, Some(&home(3.0)), 160), Settled::DownKeepingOurs, "Home later: ours kept");
+    assert_eq!(settle_new(&ours, None, 160), Settled::Up, "Home has none: nothing to keep");
+
+    assert_eq!(settle_new(&local("a.raf", None, 3), Some(&home(3.0)), 160), Settled::Down);
+}
+
+#[test]
+fn a_round_killed_part_way_resumes_from_what_it_kept() {
+    let (a, b) = (local("a.raf", Some("{\"exposure\":1}"), 0), local("b.raf", Some("{\"exposure\":2}"), 0));
+    let theirs = |id: &str, path: &str| Remote { edited: true, ..remote(id, path, 120) };
+    let (home_a, home_b) = (theirs("1", "a.raf"), theirs("2", "b.raf"));
+
+    let saved = Link { photos: BTreeMap::from([("a.raf".to_string(), a.kept("1", 120))]), ..Link::default() };
+    let steps = plan(&saved, &[home_a, home_b.clone()], &[a, b]);
+    assert_eq!(steps, vec![both("b.raf", "2", Some(home_b), EDITS, Parts::ALL)], "a.raf is settled; b.raf is looked at");
+    assert!(keep_now(KEEP_EVERY) && !keep_now(1) && !keep_now(0));
 }

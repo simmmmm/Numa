@@ -46,6 +46,7 @@ pub(super) fn show_folders(state: &App) {
         return;
     }
 
+    same_photos::banners(state, column, true);
     let row = commands(&[("Add Folder…", "win.add-folder")]);
     row.append(&library_bar::select_toggle(state));
     column.append(&row);
@@ -83,6 +84,7 @@ pub(super) fn show_albums(state: &App) {
             column.append(&empty);
         }
         false => {
+            same_photos::banners(state, column, false);
             column.append(&commands(&[("New Album…", "win.new-album")]));
             column.append(&shelf(state, None, &albums));
         }

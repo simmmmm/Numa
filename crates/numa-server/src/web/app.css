@@ -185,6 +185,10 @@ main { padding: 0 var(--edge) 48px; }
   .tile .rate:hover i { opacity: 0.45; }
   .tile .rate i:hover, .tile .rate:hover i:has(~ i:hover) { opacity: 1; }
 }
+.tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity var(--standard); pointer-events: none; }
+.tile video.in { opacity: 1; }
+.tile .kind { right: var(--space-6); top: var(--space-6); }
+.tile.tiny .kind { display: none; }
 .tile.rejected img.in { opacity: 0.35; }
 .tile.tiny .burst { display: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile, 150px), 1fr)); gap: 3px; padding-top: 12px; }
@@ -237,6 +241,14 @@ main { padding: 0 var(--edge) 48px; }
 @keyframes fade-in { from { opacity: 0; } }
 .viewer .stage { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
 .viewer .stage > img { max-width: none; flex: none; display: block; user-select: none; -webkit-user-drag: none; transform-origin: 0 0; cursor: zoom-in; }
+.viewer .stage > .film { position: absolute; left: 0; width: 100%; top: calc(var(--edge) + var(--space-44) + var(--space-8));
+  height: calc(100% - 2 * var(--edge) - 2 * var(--space-44) - var(--space-8) - var(--space-16)); object-fit: contain; background: transparent; }
+.viewer .stage > .hold { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.viewer .live { position: absolute; top: var(--edge); left: 50%; transform: translateX(-50%); z-index: 3; display: inline-flex; align-items: center; gap: var(--space-6); }
+.viewer .live svg { width: 14px; height: 14px; }
+.film-note { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: var(--space-12); padding: 0 var(--space-20); text-align: center; z-index: 1; }
+.film-note .chip { text-decoration: none; display: inline-flex; align-items: center; }
+.film-note h2 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; }
 .viewer .stage.zoomed > img { cursor: grab; }
 .viewer .stage.zoomed > img:active { cursor: grabbing; }
 /* The floating value: one name, one number, top centre on the photograph. */
@@ -563,6 +575,11 @@ dialog.ask .chapters { display: grid; gap: 6px; max-height: 40vh; overflow-y: au
    once ticked its May edit switch on the right: chosen is white. */
 dialog.ask .grants { display: grid; gap: 8px; max-height: 50vh; overflow-y: auto; }
 dialog.ask .grants-albums { display: grid; gap: 8px; }
+dialog.ask.review { width: min(720px, calc(100vw - 32px)); }
+dialog.ask .grid.review { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); max-height: 50vh; overflow-y: auto; padding-top: 0; }
+dialog.ask .grid.review .tile { aspect-ratio: 1; }
+dialog.ask .grid.review .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+dialog.ask .grid.review .tile.ticked { outline: 2px solid var(--accent); outline-offset: -2px; }
 dialog.ask .grant { display: flex; justify-content: space-between; align-items: center; gap: var(--space-12); color: var(--name); min-width: 0; }
 dialog.ask .grant > label:first-child { min-width: 0; }
 dialog.ask .grant span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -679,6 +696,9 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .safe .attention { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: 14px; background: var(--ground-view); color: var(--ink); font-weight: 600; }
 .safe .signal { width: 10px; height: 10px; border-radius: 5px; background: var(--attention); flex: none; }
 .safe .role { margin: 0; }
+.safe .check { display: flex; align-items: center; gap: var(--space-8); }
+.safe input[type=checkbox] { accent-color: var(--accent); }
+.safe .signal.ok { background: var(--accent); }
 .safe .all-home { margin: 0; color: var(--ink); font-weight: 600; }
 /* Boxes flow down three columns, so a short one fills under a short one. */
 .safe .boxes { columns: 300px 3; column-gap: 14px; }
@@ -690,6 +710,11 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .safe .done li { display: block; color: var(--name); }
 .safe .name { color: var(--ink); font-weight: 600; }
 .safe .late { color: var(--attention); }
+.safe .way-in { align-items: flex-start; }
+.safe .way-in > span { display: grid; gap: 2px; }
+.safe .warn { display: grid; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--attention); }
+.safe .warn[hidden] { display: none; }
+.safe .chip:disabled { opacity: .5; }
 .safe .big { font-size: 26px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .safe .disk { display: grid; gap: 4px; }
 .safe .copy-when { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }

@@ -23,10 +23,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 PANEL = 600
-# Components are counted at this width: a speck is still a pixel here, and
-# pure-Python labelling stays under a second a sheet.
 COUNT = 400
-
 
 def components(binary):
     """4-connected pieces of a boolean grid: (sizes, touches-the-border)."""
@@ -56,7 +53,6 @@ def components(binary):
         border.append(edge)
     return sizes, border
 
-
 def measure(alpha, luma):
     small = np.asarray(Image.fromarray((alpha * 255).astype(np.uint8)).resize(
         (COUNT, max(1, COUNT * alpha.shape[0] // alpha.shape[1])), Image.BILINEAR)) / 255.0
@@ -74,8 +70,6 @@ def measure(alpha, luma):
     line = np.zeros_like(hard)
     line[:, 1:] |= hard[:, 1:] != hard[:, :-1]
     line[1:, :] |= hard[1:, :] != hard[:-1, :]
-    # A pixel either side, because the photograph's step and the mask's are
-    # not on the same pixel after two resamplings.
     near = line.copy()
     near[:, 1:] |= line[:, :-1]
     near[:, :-1] |= line[:, 1:]
@@ -89,7 +83,6 @@ def measure(alpha, luma):
         "soft": ((alpha > 0.1) & (alpha < 0.9)).mean(),
         "edge": edge,
     }
-
 
 def panel(photo, alpha, text, font):
     w = PANEL
@@ -107,7 +100,6 @@ def panel(photo, alpha, text, font):
     draw.rectangle((0, 0, draw.textlength(text, font=font) + 10, 22), fill=(0, 0, 0))
     draw.text((5, 3), text, fill=(255, 255, 255), font=font)
     return image
-
 
 def main():
     out = sys.argv[1]
@@ -144,7 +136,6 @@ def main():
             sheet.paste(p, ((i % columns) * PANEL, (i // columns) * h))
         ImageDraw.Draw(sheet).text((5, sheet.height - 20), seen[stem], fill=(200, 200, 200), font=font)
         sheet.save(os.path.join(sheets, stem + ".jpg"), quality=88)
-
 
 if __name__ == "__main__":
     main()

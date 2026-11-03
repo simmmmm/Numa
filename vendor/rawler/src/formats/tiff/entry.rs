@@ -106,6 +106,11 @@ impl Entry {
     }
 
     reader.goto(base + offset)?;
+    // A count is the file's word, and the vectors below are sized by it: a
+    // header of 20 bytes asked for 8 GB, which ends the whole program.
+    if (count as u64) << DATASHIFTS[compat_typ as usize] > reader.remaining()? {
+      return Err(TiffError::Overflow(format!("Tag 0x{:X} counts {} values, more than the file holds", tag, count)));
+    }
     let entry = match typ {
       TYPE_BYTE => {
         let mut v = vec![0; count as usize];

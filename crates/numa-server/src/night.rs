@@ -102,6 +102,7 @@ pub fn run(server: &Arc<Server>, failed: &mut HashSet<i64>) {
     save(server, &report);
     server.activity.plan(Kind::Night, 0, None);
     server.activity.start(Kind::Night);
+    crate::collect::sweep(server);
     let steps: [(&'static str, Step); 9] = [
         ("Trying again what failed", retry),
         ("Reading every library again in full", rescan),

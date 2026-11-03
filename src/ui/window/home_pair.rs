@@ -203,6 +203,26 @@ fn ask_to_home(state: &App, joined: Vec<(Library, Option<sync::Library>)>, count
     dialog.present(Some(&window));
 }
 
+pub(super) async fn merge_with_home(state: &App, here: &Library, home: &Library, tied: std::collections::BTreeMap<String, sync::Kept>) -> Result<(), String> {
+    let Some(theirs) = home_sync::linked(state, home.id) else { return Err(format!("{} is no longer kept at {NUMA_HOME}", home.label())) };
+    if !home_sync::a_round_of(state, home).await {
+        return Err(format!("{NUMA_HOME} could not be reached for all of {}: nothing was merged", home.label()));
+    }
+    let link = Link { address: theirs.address, library: theirs.library, name: here.label(), way: Some(Way::Up), photos: tied, ..Link::default() };
+    home_sync::keep(state, here.id, &link);
+    home_sync::unlink(state, home.id);
+    state.catalog.remove_library(home.id)?;
+    if home_sync::is_cache_only(home) {
+        if let Err(err) = gio::File::for_path(&home.path).trash(gio::Cancellable::NONE) {
+            log::info!("Numa Home: {}: {err}", home.path.display());
+        }
+    }
+    reload_libraries(state);
+    home_sync::sync_now(state, here.clone());
+    redraw(state);
+    Ok(())
+}
+
 pub(super) fn stop_syncing(state: &App, libraries: Vec<Library>) {
     let Some(window) = window(state) else { return };
     let Some(way) = libraries.first().and_then(|library| home_sync::way_of(state, library.id)) else { return };

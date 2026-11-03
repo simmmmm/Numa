@@ -30,7 +30,6 @@ SOURCE = ROOT / "data/design/tokens.json"
 OUT = ROOT / "src/ui/tokens.css"
 WEB = ROOT / "crates/numa-server/src/web/tokens.css"
 
-
 def render():
     tokens = json.loads(SOURCE.read_text())["color"]["tokens"]
     name = lambda token: "numa_" + token["name"].replace("-", "_")
@@ -47,7 +46,6 @@ def render():
     head = "/* Written by dev/tokens.py from data/design/tokens.json. Do not edit. */"
     return "\n".join([head, *dark, *photo, "/* light */", *light]) + "\n"
 
-
 def render_web():
     tokens = json.loads(SOURCE.read_text())
     dark = lambda value: value if isinstance(value, str) else value["dark"]
@@ -63,7 +61,6 @@ def render_web():
         rows.append(f"  --font-{family}: {stack};")
     head = "/* Written by dev/tokens.py from data/design/tokens.json. Do not edit. */"
     return "\n".join([head, ":root {", *rows, "}"]) + "\n"
-
 
 if __name__ == "__main__":
     outputs = [(OUT, render(), "src/ui/tokens.css"), (WEB, render_web(), "crates/numa-server/src/web/tokens.css")]

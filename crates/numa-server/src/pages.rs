@@ -42,6 +42,7 @@ pub fn routes() -> Router<Arc<Server>> {
         .route("/import.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/import.js")) }))
         .route("/today.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/today.js")) }))
         .route("/start.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/start.js")) }))
+        .route("/reach.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/reach.js")) }))
         .route("/tidy.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/tidy.js")) }))
         .route("/manage.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/manage.js")) }))
         .route("/tokens.css", get(|| async { file("text/css; charset=utf-8", include_bytes!("web/tokens.css")) }))

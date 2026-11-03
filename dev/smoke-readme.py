@@ -13,7 +13,6 @@ root = Path(__file__).resolve().parent.parent
 workflow = (root / ".github/workflows/smoke.yml").read_text()
 readme = (root / "README.md").read_text().splitlines()
 
-
 def block(heading):
     """The first sh block after the line that starts with `heading`, as run.sh's awk finds it."""
     found = inside = False
@@ -28,7 +27,6 @@ def block(heading):
         else:
             lines.append(line)
     return lines
-
 
 jobs = re.findall(r'\{ name: "([^"]+)".*?heading: "([^"]+)"', workflow)
 missing = [f"{name}: no sh block under {heading}" for name, heading in jobs if not block(heading)]

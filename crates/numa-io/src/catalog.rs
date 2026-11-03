@@ -31,6 +31,8 @@ mod found;
 mod at_home;
 
 mod tidy;
+
+mod album_merge;
 pub use at_home::{home_preview, home_thumb, AtHome};
 use schema::{migrate, upgrade, user_version, HOME_MIGRATIONS, HOME_SCHEMA, HOME_VERSION, LEGACY_SCHEMA, LIBRARY_MIGRATIONS, LIBRARY_SCHEMA, LIBRARY_VERSION};
 
@@ -1592,7 +1594,7 @@ impl Catalog {
                 let rows = stmt
                     .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))
                     .map_err(text)?;
-                rows.flatten().filter(|(_, path, _)| !seen.contains(path)).collect()
+                rows.flatten().filter(|(_, path, _)| !seen.contains(path) && (found.videos || !crate::video::is_video(Path::new(path)))).collect()
             };
 
             let key = |path: &str, mtime: i64| (Path::new(path).file_name().map(|n| n.to_owned()), mtime);
@@ -2151,6 +2153,8 @@ pub struct Scan {
     pub unchanged: bool,
 
     pub folders: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+
+    pub videos: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2167,7 +2171,15 @@ impl Changes {
 }
 
 pub fn scan(root: &Path, known: &Known) -> Scan {
-    let (paths, complete, folders) = walk_images(root);
+    scan_in(root, known, false)
+}
+
+pub fn scan_with_videos(root: &Path, known: &Known) -> Scan {
+    scan_in(root, known, true)
+}
+
+fn scan_in(root: &Path, known: &Known, videos: bool) -> Scan {
+    let (paths, complete, folders) = walk_images(root, videos);
     let files: Vec<(PathBuf, i64, crate::exif::Stamp)> = paths
             .into_iter()
             .map(|path| {
@@ -2175,6 +2187,7 @@ pub fn scan(root: &Path, known: &Known) -> Scan {
 
                 let stamp = match known.get(&path) {
                     Some((was, Some(stamp))) if *was == mtime => stamp.clone(),
+                    _ if crate::video::is_video(&path) => crate::video::stamp(&path),
                     _ => crate::exif::stamp(&path),
                 };
                 (path, mtime, stamp)
@@ -2184,7 +2197,7 @@ pub fn scan(root: &Path, known: &Known) -> Scan {
     let unchanged = complete
         && files.len() == known.len()
         && files.iter().all(|(path, mtime, _)| known.get(path).is_some_and(|(was, stamp)| was == mtime && stamp.is_some()));
-    Scan { files, complete, unchanged, folders }
+    Scan { files, complete, unchanged, folders, videos }
 }
 
 pub fn moved(folders: &[(PathBuf, Option<std::time::SystemTime>)]) -> bool {
@@ -2200,7 +2213,7 @@ fn mtime_secs(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-fn walk_images(root: &Path) -> (Vec<PathBuf>, bool, Vec<(PathBuf, Option<std::time::SystemTime>)>) {
+fn walk_images(root: &Path, videos: bool) -> (Vec<PathBuf>, bool, Vec<(PathBuf, Option<std::time::SystemTime>)>) {
     let mut found = Vec::new();
     let mut complete = true;
     let mut pending = vec![root.to_path_buf()];
@@ -2239,7 +2252,7 @@ fn walk_images(root: &Path) -> (Vec<PathBuf>, bool, Vec<(PathBuf, Option<std::ti
                     continue;
                 }
                 pending.push(path);
-            } else if raw::is_supported(&path) {
+            } else if raw::is_supported(&path) || videos && crate::video::is_video(&path) {
                 found.push(path);
             }
         }
@@ -2256,6 +2269,32 @@ mod tests {
     unsafe extern "C" {
         #[link_name = "geteuid"]
         fn libc_geteuid() -> u32;
+    }
+
+    #[test]
+    fn a_scan_that_skips_videos_keeps_the_ones_the_catalog_holds() {
+        let root = temp_dir("videos-kept");
+        let catalog = Catalog::in_memory().unwrap();
+        let library = catalog.add_library(&root).unwrap();
+        let files = |names: &[&str], videos: bool| Scan {
+            files: names.iter().map(|name| (root.join(name), 1, crate::exif::Stamp::default())).collect(),
+            complete: true,
+            videos,
+            ..Scan::default()
+        };
+        let names = |catalog: &Catalog| -> Vec<String> {
+            let mut names: Vec<String> =
+                catalog.photos(library.id, &Filter::default()).unwrap().iter().map(|photo| photo.path.file_name().unwrap().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        };
+        catalog.apply_scan(&library, &files(&["a.jpg", "b.mp4"], true)).unwrap();
+        assert_eq!(names(&catalog), ["a.jpg", "b.mp4"]);
+        catalog.apply_scan(&library, &files(&["a.jpg", "c.jpg"], false)).unwrap();
+        assert_eq!(names(&catalog), ["a.jpg", "b.mp4", "c.jpg"]);
+        catalog.apply_scan(&library, &files(&["a.jpg", "c.jpg"], true)).unwrap();
+        assert_eq!(names(&catalog), ["a.jpg", "c.jpg"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -3655,6 +3694,26 @@ INSERT INTO photos (id, library_id, path, mtime, rating, flag, edits)
 
     fn names_of(photos: &[Photo]) -> Vec<String> {
         photos.iter().map(|photo| photo.path.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn two_albums_become_one_across_libraries_and_nothing_is_lost() {
+        let catalog = Catalog::in_memory().unwrap();
+        let (first, second) = two_libraries(&catalog, "album-merge");
+        let a = catalog.photos(first.id, &Filter::default()).unwrap().remove(0);
+        let c = catalog.photos(second.id, &Filter::default()).unwrap().remove(0);
+        let keep = catalog.create_album("Holiday").unwrap();
+        let other = catalog.create_album("Holiday at Home").unwrap();
+        catalog.set_in_album(&keep, &[a.id], true).unwrap();
+
+        catalog.set_in_album(&other, &[a.id, c.id], true).unwrap();
+
+        catalog.merge_albums(&keep, &other).unwrap();
+
+        let in_it = |key: &str, library: i64| catalog.photos(library, &Filter { album: Some(key.to_string()), ..Filter::default() }).unwrap().len();
+        assert_eq!((in_it(&keep, first.id), in_it(&keep, second.id)), (1, 1));
+        assert_eq!((in_it(&other, first.id), in_it(&other, second.id)), (0, 0));
+        assert_eq!(catalog.albums().unwrap(), [(keep, "Holiday".to_string())]);
     }
 
     #[test]

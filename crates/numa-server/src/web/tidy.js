@@ -1,11 +1,3 @@
-// HOME-019: Tidy Up — library by library, and over your own photographs
-// unless Everyone's is chosen. The page first lists the libraries that have
-// something to tidy, as stacks; a library opens its cards of decisions, each
-// a small set side by side, Numa's suggestion marked: exact copies, runs of
-// the same frame, frames past use, and (Everyone's) photographs nobody is
-// known to have taken. One tap keeps the best (the rest to their library's
-// trash, 30 days), keeps all (never asked again), or tap the frames to keep
-// by hand.
 'use strict';
 
 const KINDS = [
@@ -15,19 +7,12 @@ const KINDS = [
   ['who', S.whoTitle, S.whoText],
 ];
 
-// Whose photographs the page is over: the account's own, every time Tidy Up
-// is opened. Everyone's rides along in the address while one moves about in
-// Tidy Up (a library and back), and is gone when Tidy Up is opened afresh.
 const everyoneIn = params => params.get('everyone') === '1';
 const around = (params, more) => ({ everyone: everyoneIn(params) ? '1' : null, ...more });
 const everyonesChip = (params, single) => !single && h('button', { class: 'chip everyones' + (everyoneIn(params) ? ' chosen' : ''),
   'aria-pressed': String(everyoneIn(params)), title: S.everyonesTip,
   onclick: () => go('/tidy', { library: params.get('library'), everyone: everyoneIn(params) ? null : '1' }) }, S.everyones);
 
-// The entry on a library's page, beside For a Book…: an admin's, an
-// account's with the right to delete, or its own Sent Home. For the rest it
-// stays in sight, greyed, and says who can (P14), in a tooltip and, so that a
-// touch screen and the keys reach it too, as a toast.
 const tidyEntry = library => state.me.admin || state.me.manage || library.mine
   ? h('button', { class: 'chip', title: S.tidyTip, onclick: () => go('/tidy', { library: library.id }) }, S.tidyUp)
   : h('button', { class: 'chip', 'aria-disabled': 'true', title: S.tidyRefused, onclick: () => toast(S.tidyRefused) }, S.tidyUp);
@@ -46,8 +31,6 @@ async function tidyPage(main, params) {
   page.replaceChildren(...(library ? tidyLibrary(pending, params, answer) : tidyLibraries(top, pending, params, answer)).filter(Boolean));
 }
 
-// The libraries with something to tidy, as stacks of the photographs in the
-// sets, and how many of them.
 function tidyLibraries(top, pending, params, answer) {
   const chips = everyonesChip(params, answer.single);
   const places = h('div', { class: 'places' }, answer.libraries.map(library => h('button', { class: 'place', onclick: () => go('/tidy', around(params, { library: library.id })) },
@@ -57,8 +40,6 @@ function tidyLibraries(top, pending, params, answer) {
     answer.libraries.length ? places : empty(S.nothingToTidy, answer.everyone || answer.single ? S.nothingFoundTidy : S.nothingOfYours)];
 }
 
-// One library's cards: its name with the way back, the kinds as chips and
-// Everyone's after them.
 function tidyLibrary(pending, params, answer) {
   const kind = params.get('kind');
   const { library } = answer;
@@ -133,7 +114,6 @@ function tidyCard(card, accounts, scope) {
   return box;
 }
 
-// The viewer over the set, as on the timeline: arrows, zoom, Info.
 function openFrame(section, at) {
   state.sections = [section];
   openViewer(section, at);

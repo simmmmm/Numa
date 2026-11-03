@@ -1,9 +1,3 @@
-// HOME-041: Places — where the household's photographs were taken: the
-// countries with their regions and towns, and a map of them; and a small map
-// in a photograph's info. The map is Numa Home's own: OpenStreetMap's data as
-// Protomaps builds it, kept on the NAS, drawn by MapLibre GL JS (BSD-3-Clause,
-// licensed on /licences) in the design system's map greys, so the page asks
-// no server but Numa Home and the photographs stay the brightest thing.
 'use strict';
 
 const MAPLIBRE = '/map/6.13.0/';
@@ -17,10 +11,6 @@ function loadMapLibre() {
   return mapLibrary;
 }
 
-// The map's look, from the tokens, so it follows the theme. The world to zoom
-// 6 is everywhere and drawn larger past it; the detail kept around the
-// photographs lies over it from zoom 7. Lines and names come only from the
-// one that has them sharp.
 function mapStyle() {
   const css = getComputedStyle(document.documentElement);
   const token = name => css.getPropertyValue(`--map-${name}`).trim();
@@ -29,7 +19,7 @@ function mapStyle() {
     layout: { 'text-field': ['coalesce', ['get', 'name:en'], ['get', 'name']], 'text-font': ['Noto Sans Regular'], 'text-size': size, 'text-max-width': 8, ...more },
     paint: { 'text-color': colour, 'text-halo-color': token('land'), 'text-halo-width': 1.2 },
   });
-  // Seas and countries as the section labels are set: small, spaced, upper case.
+
   const spaced = { 'text-transform': 'uppercase', 'text-letter-spacing': 0.12 };
   const layers = [{ id: 'sea', type: 'background', paint: { 'background-color': token('water') } }];
   for (const source of ['world', 'here']) {
@@ -57,10 +47,6 @@ function mapStyle() {
   };
 }
 
-// The points as countries, then regions, then towns: each with its count,
-// its first three photographs, the box its photographs lie in, and where its
-// stack stands (a town where its photographs are, the others on their
-// largest town). A region of one town is that town.
 function placeTree(found) {
   const countries = new Map();
   const child = (kids, name, level, parent) => {
@@ -92,11 +78,6 @@ function placeTree(found) {
   return tree;
 }
 
-// Which places stand on the map at a zoom: a country opens to its parts from
-// zoom 4, a region to its towns from 6, each only when its parts' stacks lie
-// apart, so a stack never covers one of its own. Places of different
-// countries that would still cover each other stand as one stack, which
-// zooms in to them.
 const OPENS = { country: 4, region: 6 };
 const APART = 64;
 function shownAt(tree, zoom) {
@@ -119,11 +100,8 @@ function shownAt(tree, zoom) {
   return stacks.map(stack => stack.places);
 }
 
-// The page's own filter for a place: a region is asked as one, a town or a country as the place.
 const placeFilter = node => ({ [node.level === 'region' ? 'region' : 'place']: node.name });
 
-// The map is made once and kept, with where it looks, while the page is
-// rebuilt around it (a chip, a visit elsewhere and back).
 let mapView = null;
 
 async function placesPage(main, params) {
@@ -166,7 +144,7 @@ async function placesPage(main, params) {
   if (found.none || found.looking) {
     list.append(h('p', { class: 'caption none' }, found.looking ? S.lookingWhere : phrase(found.none === 1 ? 'oneNoPlace' : 'noPlace', { n: grouped(found.none) })));
   }
-  // Still reading where the photographs were taken: asked again in a moment.
+
   if (found.looking) setTimeout(() => { if (main.isConnected && route().path === '/places') render(); }, 4000);
   if (found.map !== 'ready') {
     stage.replaceChildren(h('div', { class: 'note' }, mapNote(view, found)));
@@ -200,8 +178,7 @@ async function placesPage(main, params) {
   }
   if (at.length === 2 && at.every(Number.isFinite)) view.map.jumpTo({ center: [at[1], at[0]], zoom: 12 });
   else if (!view.fitted && tree.length) {
-    // Every place, or where most were taken when every place is more than
-    // the map can show; clear of the chips, and of the sheet on a phone.
+
     const box = tree.reduce((all, node) => [Math.min(all[0], node.box[0]), Math.min(all[1], node.box[1]), Math.max(all[2], node.box[2]), Math.max(all[3], node.box[3])], [180, 90, -180, -90]);
     const padding = { top: 80, left: 60, right: 60, bottom: list.offsetParent && getComputedStyle(list).position === 'absolute' ? list.offsetHeight + 40 : 60 };
     const fits = view.map.cameraForBounds([[box[0], box[1]], [box[2], box[3]]], { padding });
@@ -214,8 +191,6 @@ async function placesPage(main, params) {
   placeStacks(view);
 }
 
-// What stands in the map's place until it has come: how far its download is,
-// or what stopped it and Try Again, which has Numa Home fetch it now.
 function mapNote(view, found) {
   if (found.map === 'fetching') {
     view.note = coming('world');
@@ -229,8 +204,6 @@ function mapNote(view, found) {
   return box;
 }
 
-// A download of the map: what comes and how far, the activity ring turning
-// until its size is known, then its meter.
 function coming(kind) {
   const turning = ring(0.25), said = h('span', {}), meter = h('div', { class: 'meter' }, h('div', { class: 'fill' }));
   return { turning, said, meter, box: h('div', { class: 'coming ' + kind }, h('div', { class: 'line' }, turning, said), meter) };
@@ -245,11 +218,6 @@ function drawComing(block, row, lead) {
   block.meter.firstChild.style.transform = filled(total ? row.done / total : 0).transform;
 }
 
-// The map's download as Activity reports it, asked every half second while
-// it comes (activityBadge). The world's on the note, the page drawn again
-// once that download is over — another one, the streets', begins only once
-// the world is here; the streets around new places in a caption over the
-// map, their tiles asked again once they have come.
 function mapProgress(activity) {
   const row = activity.downloads.find(item => item.name === S.map);
   const fetching = row?.state === 'fetching', view = mapView;
@@ -273,7 +241,6 @@ function mapProgress(activity) {
   return fetching;
 }
 
-// The places on the map as small stacks of their photographs, the count beside.
 function placeStacks(view) {
   if (!view.map || !view.tree) return;
   const shown = shownAt(view.tree, view.map.getZoom());
@@ -289,7 +256,7 @@ function placeStacks(view) {
     const key = keyOf(places), [node] = places;
     if (view.markers.has(key)) continue;
     const count = places.reduce((sum, one) => sum + one.count, 0);
-    // Several places as one: a click zooms in until they stand apart.
+
     const open = event => {
       event.stopPropagation();
       if (places.length === 1) return choosePlace(view, node, false);
@@ -303,7 +270,6 @@ function placeStacks(view) {
   }
 }
 
-// The list: every country with its count, opening to its regions and towns.
 function fillPlaces(view) {
   const row = (node, top) => {
     const chosen = view.chosen?.key === node.key;
@@ -321,14 +287,10 @@ function fillPlaces(view) {
   view.rows.replaceChildren(...(view.tree.length ? view.tree.map(node => row(node, true)) : view.looking ? [] : [h('p', { class: 'body' }, S.noPlaces)]));
 }
 
-// A place chosen, in the list or on the map: its row and stack white, and
-// over the map its name, its count and months, three of its photographs and
-// Show N, the timeline of it with the page's filters. From the list, the map
-// goes to it first.
 function choosePlace(view, node, fly) {
   closePlace(view);
   view.chosen = node;
-  // Its parts in the list too, when it was chosen there.
+
   for (let up = fly ? node : node.parent; up; up = up.parent) view.open.add(up.key);
   fillPlaces(view);
   view.rows.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest' });
@@ -349,7 +311,7 @@ function choosePlace(view, node, fly) {
   pop.addEventListener('click', event => event.stopPropagation());
   view.box.parentNode.append(pop);
   view.pop = pop;
-  // Above its stack, inside the map; under it when the top is too near.
+
   view.follow = () => {
     const { x, y } = view.map.project([node.lon, node.lat]);
     const { width, height } = pop.getBoundingClientRect();
@@ -369,7 +331,6 @@ function closePlace(view) {
 }
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && mapView?.pop) closePlace(mapView); });
 
-// The timeline's own chips, on the map: All · Picks · ★ 3+, and the year.
 function mapChips(params) {
   const flag = params.get('flag'), rating = params.get('rating'), date = params.get('date');
   const to = change => go('/places', { ...Object.fromEntries(narrowedBy(params).filter(([key]) => key !== 'place' && key !== 'region')), ...change });
@@ -389,8 +350,6 @@ function mapChips(params) {
     h('span', { class: 'divider' }), year);
 }
 
-// A photograph's place in its info: a small map with where it was taken, one
-// map kept and moved from photograph to photograph; a click opens Places there.
 let miniMap = null;
 function infoMap([lat, lon]) {
   if (!miniMap) {

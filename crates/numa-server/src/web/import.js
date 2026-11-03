@@ -1,7 +1,3 @@
-// HOME-009: a card in the NAS. The bar on every page — what is new on it,
-// the import's progress and verdict — and the Import page: the card's own
-// previews by shoot, the new ones ticked, the ones already in a library
-// dimmed, and where each shoot goes.
 'use strict';
 
 let cardTimer = null;
@@ -45,8 +41,6 @@ function drawCard(bar, card) {
     h('button', { class: 'primary', onclick: () => go('/import') }, S.importEll)));
 }
 
-// The Import page. Ticked: the photographs to copy, by their place on the
-// card (`n`).
 async function importPage(main) {
   let card, list;
   try { [card, list] = await Promise.all([api('card'), api('card/photos')]); } catch (error) { return main.append(empty(S.importPage, error.message, true)); }
@@ -101,8 +95,7 @@ async function importPage(main) {
     tiles.set(photo.n, el);
     return el;
   };
-  // Asked once for every shoot: reading the card's GPS takes a moment, and
-  // the page does not wait for it.
+
   const named = api('card/names', { wait: 180, quiet: true }).catch(() => null);
   const rows = card.shoots.map((shoot, at) => {
     const own = list.shoots[at] || [];
@@ -118,11 +111,10 @@ async function importPage(main) {
       where.textContent = select.value ? '' : phrase('intoWhere', { where: `${parent ? parent + '/' : ''}${name.value.trim() || suggested}` });
     };
     select.addEventListener('change', update);
-    // A name chosen (typed, or one of the ideas below) is a new folder's.
+
     name.addEventListener('input', () => { select.value = ''; update(); });
     update();
-    // HOME-029: a name from where it was taken, by its GPS: the first is
-    // filled in while the date still stands, the others offered.
+
     const ideas = nameIdeas(named.then(all => {
       const answer = all?.[at];
       if (answer?.names?.length && name.value === suggested) {
@@ -154,8 +146,6 @@ async function importPage(main) {
   paint();
 }
 
-// A meter of its own width and the numbers beside it in tabular figures, so
-// neither moves while the other changes.
 function progressLine(word, { done, total }) {
   return h('div', { class: 'line progress' }, h('span', {}, word),
     h('div', { class: 'meter', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': total, 'aria-valuenow': done },
@@ -163,13 +153,8 @@ function progressLine(word, { done, total }) {
     h('span', { class: 'numbers' }, phrase('ofTotal', { done: grouped(done), total: grouped(total) })));
 }
 
-// HOME-052: Send Home from the browser. Files chosen with Add Photos… or
-// dropped anywhere on the page go into the account's own Sent Home, by the
-// day each was taken, one at a time; a bar under the header counts them and
-// a toast says how it went. The same bytes sent twice are kept once (the
-// server's), so sending a folder again is safe.
 const sending = { queue: [], done: 0, total: 0, created: 0, already: 0, failed: [] };
-// Made on first use: `h` is app.js's, which loads after this file.
+
 const sendBar = () => sending.bar ??= h('div', { class: 'cardbar', hidden: true });
 
 function addPhotos() {
@@ -184,7 +169,7 @@ async function sendHome(files) {
   if (!files.length) return;
   sending.queue.push(...files);
   sending.total += files.length;
-  // A round already going takes these along.
+
   if (sending.total > files.length) return drawSending();
   while (sending.queue.length) {
     drawSending();
@@ -213,9 +198,6 @@ function drawSending() {
   if (sending.total) bar.replaceChildren(progressLine(S.sendingHome, sending));
 }
 
-// Files dragged in from outside show where they go over the whole window. A
-// drag that starts on the page (a stack's print) is not one: Chrome gives it
-// a file too. Listened to on the window, after manage.js has said no to a tile.
 let dragFromPage = false;
 window.addEventListener('dragstart', event => { dragFromPage = !event.defaultPrevented; });
 window.addEventListener('dragend', () => { dragFromPage = false; });
@@ -233,15 +215,13 @@ document.addEventListener('drop', event => {
   if (!carriesFiles(event)) return;
   event.preventDefault();
   dropZone().hidden = true;
-  // Asked for now: the drop's items are gone once this returns.
+
   const entries = [...event.dataTransfer.items].map(item => item.webkitGetAsEntry?.()).filter(Boolean);
   const files = [...event.dataTransfer.files];
   (entries.length ? filesIn(entries) : Promise.resolve(files)).then(sendHome, error => toast(error.message));
 });
 window.addEventListener('beforeunload', event => { if (sending.total) event.preventDefault(); });
 
-// A dropped folder is walked: every file in it and in its folders, nothing
-// hidden (a Mac's .DS_Store, a library's own .numa).
 async function filesIn(entries) {
   const files = [];
   const asked = (call, ...on) => new Promise((ok, no) => call.call(...on, ok, no));

@@ -148,7 +148,7 @@ pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Resu
 
     let _ = candidates(path, mtime, max_edge, edits).find(|cached| {
         cached.parent().is_some_and(|parent| std::fs::create_dir_all(parent).is_ok())
-            && image.save_with_format(cached, image::ImageFormat::Jpeg).is_ok()
+            && save_atomic(cached, |out| image.write_to(out, image::ImageFormat::Jpeg).map_err(std::io::Error::other)).is_ok()
     });
 
     if edits.is_some() {
@@ -156,6 +156,28 @@ pub fn load(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Resu
     }
 
     Ok(image)
+}
+
+fn save_atomic(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_file_name(format!(".{name}.{}.{count}.tmp", std::process::id()));
+    let done = (|| {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&temp)?);
+        write(&mut out)?;
+        out.flush()?;
+        out.into_inner().map_err(|err| err.into_error())?.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+    if done.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    done
 }
 
 pub fn render(path: &Path, max_edge: u32, edits: &str) -> Result<RgbImage, String> {
@@ -214,7 +236,7 @@ fn prune_dir(dir: &Path, budget: u64) -> u64 {
 pub fn store(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>, image: &RgbImage) {
     let _ = candidates(path, mtime, max_edge, edits).find(|cached| {
         cached.parent().is_some_and(|parent| std::fs::create_dir_all(parent).is_ok())
-            && image.save_with_format(cached, image::ImageFormat::Jpeg).is_ok()
+            && save_atomic(cached, |out| image.write_to(out, image::ImageFormat::Jpeg).map_err(std::io::Error::other)).is_ok()
     });
     if edits.is_some() {
         forget(path, mtime, max_edge, None);
@@ -279,6 +301,26 @@ mod tests {
         left.sort();
         assert_eq!(left, ["1.jpg", "3.jpg"]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_leaves_nothing_under_the_final_name() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("numa-thumbs-atomic-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("0123.jpg");
+        let cut = save_atomic(&target, |out| {
+            out.write_all(b"half a jpeg")?;
+            Err(std::io::Error::other("power cut"))
+        });
+        assert!(cut.is_err());
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "no temporary file stays");
+        save_atomic(&target, |out| out.write_all(b"whole")).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"whole");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

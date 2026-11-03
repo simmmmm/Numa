@@ -72,8 +72,15 @@ pub fn start(server: Arc<Server>) {
             .start_handler(|_| lower_priority())
             .build()
             .expect("the background's threads");
-        run(&server, &pool);
+        survive(Duration::from_secs(60), || run(&server, &pool));
     });
+}
+
+fn survive(pause: Duration, mut work: impl FnMut()) {
+    while std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut work)).is_err() {
+        log::error!("the background work stopped on a panic; starting again in {} s", pause.as_secs());
+        std::thread::sleep(pause);
+    }
 }
 
 fn run(server: &Arc<Server>, pool: &rayon::ThreadPool) {
@@ -170,7 +177,7 @@ fn walk(server: &Arc<Server>, library: Library, full: bool) -> Option<Result<num
         true => Default::default(),
         false => server.home.blocking(move |catalog| catalog.known_files(&walked).unwrap_or_default())?,
     };
-    let mut found = numa_io::catalog::scan(&library.path, &known);
+    let mut found = numa_io::catalog::scan_with_videos(&library.path, &known);
     let removed = server.store.removed(library.id);
     if !removed.is_empty() {
         found.files.retain(|(path, ..)| !removed.contains(&crate::manage::within(&library, path)));
@@ -215,7 +222,7 @@ fn plan(server: &Arc<Server>, failed: &HashSet<i64>) -> Plan {
             .map(|(library, _)| {
                 let id = library.id;
                 let pending = server.home.blocking(move |catalog| catalog.unanalysed(id, cull::VERSION).unwrap_or_default()).unwrap_or_default();
-                (library.clone(), pending.into_iter().filter(|photo| !failed.contains(&photo.id)).collect())
+                (library.clone(), pending.into_iter().filter(|photo| !failed.contains(&photo.id) && !numa_io::video::is_video(&photo.path)).collect())
             })
             .collect(),
     };
@@ -227,7 +234,7 @@ fn plan(server: &Arc<Server>, failed: &HashSet<i64>) -> Plan {
             all.into_iter()
                 .map(|(library, photos)| {
                     let index = &indexes[&library.id];
-                    let pending = photos.into_iter().filter(|photo| index.get(&photo.path, photo.mtime).is_none()).map(|photo| (photo.path, photo.mtime)).collect();
+                    let pending = photos.into_iter().filter(|photo| !numa_io::video::is_video(&photo.path) && index.get(&photo.path, photo.mtime).is_none()).map(|photo| (photo.path, photo.mtime)).collect();
                     (library, pending)
                 })
                 .collect()
@@ -260,6 +267,7 @@ fn missing_thumbnails(server: &Arc<Server>, photos: Vec<Photo>) -> Vec<(Photo, O
             let edits = edits.get(&photo.id).cloned();
             (photo, edits)
         })
+        .filter(|(photo, _)| !numa_io::video::is_video(&photo.path) || crate::video::ffmpeg().is_some())
         .filter(|(photo, edits)| {
             !thumbs::is_cached(&photo.path, photo.mtime, thumbs::STEPS[0], edits.as_deref())
                 || !thumbs::is_cached(&photo.path, photo.mtime, thumbs::LIBRARY_EDGE, edits.as_deref())
@@ -291,7 +299,11 @@ fn ahead(server: &Arc<Server>, plan: Thumbnails, failed: &mut HashSet<i64>) -> b
                 .filter(|_| !server.activity.paused())
                 .map(|(photo, edits)| {
                     let (path, edits) = (&photo.path, edits.as_deref());
-                    let large = thumbs::load(path, photo.mtime, thumbs::STEPS[0], edits).map_err(|err| log::info!("{}: {err}", path.display())).map_err(|()| photo.id)?;
+                    let loaded = match numa_io::video::is_video(path) {
+                        true => crate::video::poster(path, photo.mtime, thumbs::STEPS[0]),
+                        false => thumbs::load(path, photo.mtime, thumbs::STEPS[0], edits),
+                    };
+                    let large = loaded.map_err(|err| log::info!("{}: {err}", path.display())).map_err(|()| photo.id)?;
                     if !thumbs::is_cached(path, photo.mtime, thumbs::LIBRARY_EDGE, edits) {
                         let small = image::DynamicImage::ImageRgb8(large.clone()).thumbnail(thumbs::LIBRARY_EDGE, thumbs::LIBRARY_EDGE).into_rgb8();
                         thumbs::store(path, photo.mtime, thumbs::LIBRARY_EDGE, edits, &small);
@@ -441,4 +453,21 @@ fn see_things(server: &Arc<Server>) -> bool {
     }
     server.activity.finish(Kind::Things);
     true
+}
+
+#[cfg(test)]
+mod survive_tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_in_the_background_starts_it_again() {
+        let mut rounds = 0;
+        survive(Duration::ZERO, || {
+            rounds += 1;
+            if rounds < 3 {
+                panic!("a decoder gave up");
+            }
+        });
+        assert_eq!(rounds, 3);
+    }
 }

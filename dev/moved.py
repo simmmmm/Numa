@@ -15,7 +15,6 @@ differs.
 """
 import collections, re, subprocess, sys
 
-
 def lines_of(diff):
     removed, added = [], []
     for line in diff.splitlines():
@@ -27,11 +26,8 @@ def lines_of(diff):
             added.append(line[1:].strip())
     return removed, added
 
-
 def check(removed, added):
     """The lines that make this more than a move; empty when it is one."""
-    # A file included by relative path is further away from a file that moved
-    # down a directory; how far is not a difference.
     near = lambda line: re.sub(r'(include_(?:str|bytes)!\(")(\.\./)+', r"\1", line.strip())
     removed = [near(line) for line in removed]
     added = [near(line).replace("pub(super) ", "") for line in added]
@@ -54,7 +50,6 @@ def check(removed, added):
         problems.append(f"+ {line}" + (f"  (x{count})" if count > 1 else ""))
     return problems
 
-
 def self_test():
     moved = ["fn a() {", "    1", "}"]
     assert check(moved, ["use super::*;", "pub(super) fn a() {", "1", "}", "mod x;", "use x::*;"]) == []
@@ -65,7 +60,6 @@ def self_test():
     assert check(["fn c() {}", "}"], ["fn c() {}"]), "a stray brace passed"
     assert check(["struct C(u8);"], ["pub(super) struct C(pub(super) u8);"]) == []
     print("moved.py: self-test passed")
-
 
 def main(args):
     if args == ["--self-test"]:
@@ -79,7 +73,6 @@ def main(args):
         print("\n".join(problems[:40]))
         sys.exit(1)
     print(f"a pure move: {len(removed)} lines out, {len(added)} in")
-
 
 if __name__ == "__main__":
     main(sys.argv[1:])

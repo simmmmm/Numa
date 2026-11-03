@@ -12,6 +12,8 @@ thread_local! {
 
     static ROUND: Cell<bool> = const { Cell::new(false) };
 
+    static WENT_THROUGH: Cell<bool> = const { Cell::new(false) };
+
     static QUIET: RefCell<Option<Cancel>> = const { RefCell::new(None) };
 
     static TURN: Cell<usize> = const { Cell::new(0) };
@@ -103,7 +105,7 @@ pub(super) fn is_home(state: &App, library: i64) -> bool {
     way_of(state, library) == Some(Way::Down)
 }
 
-fn home_root() -> PathBuf {
+pub(super) fn home_root() -> PathBuf {
     let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
     pictures.join(NUMA_HOME)
 }
@@ -177,6 +179,40 @@ pub(super) fn settle_here(state: &App, library: &Library, root: &Path) -> Result
     Ok(Library { path: to, ..library.clone() })
 }
 
+pub(super) fn move_folder(from: &Path, to: &Path) -> Result<(), String> {
+    let said = |err: std::io::Error| format!("{}: {err}", to.display());
+    std::fs::create_dir_all(to.parent().unwrap_or(to)).map_err(said)?;
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    let size = preferences::folder_size(from, &[]);
+    let free = gio::File::for_path(to.parent().unwrap_or(to)).query_filesystem_info("filesystem::free", gio::Cancellable::NONE).map(|info| info.attribute_uint64("filesystem::free")).unwrap_or(u64::MAX);
+    if free <= size {
+        return Err(format!("{} needs {}, and has {} free", to.display(), glib::format_size(size), glib::format_size(free)));
+    }
+    copy_all(from, to).map_err(said)?;
+
+    if !same_files(from, to).map_err(said)? {
+        return Err(format!("{} did not arrive whole; the original stays", to.display()));
+    }
+    gio::File::for_path(from).trash(gio::Cancellable::NONE).map_err(|err| format!("{}: {err}", from.display()))
+}
+
+fn same_files(from: &Path, to: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let there = to.join(entry.file_name());
+        let same = match entry.file_type()?.is_dir() {
+            true => same_files(&entry.path(), &there)?,
+            false => there.exists() && numa::io::offload::hash_file(&entry.path())? == numa::io::offload::hash_file(&there)?,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -230,6 +266,14 @@ pub(super) fn keep(state: &App, library: i64, link: &Link) {
     if let Err(err) = saved {
         log::warn!("Numa Home: the link could not be kept: {err}");
     }
+}
+
+fn keep_midway(state: &App, library: i64, link: &Link) {
+    let mut link = link.clone();
+    if let Some(stored) = linked(state, library) {
+        (link.keep_here, link.way) = (stored.keep_here, stored.way.or(link.way));
+    }
+    keep(state, library, &link);
 }
 
 pub(super) fn photographs(count: usize) -> String {
@@ -500,6 +544,30 @@ fn stale_rows<'a>(all: &'a [Library], old_root: &Path, cache: &Path, exists: imp
         .collect()
 }
 
+pub(super) async fn hold_rounds() -> impl Drop {
+    struct Held;
+    impl Drop for Held {
+        fn drop(&mut self) {
+            ROUND.with(|round| round.set(false));
+        }
+    }
+    round_over().await;
+    ROUND.with(|round| round.set(true));
+    Held
+}
+
+pub(super) async fn a_round_of(state: &App, library: &Library) -> bool {
+    round_over().await;
+    WENT_THROUGH.with(|went| went.set(false));
+    in_step(state, library.clone(), How::ByHand);
+    round_over().await;
+    WENT_THROUGH.with(Cell::get)
+}
+
+pub(super) fn forget_way(library: i64) {
+    WAYS.with(|ways| ways.borrow_mut().remove(&library));
+}
+
 async fn round_over() {
     while ROUND.with(Cell::get) {
         glib::timeout_future(Duration::from_millis(300)).await;
@@ -560,6 +628,8 @@ pub(super) fn keep_in_step(state: &App) {
 
     offer(state);
     adopt(state, true);
+    home_leftovers::offer(state);
+    same_photos::look_later(state);
     glib::timeout_add_seconds_local(
         EVERY,
         glib::clone!(
@@ -934,6 +1004,7 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
             }
         }
         let finished = !done.cut && done.failures.is_empty();
+        WENT_THROUGH.with(|went| went.set(finished));
 
         link.everything |= finished && how != How::Glance;
         if how == How::Import || (whole && finished && !done.hold) {
@@ -1070,16 +1141,19 @@ async fn carry_out(
     let (brought, pulled) = (arrived.len(), later.len());
     let mut moved: HashSet<String> = HashSet::new();
     let ctx = Ctx { state, account: &account, library, folder: &folder, albums_there: &albums_there, running, light: how == How::Light };
-    for (at, step) in later.into_iter().chain(rest).enumerate() {
+    for (turn, step) in later.into_iter().chain(rest).enumerate() {
         if done.cut {
             break;
         }
-        let at = brought + done.deleted + at.saturating_sub(pulled);
+        let at = brought + done.deleted + turn.saturating_sub(pulled);
         saying.say(at, match &step {
             Step::Send(_) => format!("Sending {} of {} home", at + 1, saying.total),
             _ => format!("Edits and marks with {NUMA_HOME}"),
         });
         let result = one(&ctx, link, &here, step, &mut done, &mut moved).await;
+        if sync::keep_now(turn + 1) {
+            keep_midway(state, library.id, link);
+        }
         if let Err(failure) = result {
             if stop(state, failure, &account, cancel, &mut done) {
                 break;
@@ -1364,7 +1438,7 @@ async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Side
         at = at.max(given);
         let settled = match sides.kept {
             Some(kept) => sync::settle(kept, ours, stack.as_deref(), at),
-            None => Settled::Down,
+            None => sync::settle_new(ours, stack.as_deref(), at),
         };
         match settled {
             Settled::Same => up_edits = false,

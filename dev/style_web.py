@@ -38,7 +38,6 @@ WEB = "crates/numa-server/src/web"
 RADIUS = {0, 999}
 DURATION_MS = {0, 120, 150, 160, 200, 300, 700, 900, 1400}
 
-
 def scales(root):
     """The spacing, radius and font scales, from the design system's own file."""
     tokens = json.loads((root / "data/design/tokens.json").read_text())
@@ -48,7 +47,6 @@ def scales(root):
     font = {px(s["fontSize"]) for g in tokens["type"]["groups"] for s in g["styles"] if s["fontSize"].endswith("px") and g["name"] == "Interface"}
     return spacing, radius, font
 
-
 hex_colour = re.compile(r'(?<![\w&])#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?:[0-9a-fA-F]{2})?)?\b|%23[0-9a-fA-F]{3,8}\b')
 func_colour = re.compile(r'\b(?:rgba?|hsla?)\(')
 px_length = re.compile(r'(?<![\w.-])(-?\d+(?:\.\d+)?)px\b')
@@ -57,10 +55,8 @@ time_value = re.compile(r'(?<![\w.-])(\d+(?:\.\d+)?)(ms|s)\b')
 SIZE_PROP = re.compile(r'^(font-size|padding(?:-\w+)*|margin(?:-\w+)*|gap|row-gap|column-gap)$')
 TIME_PROP = re.compile(r'^(transition(?:-duration|-delay)?|animation(?:-duration|-delay)?)$')
 
-
 def strip_css_comments(text):
     return re.sub(r'/\*.*?\*/', lambda m: "\n" * m.group().count("\n"), text, flags=re.S)
-
 
 def declarations(css):
     """Every `property: value` of a stylesheet, whatever its nesting, with url(…) bodies blanked."""
@@ -76,7 +72,6 @@ def declarations(css):
                     found.append((prop.strip(), value.strip()))
         css = re.sub(r'\{[^{}]*\}', ' ', css)
     return found
-
 
 def count_values(decls, spacing, radius, font):
     size = rad = dur = 0
@@ -94,10 +89,7 @@ def count_values(decls, spacing, radius, font):
                     dur += 1
     return size, rad, dur
 
-
-# camelCase to kebab, so a style string reads as the property it sets.
 kebab = lambda name: re.sub(r'(?<=[a-z])(?=[A-Z])', '-', name).lower()
-
 
 def style_strings(js):
     """The declarations written as strings in a script: [(property, value)], and the raw text for colours."""
@@ -119,7 +111,6 @@ def style_strings(js):
         raw.append(text)
         decls += [(prop.strip(), value) for prop, _, value in (part.partition(':') for part in text.split(';')) if value]
     return decls, "\n".join(raw)
-
 
 def measure(root):
     debts = {check: {} for check in CHECKS}
@@ -146,7 +137,6 @@ def measure(root):
                 debts[check][key] = count
     return debts
 
-
 def read_baseline():
     base = {check: {} for check in CHECKS}
     if BASELINE.exists():
@@ -157,7 +147,6 @@ def read_baseline():
             base[check][key] = int(count)
     return base
 
-
 def write_baseline(debts):
     rows = ["# web style baseline — what the design system's tokens replace in Numa Home's pages, per file. May only shrink.",
             "# check\tcount\tfile"]
@@ -166,10 +155,8 @@ def write_baseline(debts):
             rows.append(f"{check}\t{count}\t{key}")
     BASELINE.write_text("\n".join(rows) + "\n")
 
-
 def totals(debts):
     return {check: sum(d.values()) for check, d in debts.items()}
-
 
 def main():
     args = sys.argv[1:]
@@ -204,7 +191,6 @@ def main():
     print("\nweb style: " + ", ".join(f"{c} {n}" for c, n in totals(debts).items())
           + (f"; {len(shrunk)} shrank — run --baseline to lock them in" if shrunk else ""))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

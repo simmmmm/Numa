@@ -19,14 +19,12 @@ import pathlib, re, sys
 WINDOW = pathlib.Path("src/ui/window.rs")
 CHILDREN = pathlib.Path("src/ui/window")
 
-
 def block(lines, start, closer):
     """The index of the line that closes the block opened at `start`."""
     for i in range(start + 1, len(lines)):
         if lines[i] == closer:
             return i
     sys.exit(f"no {closer!r} after line {start + 1}")
-
 
 def entries(lines, first, last, indent):
     """The entries between `first` and `last` (exclusive) at `indent`: each is
@@ -39,12 +37,10 @@ def entries(lines, first, last, indent):
         while start > first and re.match(r"^\s*(//|#\[)", lines[start - 1]):
             start -= 1
         end = (starts[n + 1] if n + 1 < len(starts) else last) - 1
-        # The next entry's comments are the next entry's.
         while end > i and (re.match(r"^\s*(//|#\[)", lines[end]) or lines[end].strip() == ""):
             end -= 1
         out.append((head.match(lines[i]).group(1), start, end))
     return out
-
 
 def main(args):
     module, name = args[0], args[0]
@@ -70,7 +66,6 @@ def main(args):
     if re.search(r"^pub\(super\) struct State\b", target.read_text(), re.M):
         sys.exit(f"{target} already has a State")
 
-    # The new struct, from the fields' own lines.
     body = []
     for field, new in renames.items():
         a, b = fields[field]
@@ -86,8 +81,6 @@ def main(args):
                  if head.match(l) else l for l in chunk]
         literal += chunk
 
-    # Out of the literal first (it is further down), then out of the struct,
-    # each replaced where its first field was.
     def replace(ranges, insert):
         first = min(a for a, _ in ranges)
         for a, b in sorted(ranges, reverse=True):
@@ -108,8 +101,6 @@ def main(args):
     )
     target.write_text(text)
 
-    # Every use, in one pass.
-    # `state` and its field may be a line apart, the way rustfmt breaks a chain.
     pattern = re.compile(r"\bstate(\s*)\.(" + "|".join(map(re.escape, renames)) + r")\b(?!\s*\()")
     touched = 0
     for path in [WINDOW, *sorted(CHILDREN.glob("*.rs"))]:
@@ -119,7 +110,6 @@ def main(args):
             path.write_text(after)
             touched += 1
     print(f"{module}::State: {len(renames)} fields as state.{name}, uses rewritten in {touched} files")
-
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

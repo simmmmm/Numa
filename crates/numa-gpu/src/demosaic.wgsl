@@ -1,22 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1
-//
-// RENDER-010: the X-Trans demosaic, on the card (RENDER-027: Bayer's is RCD,
-// in rcd.wgsl; PPG's passes, which were here, went with it).
-//
-// Markesteijn is Frank Markesteijn's X-Trans interpolation as dcraw
-// published it. What these passes reproduce is rawler's port (Copyright
-// 2022-2026 Daniel Vogelbacher, LGPL-2.1), which is what Numa's processor
-// path runs — step for step, with its borders and its tile-width quirk, so
-// that the card and the processor tell the same picture apart only by
-// rounding. A translation that close is rawler's code in another language,
-// so it keeps rawler's licence rather than Numa's.
-//
-// Everything here reads the mosaic through `mos` and writes the cropped frame
-// through `store_lin`, both in develop.wgsl.
-
-// ---- Markesteijn, one pass (X-Trans) -----------------------------------
-//
-// Four directions, twelve planes of the band: plane (d * 3 + c).
+// Derived from rawler, Copyright 2022-2026 Daniel Vogelbacher, LGPL-2.1
 
 fn mk_index(d: u32, c: u32, x: i32, ly: i32) -> u32 {
     let xx = u32(clamp(x, 0, i32(P.roi_w) - 1));
@@ -28,7 +11,6 @@ fn rgbd(d: u32, c: u32, x: i32, ly: i32) -> f32 {
     return work[mk_index(d, c, x, ly)];
 }
 
-// The hexagon of neighbours around a site: (dy, dx) of one of eight slots.
 fn hex(x: i32, y: i32, slot: u32) -> vec2<i32> {
     let at = T_HEX + (((u32(y % 3) * 3u + u32(x % 3)) * 8u + slot) * 2u);
     return vec2<i32>(bitcast<i32>(table[at]), bitcast<i32>(table[at + 1u]));
@@ -38,7 +20,6 @@ fn modulo3(v: i32) -> i32 {
     return ((v % 3) + 3) % 3;
 }
 
-// Green in four directions, and each site's own colour in all of them.
 @compute @workgroup_size(16, 16)
 fn mk_green(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= P.roi_w || id.y >= band.rows) {
@@ -94,7 +75,6 @@ fn mk_green(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Red and blue at the solitary greens.
 @compute @workgroup_size(16, 16)
 fn mk_solitary(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
@@ -147,7 +127,6 @@ fn mk_solitary(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Red at blue sites and blue at red ones.
 @compute @workgroup_size(16, 16)
 fn mk_rb(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
@@ -164,8 +143,6 @@ fn mk_rb(@builtin(global_invocation_id) id: vec3<u32>) {
     let vertical = modulo3(y - i32(P.sgrow)) != 0;
     let c = select(vec2<i32>(1, 0), vec2<i32>(0, 1), vertical);
     let h = select(vec2<i32>(0, 3), vec2<i32>(3, 0), vertical);
-    // rawler writes `(d ^ c) & 1` with c the tile's width when vertical: its
-    // parity is the tile's, and the last column of tiles can be odd.
     let c_odd = select(1u, select(0u, P.tw_odd, u32(x) >= P.tw_from), vertical);
     for (var d = 0u; d < 4u; d++) {
         let g0 = rgbd(d, 1u, x, ly);
@@ -184,7 +161,6 @@ fn mk_rb(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Red and blue for the 2x2 blocks of green.
 @compute @workgroup_size(16, 16)
 fn mk_blocks(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
@@ -218,7 +194,6 @@ fn mk_blocks(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// rawler's cube root: a bit trick and two Newton steps.
 fn fast_cbrt(x: f32) -> f32 {
     if (x == 0.0) {
         return 0.0;
@@ -237,7 +212,6 @@ fn lab_f(t: f32) -> f32 {
     return ((24389.0 / 27.0) * t + 16.0) / 116.0;
 }
 
-// sRGB (D65) to CIELab, as rawler measures homogeneity in.
 fn lab(d: u32, x: i32, ly: i32) -> vec3<f32> {
     let r = rgbd(d, 0u, x, ly);
     let g = rgbd(d, 1u, x, ly);
@@ -251,7 +225,6 @@ fn lab(d: u32, x: i32, ly: i32) -> vec3<f32> {
     return vec3<f32>(116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz));
 }
 
-// How much each direction's picture changes along that direction, in Lab.
 @compute @workgroup_size(16, 16)
 fn mk_drv(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= P.roi_w || id.y >= band.rows) {
@@ -278,8 +251,6 @@ fn drv_at(d: u32, x: i32, ly: i32) -> f32 {
     return drv[d * P.band_n + yy * P.roi_w + xx];
 }
 
-// Each direction's votes: how many of the 3x3 are within eight times the
-// smoothest direction here. Four counts in one word.
 @compute @workgroup_size(16, 16)
 fn mk_homo(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= P.roi_w || id.y >= band.rows) {
@@ -313,7 +284,6 @@ fn homo_at(x: i32, ly: i32) -> u32 {
     return homo[yy * P.roi_w + xx];
 }
 
-// Markesteijn's border: every channel the mean of that colour in the 3x3.
 fn mk_border(x: i32, y: i32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     var count = vec3<f32>(0.0);
@@ -327,7 +297,6 @@ fn mk_border(x: i32, y: i32) -> vec3<f32> {
     return select(vec3<f32>(0.0), sum / max(count, vec3<f32>(1.0)), count > vec3<f32>(0.0));
 }
 
-// The average of the most homogeneous directions over a 5x5, and out.
 @compute @workgroup_size(16, 16)
 fn mk_final(@builtin(global_invocation_id) id: vec3<u32>) {
     let y = band.y0 + id.y;

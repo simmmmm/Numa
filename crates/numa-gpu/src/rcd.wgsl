@@ -1,26 +1,10 @@
-
-// RENDER-027: the Bayer demosaic on the card, RCD — Luis Sanz Rodríguez's
-// Ratio Corrected Demosaicing (v2.3) — as `numa-io`'s `raw::rcd` does it: the
-// same steps, operation for operation, and the same rule at the active area's
-// edge, so the card and the processor differ only by how the card rounds.
-// Numa's own, written from the algorithm's steps.
-//
-// The sites arrive white-balanced as shot (`scale`, through the levels'
-// table). `rcd_direction` leaves vertical against horizontal in `drv`,
-// `rcd_green` the green in `work`, `rcd_colour` blue at red and red at blue
-// in `homo`; `rcd_out` finishes red and blue at green and takes the balance
-// out again on the way to `lin`.
-
 const RCD_EPS: f32 = 1e-5;
 const RCD_EPSSQ: f32 = 1e-10;
 
-// How far a site of the active area is from its nearest edge.
 fn rcd_edge(x: i32, y: i32) -> i32 {
     return min(min(x, y), min(i32(P.roi_w) - 1 - x, i32(P.roi_h) - 1 - y));
 }
 
-// PPG's border, which RCD keeps near the edge: the mean of colour `c` in the
-// 3x3 around, within the area; 0 when there is none.
 fn rcd_border(x: i32, y: i32, c: u32) -> f32 {
     var sum = 0.0;
     var count = 0u;
@@ -38,7 +22,6 @@ fn rcd_border(x: i32, y: i32, c: u32) -> f32 {
     return sum / f32(count);
 }
 
-// The square of a colour-difference high pass through (x, y) along (dx, dy).
 fn rcd_high(x: i32, y: i32, dx: i32, dy: i32) -> f32 {
     let v = (mos(x - 3 * dx, y - 3 * dy) - mos(x - dx, y - dy) - mos(x + dx, y + dy) + mos(x + 3 * dx, y + 3 * dy))
         - 3.0 * (mos(x - 2 * dx, y - 2 * dy) + mos(x + 2 * dx, y + 2 * dy)) + 6.0 * mos(x, y);
@@ -61,25 +44,20 @@ fn rcd_other(x: i32, y: i32) -> f32 {
     return bitcast<f32>(homo[rcd_index(x, y)]);
 }
 
-// A direction, or the mean of the four diagonal neighbours' where those are
-// surer of theirs.
 fn rcd_refine(central: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
     let around = 0.25 * (a + b + c + d);
     return select(central, around, abs(0.5 - central) < abs(0.5 - around));
 }
 
-// A low pass of all three colours, at red and blue.
 fn rcd_lpf(x: i32, y: i32) -> f32 {
     return mos(x, y) + 0.5 * (mos(x, y - 1) + mos(x, y + 1) + mos(x - 1, y) + mos(x + 1, y))
         + 0.25 * (mos(x - 1, y - 1) + mos(x + 1, y - 1) + mos(x - 1, y + 1) + mos(x + 1, y + 1));
 }
 
-// A neighbour's value, corrected by the ratio of the low pass here and there.
 fn rcd_ratio(value: f32, here: f32, there: f32) -> f32 {
     return value * (1.0 + (here - there) / (RCD_EPS + here + there));
 }
 
-// Diagonal against anti-diagonal at a red or blue site, as the direction is.
 fn rcd_pq(x: i32, y: i32) -> f32 {
     if (rcd_edge(x, y) < 4) {
         return 0.5;
@@ -89,7 +67,6 @@ fn rcd_pq(x: i32, y: i32) -> f32 {
     return p / (p + q);
 }
 
-// 1. Vertical against horizontal, over the active area.
 @compute @workgroup_size(16, 16)
 fn rcd_direction(@builtin(global_invocation_id) id: vec3<u32>) {
     let row = band.y0 + id.y;
@@ -107,7 +84,6 @@ fn rcd_direction(@builtin(global_invocation_id) id: vec3<u32>) {
     drv[rcd_index(x, y)] = dir;
 }
 
-// 2–3. Green at red and blue, each neighbour corrected by the low pass.
 @compute @workgroup_size(16, 16)
 fn rcd_green(@builtin(global_invocation_id) id: vec3<u32>) {
     let row = band.y0 + id.y;
@@ -140,7 +116,6 @@ fn rcd_green(@builtin(global_invocation_id) id: vec3<u32>) {
     work[rcd_index(x, y)] = g;
 }
 
-// 4. Blue at red and red at blue, along the diagonals.
 @compute @workgroup_size(16, 16)
 fn rcd_colour(@builtin(global_invocation_id) id: vec3<u32>) {
     let row = band.y0 + id.y;
@@ -173,7 +148,6 @@ fn rcd_colour(@builtin(global_invocation_id) id: vec3<u32>) {
     homo[rcd_index(x, y)] = bitcast<u32>(o);
 }
 
-// Colour `c` at a red or blue site.
 fn rcd_known(x: i32, y: i32, c: u32) -> f32 {
     if (colour(x, y) == c) {
         return mos(x, y);
@@ -181,8 +155,6 @@ fn rcd_known(x: i32, y: i32, c: u32) -> f32 {
     return rcd_other(x, y);
 }
 
-// 5. Red and blue at green, along the axes; the crop out, on the camera's
-// own scale.
 @compute @workgroup_size(16, 16)
 fn rcd_out(@builtin(global_invocation_id) id: vec3<u32>) {
     let row = band.y0 + id.y;
@@ -219,7 +191,6 @@ fn rcd_out(@builtin(global_invocation_id) id: vec3<u32>) {
         rgb[c] = mos(x, y);
         rgb[2u - c] = rcd_other(x, y);
     }
-    // `balance` is red and blue as shot, then one over each.
     rgb.x = rgb.x * P.balance[2];
     rgb.z = rgb.z * P.balance[3];
     store_lin(id.x, row, rgb);

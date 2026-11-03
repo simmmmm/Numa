@@ -7,6 +7,9 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use crate::auth::{self, Signed};
+use crate::grants::Level;
+use crate::manage::Ids;
+use crate::selection::chosen;
 use crate::{Fail, Server};
 
 const STALE: i64 = 30 * 86_400;
@@ -39,6 +42,17 @@ pub async fn stop(State(server): State<Arc<Server>>, Signed(me): Signed, headers
     let device = auth::presented(&headers).and_then(|token| server.store.session_device(&auth::digest(&token))).unwrap_or_default();
     server.store.unsynced(id, &me.name, &device);
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn hashes(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Ids>) -> Result<Json<Vec<Value>>, Fail> {
+    if asked.ids.len() > numa_io::home::same::SAMPLE {
+        return Err(Fail::bad("Too many photographs at once."));
+    }
+    let photos = chosen(&server, &me, &asked.ids, false, false, Level::View)?;
+    let hashed = tokio::task::spawn_blocking(move || photos.iter().filter_map(|(_, photo)| Some(json!({ "id": photo.id, "hash": crate::tidy::hash_of(&server, photo)? }))).collect())
+        .await
+        .map_err(Fail::internal)?;
+    Ok(Json(hashed))
 }
 
 pub async fn devices(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<Value> {

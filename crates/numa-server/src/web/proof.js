@@ -1,8 +1,3 @@
-// HOME-043: a proof gallery, as a client sees it from a link. Every picture
-// arrives as a puzzle of shuffled tiles in one JPEG and is put back here on
-// a canvas, from the seed its answer carries (X-Proof: seed width height
-// tile). The order is the server's (proof.rs): mulberry32 and Fisher–Yates.
-// The client chooses favourites with the heart; the photographer sees them.
 'use strict';
 
 const token = location.pathname.split('/')[2] || '';
@@ -51,7 +46,6 @@ function order(seed, tiles) {
 
 const pause = ms => new Promise(done => setTimeout(done, ms));
 
-// One proof onto `canvas`. Too many at once (429) waits and asks again.
 async function draw(canvas, n, edge) {
   let answer;
   for (let tries = 0; tries < 6; tries++) {
@@ -74,7 +68,6 @@ async function draw(canvas, n, edge) {
   puzzle.close();
 }
 
-// A canvas of the photograph's shape until its picture comes.
 const blank = aspect => h('canvas', { width: Math.round(aspect * 100), height: 100 });
 
 let gallery;
@@ -113,7 +106,6 @@ function counted() {
   tally.textContent = [photos, phrase('proofChosen', { n: chosen }), phrase('proofUntil', { date: until })].join(' · ');
 }
 
-// Grid pictures come as they scroll into sight.
 const sight = new IntersectionObserver(entries => entries.forEach(entry => {
   if (!entry.isIntersecting) return;
   sight.unobserve(entry.target);
@@ -141,7 +133,6 @@ async function start() {
     h('p', { class: 'body' }, S.proofHow), grid);
 }
 
-// The loupe: one photograph at 2048 px at most, ← and → to the next.
 function loupe(at) {
   const box = h('dialog', { class: 'loupe', 'aria-label': gallery.title });
   const stage = h('div', { class: 'stage' });
@@ -151,7 +142,7 @@ function loupe(at) {
     at = (n + gallery.photos.length) % gallery.photos.length;
     const photo = gallery.photos[at];
     const canvas = blank(photo.aspect);
-    // Over the canvas, so a right click finds no picture to save.
+
     stage.replaceChildren(canvas, h('div', { class: 'shield' }));
     fav.replaceChildren(heart(photo));
     where.textContent = `${at + 1} / ${gallery.photos.length}`;
@@ -171,7 +162,5 @@ function loupe(at) {
   show(at);
 }
 
-// Saving a canvas from its menu would hand over the put-back picture; a
-// screenshot still can, and the guide says so.
 document.addEventListener('contextmenu', event => { if (event.target.closest('canvas, .proof, .stage')) event.preventDefault(); });
 start();

@@ -77,12 +77,10 @@ pub fn resolve(admin: bool, own: &Path, archive: &Path, libraries: &[Library], g
     };
     let libraries: HashMap<i64, Level> = libraries.iter().map(|library| (library.id, level(library))).filter(|(_, level)| *level > Level::None).collect();
     let mut photos: HashMap<i64, Level> = HashMap::new();
-    if !admin {
-        for (level, ids) in albums {
-            for id in ids {
-                let at = photos.entry(*id).or_default();
-                *at = (*at).max(*level);
-            }
+    for (level, ids) in albums {
+        for id in ids {
+            let at = photos.entry(*id).or_default();
+            *at = (*at).max(*level);
         }
     }
     Sight { libraries, photos, household: admin || grants.access == Level::Edit }
@@ -102,6 +100,18 @@ pub async fn sight(server: &Server, account: &Account) -> Result<Sight, Fail> {
 
     for (_, ids) in &mut albums {
         ids.retain(|id| libraries.iter().any(|library| library.id == library_of(*id) && library.path.starts_with(&server.home.photos)));
+    }
+
+    for shared in server.store.shared_albums(&account.name).map_err(Fail::internal)? {
+        let ids = server.home.album(&shared.key).await?;
+        let ids = server.home.with_twins(&ids);
+        let mut pool = Vec::new();
+        for name in shared.pool() {
+            let Some((name, _, admin)) = server.store.account(name) else { continue };
+            let theirs = if admin { Grants::default() } else { server.store.grants(&name).map_err(Fail::internal)? };
+            pool.push(resolve(admin, &server.home.sent_folder(&name), &server.home.photos, &libraries, &theirs, &[]));
+        }
+        albums.push((Level::View, crate::shared::reachable(&ids, &pool)));
     }
     Ok(resolve(account.admin, &server.home.sent_folder(&account.name), &server.home.photos, &libraries, &grants, &albums))
 }

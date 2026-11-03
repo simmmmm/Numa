@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::grants::{Grants, Level};
 
-pub struct Store(Mutex<Connection>);
+pub struct Store(pub(crate) Mutex<Connection>);
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct Account {
@@ -65,7 +65,9 @@ impl Store {
              CREATE TABLE IF NOT EXISTS hashes (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS left_out (folder TEXT PRIMARY KEY);
              CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, folder TEXT NOT NULL, at INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS arrived (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS arrived (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS sign_ins (
+                 id INTEGER PRIMARY KEY, at INTEGER NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL, outside INTEGER NOT NULL, result TEXT NOT NULL);",
         )
         .map_err(|err| err.to_string())?;
 
@@ -374,6 +376,23 @@ impl Store {
         self.with(|conn| {
             let mut statement = conn.prepare("SELECT substr(key, length(?1) + 1), value FROM settings WHERE substr(key, 1, length(?1)) = ?1")?;
             let rows = statement.query_map([prefix], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn log_sign_in(&self, name: &str, address: &str, outside: bool, result: &str) {
+        let name: String = name.trim().chars().take(40).collect();
+        let _ = self.with(|conn| {
+            conn.execute("INSERT INTO sign_ins (at, name, address, outside, result) VALUES (?1, ?2, ?3, ?4, ?5)", params![now(), name, address, outside, result])?;
+            conn.execute("DELETE FROM sign_ins WHERE id <= (SELECT MAX(id) FROM sign_ins) - 500", [])
+        });
+    }
+
+    pub fn sign_ins(&self, most: i64) -> Vec<(i64, String, String, bool, String)> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT at, name, address, outside, result FROM sign_ins ORDER BY id DESC LIMIT ?1")?;
+            let rows = statement.query_map([most], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))?;
             rows.collect()
         })
         .unwrap_or_default()

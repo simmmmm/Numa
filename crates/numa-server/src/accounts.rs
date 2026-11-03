@@ -41,7 +41,7 @@ pub async fn status(State(server): State<Arc<Server>>, ConnectInfo(peer): Connec
 
 pub async fn setup(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(new): Json<NewAccount>) -> Result<StatusCode, Fail> {
     if !auth::in_house(peer, &headers) {
-        let keys = auth::limit_keys("setup", auth::client(peer, &headers).0);
+        let keys = auth::limit_keys("setup", auth::client(peer, &headers).0, true);
         let left = server.limit.left(&keys, now());
         if left > 0 {
             return Err(Fail(StatusCode::TOO_MANY_REQUESTS, format!("Too many wrong codes. {}", auth::try_again(left))));
@@ -159,6 +159,18 @@ async fn make(server: &Arc<Server>, name: &str, password: &str, admin: bool, fir
     Ok(StatusCode::CREATED)
 }
 
+pub fn reset_password(store: &crate::store::Store, name: &str) -> Result<String, String> {
+
+    let (token, _) = auth::token();
+    let password = token[..20].to_string();
+    let hash = auth::hash(&password)?;
+    if !store.set_password(name, &hash, true)? {
+        return Err(format!("There is no account called {name}."));
+    }
+    store.end_sessions(name, None);
+    Ok(password)
+}
+
 async fn hashed(password: &str) -> Result<String, Fail> {
     if password.chars().count() < 8 {
         return Err(Fail::bad("A password is at least 8 characters."));
@@ -167,8 +179,8 @@ async fn hashed(password: &str) -> Result<String, Fail> {
     auth::argon(move || auth::hash(&password)).await?.map_err(Fail::internal)
 }
 
-async fn checked(server: &Server, name: &str, password: String, address: std::net::IpAddr) -> Result<Option<(String, String, bool)>, Fail> {
-    let keys = auth::limit_keys(name, address);
+async fn checked(server: &Server, name: &str, password: String, address: std::net::IpAddr, outside: bool) -> Result<Option<(String, String, bool)>, Fail> {
+    let keys = auth::limit_keys(name, address, outside);
     let left = server.limit.reserve(&keys, now());
     if left > 0 {
         return Err(Fail(StatusCode::TOO_MANY_REQUESTS, format!("Too many wrong passwords. {}", auth::try_again(left))));
@@ -182,15 +194,37 @@ async fn checked(server: &Server, name: &str, password: String, address: std::ne
     Ok(known.filter(|_| right))
 }
 
+fn tried_name(name: &str) -> String {
+    match name.trim() {
+        long if long.chars().count() > 40 => "(name too long)".into(),
+        name => name.into(),
+    }
+}
+
 fn cookie(value: &str, max_age: i64, https: bool) -> String {
     format!("{}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{}", auth::COOKIE, if https { "; Secure" } else { "" })
 }
 
-pub async fn login(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(login): Json<Login>) -> Result<Response, Fail> {
+pub async fn login(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(mut login): Json<Login>) -> Result<Response, Fail> {
+    login.name = tried_name(&login.name);
     let (address, https) = auth::client(peer, &headers);
-    let Some((name, _, admin)) = checked(&server, &login.name, login.password, address).await? else {
+    let outside = !auth::in_house(peer, &headers);
+    let tried = checked(&server, &login.name, login.password, address, outside).await;
+    let result = match &tried {
+        Ok(Some(_)) => "ok",
+        Ok(None) => "wrong",
+        Err(Fail(StatusCode::TOO_MANY_REQUESTS, _)) => "locked",
+        Err(_) => "",
+    };
+    if !result.is_empty() {
+        server.store.log_sign_in(&login.name, &address.to_string(), outside, result);
+        if outside && result != "ok" {
+            log::warn!("sign-in from outside: {result} for {:?} from {address}", login.name.trim());
+        }
+    }
+    let Some((name, _, admin)) = tried? else {
         let text = "That name and password do not match an account.";
-        return Err(Fail(StatusCode::UNAUTHORIZED, match server.limit.left(&auth::limit_keys(&login.name, address), now()) {
+        return Err(Fail(StatusCode::UNAUTHORIZED, match server.limit.left(&auth::limit_keys(&login.name, address, outside), now()) {
             0 => text.into(),
             left => format!("{text} {}", auth::try_again(left)),
         }));
@@ -221,7 +255,7 @@ pub async fn change_password(
     Signed(me): Signed,
     Json(asked): Json<NewPassword>,
 ) -> Result<StatusCode, Fail> {
-    if !me.must_change && checked(&server, &me.name, asked.old.unwrap_or_default(), auth::client(peer, &headers).0).await?.is_none() {
+    if !me.must_change && checked(&server, &me.name, asked.old.unwrap_or_default(), auth::client(peer, &headers).0, !auth::in_house(peer, &headers)).await?.is_none() {
         return Err(Fail(StatusCode::FORBIDDEN, "That is not your current password.".into()));
     }
     let hash = hashed(&asked.new).await?;
@@ -299,4 +333,62 @@ pub async fn set_start(State(server): State<Arc<Server>>, Signed(me): Signed, Js
     }
     server.store.set_setting(&format!("start:{}", me.name), &asked.start).map_err(Fail::internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_session_cookie_is_closed_to_scripts_and_other_sites() {
+        let https = cookie("abc", 100, true);
+        for part in ["numa_session=abc", "HttpOnly", "SameSite=Strict", "Path=/", "Secure"] {
+            assert!(https.split("; ").any(|one| one == part), "{part} in {https}");
+        }
+        assert!(!cookie("abc", 100, false).contains("Secure"), "plain http cannot carry it");
+        assert!(cookie("", 0, true).contains("Max-Age=0"));
+    }
+
+    #[test]
+    fn sign_ins_are_kept() {
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        store.log_sign_in(" Sam ", "203.0.113.7", true, "wrong");
+        store.log_sign_in("Sam", "192.168.1.5", false, "ok");
+        let rows = store.sign_ins(10);
+        assert_eq!((rows[0].1.as_str(), rows[0].3, rows[0].4.as_str()), ("Sam", false, "ok"));
+        assert_eq!((rows[1].1.as_str(), rows[1].2.as_str(), rows[1].3), ("Sam", "203.0.113.7", true));
+        for _ in 0..600 {
+            store.log_sign_in(&"x".repeat(100), "203.0.113.7", true, "wrong");
+        }
+        assert_eq!(store.sign_ins(1000).len(), 500);
+        assert_eq!(store.sign_ins(1)[0].1.len(), 40, "a long name is cut");
+    }
+
+    #[test]
+    fn a_name_longer_than_a_name_is_short_in_the_lock_and_the_log() {
+        assert_eq!(tried_name("  Sam "), "Sam");
+        assert_eq!(tried_name(&"x".repeat(40)), "x".repeat(40));
+        let long = tried_name(&"x".repeat(2_000_000));
+        assert!(long.len() < 40 && !auth::valid_name(&long), "{long}");
+        assert_eq!(tried_name(&format!("{}y", " ".repeat(5_000))), "y", "spaces are not length");
+        let key = auth::limit_keys(&long, "203.0.113.7".parse().unwrap(), true);
+        assert!(key.iter().all(|key| key.len() < 80));
+    }
+
+    #[test]
+    fn reset_password_gives_a_password_that_works_and_must_be_changed() {
+        let folder = std::env::temp_dir().join(format!("numa-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let store = crate::store::Store::open(&folder.join("server.db")).unwrap();
+        store.add_account("anna", &auth::hash("the old one").unwrap(), true, true).unwrap();
+        store.add_session("digest", "anna", None, "").unwrap();
+
+        let password = reset_password(&store, "ANNA").unwrap();
+        let (_, hash, _) = store.account("anna").unwrap();
+        assert!(auth::verify(&password, Some(&hash)));
+        assert!(!auth::verify("the old one", Some(&hash)));
+        assert!(store.session("digest").is_none(), "signed out everywhere");
+        assert!(reset_password(&store, "nobody").is_err());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 }

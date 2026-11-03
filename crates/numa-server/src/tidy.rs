@@ -63,6 +63,20 @@ fn copies(server: &Server, hash: bool) -> (Vec<Vec<i64>>, usize) {
     })
 }
 
+pub fn hash_of(server: &Server, photo: &numa_io::catalog::Photo) -> Option<String> {
+    let size = std::fs::metadata(&photo.path).ok()?.len();
+    let path = photo.path.to_string_lossy().to_string();
+    let mut known = server.tidy.hashes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let known = known.get_or_insert_with(|| server.store.hashes());
+    if let Some((_, _, hash)) = known.get(&path).filter(|(mtime, was, _)| *mtime == photo.mtime && *was == size) {
+        return Some(hash.clone());
+    }
+    let shared::Hash::Made(made) = shared::hash_file(photo) else { return None };
+    server.store.note_hash(&path, photo.mtime, size, &made);
+    known.insert(path, (photo.mtime, size, made.clone()));
+    Some(made)
+}
+
 fn copies_now(server: &Server) -> Arc<(Vec<Vec<i64>>, usize)> {
     let found = server.tidy.copies.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     if let Some(found) = found.filter(|_| !server.tidy.stale.load(std::sync::atomic::Ordering::Relaxed)) {

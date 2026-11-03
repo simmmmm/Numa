@@ -261,19 +261,43 @@ pub fn free(path: PathBuf) -> PathBuf {
 }
 
 pub fn move_file(from: &FilePath, to: &FilePath) -> std::io::Result<()> {
+    move_with(from, to, |from, to| std::fs::rename(from, to), sync_file_and_folder)
+}
+
+fn sync_file_and_folder(path: &FilePath) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()?;
+    match path.parent() {
+        Some(parent) => std::fs::File::open(parent)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
+fn move_with(
+    from: &FilePath,
+    to: &FilePath,
+    rename: impl FnOnce(&FilePath, &FilePath) -> std::io::Result<()>,
+    sync: impl FnOnce(&FilePath) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if std::fs::rename(from, to).is_ok() {
+    if rename(from, to).is_ok() {
         return Ok(());
     }
     let copied = std::fs::copy(from, to)?;
-    if copied != std::fs::metadata(from)?.len() {
-        let _ = std::fs::remove_file(to);
-        return Err(std::io::Error::other("the copy came out short"));
-    }
     if let Ok(modified) = std::fs::metadata(from).and_then(|meta| meta.modified()) {
         let _ = std::fs::File::options().write(true).open(to).and_then(|file| file.set_modified(modified));
+    }
+    let checked = sync(to).and_then(|()| {
+        if copied == std::fs::metadata(from)?.len() && copied == std::fs::metadata(to)?.len() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("the copy came out short"))
+        }
+    });
+    if let Err(err) = checked {
+        let _ = std::fs::remove_file(to);
+        return Err(err);
     }
     std::fs::remove_file(from)
 }
@@ -365,14 +389,17 @@ pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json
 pub async fn embedded(server: &Server, path: PathBuf, edge: u32) -> Result<Response, Fail> {
     let _turn = server.decodes.acquire().await.map_err(Fail::internal)?;
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        let image = numa_io::raw::load_thumbnail(&path, edge)?;
+        let image = match numa_io::video::is_video(&path) {
+            true => crate::video::placeholder(&path, edge),
+            false => numa_io::raw::load_thumbnail(&path, edge)?,
+        };
         let mut bytes = Vec::new();
         image::DynamicImage::ImageRgb8(image).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg).map_err(|err| err.to_string())?;
         Ok(bytes)
     })
     .await
     .map_err(Fail::internal)?
-    .map_err(|err| Fail(StatusCode::UNPROCESSABLE_ENTITY, format!("Numa could not read this photograph: {err}")))?;
+    .map_err(Fail::unreadable)?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
 }
 
@@ -662,6 +689,24 @@ mod tests {
         let mut files = files_under(&root);
         files.sort();
         assert_eq!(files, [root.join("b 2.jpg").with_file_name("b.jpg"), root.join("deeper/a.jpg")]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_checked_keeps_the_original() {
+        let root = std::env::temp_dir().join(format!("numa-home-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (from, to) = (root.join("a.jpg"), root.join("b/a.jpg"));
+        std::fs::write(&from, b"photograph").unwrap();
+        let no_rename = |_: &FilePath, _: &FilePath| Err(std::io::Error::other("another disk"));
+        let failed = move_with(&from, &to, no_rename, |_| Err(std::io::Error::other("no sync")));
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read(&from).unwrap(), b"photograph", "the original stays");
+        assert!(!to.exists(), "and no half copy");
+        move_with(&from, &to, no_rename, sync_file_and_folder).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"photograph");
+        assert!(!from.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

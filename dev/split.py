@@ -26,20 +26,17 @@ ITEM = re.compile(
 )
 CLOSER = re.compile(r"^[}\])];?\s*$")
 
-
 def name_of(line):
     """The name a top-level item line declares, or None."""
     if not ITEM.match(line):
         return None
     if re.match(r"^impl\b", line):
-        # `impl<T> Name<T>`, `impl Trait for Name`: the type being implemented.
         body = re.sub(r"^impl(<[^>]*>)?\s+", "", line)
         target = body.split(" for ")[-1]
         m = re.match(r"([A-Za-z_]\w*)", target)
         return m.group(1) if m else None
     m = re.search(r"\b(fn|struct|enum|const|static|type|mod|trait|union)\s+([A-Za-z_]\w*)", line)
     return m.group(2) if m else None
-
 
 def items(lines):
     """Every top-level item as (name, start, end), inclusive, with the doc
@@ -67,7 +64,6 @@ def items(lines):
         i = end + 1
     return out
 
-
 def balanced(block):
     """Braces balance, counted outside strings, chars and comments."""
     text, i, depth = "\n".join(block), 0, 0
@@ -87,14 +83,12 @@ def balanced(block):
                 i += 2 if text[i] == "\\" else 1
             i += 1
         elif c == "'":
-            # A char literal, or a lifetime: 'a' is one, 'a is the other.
             m = re.match(r"'(\\.[^']*|[^'\\])'", text[i:])
             i += m.end() if m else 1
         else:
             depth += (c == "{") - (c == "}")
             i += 1
     return depth == 0
-
 
 def expose(block):
     """`pub(super)` on what has no visibility: items, struct fields, and the
@@ -106,7 +100,6 @@ def expose(block):
         elif inside == "thread_local" and re.match(r"^    static\b", line):
             line = "    pub(super) " + line[4:]
         elif ITEM.match(line):
-            # A tuple struct's fields, on its one line: `struct X(T, U);`.
             tuple = re.match(r"^(.*\bstruct \w+\()(.*)(\);\s*)$", line)
             if tuple:
                 if "<" in tuple.group(2) and "," in tuple.group(2):
@@ -128,11 +121,9 @@ def expose(block):
             line = "    pub(super) " + line[4:]
         elif inside == "struct" and re.match(r"^    [a-z_][a-z0-9_]*\s*:", line):
             line = "    pub(super) " + line[4:]
-        # A file included by relative path is one directory further away.
         line = re.sub(r'(include_(?:str|bytes)!\(")(?!/)', r"\1../", line)
         out.append(line)
     return out
-
 
 def declare(lines, module, public):
     """`mod module;` after the last `mod x;`, `use module::*;` after the last
@@ -146,7 +137,6 @@ def declare(lines, module, public):
         lines.insert(globs[-1] + 1, f"{visibility} use {module}::{name};")
     lines.insert(globs[-1] + 1, f"use {module}::*;")
     lines.insert(mods[-1] + 1, f"mod {module};")
-
 
 def main(args):
     lines = WINDOW.read_text().split("\n")
@@ -191,14 +181,12 @@ def main(args):
               for m in [re.match(r"^(pub|pub\(crate\))\s", line)] if m and ITEM.match(line) and name_of(line)
               and not line.startswith("impl")]
 
-    # The block goes, and the blank line it leaves behind with it.
     del lines[start:end + 1]
     while start < len(lines) and start > 0 and lines[start] == "" and lines[start - 1] == "":
         del lines[start]
     declare(lines, module, public)
     WINDOW.write_text("\n".join(lines))
     print(f"{module}: {end - start + 1} lines, {first}..{last}")
-
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

@@ -1,4 +1,5 @@
 use super::*;
+use numa::io::home::same;
 use gtk::graphene;
 use gtk::gsk;
 use numa::io::catalog::Glance;
@@ -139,6 +140,11 @@ fn read_all(state: &App) {
         }
     }
 
+    let album_names = if home::account(state).address.is_empty() { Vec::new() } else { state.catalog.albums().unwrap_or_default() };
+    let library_labels: Vec<String> = libraries.iter().map(|it| it.label().to_string()).collect();
+    let named_twice = same::named_twice(album_names.iter().map(|(_, name)| name.as_str()).chain(library_labels.iter().map(String::as_str)));
+    let at_home_named: std::collections::HashSet<String> = libraries.iter().filter(|it| home_sync::is_home(state, it.id)).map(|it| it.label().to_lowercase()).collect();
+
     let mut rows = HashMap::new();
     for place in &places {
 
@@ -176,6 +182,16 @@ fn read_all(state: &App) {
         let row = match place {
             Place::Library(library) if home_sync::is_home(state, library.id) => {
                 Row { subtitle: format!("{} \u{b7} {}", home::NUMA_HOME, row.subtitle), ..row }
+            }
+            Place::Library(library) if at_home_named.contains(&library.label().to_lowercase()) => {
+                Row { subtitle: format!("{} \u{b7} {}", same::Origin::Here.words(), row.subtitle), ..row }
+            }
+            Place::Album(album) if album_names.iter().any(|(key, name)| key == album && named_twice.contains(&name.to_lowercase())) => {
+                let having = libraries.iter().filter(|it| state.catalog.glance(it.id, Some(album), None).is_ok_and(|glance| glance.photos > 0));
+                match same::Origin::of(having.map(|it| same_photos::origin_of(state, it.id))) {
+                    Some(origin) => Row { subtitle: format!("{} \u{b7} {}", origin.words(), row.subtitle), ..row },
+                    None => row,
+                }
             }
             _ => row,
         };
