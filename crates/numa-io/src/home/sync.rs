@@ -733,6 +733,17 @@ pub fn put_marks(address: &str, id: &str, rating: u8, flag: &str) -> Vec<OsStrin
     curl(words(&rest), format!("{}/api/v1/photos/{}/marks", base(address), escaped(id)))
 }
 
+pub fn edits_put(out: &str) -> Result<(i64, bool), Failure> {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(default)]
+        updated: i64,
+        #[serde(default)]
+        conflict: bool,
+    }
+    parsed::<Answer>(answer(out)?).map_or(Ok((0, false)), |answer| Ok((answer.updated, answer.conflict)))
+}
+
 pub fn updated(out: &str) -> Result<i64, Failure> {
     #[derive(Deserialize)]
     struct Answer {

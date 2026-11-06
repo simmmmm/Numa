@@ -80,7 +80,7 @@ def measure(root):
     debts = {check: {} for check in CHECKS}
     ui = root / "src/ui"
     for f in sorted(ui.rglob("*")):
-        if f.suffix not in (".rs", ".css") or f.name in ("tokens.css", "tests.rs"):
+        if f.suffix not in (".rs", ".css") or f.name in ("tokens.css", "tests.rs", "signals.rs"):
             continue
         css = f.suffix == ".css"
         text = strip_comments(f.read_text(errors="replace"), css)

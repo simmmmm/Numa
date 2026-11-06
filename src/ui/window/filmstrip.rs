@@ -140,7 +140,7 @@ fn bind_frame(state: &App, frame: &gtk::Button, index: usize) {
     mark.set_visible(edited);
 
     picture.set_opacity(if flag == Flag::Rejected { 0.35 } else { 1.0 });
-    badge.set_text(&strip_badge_text(rating, flag));
+    badge.set_markup(&signals::markup(&strip_badge_text(rating, flag)));
     badge.set_visible(!badge.text().is_empty());
     match flag == Flag::Rejected {
         true => badge.add_css_class("rejected"),

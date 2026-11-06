@@ -70,7 +70,7 @@ fn profiles_available() -> bool {
     })
 }
 
-fn megabytes(files: &[ModelFile]) -> u64 {
+pub(super) fn megabytes(files: &[ModelFile]) -> u64 {
     (files.iter().map(fetched_bytes).sum::<u64>() + 500_000) / 1_000_000
 }
 
@@ -207,31 +207,7 @@ fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
         move |_| {
             state.catalog.remember(OFFERED_MODELS, &true);
             dialog.close();
-
-            let cancel = Cancel::default();
-            let (toast, text, bar) = progress_toast(&state, &cancel);
-            let progress = move |got: u64, total: u64| {
-                text.set_text(&format!(
-                    "Downloading additional files — {} of {} MB",
-                    got / 1_000_000,
-                    total / 1_000_000
-                ));
-                bar.set_fraction(got as f64 / total.max(1) as f64);
-            };
-            let state = state.clone();
-            download_model(missing.clone(), progress, cancel, move |result| {
-                toast.dismiss();
-                match result {
-                    Ok(()) => state.toast("Additional files installed — restart Numa to use them"),
-                    Err(err) if err == "stopped" => {
-                        state.toast("Download stopped — continue any time from Preferences")
-                    }
-                    Err(err) => {
-                        log::warn!("downloading the additional files: {err}");
-                        state.toast("Some files could not be downloaded — Preferences shows which")
-                    }
-                }
-            });
+            download_additional(&state, missing.clone());
         }
     ));
 
@@ -239,6 +215,31 @@ fn additional_files_dialog(state: &App, window: &adw::ApplicationWindow) {
         #[weak] window,
         move || dialog.present(Some(&window))
     ));
+}
+
+pub(super) fn download_additional(state: &App, files: Vec<ModelFile>) {
+    let cancel = Cancel::default();
+    let (toast, text, bar) = progress_toast(state, &cancel);
+    let progress = move |got: u64, total: u64| {
+        text.set_text(&format!("Downloading additional files — {} of {} MB", got / 1_000_000, total / 1_000_000));
+        bar.set_fraction(got as f64 / total.max(1) as f64);
+    };
+    let state = state.clone();
+    download_model(files, progress, cancel, move |result| {
+        toast.dismiss();
+        match result {
+            Ok(()) => state.toast("Additional files installed — restart Numa to use them"),
+            Err(err) if err == "stopped" => state.toast("Download stopped — continue any time from Preferences"),
+            Err(err) => {
+                log::warn!("downloading the additional files: {err}");
+                state.toast("Some files could not be downloaded — Preferences shows which")
+            }
+        }
+    });
+}
+
+pub(super) fn not_yet_here(files: Vec<ModelFile>) -> Vec<ModelFile> {
+    files.into_iter().filter(|file| model_on_disk(file).is_none()).collect()
 }
 
 pub(super) fn ask_for(state: &App, model: &str, heading: &str, body: &str, then: impl Fn(&App) + 'static) {
@@ -587,11 +588,14 @@ thread_local! {
     static SAFE_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn at_startup(state: &App) {
+pub(super) fn at_startup(state: &App, wizard_open: bool) {
     if SAFE_MODE.get() {
         state.toast("GPU acceleration is off after a crash — Preferences turns it back on");
     }
-    offer_additional_files(state);
+
+    if !wizard_open {
+        offer_additional_files(state);
+    }
 }
 
 pub(super) fn start_gpu(catalog: &Catalog) {

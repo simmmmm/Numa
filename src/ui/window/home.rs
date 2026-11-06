@@ -402,7 +402,7 @@ async fn one(account: &Account, file: &Path, edits: Option<&str>, folder: &Path,
     if let Some(edits) = edits {
         let stack = folder.join("edits.json");
         std::fs::write(&stack, edits).map_err(|err| Failure::Said(err.to_string()))?;
-        api::taken(&curl(api::edits(&account.address, &sent.id, &stack), account.header(), running).await)?;
+        api::taken(&curl(api::edits(&account.address, &sent.id, &stack, None), account.header(), running).await)?;
     }
     Ok(sent.duplicate)
 }

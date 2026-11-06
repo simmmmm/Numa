@@ -30,7 +30,11 @@
 @define-color numa_clip_shadow #2858ff;
 @define-color numa_clip_highlight #ff4040;
 @define-color numa_ground_photo_card_linux rgba(20, 20, 20, 0.7);
-@define-color numa_attention #e0b04a;
+@define-color numa_attention #ff9f43;
+@define-color numa_pick #7fd6a0;
+@define-color numa_star #f2c35b;
+@define-color numa_edited #b9a2ff;
+@define-color numa_info #8ab8ff;
 @define-color numa_ground_bar rgba(20, 20, 20, 0.92);
 @define-color numa_surround_black #000000;
 @define-color numa_surround_dark #0e0e0e;
@@ -73,7 +77,11 @@
 @define-color numa_photo_on_accent #141414;
 @define-color numa_photo_reject #ff7a66;
 @define-color numa_photo_star_rest #5e5e5e;
-@define-color numa_photo_attention #e0b04a;
+@define-color numa_photo_attention #ff9f43;
+@define-color numa_photo_pick #7fd6a0;
+@define-color numa_photo_star #f2c35b;
+@define-color numa_photo_edited #b9a2ff;
+@define-color numa_photo_info #8ab8ff;
 /* light */
 @define-color numa_ground_window #fafafb;
 @define-color numa_ground_view #ffffff;
@@ -97,4 +105,8 @@
 @define-color numa_on_accent #ffffff;
 @define-color numa_reject #c01c28;
 @define-color numa_star_rest #8d8d8d;
-@define-color numa_attention #8f6400;
+@define-color numa_attention #a14f00;
+@define-color numa_pick #267544;
+@define-color numa_star #865f0b;
+@define-color numa_edited #6a39ff;
+@define-color numa_info #005be8;

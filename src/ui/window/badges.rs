@@ -221,7 +221,7 @@ fn mark_card(state: &App, card: &gtk::Widget, parts: &CardParts, photo: &Photo, 
     let note = cull_note(photo, &scale);
     let (text, look) = card_badge(photo.rating, photo.flag, photo.suggested, note.contains("soft"));
     parts.rating.set_visible(!text.is_empty());
-    parts.rating.set_text(&text);
+    parts.rating.set_markup(&signals::markup(&text));
     for class in ["rejected", "suggested"] {
         match look == Some(class) {
             true => parts.rating.add_css_class(class),

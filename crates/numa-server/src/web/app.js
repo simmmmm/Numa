@@ -806,7 +806,7 @@ function rateStar(event, photo) {
 function tileMarks(photo) {
   const pill = (where, ...inside) => h('span', { class: 'mark ' + where, 'aria-hidden': 'true' }, inside);
   const judged = photo.flag === 'reject' ? pill('judged rejected', icon('close'))
-    : (photo.rating > 0 || photo.flag === 'pick') && pill('judged', photo.rating > 0 && [icon('star'), String(photo.rating)], photo.flag === 'pick' && icon('flag'));
+    : (photo.rating > 0 || photo.flag === 'pick') && pill('judged', photo.rating > 0 && h('span', { class: 'stars' }, icon('star'), String(photo.rating)), photo.flag === 'pick' && h('span', { class: 'pick' }, icon('flag')));
   return [judged, photo.edited && pill('edited', h('i')), photo.stack > 1 && pill('burst', icon('burst'), String(photo.stack)),
     photo.video && pill('kind', icon('play'), photo.seconds != null && lasted(photo.seconds)), photo.live && pill('kind', icon('live'), S.live)].filter(Boolean);
 }

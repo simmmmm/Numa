@@ -2,6 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+free_gib() { df -BG --output=avail . | tail -1 | tr -dc 0-9; }
+if [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] && [ ! -e /.dockerenv ] && [ "$(free_gib)" -lt 20 ]; then
+    echo "only $(free_gib) GiB free: trimming target/" >&2
+    if [ -x dev/clean.sh ]; then dev/clean.sh >&2; fi
+    if [ "$(free_gib)" -lt 20 ]; then
+        echo "less than 20 GiB free on the disk of $PWD after trimming target/: free some space first" >&2
+        exit 1
+    fi
+fi
+
 CAP=10G dev/capped.sh cargo test --workspace --release
 python3 dev/shape.py
 python3 dev/style.py
@@ -9,7 +19,7 @@ python3 dev/style_web.py
 python3 dev/tokens.py --check
 python3 dev/smoke-readme.py
 if command -v cargo-deny >/dev/null; then
-    cargo deny check licenses
+    cargo deny check licenses advisories bans sources
 elif [ -n "${CI:-}" ]; then
     echo "cargo-deny is not installed on this runner" >&2
     exit 1

@@ -4,7 +4,7 @@ mod develop;
 pub mod display;
 pub mod render;
 
-pub use develop::{develop, Developed, Job, Mosaic};
+pub use develop::{develop, developed, Developed, Job, Mosaic};
 pub use render::{forget_proxies, render, render_enabled, Output, Pixels, Rendered};
 
 use std::sync::atomic::{AtomicBool, Ordering};

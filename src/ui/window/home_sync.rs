@@ -501,25 +501,27 @@ pub(super) fn adopt(state: &App, catch_up: bool) {
             reload_libraries(&state);
         }
 
-        let unfinished = |library: &Library| {
-            let cleared = library.path.starts_with(browse_root()) && !library.path.exists();
-            if cleared {
-                if let Err(err) = std::fs::create_dir_all(&library.path) {
-                    log::info!("Numa Home: {}: {err}", library.path.display());
-                }
+        let mut made = made;
+        for library in state.catalog.libraries().unwrap_or_default() {
+            if !remake_cache_folder(&library.path, &browse_root()) {
+                continue;
             }
-            if let (true, Some(link)) = (cleared, linked(&state, library.id)) {
+            state.catalog.reconnect(library.id);
+            if let Some(link) = linked(&state, library.id) {
 
                 keep(&state, library.id, &Link { since: 0, everything: false, photos: BTreeMap::new(), gone: BTreeMap::new(), ..link });
+                made.push(library);
             }
-            linked(&state, library.id).is_some_and(|link| {
-                api::same_server(&link.address, &account.address) && !link.library.is_empty() && !link.everything
-            })
-        };
-        let made = match catch_up {
-            true => state.catalog.libraries().unwrap_or_default().into_iter().filter(unfinished).collect(),
-            false => made,
-        };
+        }
+        if catch_up {
+            let unfinished = |library: &Library| linked(&state, library.id).is_some_and(|link| api::same_server(&link.address, &account.address) && !link.library.is_empty() && !link.everything);
+            let all = state.catalog.libraries().unwrap_or_default().into_iter().filter(unfinished);
+            for library in all {
+                if !made.iter().any(|it| it.id == library.id) {
+                    made.push(library);
+                }
+            }
+        }
         if made.is_empty() {
             return;
         }
@@ -535,6 +537,13 @@ pub(super) fn adopt(state: &App, catch_up: bool) {
             }
         }
     });
+}
+
+fn remake_cache_folder(path: &Path, cache: &Path) -> bool {
+    if !path.starts_with(cache) || path.exists() {
+        return false;
+    }
+    std::fs::create_dir_all(path).map_err(|err| log::info!("Numa Home: {}: {err}", path.display())).is_ok()
 }
 
 fn stale_rows<'a>(all: &'a [Library], old_root: &Path, cache: &Path, exists: impl Fn(&Path) -> bool) -> Vec<&'a Library> {
@@ -1470,7 +1479,12 @@ async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Side
     if up_edits {
         let stack = ctx.folder.join("edits.json");
         std::fs::write(&stack, ours.edits.as_deref().unwrap_or_default()).map_err(|err| Failure::Said(err.to_string()))?;
-        at = at.max(sync::updated(&curl(api::edits(&account.address, id, &stack), account.header(), running).await)?);
+        let base = (at > 0).then_some(at);
+        let (updated, conflict) = sync::edits_put(&curl(api::edits(&account.address, id, &stack, base), account.header(), running).await)?;
+        at = at.max(updated);
+        if conflict {
+            state.toast(&format!("{NUMA_HOME} had a newer edit of {}; it was kept as a version and this one is now current", ours.path));
+        }
     }
     if up.marks {
         at = at.max(sync::updated(&curl(sync::put_marks(&account.address, id, ours.rating, &ours.flag), account.header(), running).await)?);
@@ -1583,6 +1597,17 @@ mod tests {
 
     fn library(id: i64, path: &str) -> Library {
         Library { id, path: PathBuf::from(path), name: None }
+    }
+
+    #[test]
+    fn only_a_missing_cache_folder_is_made_again() {
+        let dir = std::env::temp_dir().join(format!("numa-remake-{}", std::process::id()));
+        let cache = dir.join("cache");
+        let (inside, away) = (cache.join("Japan"), dir.join("drive").join("Japan"));
+        assert!(remake_cache_folder(&inside, &cache) && inside.is_dir());
+        assert!(!remake_cache_folder(&inside, &cache));
+        assert!(!remake_cache_folder(&away, &cache) && !away.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

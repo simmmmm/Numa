@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
+    preferences_dialog_at(state, window, None);
+}
+
+pub(super) fn preferences_dialog_at(state: &App, window: &adw::ApplicationWindow, tab: Option<&str>) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_search_enabled(true);
 
@@ -11,7 +15,11 @@ pub(super) fn preferences_dialog(state: &App, window: &adw::ApplicationWindow) {
     dialog.add(&page_of("Models", "application-x-addon-symbolic", &downloads::models_group(&dialog, &folder_row)));
     dialog.add(&profiles_page(state, &dialog, &folder_row));
     dialog.add(&storage_page(state, &folder_row));
+    if let Some(tab) = tab {
+        dialog.set_visible_page_name(tab);
+    }
     dialog.present(Some(window));
+    dialog
 }
 
 fn folder_row(window: &adw::ApplicationWindow, title: &str, dir: PathBuf) -> adw::ActionRow {
@@ -116,6 +124,7 @@ fn page_of(title: &str, icon: &str, group: &adw::PreferencesGroup) -> adw::Prefe
 
 fn home_page(state: &App, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
     let page = page_of(home::NUMA_HOME, "go-home-symbolic", &home::preferences_group(state, dialog));
+    page.set_name(Some("home"));
     page.add(&photos_group(state));
     page
 }

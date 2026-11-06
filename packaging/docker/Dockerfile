@@ -1,12 +1,24 @@
-FROM rust:1.98-trixie AS build
+FROM --platform=$BUILDPLATFORM rust:1.98-trixie AS build
 ARG JOBS=4
+ARG TARGETARCH
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p numa-server -j "${JOBS}" \
- && cp target/release/numa-server /usr/local/bin/numa-server
+    if [ "${TARGETARCH}" = arm64 ] && [ "$(uname -m)" != aarch64 ]; then \
+        T=aarch64-unknown-linux-gnu \
+     && apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+     && rm -rf /var/lib/apt/lists/* \
+     && rustup target add "$T" \
+     && CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+        cargo build --release --locked -p numa-server -j "${JOBS}" --target "$T" \
+     && cp "target/$T/release/numa-server" /usr/local/bin/numa-server; \
+    else \
+        cargo build --release --locked -p numa-server -j "${JOBS}" \
+     && cp target/release/numa-server /usr/local/bin/numa-server; \
+    fi
 
 FROM debian:trixie-slim
 LABEL org.opencontainers.image.source=https://github.com/simmmmm/numa-home

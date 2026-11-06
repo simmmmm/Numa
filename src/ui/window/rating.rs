@@ -100,6 +100,7 @@ pub(super) fn build_bar_rating(state: &App) -> gtk::Box {
         row.append(button);
     }
     state.editor_page.pick.set_margin_start(6);
+    state.editor_page.pick.add_css_class("flag-pick");
     row
 }
 

@@ -45,7 +45,7 @@ pub(super) fn look_group(dialog: &adw::Dialog, card: &Card, marks: &Marks, chang
             for ((at, _), (overlay, _, badge)) in frames.iter().zip(tiles.iter()) {
                 let (rating, flag) = marks.get(at).copied().unwrap_or((0, Flag::None));
                 let (text, class) = card_badge(rating, flag, None, false);
-                badge.set_text(&text);
+                badge.set_markup(&signals::markup(&text));
                 badge.set_visible(!text.is_empty());
                 match class {
                     Some(class) => badge.add_css_class(class),

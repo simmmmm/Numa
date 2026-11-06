@@ -121,8 +121,19 @@ pub fn develop(job: &Job, frugal: bool, exposure: impl FnOnce(&[f32]) -> f32) ->
     match (result, out_of_memory, invalid) {
         (_, Some(error), _) | (_, _, Some(error)) => Err(format!("the card: {error}")),
         (Err(_), _, _) => Err("the card's develop panicked".into()),
-        (Ok(result), None, None) => result,
+        (Ok(result), None, None) => {
+            if result.is_ok() {
+                DEVELOPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            result
+        }
     }
+}
+
+static DEVELOPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn developed() -> usize {
+    DEVELOPED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 struct Laps {

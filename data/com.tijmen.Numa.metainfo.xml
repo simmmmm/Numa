@@ -51,6 +51,14 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.50.0" date="2026-11-06">
+      <description>
+        <p>Numa now opens with a short setup the first time you start it. You choose your photograph folder, you can connect Numa Home, and you choose which extra files to download. Nothing downloads until you say so.</p>
+        <p>The pick flag, the stars, the edited mark and the info mark now have their own colours, so you can tell them apart at a glance.</p>
+        <p>If two devices edit the same photograph, Numa Home keeps the older edit as a version, uses the newer one, and tells you. A Numa Home library whose folder you deleted is made again and no longer stays offline.</p>
+        <p>On iPhone, iPad and Mac, removing a library from a device and moving a photograph to the Trash no longer lose your edits and stars. Numa Home sign-in over plain http is refused unless the server is on your own network.</p>
+      </description>
+    </release>
     <release version="0.49.0" date="2026-11-03">
       <description>
         <p>Numa Home has shared albums. An album can have more than one owner, and you can invite people to add photographs to it. You can also collect photographs from guests: send a link, and they upload straight into an album.</p>

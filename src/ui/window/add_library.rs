@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) fn add_library_dialog(state: &App, window: &adw::ApplicationWindow) {
+    add_library_then(state, window, None);
+}
+
+pub(super) fn add_library_then(state: &App, window: &adw::ApplicationWindow, then: Option<Rc<dyn Fn(&Path)>>) {
     let dialog = gtk::FileDialog::new();
     dialog.set_title("Add Folder to Library");
 
@@ -35,7 +39,9 @@ pub(super) fn add_library_dialog(state: &App, window: &adw::ApplicationWindow) {
                     0 => format!("No photos found in {}", path.display()),
                     n => format!("Added {n} photo(s) from {}", path.display()),
                 });
-                if count > 0 {
+                if let Some(then) = &then {
+                    then(&path);
+                } else if count > 0 {
                     describe_new_library(&state, &window, library.id, count);
                 }
             }

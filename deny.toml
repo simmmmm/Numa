@@ -1,5 +1,6 @@
-# `cargo deny check licenses`: every crate built into Numa has a licence
-# compatible with GPL-3.0-or-later. (dev/third-party-licences.py writes the
+# `cargo deny check licenses advisories bans sources`: every crate built into
+# Numa has a licence compatible with GPL-3.0-or-later, no known advisory, and
+# comes from crates.io. (dev/third-party-licences.py writes the
 # texts that ship in About.)
 [graph]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "aarch64-apple-ios"]
@@ -17,3 +18,7 @@ unused-allowed-license = "allow"
 # (numa-io's AVIF encoder). No newer rav1e drops it; it is not a vulnerability.
 [advisories]
 ignore = ["RUSTSEC-2024-0436"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

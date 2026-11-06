@@ -54,6 +54,8 @@ impl Store {
                  name TEXT NOT NULL COLLATE NOCASE, sha256 TEXT NOT NULL, library INTEGER NOT NULL, path TEXT NOT NULL,
                  PRIMARY KEY (name, sha256, library));
              CREATE TABLE IF NOT EXISTS updated (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS edited (photo INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS edit_versions (photo INTEGER NOT NULL, at INTEGER NOT NULL, edits TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS cameras (camera TEXT PRIMARY KEY, account TEXT NOT NULL COLLATE NOCASE);
              CREATE TABLE IF NOT EXISTS removed (library INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (library, path));
@@ -301,6 +303,17 @@ impl Store {
         let now = now();
         let _ = self.with(|conn| conn.execute("INSERT OR REPLACE INTO updated (photo, at) VALUES (?1, ?2)", params![id, now]));
         now
+    }
+
+    pub fn put_edits(&self, photo: i64, base: Option<i64>, kept: Option<&str>, incoming: &str) -> bool {
+        let stale = base.is_some_and(|base| self.with(|c| c.query_row("SELECT at FROM edited WHERE photo = ?1", [photo], |r| r.get::<_, i64>(0))).unwrap_or(0) > base);
+        let stale = stale && kept.is_some_and(|kept| !kept.is_empty() && kept != incoming);
+        let at = now();
+        if let (true, Some(kept)) = (stale, kept) {
+            let _ = self.with(|c| c.execute("INSERT INTO edit_versions (photo, at, edits) VALUES (?1, ?2, ?3)", params![photo, at, kept]));
+        }
+        let _ = self.with(|c| c.execute("INSERT OR REPLACE INTO edited (photo, at) VALUES (?1, ?2)", params![photo, at]));
+        stale
     }
 
     pub fn updated(&self) -> std::collections::HashMap<i64, i64> {
@@ -552,6 +565,17 @@ pub fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_edit_keeps_the_older_one() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        assert!(!store.put_edits(1, None, None, "a"));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(!store.put_edits(1, Some(now()), Some("a"), "b"), "based on the latest: not stale");
+        assert!(store.put_edits(1, Some(0), Some("b"), "c"), "based on an older state: stale");
+        let kept: String = store.with(|c| c.query_row("SELECT edits FROM edit_versions WHERE photo = 1", [], |r| r.get(0))).unwrap();
+        assert_eq!(kept, "b", "the older edit is kept, not overwritten");
+    }
 
     #[test]
     fn grants_are_kept() {

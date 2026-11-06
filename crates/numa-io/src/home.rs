@@ -126,8 +126,13 @@ fn send_to(address: &str, file: &Path, sha256: &str, query: &str) -> Vec<OsStrin
     curl(rest, format!("{}/api/v1/send/{}{query}", base(address), escaped(&name)))
 }
 
-pub fn edits(address: &str, id: &str, file: &Path) -> Vec<OsString> {
-    let rest = words(&["--header", "@-", "--header", "Content-Type: application/json", "--upload-file"]).into_iter().chain([file.into()]);
+pub fn edits(address: &str, id: &str, file: &Path, seen: Option<i64>) -> Vec<OsString> {
+    let header = seen.map(|seen| format!("X-Numa-Base: {seen}"));
+    let rest = words(&["--header", "@-", "--header", "Content-Type: application/json"])
+        .into_iter()
+        .chain(header.iter().flat_map(|header| words(&["--header", header])))
+        .chain(words(&["--upload-file"]))
+        .chain([file.into()]);
     curl(rest, format!("{}/api/v1/photos/{}/edits", base(address), escaped(id)))
 }
 
@@ -254,7 +259,7 @@ mod tests {
     fn the_token_and_the_password_never_go_on_the_command_line() {
         let account = Account { address: "nas".into(), name: "Amelie".into(), token: "secret-token".into() };
         let file = Path::new("/tmp/My photo #1.RAF");
-        for argv in [send(&account.address, file, "ab12"), edits(&account.address, "7", file), logout("nas"), login("nas")] {
+        for argv in [send(&account.address, file, "ab12"), edits(&account.address, "7", file, None), logout("nas"), login("nas")] {
             assert!(!argv.iter().any(|arg| arg.to_string_lossy().contains("secret")), "{argv:?}");
             assert_eq!(argv[0], "curl");
         }
@@ -271,7 +276,7 @@ mod tests {
         assert!(text.contains(&"X-Numa-Sha256: ab12".to_string()));
         assert!(text.windows(2).any(|pair| pair == ["--header", "@-"]));
         assert_eq!(text.last().unwrap(), "http://nas:8283/api/v1/send/My%20photo%20%231.RAF");
-        let edits = edits("nas", "7", Path::new("/tmp/e.json"));
+        let edits = edits("nas", "7", Path::new("/tmp/e.json"), Some(5));
         assert_eq!(edits.last().unwrap(), "http://nas:8283/api/v1/photos/7/edits");
     }
 

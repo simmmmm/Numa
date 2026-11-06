@@ -166,10 +166,13 @@ main { padding: 0 var(--edge) 48px; }
 .tile .mark svg { width: 11px; height: 11px; flex: none; }
 .tile .judged { left: var(--space-6); bottom: var(--space-6); }
 .tile .judged svg { fill: currentColor; }
+.tile .judged .stars, .tile .judged .pick { display: inline-flex; align-items: center; gap: var(--space-4); }
+.tile .judged .stars, .tile .rate i.set { color: var(--star); }
+.tile .judged .pick { color: var(--pick); }
 .tile .judged.rejected { color: var(--reject); }
 .tile .judged.rejected svg { fill: none; stroke-width: 2.6; }
 .tile .edited { right: var(--space-6); bottom: var(--space-6); width: 14px; height: 14px; padding: 0; justify-content: center; }
-.tile .edited i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tile .edited i { width: 6px; height: 6px; border-radius: 50%; background: var(--edited); }
 .tile .burst { right: var(--space-6); top: var(--space-6); }
 .tile .burst svg { stroke-width: 2.2; }
 .tile .rate { display: none; position: absolute; left: var(--space-6); bottom: var(--space-6); padding: 0 var(--space-4); border-radius: var(--radius-pill);
@@ -311,7 +314,7 @@ main { padding: 0 var(--edge) 48px; }
 .loupe-bar .acts { display: flex; align-items: center; gap: 6px; }
 .loupe-bar .star { background: none; border: 0; padding: 3px; color: var(--name); opacity: 0.5; cursor: pointer; display: grid; place-items: center; transition: opacity var(--quick), color var(--quick); }
 .loupe-bar .star svg { width: 20px; height: 20px; }
-.loupe-bar .star.set { color: var(--accent); opacity: 1; }
+.loupe-bar .star.set { color: var(--star); opacity: 1; }
 .loupe-bar .star.set svg, .round.flag-pick.chosen svg { fill: currentColor; }
 .loupe-bar .round.small { background: none; }
 .loupe-bar .round.small.chosen { background: var(--accent); }

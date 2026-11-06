@@ -22,7 +22,7 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-![The library: rows of photographs with star ratings, and the Analyse, Filter and Export buttons](docs/screenshots/library.webp)
+![A library: a trip's photographs in a justified grid with star ratings and flags, and the side list with Today, Photos, Libraries, People, Albums and Places](docs/screenshots/library.webp)
 
 Numa is a GTK 4 and libadwaita application written in Rust. It reads every RAW
 format [rawler](https://github.com/dnglab/dnglab) reads (29 formats from about
@@ -31,10 +31,12 @@ support: X-Trans demosaicking, the camera's film simulation and the lens
 corrections stored in the RAF. Everything runs on your computer, including the
 machine-learning models.
 
-- **Library:** folders as libraries, ratings, flags, albums, people, search by
-  words, and a catalog per library that moves with the folder.
+- **Library:** folders as libraries, shown in months with a scrubber, and a
+  catalog per library that moves with the folder. Ratings, flags, albums,
+  people, places on a map, search by words, and Tidy Up for exact copies and
+  near-identical frames. Today brings back a photograph and what waits for you.
 - **Culling:** a loupe with burst comparison, sharpness, clipping and
-  closed-eye checks.
+  closed-eye checks, and import from a card or a tethered camera.
 - **Developing:** scene-referred editing, camera profiles, tone curves, colour
   mixer and grading, masks (subject, sky, click to select), retouching, AI
   denoise and lens corrections.
@@ -43,7 +45,9 @@ machine-learning models.
 The [user guide](https://guide.numa.photo) describes every feature. The code
 was written with Claude (Anthropic).
 
-![The editor with a photograph and the light controls](docs/screenshots/editor.webp)
+![The Libraries page: seven libraries, each a stack of its photographs with its date range](docs/screenshots/libraries.webp)
+
+![The editor: an aerial photograph with the Light panel, the tone curve, the histogram and the filmstrip](docs/screenshots/editor.webp)
 
 ## Installing
 

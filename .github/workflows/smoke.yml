@@ -55,7 +55,7 @@ jobs:
           OUT: ${{ runner.temp }}/smoke
         run: packaging/smoke/run.sh "${{ matrix.name }}" "${{ matrix.image }}" "${{ matrix.how }}" "${{ matrix.heading }}" "${{ steps.version.outputs.number }}"
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-${{ strategy.job-index }}
           path: |
@@ -69,7 +69,7 @@ jobs:
     needs: smoke
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: smoke-*
       - run: |

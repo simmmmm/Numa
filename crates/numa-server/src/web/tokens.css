@@ -31,7 +31,11 @@
   --clip-shadow: #2858ff;
   --clip-highlight: #ff4040;
   --ground-photo-card-linux: rgba(20, 20, 20, 0.7);
-  --attention: #e0b04a;
+  --attention: #ff9f43;
+  --pick: #7fd6a0;
+  --star: #f2c35b;
+  --edited: #b9a2ff;
+  --info: #8ab8ff;
   --ground-bar: rgba(20, 20, 20, 0.92);
   --surround-black: #000000;
   --surround-dark: #0e0e0e;

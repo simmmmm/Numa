@@ -424,6 +424,7 @@ pub(super) fn build_loupe_rating(state: &App) -> gtk::Box {
         row.append(button);
     }
     state.loupe.pick.set_margin_start(6);
+    state.loupe.pick.add_css_class("flag-pick");
     row
 }
 

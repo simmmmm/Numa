@@ -317,7 +317,7 @@ pub async fn rights_put(State(server): State<Arc<Server>>, Signed(me): Signed, J
     Ok(Json(json!({ "creator": asked.creator.trim(), "copyright": asked.copyright.trim() })))
 }
 
-pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, body: Bytes) -> Result<Json<Value>, Fail> {
+pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, headers: HeaderMap, body: Bytes) -> Result<Json<Value>, Fail> {
     let photo = server.home.photo(&me, id, Level::Edit)?;
     let _one = server.editing.lock(id).await;
     if numa_core::document::schema_of(&String::from_utf8_lossy(&body)) > numa_core::document::SCHEMA {
@@ -331,7 +331,13 @@ pub async fn edits_put(State(server): State<Arc<Server>>, Signed(me): Signed, Pa
 
     document.source.path = photo.path.to_string_lossy().into_owned();
     document.moment = None;
-    changed(&server, id, move |catalog| catalog.save_edits(id, &document).map_err(String::from)).await
+    let base = headers.get("x-numa-base").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<i64>().ok());
+    let kept = server.home.ask(move |catalog| catalog.edits_json(id)).await?.map_err(Fail::internal)?;
+    let incoming = serde_json::to_string(&document).map_err(Fail::internal)?;
+    let conflict = server.store.put_edits(id, base, kept.as_deref(), &incoming);
+    let Json(mut answer) = changed(&server, id, move |catalog| catalog.save_edits(id, &document).map_err(String::from)).await?;
+    answer["conflict"] = json!(conflict);
+    Ok(Json(answer))
 }
 
 pub async fn edits_get(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>) -> Result<Json<Value>, Fail> {

@@ -619,7 +619,7 @@ entry.curve-value:focus-within {
     min-width: 6px;
     min-height: 6px;
     border-radius: 3px;
-    background: white;
+    background: @numa_photo_edited;
 }
 
 .card-fetch {
@@ -700,6 +700,7 @@ entry.curve-value:focus-within {
 
 .card-stars {
     font-size: 13px;
+    color: @numa_photo_star;
 }
 
 .grid-card:hover .card-caption {
@@ -860,7 +861,11 @@ listview.filmstrip-frames > row {
 
 .bar-rating button.rated {
     opacity: 1;
-    color: @numa_accent;
+    color: @numa_star;
+}
+
+.bar-rating button.flag-pick.rated {
+    color: @numa_pick;
 }
 
 .bar-rating.rejected button.rated,
