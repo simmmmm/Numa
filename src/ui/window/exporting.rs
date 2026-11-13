@@ -302,3 +302,71 @@ pub(super) fn run_export_then(
         done(&state, written, &failures, &last);
     });
 }
+
+pub(super) fn copy_edge(catalog: &Catalog) -> u32 {
+    export::copy_edge(catalog.recall::<u64>(COPY_EDGE))
+}
+
+pub(super) fn keep_copy_edge(catalog: &Catalog, edge: u32) {
+    catalog.remember(COPY_EDGE, &edge);
+}
+
+pub(super) fn copy_job(state: &App) -> Option<ExportJob> {
+    match state.stack.visible_child_name().as_deref() {
+        Some("editor") => open_job(state),
+        Some("library") => {
+            let mut jobs = selected_jobs(state);
+            (jobs.len() == 1).then(|| jobs.remove(0))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn copy_photo(state: &App, job: Option<ExportJob>) {
+    let Some(job) = job else {
+        state.toast("Select one photo to copy");
+        return;
+    };
+    if state.export.copying.replace(true) {
+        return;
+    }
+    let settings = export::ExportSettings::copy(copy_edge(&state.catalog));
+    let state = state.clone();
+    glib::spawn_future_local(async move {
+        let started = std::time::Instant::now();
+        let developed = busy(&state, "Copying the photo…", move || develop_one(job, &settings, &Work::default())).await;
+        state.export.copying.set(false);
+        let image = match developed {
+            Ok(Ok((export::Developed::Eight(image), _, _))) => image,
+            Ok(Err(why)) => {
+                log::warn!("copy: {why}");
+                return state.toast("Could not copy. Use Export.");
+            }
+            _ => return state.toast("Could not copy. Use Export."),
+        };
+        let (width, height) = image.dimensions();
+        log::info!("copy: {width} × {height} px in {:.0?}", started.elapsed());
+        let Some(display) = gtk::gdk::Display::default() else { return };
+
+        display.clipboard().set_texture(&crate::ui::display::unconverted(image));
+        state.toast(&format!("Photo copied, {width} × {height} px"));
+    });
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    #[test]
+    fn the_copy_size_is_kept() {
+        let folder = std::env::temp_dir().join(format!("numa-copy-edge-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let catalog = Catalog::open(&folder.join("catalog.db")).unwrap();
+        assert_eq!(copy_edge(&catalog), 4096, "until one is chosen");
+        keep_copy_edge(&catalog, 1080);
+        assert_eq!(copy_edge(&Catalog::open(&folder.join("catalog.db")).unwrap()), 1080);
+        catalog.remember(COPY_EDGE, &3000u32);
+        assert_eq!(copy_edge(&catalog), 4096, "a size no client copies at");
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+}

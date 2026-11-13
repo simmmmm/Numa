@@ -314,8 +314,10 @@ pub async fn end_others(State(server): State<Arc<Server>>, Signed(me): Signed, h
 
 pub async fn me(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<serde_json::Value> {
     let start = server.store.setting(&format!("start:{}", me.name)).unwrap_or_else(|| "today".into());
+    let copy_edge = numa_io::export::copy_edge(server.store.setting(&format!("copy_edge:{}", me.name)).and_then(|kept| kept.parse().ok()));
     let mut answer = serde_json::to_value(&me).unwrap_or_default();
     answer["start"] = start.into();
+    answer["copy_edge"] = copy_edge.into();
     answer["first_start"] = crate::start::step(&server, &me.name).into();
 
     answer["household"] = me.sight.household.into();
@@ -323,21 +325,54 @@ pub async fn me(State(server): State<Arc<Server>>, Signed(me): Signed) -> Json<s
 }
 
 #[derive(Deserialize)]
-pub struct Start {
-    start: String,
+pub struct Mine {
+    start: Option<String>,
+
+    copy_edge: Option<Value>,
 }
 
-pub async fn set_start(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Start>) -> Result<StatusCode, Fail> {
-    if !matches!(asked.start.as_str(), "today" | "photos") {
+pub async fn set_start(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Mine>) -> Result<StatusCode, Fail> {
+    if asked.start.as_deref().is_some_and(|start| !matches!(start, "today" | "photos")) {
         return Err(Fail::bad("Numa Home starts on today or photos."));
     }
-    server.store.set_setting(&format!("start:{}", me.name), &asked.start).map_err(Fail::internal)?;
+    let edge = match &asked.copy_edge {
+        None => None,
+        Some(value) => match value.as_u64().filter(|&edge| numa_io::export::COPY_EDGES.iter().any(|&one| one as u64 == edge)) {
+            Some(edge) => Some(edge),
+            None => return Err(Fail::bad("A photo is copied at 4096, 2048 or 1080 px.")),
+        },
+    };
+    if let Some(start) = &asked.start {
+        server.store.set_setting(&format!("start:{}", me.name), start).map_err(Fail::internal)?;
+    }
+    if let Some(edge) = edge {
+        server.store.set_setting(&format!("copy_edge:{}", me.name), &edge.to_string()).map_err(Fail::internal)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_copy_size_belongs_to_the_account() {
+        use crate::share::tests::http::{account, ask};
+        let (one, two) = (account("Copy Size One", Level::Edit), account("Copy Size Two", Level::View));
+        let edge = |who: &str| ask("GET", "/api/v1/me", Some(who), "", "").json()["copy_edge"].clone();
+        let put = |who: &str, body: &str| ask("PUT", "/api/v1/me", Some(who), body, "").status;
+        assert_eq!(edge(&one), json!(4096), "the default");
+        assert_eq!(put(&one, r#"{"copy_edge":2048}"#), 204);
+        assert_eq!(put(&two, r#"{"copy_edge":1080}"#), 204, "a guest who only sees");
+        assert_eq!((edge(&one), edge(&two)), (json!(2048), json!(1080)));
+        for bad in [r#"{"copy_edge":4097}"#, r#"{"copy_edge":"2048"}"#, r#"{"copy_edge":0}"#, r#"{"copy_edge":2048.5}"#, r#"{"start":"today","copy_edge":3000}"#] {
+            assert_eq!(put(&one, bad), 400, "{bad}");
+        }
+        assert_eq!(edge(&one), json!(2048), "nothing kept from a refusal");
+        assert_eq!(put(&one, r#"{"start":"photos"}"#), 204, "the start page alone, as the apps send it");
+        let me = ask("GET", "/api/v1/me", Some(&one), "", "").json();
+        assert_eq!((me["start"].clone(), me["copy_edge"].clone()), (json!("photos"), json!(2048)));
+    }
 
     #[test]
     fn the_session_cookie_is_closed_to_scripts_and_other_sites() {

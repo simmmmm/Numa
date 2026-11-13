@@ -57,7 +57,14 @@ fn link_path(path: &str) -> bool {
         || path.starts_with("/api/v1/s/")
         || path.starts_with("/c/")
         || path.starts_with("/api/v1/c/")
-        || matches!(path, PING | "/proof.js" | "/proof.css" | "/share.js" | "/collect.js" | "/collect.css" | "/strings.js" | "/tokens.css" | "/icon.svg" | "/robots.txt")
+        || path.starts_with("/t/")
+        || path.starts_with("/api/v1/t/")
+        || path.starts_with("/map/fonts/")
+        || matches!(
+            path,
+            PING | "/proof.js" | "/proof.css" | "/share.js" | "/collect.js" | "/collect.css" | "/trip.js" | "/trip.css" | "/mapstyle.js" | "/strings.js" | "/tokens.css" | "/icon.svg" | "/robots.txt"
+                | "/map/6.13.0/maplibre-gl.mjs" | "/map/6.13.0/maplibre-gl-worker.mjs" | "/map/6.13.0/maplibre-gl.css"
+        )
 }
 
 fn inside_only(path: &str) -> bool {
@@ -210,13 +217,17 @@ fn apply(store: &Store, me: &Account, new: Change) -> Result<StatusCode, Fail> {
 mod tests {
     use super::*;
 
-    const EVERY: [&str; 12] = [
+    const EVERY: [&str; 22] = [
         "/", "/app.js", "/api/v1/me", "/api/v1/login", "/api/v1/photos/1/original", "/api/v1/send/Sam", "/api/v1/shares", "/api/v1/reach", "/s", "/api/v1/status",
         "/sx/abc", "/api/v1/setup",
+
+        "/api/v1/map/3/1/2", "/api/v1/albums/x/links", "/api/v1/albums/x/page", "/api/v1/chapters/x", "/map/", "/map/6.13.0/other.js", "/map/fonts", "/map.js", "/t", "/api/v1/t",
     ];
-    const LINKS: [&str; 10] = [
+    const LINKS: [&str; 22] = [
         "/s/abc", "/api/v1/s/abc/3", "/api/v1/s/abc/3/pick", "/proof.js", "/api/v1/reach/ping", "/c/abc", "/api/v1/c/abc", "/api/v1/c/abc/files/a.jpg", "/collect.js",
         "/collect.css",
+        "/t/abc", "/api/v1/t/abc", "/api/v1/t/abc/3", "/api/v1/t/abc/map/3/1/2", "/trip.js", "/trip.css", "/mapstyle.js", "/map/6.13.0/maplibre-gl.mjs",
+        "/map/6.13.0/maplibre-gl-worker.mjs", "/map/6.13.0/maplibre-gl.css", "/map/fonts/Noto%20Sans/0-255.pbf", "/map/fonts/x/y",
     ];
 
     #[test]

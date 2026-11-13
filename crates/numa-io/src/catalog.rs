@@ -33,6 +33,15 @@ mod at_home;
 mod tidy;
 
 mod album_merge;
+
+mod caption;
+pub use caption::{caption_says, tidy_caption, CAPTION_LIMIT};
+
+mod chapters;
+pub use chapters::{AlbumChapter, AlbumKind, ChapterPlace, CHAPTER_NAME_LIMIT, CHAPTER_WORDS_LIMIT, WEDDING};
+
+mod album_page;
+pub use album_page::{AlbumPage, PageAsked, NO_CHAPTER};
 pub use at_home::{home_preview, home_thumb, AtHome};
 use schema::{migrate, upgrade, user_version, HOME_MIGRATIONS, HOME_SCHEMA, HOME_VERSION, LEGACY_SCHEMA, LIBRARY_MIGRATIONS, LIBRARY_SCHEMA, LIBRARY_VERSION};
 
@@ -187,6 +196,9 @@ pub struct Filter {
 
     pub album: Option<String>,
 
+    #[serde(skip)]
+    pub chapter: Option<String>,
+
     pub all_libraries: bool,
 }
 
@@ -199,6 +211,7 @@ impl Filter {
     pub fn in_one_library(&mut self) {
         self.all_libraries = false;
         self.album = None;
+        self.chapter = None;
         self.person = None;
     }
 }
@@ -983,7 +996,8 @@ impl Catalog {
                 .query_row("SELECT latitude, longitude FROM positions WHERE photo_id = ?1", [local], |row| Ok((row.get(0)?, row.get(1)?)))
                 .optional()
                 .map_err(text)?;
-            found.insert(id, crate::export::Description { rating, people, albums, position });
+            let caption = self.caption(id)?;
+            found.insert(id, crate::export::Description { rating, people, albums, caption, position });
         }
         Ok(found)
     }
@@ -1687,6 +1701,7 @@ impl Catalog {
             let Ok(open) = self.library(library.id) else { continue };
             open.conn.execute("DELETE FROM album_photos WHERE album = ?1", params![key]).map_err(text)?;
         }
+        self.forget_chapters_of(key)?;
         self.home.execute("DELETE FROM albums WHERE key = ?1", params![key]).map_err(text)?;
         Ok(())
     }
@@ -1697,7 +1712,11 @@ impl Catalog {
         } else {
             "DELETE FROM album_photos WHERE album = ?1 AND photo_id = ?2"
         };
-        self.update_each(photo_ids, sql, key, None)
+        self.update_each(photo_ids, sql, key, None)?;
+        if inside {
+            return Ok(());
+        }
+        self.leave_chapters_of(key, photo_ids)
     }
 
     pub fn photos(&self, library_id: i64, filter: &Filter) -> Result<Vec<Photo>, String> {
@@ -1721,6 +1740,9 @@ impl Catalog {
         );
         if let Some(flag) = filter.flag {
             sql.push_str(&format!(" AND p.flag = {}", flag.to_i64()));
+        }
+        if let (Some(album), Some(chapter)) = (&filter.album, &filter.chapter) {
+            sql.push_str(&self.chapter_clause(album, chapter)?);
         }
         if filter.only_questionable {
 
@@ -2830,6 +2852,7 @@ mod tests {
             person: None,
             file_type: FileType::Raw,
             album: Some("5f".to_string()),
+            chapter: None,
             all_libraries: true,
         };
         catalog.remember("filter", &filter);

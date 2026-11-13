@@ -1,4 +1,4 @@
 # web style baseline — what the design system's tokens replace in Numa Home's pages, per file. May only shrink.
 # check	count	file
-size	33	crates/numa-server/src/web/app.css
-radius	15	crates/numa-server/src/web/app.css
+size	28	crates/numa-server/src/web/app.css
+radius	11	crates/numa-server/src/web/app.css

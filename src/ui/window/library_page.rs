@@ -146,6 +146,8 @@ pub(super) struct Head {
     tokens: gtk::Label,
 
     more: gtk::MenuButton,
+
+    kinds: gtk::Box,
     book: gtk::Button,
     rename: gtk::Button,
     files: gtk::Button,
@@ -206,6 +208,17 @@ impl Head {
         more.set_icon_name("view-more-symbolic");
         more.set_valign(gtk::Align::Center);
         more.set_tooltip_text(Some("More"));
+        let kinds = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        for (label, action) in [("Add a Chapter…", "album.add-chapter"), ("Make a Trip", "album.make-trip"), ("Make a Wedding", "album.make-wedding")] {
+            let button = item(label);
+            button.set_action_name(Some(action));
+            button.connect_clicked(glib::clone!(
+                #[weak] more,
+                move |_| more.popdown()
+            ));
+            kinds.append(&button);
+        }
+        kinds.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         let pencil = gtk::Button::from_icon_name("document-edit-symbolic");
         pencil.add_css_class("flat");
         pencil.add_css_class("circular");
@@ -222,7 +235,7 @@ impl Head {
 
         titles_stack.set_vhomogeneous(false);
         let editing = Rc::new(Cell::new(false));
-        Self { back, title, caption, tokens, more, book, rename, files, stop, tidy, sync, pencil, edit, titles_stack, editing, owner: Rc::new(Cell::new("libraries")) }
+        Self { back, title, caption, tokens, more, kinds, book, rename, files, stop, tidy, sync, pencil, edit, titles_stack, editing, owner: Rc::new(Cell::new("libraries")) }
     }
 }
 
@@ -321,6 +334,7 @@ fn build_head(state: &App) -> gtk::Box {
     row.append(&head.sync);
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    list.append(&head.kinds);
     for button in [&head.tidy, &head.book, &head.rename, &head.files, &head.stop] {
         list.append(button);
         button.connect_clicked(glib::clone!(
@@ -441,6 +455,8 @@ pub(super) fn show_head(state: &App) {
     head.back.set_tooltip_text(Some(back));
     let book = matches!(place, Place::Library(_) | Place::Album(_));
     head.book.set_visible(book);
+
+    head.kinds.set_visible(matches!(&place, Place::Album(key) if !album_page::has_page(state, key)));
     let here = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
     head.tidy.set_visible(here);
     head.rename.set_visible(here);
@@ -611,6 +627,7 @@ pub(super) fn install_photo_menu(state: &App, window: &adw::ApplicationWindow) {
     }
     install_preset_actions(state, window);
     install_client_actions(state, window);
+    install_copy_action(state, window);
 
     debug_assert_missing_actions(&menu, window);
 
@@ -640,6 +657,8 @@ pub(super) fn photo_menu_model(state: &App) -> gio::Menu {
         flags.append_item(&item);
     }
     menu.append_section(None, &flags);
+
+    menu.append_section(Some("Copy"), &copy_menu());
 
     let settings = gio::Menu::new();
     settings.append(Some("Export…"), Some("win.photo-export"));
@@ -813,10 +832,15 @@ fn install_photo_menu_popover(state: &App, menu: gio::Menu) {
             if !state.grid.wall.is_selected(index) {
                 state.grid.wall.select_only(index);
             }
+
+            state.export.copy.set_enabled(state.grid.wall.selected().len() == 1);
             rows_popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             rows_popover.popup();
         }
     ));
+
+    let copy = state.export.copy.clone();
+    rows_popover.connect_closed(move |_| copy.set_enabled(true));
     state.grid.wall.add_controller(click);
 }
 

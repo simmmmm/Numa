@@ -15,7 +15,9 @@ token becomes `@define-color numa_<name>` with its dark value; below the
 the photograph is photo-side, and photo-side is dark (the README's Colour). `load_css`
 (src/ui/window.rs) reads the dark half always and the light half on top of it
 while the style manager says the scheme is light — GTK 4.14 has no media
-query for that.
+query for that. A token with a `contrast` value is raised one step under
+`/* contrast */` (photo-side too, dark in both schemes) and `/* contrast
+light */`; `load_css` adds those while the desktop asks for high contrast.
 
 Numa Home is dark only (the README's Web column), so its file is one `:root`
 with every token's dark value as `--<token-name>`: the colours, the spacing,
@@ -33,7 +35,7 @@ WEB = ROOT / "crates/numa-server/src/web/tokens.css"
 def render():
     tokens = json.loads(SOURCE.read_text())["color"]["tokens"]
     name = lambda token: "numa_" + token["name"].replace("-", "_")
-    dark, light, photo = [], [], []
+    dark, light, photo, contrast, contrast_light = [], [], [], [], []
     for token in tokens:
         value = token["value"]
         if isinstance(value, str):
@@ -43,8 +45,13 @@ def render():
         if value["light"] != value["dark"]:
             light.append(f"@define-color {name(token)} {value['light']};")
             photo.append(f"@define-color {name(token).replace('numa_', 'numa_photo_', 1)} {value['dark']};")
+        if "contrast" in token:
+            raised = token["contrast"]
+            contrast.append(f"@define-color {name(token)} {raised['dark']};")
+            contrast.append(f"@define-color {name(token).replace('numa_', 'numa_photo_', 1)} {raised['dark']};")
+            contrast_light.append(f"@define-color {name(token)} {raised['light']};")
     head = "/* Written by dev/tokens.py from data/design/tokens.json. Do not edit. */"
-    return "\n".join([head, *dark, *photo, "/* light */", *light]) + "\n"
+    return "\n".join([head, *dark, *photo, "/* light */", *light, "/* contrast */", *contrast, "/* contrast light */", *contrast_light]) + "\n"
 
 def render_web():
     tokens = json.loads(SOURCE.read_text())

@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub mod sync;
+pub mod album_sync;
 pub mod same;
 
 pub const PORT: u16 = 8283;

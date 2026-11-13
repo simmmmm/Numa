@@ -4,10 +4,7 @@ use super::*;
 use numa::io::models::{files_of, ModelFile};
 
 const WIZARD: &str = "first-start-wizard";
-
-const USAGE_COUNTS: &str = "usage-counts";
-
-const STEPS: usize = 4;
+const STEPS: usize = 3;
 
 struct Tile {
     icon: &'static str,
@@ -105,6 +102,10 @@ fn step_page(step: usize, title: &str, intro: &str, body: &impl IsA<gtk::Widget>
     column
 }
 
+fn scrolling(card: &gtk::Box) -> gtk::ScrolledWindow {
+    gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).child(card).build()
+}
+
 fn button_row(grey: &[&gtk::Button], white: &gtk::Button) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.set_halign(gtk::Align::Center);
@@ -156,8 +157,7 @@ fn present(state: &App, window: &adw::ApplicationWindow) {
     ));
     pages.add_named(&photographs_step(state, window, &go), Some("0"));
     pages.add_named(&home_step(state, window, &go), Some("1"));
-    pages.add_named(&extras_step(state, &go), Some("2"));
-    pages.add_named(&counts_step(state, &dialog), Some("3"));
+    pages.add_named(&extras_step(state, &dialog), Some("2"));
     ask_once(state, &dialog);
     go(0);
     dialog.present(Some(window));
@@ -205,7 +205,7 @@ fn photographs_step(state: &App, window: &adw::ApplicationWindow, go: &Go) -> gt
             add_library::add_library_then(&state, &window, Some(then));
         }
     ));
-    let one = step_page(1, "Where are your photographs?", "Choose a folder. Numa never moves or changes your photographs; it keeps its edits beside them.", &card);
+    let one = step_page(1, "Where are your photographs?", "Choose a folder. Numa never moves or changes your photographs; it keeps its edits beside them.", &scrolling(&card));
     one.append(&button_row(&[], &continue_1));
     continue_1.connect_clicked(glib::clone!(#[strong] go, move |_| go(1)));
     one
@@ -231,7 +231,7 @@ fn home_step(state: &App, window: &adw::ApplicationWindow, go: &Go) -> gtk::Box 
     }
     let later_2 = gtk::Button::with_label("Not Now");
     let connect = primary_button("Connect…");
-    let two = step_page(2, "Your photographs, at home", "Numa Home is optional. It is a photo server you run yourself, such as on a NAS.", &home_card);
+    let two = step_page(2, "Your photographs, at home", "Numa Home is optional. It is a photo server you run yourself, such as on a NAS.", &scrolling(&home_card));
     two.append(&button_row(&[&later_2], &connect));
     later_2.connect_clicked(glib::clone!(#[strong] go, move |_| go(2)));
     connect.connect_clicked(glib::clone!(
@@ -246,7 +246,7 @@ fn home_step(state: &App, window: &adw::ApplicationWindow, go: &Go) -> gtk::Box 
     two
 }
 
-fn extras_step(state: &App, go: &Go) -> gtk::Box {
+fn extras_step(state: &App, dialog: &adw::Dialog) -> adw::ToolbarView {
     let ticks = Rc::new(RefCell::new(default_ticks()));
     let boxes: Vec<gtk::CheckButton> = TILES.iter().map(|_| gtk::CheckButton::new()).collect();
     let everything = gtk::CheckButton::new();
@@ -267,54 +267,57 @@ fn extras_step(state: &App, go: &Go) -> gtk::Box {
             download.set_sensitive(!files.is_empty());
         }
     ));
-    let grid = gtk::FlowBox::new();
-    grid.set_selection_mode(gtk::SelectionMode::None);
-    grid.set_min_children_per_line(1);
-    grid.set_max_children_per_line(2);
-    grid.set_homogeneous(true);
-    grid.set_row_spacing(8);
-    grid.set_column_spacing(8);
-    grid.set_margin_start(24);
-    grid.set_margin_end(24);
     let mut all_mb = 0;
+    let mut rows = Vec::new();
     for (index, (tile, check)) in TILES.iter().zip(&boxes).enumerate() {
         let (row, missing) = tile_row(index, tile, check, &ticks, &refresh);
         all_mb += missing;
-        grid.append(&row);
+        rows.push(row);
     }
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-    scroll.set_vexpand(true);
-    scroll.set_child(Some(&grid));
-    let all_row = everything_row(&everything, &boxes, all_mb);
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    body.append(&all_row);
-    body.append(&scroll);
+    let body = boxed_list(&rows);
+    body.set_margin_top(8);
+    body.set_margin_bottom(16);
     let later_3 = gtk::Button::with_label("Not Now");
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    bar.set_margin_start(24);
-    bar.set_margin_end(24);
-    bar.set_margin_top(12);
-    bar.set_margin_bottom(12);
     bar.append(&summary);
     later_3.add_css_class("pill");
     download.add_css_class("pill");
-    bar.append(&later_3);
-    bar.append(&download);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    buttons.append(&later_3);
+    buttons.append(&download);
+    bar.append(&buttons);
+
+    let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, 560.0, adw::LengthUnit::Px));
+    narrow.add_setter(&bar, "orientation", Some(&gtk::Orientation::Vertical.to_value()));
+    narrow.add_setter(&buttons, "halign", Some(&gtk::Align::End.to_value()));
+    dialog.add_breakpoint(narrow);
     let three = step_page(3, "Choose what Numa can do", "Everything here runs on your own computer. Your photographs are never sent online. Each one downloads once, only when you choose Download, and you can add more in Preferences.", &body);
-    three.append(&bar);
+
+    let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).child(&three).build();
+    let page = adw::ToolbarView::new();
+    page.set_content(Some(&scroll));
+
+    let foot = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    foot.set_margin_start(24);
+    foot.set_margin_end(24);
+    foot.set_margin_top(12);
+    foot.set_margin_bottom(12);
+    foot.append(&everything_row(&everything, &boxes, all_mb));
+    foot.append(&bar);
+    page.add_bottom_bar(&foot);
+    page.set_bottom_bar_style(adw::ToolbarStyle::Raised);
     refresh();
-    later_3.connect_clicked(glib::clone!(#[strong] go, move |_| go(3)));
+    later_3.connect_clicked(glib::clone!(#[weak] dialog, move |_| { dialog.close(); }));
     download.connect_clicked(glib::clone!(
         #[strong] state,
-        #[strong] go,
+        #[weak] dialog,
         #[strong] ticks,
         move |_| {
             download_additional(&state, files_for(&*ticks.borrow()));
-            go(3);
+            dialog.close();
         }
     ));
-    three
+    page
 }
 
 fn tile_row(
@@ -323,76 +326,48 @@ fn tile_row(
     check: &gtk::CheckButton,
     ticks: &Rc<RefCell<[bool; TILES.len()]>>,
     refresh: &Rc<impl Fn() + 'static>,
-) -> (gtk::Box, u64) {
-        let files = files_of(tile.models);
-        let here = not_yet_here(files.clone()).is_empty();
-        let mb = megabytes(&files);
-        let missing = megabytes(&not_yet_here(files));
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.add_css_class("card");
-        row.set_margin_top(0);
-        let words = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        words.set_hexpand(true);
-        words.set_margin_top(12);
-        words.set_margin_bottom(12);
-        let name = gtk::Label::new(Some(tile.title));
-        name.add_css_class("heading");
-        name.set_xalign(0.0);
-        let line = gtk::Label::new(Some(tile.line));
-        line.add_css_class("dim-label");
-        line.set_wrap(true);
-        line.set_xalign(0.0);
-        let size = gtk::Label::new(Some(&if here { "Installed".to_string() } else { size_text(mb) }));
-        size.add_css_class("dim-label");
-        size.add_css_class("numeric");
-        size.set_xalign(0.0);
-        words.append(&name);
-        words.append(&line);
-        words.append(&size);
-        let symbol = gtk::Image::from_icon_name(tile.icon);
-        symbol.set_margin_start(12);
-        check.set_valign(gtk::Align::Center);
-        check.set_margin_end(12);
-        check.update_property(&[gtk::accessible::Property::Label(tile.title)]);
-        check.set_active(tile.ticked && !here);
-        check.set_sensitive(!here);
-        if here {
-            ticks.borrow_mut()[index] = false;
+) -> (adw::ActionRow, u64) {
+    let files = files_of(tile.models);
+    let here = not_yet_here(files.clone()).is_empty();
+    let mb = megabytes(&files);
+    let missing = megabytes(&not_yet_here(files));
+
+    let row = adw::ActionRow::new();
+    row.set_title(tile.title);
+    row.set_subtitle(tile.line);
+    row.add_prefix(&gtk::Image::from_icon_name(tile.icon));
+    let size = gtk::Label::new(Some(&if here { "Installed".to_string() } else { size_text(mb) }));
+    size.add_css_class("dim-label");
+    size.add_css_class("numeric");
+    row.add_suffix(&size);
+    check.set_valign(gtk::Align::Center);
+    check.update_property(&[gtk::accessible::Property::Label(tile.title)]);
+    check.set_active(tile.ticked && !here);
+    check.set_sensitive(!here);
+    if here {
+        ticks.borrow_mut()[index] = false;
+    }
+    row.add_suffix(check);
+    row.set_activatable_widget(Some(check));
+    check.connect_toggled(glib::clone!(
+        #[strong] ticks,
+        #[strong] refresh,
+        move |check| {
+            ticks.borrow_mut()[index] = check.is_active();
+            refresh();
         }
-        row.append(&symbol);
-        row.append(&words);
-        row.append(check);
-        let click = gtk::GestureClick::new();
-        click.connect_released(glib::clone!(#[weak] check, move |_, _, _, _| check.set_active(!check.is_active())));
-        row.add_controller(click);
-        check.connect_toggled(glib::clone!(
-            #[strong] ticks,
-            #[strong] refresh,
-            move |check| {
-                ticks.borrow_mut()[index] = check.is_active();
-                refresh();
-            }
-        ));
+    ));
     (row, missing)
 }
 
-fn everything_row(everything: &gtk::CheckButton, boxes: &[gtk::CheckButton], all_mb: u64) -> gtk::Box {
+fn everything_row(everything: &gtk::CheckButton, boxes: &[gtk::CheckButton], all_mb: u64) -> gtk::ListBox {
     let boxes = boxes.to_vec();
-    let all_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    all_row.set_margin_start(24);
-    all_row.set_margin_end(24);
-    let all_words = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    all_words.set_hexpand(true);
-    let all_name = gtk::Label::new(Some("Download Everything"));
-    all_name.add_css_class("heading");
-    all_name.set_xalign(0.0);
-    let all_line = gtk::Label::new(Some(&format!("All of the above · {} · best on Wi-Fi", size_text(all_mb))));
-    all_line.add_css_class("dim-label");
-    all_line.set_xalign(0.0);
-    all_words.append(&all_name);
-    all_words.append(&all_line);
-    all_row.append(&all_words);
-    all_row.append(everything);
+    let row = adw::ActionRow::new();
+    row.set_title("Download Everything");
+    row.set_subtitle(&format!("All of the above · {} · best on Wi-Fi", size_text(all_mb)));
+    everything.set_valign(gtk::Align::Center);
+    row.add_suffix(everything);
+    row.set_activatable_widget(Some(everything));
     everything.update_property(&[gtk::accessible::Property::Label("Download Everything")]);
     everything.connect_toggled(glib::clone!(
         #[strong] boxes,
@@ -402,37 +377,17 @@ fn everything_row(everything: &gtk::CheckButton, boxes: &[gtk::CheckButton], all
             }
         }
     ));
-    all_row
+    boxed_list(&[row])
 }
 
-fn counts_step(state: &App, dialog: &adw::Dialog) -> gtk::Box {
-    let counts = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    counts.set_valign(gtk::Align::Center);
-    for text in [
-        "Your photographs, names, places and file paths are never included.",
-        "Nothing is sent in this version. Your choice is kept for later.",
-    ] {
-        let label = gtk::Label::new(Some(text));
-        label.set_wrap(true);
-        label.set_justify(gtk::Justification::Center);
-        label.add_css_class("dim-label");
-        counts.append(&label);
+fn boxed_list(rows: &[adw::ActionRow]) -> gtk::ListBox {
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.add_css_class("boxed-list");
+    for row in rows {
+        list.append(row);
     }
-    let no_thanks = gtk::Button::with_label("No Thanks");
-    let share = primary_button("Share Counts");
-    let four = step_page(4, "Help improve Numa", "Numa can send anonymous counts of how it is used, such as which tools and how long they take. Nothing is sent unless you choose Share Counts.", &counts);
-    four.append(&button_row(&[&no_thanks], &share));
-    for (button, choice) in [(&no_thanks, "no"), (&share, "yes")] {
-        button.connect_clicked(glib::clone!(
-            #[strong] state,
-            #[weak] dialog,
-            move |_| {
-                let _ = state.catalog.set_setting(USAGE_COUNTS, choice);
-                dialog.close();
-            }
-        ));
-    }
-    four
+    list
 }
 
 fn ask_once(state: &App, dialog: &adw::Dialog) {

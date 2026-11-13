@@ -76,7 +76,7 @@ impl TileSource {
     }
 }
 
-fn colour(dark: bool, role: &str) -> String {
+pub(super) fn colour(dark: bool, role: &str) -> String {
     let token = match (dark, role) {
         (true, _) => format!("map_{role}"),
         (false, "land") => "ground_sheet".into(),
@@ -86,7 +86,8 @@ fn colour(dark: bool, role: &str) -> String {
         (false, "label") => "label".into(),
         (false, _) => "name".into(),
     };
-    let (dark_half, light_half) = TOKENS.split_once("/* light */").unwrap_or((TOKENS, ""));
+    let tokens = TOKENS.split_once("/* contrast */").map_or(TOKENS, |(tokens, _)| tokens);
+    let (dark_half, light_half) = tokens.split_once("/* light */").unwrap_or((tokens, ""));
     let find = |half: &str| {
         half.lines().find_map(|line| line.trim().strip_prefix(&format!("@define-color numa_{token} "))?.strip_suffix(';').map(str::to_string))
     };
@@ -217,6 +218,26 @@ pub(super) fn fit(map: &libshumate::Map, area: [f64; 4], padding: f64, most: f64
     let (latitude, longitude) = unmercator((west + east) / 2.0, (north + south) / 2.0);
     viewport.set_zoom_level(zoom);
     map.center_on(latitude, longitude);
+    settle(map);
+}
+
+pub(super) fn settle(map: &libshumate::Map) {
+    again(map, 3);
+}
+
+fn again(map: &libshumate::Map, times: u8) {
+    if times == 0 {
+        return;
+    }
+    map.add_tick_callback(move |map, _| {
+        if let Some(viewport) = map.viewport() {
+            viewport.notify("zoom-level");
+        }
+
+        let map = map.clone();
+        glib::idle_add_local_once(move || again(&map, times - 1));
+        glib::ControlFlow::Break
+    });
 }
 
 pub(super) fn pixel(map: &libshumate::Map, latitude: f64, longitude: f64) -> Option<(f64, f64)> {

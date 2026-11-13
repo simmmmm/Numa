@@ -267,7 +267,7 @@ impl Controls {
         let strip_location = switch("Remove location", "Leave the camera's GPS position out");
         let strip_serials = switch("Remove camera serials", "Leave the body's and the lens's serial numbers out");
         let no_ai_training = switch("Prohibit AI training", "Say in the file that it may not be used to train AI");
-        let keywords = switch("Stars and keywords", "The rating, and the people and albums it is in");
+        let keywords = switch("Stars, caption and keywords", "The rating and the caption, and the people and albums it is in");
         let creator = entry("Creator");
         let copyright = entry("Copyright");
         let details = adw::ExpanderRow::new();
@@ -681,6 +681,10 @@ pub(super) struct State {
 
     pub(super) button: Rc<RefCell<Option<gtk::Button>>>,
     pub(super) library_export: Rc<RefCell<Option<gtk::Button>>>,
+
+    pub(super) copy: gio::SimpleAction,
+
+    pub(super) copying: Rc<Cell<bool>>,
 }
 
 impl State {
@@ -689,8 +693,35 @@ impl State {
             settings: Rc::new(RefCell::new(export::ExportSettings::default())),
             button: Rc::new(RefCell::new(None)),
             library_export: Rc::new(RefCell::new(None)),
+            copy: gio::SimpleAction::new_stateful("copy-photo", Some(glib::VariantTy::UINT32), &export::COPY_EDGES[0].to_variant()),
+            copying: Rc::new(Cell::new(false)),
         }
     }
+}
+
+pub(super) fn copy_menu() -> gio::Menu {
+    let sizes = gio::Menu::new();
+    for edge in export::COPY_EDGES {
+        let item = gio::MenuItem::new(Some(&format!("{edge} px")), None);
+        item.set_action_and_target_value(Some("win.copy-photo"), Some(&edge.to_variant()));
+        sizes.append_item(&item);
+    }
+    sizes
+}
+
+pub(super) fn install_copy_action(state: &App, window: &adw::ApplicationWindow) {
+    let copy = &state.export.copy;
+    copy.set_state(&exporting::copy_edge(&state.catalog).to_variant());
+    copy.connect_activate(glib::clone!(
+        #[strong] state,
+        move |action, edge| {
+            let Some(edge) = edge.and_then(|edge| edge.get::<u32>()).filter(|edge| export::COPY_EDGES.contains(edge)) else { return };
+            action.set_state(&edge.to_variant());
+            exporting::keep_copy_edge(&state.catalog, edge);
+            exporting::copy_photo(&state, exporting::copy_job(&state));
+        }
+    ));
+    window.add_action(copy);
 }
 
 #[cfg(test)]

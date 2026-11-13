@@ -51,12 +51,20 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.51.0" date="2026-11-13">
+      <description>
+        <p>An album now has its own page. It shows a cover and the photographs by day. You can add chapters, each with a name and a few words. A photograph can have a caption.</p>
+        <p>An album can become a trip or a wedding. A trip has places, a map and the route between them, and a link that you can give to guests. A wedding starts with six chapters.</p>
+        <p>Your albums are the same on each device that uses the same Numa Home.</p>
+        <p>You can copy a photograph with your edits and paste it into another app, at 4096, 2048 or 1080 px. Right-click a photograph, or press Ctrl+Shift+C. Numa remembers the size.</p>
+        <p>Canon DNG files from Adobe's converter no longer turn magenta.</p>
+      </description>
+    </release>
     <release version="0.50.0" date="2026-11-06">
       <description>
         <p>Numa now opens with a short setup the first time you start it. You choose your photograph folder, you can connect Numa Home, and you choose which extra files to download. Nothing downloads until you say so.</p>
         <p>The pick flag, the stars, the edited mark and the info mark now have their own colours, so you can tell them apart at a glance.</p>
         <p>If two devices edit the same photograph, Numa Home keeps the older edit as a version, uses the newer one, and tells you. A Numa Home library whose folder you deleted is made again and no longer stays offline.</p>
-        <p>On iPhone, iPad and Mac, removing a library from a device and moving a photograph to the Trash no longer lose your edits and stars. Numa Home sign-in over plain http is refused unless the server is on your own network.</p>
       </description>
     </release>
     <release version="0.49.0" date="2026-11-03">

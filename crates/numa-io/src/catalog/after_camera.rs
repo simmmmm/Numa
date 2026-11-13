@@ -14,6 +14,11 @@ impl Catalog {
             .prepare("SELECT album FROM album_photos WHERE photo_id = ?1")
             .and_then(|mut statement| statement.query_map([jpeg], |row| row.get(0))?.collect())
             .map_err(text)?;
+
+        let album_of = |key: &String| self.chapter(key).ok().flatten().map(|chapter| chapter.album);
+        let raws: Vec<String> = super::chapters::rows_of(&to.conn, raw)?.iter().filter_map(album_of).collect();
+        let chapters: Vec<String> =
+            super::chapters::rows_of(&from.conn, jpeg)?.into_iter().filter(|key| album_of(key).is_some_and(|album| !raws.contains(&album))).collect();
         let names: Vec<(String, Vec<u8>)> = from
             .conn
             .prepare("SELECT p.name, n.embedding FROM named_faces n JOIN people p ON p.id = n.person_id WHERE n.photo_id = ?1")
@@ -22,6 +27,11 @@ impl Catalog {
         let position: Option<(f64, f64)> = from
             .conn
             .query_row("SELECT latitude, longitude FROM positions WHERE photo_id = ?1", [jpeg], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()
+            .map_err(text)?;
+        let caption: Option<(String, i64)> = from
+            .conn
+            .query_row("SELECT text, changed FROM captions WHERE photo_id = ?1", [jpeg], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()
             .map_err(text)?;
 
@@ -35,6 +45,7 @@ impl Catalog {
         for album in &albums {
             tx.execute("INSERT OR IGNORE INTO album_photos (album, photo_id) VALUES (?1, ?2)", params![album, raw]).map_err(text)?;
         }
+        super::chapters::give_rows(&tx, &chapters, raw)?;
         for (name, embedding) in &names {
             tx.execute("INSERT OR IGNORE INTO people (name) VALUES (?1)", params![name]).map_err(text)?;
             let person: i64 = tx.query_row("SELECT id FROM people WHERE name = ?1", params![name], |row| row.get(0)).map_err(text)?;
@@ -44,11 +55,20 @@ impl Catalog {
         if let Some((latitude, longitude)) = position {
             tx.execute("INSERT OR IGNORE INTO positions VALUES (?1, ?2, ?3)", params![raw, latitude, longitude]).map_err(text)?;
         }
+
+        let moved = match &caption {
+            Some((caption, changed)) => tx.execute("INSERT OR IGNORE INTO captions VALUES (?1, ?2, ?3)", params![raw, caption, changed]).map_err(text)? > 0,
+            None => false,
+        };
         tx.commit().map_err(text)?;
 
         let tx = from.conn.unchecked_transaction().map_err(text)?;
         tx.execute("UPDATE photos SET rating = 0, flag = 0 WHERE id = ?1", [jpeg]).map_err(text)?;
         tx.execute("DELETE FROM album_photos WHERE photo_id = ?1", [jpeg]).map_err(text)?;
+        tx.execute("DELETE FROM chapter_photos WHERE photo_id = ?1", [jpeg]).map_err(text)?;
+        if moved {
+            tx.execute("DELETE FROM captions WHERE photo_id = ?1", [jpeg]).map_err(text)?;
+        }
         tx.commit().map_err(text)
     }
 
@@ -174,6 +194,9 @@ mod tests {
         let album = catalog.create_album("Tonight").unwrap();
         catalog.set_in_album(&album, &[jpeg], true).unwrap();
         catalog.set_positions(&[(jpeg, 35.0, 135.0)]).unwrap();
+        catalog.set_caption(jpeg, "Written on the train.").unwrap();
+        let chapter = catalog.add_chapter(&album, "Evening", None, None).unwrap();
+        catalog.put_in_chapter(&album, Some(&chapter.key), &[jpeg]).unwrap();
         let mut tone = Document::new("DSCF0001.JPG".into());
         tone.set_crop([0.1, 0.1, 0.5, 0.5], 0.0);
         catalog.save_edits(jpeg, &tone).unwrap();
@@ -189,6 +212,9 @@ mod tests {
         assert_eq!((of("DSCF0001.JPG").rating, of("DSCF0001.JPG").flag, of("DSCF0001.JPG").edited), (0, Flag::None, true));
         assert_eq!(catalog.load_edits(raw).unwrap().and_then(|edit| edit.crop()), edit.crop());
         assert_eq!(catalog.positions(&[raw, jpeg]).unwrap().len(), 2);
+        assert_eq!(catalog.captions_of(&[raw, jpeg]).unwrap(), HashMap::from([(raw, "Written on the train.".to_string())]), "the caption is the raw's now");
+        assert_eq!(catalog.chapter_of(&album).unwrap(), HashMap::from([(raw, chapter.key.clone())]), "LIB-064: the chapter is the raw's now");
+        assert!(catalog.chapters_of(jpeg).unwrap().is_empty());
         let in_album = catalog.photos(library.id, &Filter { album: Some(album), ..Filter::default() }).unwrap();
         assert_eq!(in_album.iter().map(|photo| photo.id).collect::<Vec<_>>(), vec![raw]);
         let raws = catalog.photos(library.id, &Filter { file_type: FileType::Raw, ..Filter::default() }).unwrap();
@@ -236,7 +262,11 @@ mod tests {
         let (jpeg, raw) = (id_of(&catalog, &library, "A.JPG"), id_of(&catalog, &library, "A.RAF"));
         catalog.set_rating(jpeg, 2).unwrap();
         catalog.set_rating(raw, 5).unwrap();
+        catalog.set_caption(jpeg, "The phone's words.").unwrap();
+        catalog.set_caption(raw, "The card's words.").unwrap();
         catalog.take_place(jpeg, raw, None).unwrap();
+        assert_eq!(catalog.captions_of(&[raw, jpeg]).unwrap().len(), 2, "each keeps its own words");
+        assert_eq!(catalog.caption(raw).unwrap().as_deref(), Some("The card's words."));
         let photos = catalog.photos(library.id, &Filter { file_type: FileType::Raw, ..Filter::default() }).unwrap();
         assert_eq!((photos.len(), photos[0].rating, photos[0].edited), (1, 5, false));
         std::fs::remove_dir_all(&dir).unwrap();

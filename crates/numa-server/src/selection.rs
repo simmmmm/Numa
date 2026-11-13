@@ -107,7 +107,12 @@ pub struct Album {
 }
 
 pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(asked): Json<Album>) -> Result<Json<Value>, Fail> {
-    let ids: Vec<i64> = chosen(&server, &me, &asked.ids, false, false, Level::Edit)?.into_iter().map(|(_, photo)| photo.id).collect();
+
+    let empty = asked.ids.is_empty() && asked.album.is_none() && asked.name.is_some();
+    let ids: Vec<i64> = match empty {
+        true => Vec::new(),
+        false => chosen(&server, &me, &asked.ids, false, false, Level::Edit)?.into_iter().map(|(_, photo)| photo.id).collect(),
+    };
     if asked.album.as_deref().is_some_and(|key| !crate::shared::may_add(&server.store, &me, key)) {
         return Err(Fail(StatusCode::FORBIDDEN, "You may look at this album, not add to it.".into()));
     }

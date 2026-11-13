@@ -28,6 +28,8 @@ enum Look {
     Face,
 
     Dot,
+
+    Route,
 }
 
 #[derive(Clone)]
@@ -239,6 +241,7 @@ fn fill_now(state: &App) {
             continue;
         }
         let mut tint = 0;
+        let kinds = if key == "album" { state.catalog.album_kinds().unwrap_or_default() } else { HashMap::new() };
         for place in &places {
             let look = match (place, key) {
                 (Place::Library(library), "library") if home_sync::is_home(state, library.id) => Look::House,
@@ -247,6 +250,7 @@ fn fill_now(state: &App) {
                     Look::Tint((tint - 1) % TINTS)
                 }
                 (Place::Person(_), "person") => Look::Face,
+                (Place::Album(album), "album") if kinds.get(album) == Some(&numa::io::catalog::AlbumKind::Trip) => Look::Route,
                 (Place::Album(_), "album") => Look::Dot,
                 _ => continue,
             };
@@ -363,6 +367,13 @@ fn entry_row(state: &App, place: &Place, look: Look) -> gtk::ListBoxRow {
             }
             dot.set_valign(gtk::Align::Center);
             line.append(&dot);
+        }
+        Look::Route => {
+            let route = gtk::Image::from_icon_name("numa-route-symbolic");
+            route.set_pixel_size(14);
+            route.add_css_class("side-route");
+            route.update_property(&[gtk::accessible::Property::Label("A trip")]);
+            line.append(&route);
         }
         Look::House => {
             let house = gtk::Image::from_icon_name("go-home-symbolic");

@@ -392,6 +392,10 @@ pub(super) fn refresh_info(state: &App) {
 
 fn append_photo_groups(state: &App, photo: &OpenPhoto) {
 
+    if let Source::Photo { id, .. } = &photo.source {
+        state.info.page.append(&caption_group(state, *id));
+    }
+
     if let Some(people) = people_group(state, photo) {
         state.info.page.append(&people);
     }
@@ -514,6 +518,7 @@ fn place_group(state: &App, path: &Path) -> Option<adw::PreferencesGroup> {
         parent.queue_resize();
     }
     map.center_on(latitude, longitude);
+    map_view::settle(&map);
     dot.set_location(latitude, longitude);
     AT.set((latitude, longitude));
     let credit = gtk::Label::new(Some("\u{a9} OpenStreetMap"));

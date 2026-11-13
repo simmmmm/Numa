@@ -1131,7 +1131,7 @@ button.numa-primary:disabled {
 }
 
 .print {
-    border-radius: 6px;
+    border-radius: 8px;
     background: @raised_bg_color;
     box-shadow: 0 2px 6px alpha(black, 0.55);
 }
@@ -1185,6 +1185,8 @@ button.numa-primary:disabled {
     border-radius: 999px;
     background: @numa_label;
 }
+
+.side-route { color: @numa_label; margin: 0 -3px; }
 .library-tint.tint-0 { background: @numa_library_tint_0; }
 .library-tint.tint-1 { background: @numa_library_tint_1; }
 .library-tint.tint-2 { background: @numa_library_tint_2; }
@@ -1339,7 +1341,7 @@ toolbarview.see-through windowtitle .subtitle {
 .tidy-frame:hover,
 .tidy-frame:checked {
     padding: 0;
-    border-radius: 6px;
+    border-radius: 8px;
     background: @raised_bg_color;
 }
 
@@ -1493,7 +1495,7 @@ button.rail-tab {
 }
 
 .preset-card {
-    border-radius: 6px;
+    border-radius: 8px;
     background: rgba(0, 0, 0, 0.35);
 }
 
@@ -1762,9 +1764,43 @@ actionbar.floating-bar > revealer > box {
     padding: 4px 6px;
 }
 
+toastoverlay.over-bar toast {
+    margin-bottom: calc(32px + 32px + 8px);
+}
+
 button.scope-chevron,
 menubutton.scope-chevron > button {
     min-height: 20px;
     min-width: 20px;
     padding: 0;
 }
+
+button.album-photo { padding: 0; min-height: 0; min-width: 0; border-radius: 6px; }
+.album-tile { border-radius: 6px; }
+textview.album-words, textview.album-words > text { background: none; font-size: 15px; }
+.album-offer { padding: 8px 0; }
+.album-map { border-radius: 14px; background: @numa_map_sea; }
+
+.album-route { color: alpha(@window_fg_color, 0.74); }
+entry.album-add { min-height: 32px; }
+
+.album-cover { border-radius: 12px; }
+
+.album-say { padding: 32px 24px 8px; background: linear-gradient(to bottom, alpha(@window_bg_color, 0), @window_bg_color 32px); }
+.album-scrim { background: linear-gradient(to bottom, alpha(@window_bg_color, 0.4), alpha(@window_bg_color, 0) 24%, alpha(@window_bg_color, 0) 36%, alpha(@window_bg_color, 0.8) 72%, @window_bg_color); }
+
+.album-part { min-height: 4px; border-radius: 2px; background: alpha(@window_fg_color, 0.28); }
+.album-part.been { background: @window_fg_color; }
+
+.album-rail { min-width: 2px; background: @window_fg_color; }
+.album-rail.ahead { min-width: 0; background: none; border-left: 2px dotted alpha(@window_fg_color, 0.5); }
+.album-mark { min-width: 24px; min-height: 24px; border-radius: 12px; background: @window_fg_color; color: @window_bg_color; font-size: 12px; font-weight: 800; }
+.album-mark.ahead { background: @window_bg_color; color: alpha(@window_fg_color, 0.7); box-shadow: inset 0 0 0 2px alpha(@window_fg_color, 0.5); }
+.album-mark.here { box-shadow: 0 0 0 4px alpha(@window_fg_color, 0.28); }
+
+.album-day { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; background: alpha(@window_fg_color, 0.06); }
+.album-days > flowboxchild { padding: 0; min-height: 0; }
+button.album-more { border-radius: 6px; background: @raised_bg_color; box-shadow: none; }
+
+button.album-stop { padding: 8px; border-radius: 8px; font-weight: 400; }
+button.album-stop.here { background: @raised_bg_color; }

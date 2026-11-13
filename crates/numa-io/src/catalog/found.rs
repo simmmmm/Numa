@@ -55,6 +55,14 @@ impl Catalog {
             .map_err(text)?;
         Ok(())
     }
+
+    pub fn faces_in(&self, photo_id: i64) -> Option<u32> {
+        let (open, local) = self.photo(photo_id).ok()?;
+        open.conn
+            .query_row("SELECT faces FROM analysis WHERE photo_id = ?1", [local], |row| row.get(0))
+            .ok()
+            .flatten()
+    }
 }
 
 fn grid_blob((width, height, cells): &(usize, usize, Vec<u8>)) -> Result<Vec<u8>, String> {

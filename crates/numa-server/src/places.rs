@@ -10,6 +10,7 @@ use numa_io::places::{from_positions, nearest};
 use serde_json::{json, Value};
 
 use crate::auth::Signed;
+use crate::store::Account;
 use crate::{Fail, Server};
 
 pub fn named(at: (f32, f32)) -> Option<(&'static str, &'static str, &'static str)> {
@@ -28,7 +29,7 @@ fn positions(server: &Server, photos: &[&Photo]) -> Vec<(f64, f64)> {
     some(photos).filter_map(|photo| crate::map::spot_of(server, photo)).map(|spot| (f64::from(spot.at.0), f64::from(spot.at.1))).collect()
 }
 
-pub fn names_for(server: &Server, own: &[(f64, f64)], paths: &[PathBuf], times: &[i64]) -> Value {
+pub fn names_for(server: &Server, me: &Account, own: &[(f64, f64)], paths: &[PathBuf], times: &[i64]) -> Value {
     let names = from_positions(own);
     if !names.is_empty() {
         return json!({ "from": "gps", "names": names });
@@ -40,8 +41,8 @@ pub fn names_for(server: &Server, own: &[(f64, f64)], paths: &[PathBuf], times: 
         times.get(at).is_some_and(|&time| time <= when + HOUR)
     };
     let files: std::collections::HashSet<&PathBuf> = paths.iter().collect();
-    let everyone: Vec<i64> = server.home.all_libraries().iter().map(|library| library.id).collect();
-    let others = server.home.photos(&everyone);
+    let seen: Vec<i64> = server.home.libraries(me).iter().map(|library| library.id).collect();
+    let others = server.home.photos(&seen);
     let beside: Vec<&Photo> = others.iter().filter(|photo| !files.contains(&photo.path) && near(crate::home::when(photo))).collect();
     let names = from_positions(&positions(server, &beside));
     json!({ "from": if names.is_empty() { None } else { Some("borrowed") }, "names": names })
@@ -63,7 +64,7 @@ pub async fn library(State(server): State<Arc<Server>>, Signed(me): Signed, Path
         let times: Vec<i64> = photos.iter().map(crate::home::when).collect();
         let own = positions(&server, &photos.iter().collect::<Vec<_>>());
         let paths: Vec<PathBuf> = photos.into_iter().map(|photo| photo.path).collect();
-        names_for(&server, &own, &paths, &times)
+        names_for(&server, &me, &own, &paths, &times)
     })
     .await
     .map_err(|err| Fail(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;

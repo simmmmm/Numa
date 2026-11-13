@@ -315,6 +315,29 @@ impl<'a> DngDecoder<'a> {
 
   fn get_blacklevels(&self, raw: &IFD) -> Result<Option<BlackLevel>> {
     let cpp = raw.get_entry(TiffCommonTag::SamplesPerPixel).map(|entry| entry.force_usize(0)).unwrap_or(1);
+    // BlackLevelDeltaH and BlackLevelDeltaV hold the black that changes by
+    // column and by row. Adobe's converter writes some Canon raws with all of
+    // their black there and a BlackLevel of 0. Their means go on every level,
+    // as dcraw, LibRaw and RawTherapee do.
+    // ponytail: one mean, not the value of each row (±1.5 of 4095 on the Canon
+    // DNGs measured). Upstream rawler applies each row and column
+    // (`BlackLevel::with_deltas`); take that when this copy is next synced.
+    let delta: f32 = [DngTag::BlackLevelDeltaH, DngTag::BlackLevelDeltaV]
+      .into_iter()
+      .filter_map(|tag| raw.get_entry(tag))
+      .filter(|entry| entry.value.count() > 0)
+      .map(|entry| (0..entry.value.count()).map(|i| entry.value.force_f32(i)).sum::<f32>() / entry.value.count() as f32)
+      .sum();
+    let shifted = |levels: Vec<Rational>| -> Vec<Rational> {
+      if delta == 0.0 {
+        return levels;
+      }
+      let shift = |level: Rational| if level.d == 0 { level } else { Rational::new_f32(level.n as f32 / level.d as f32 + delta, 1000) };
+      levels.into_iter().map(shift).collect()
+    };
+    if raw.get_entry(TiffCommonTag::BlackLevels).is_none() && delta != 0.0 {
+      return Ok(Some(BlackLevel::new(&shifted(vec![Rational::new(0, 1); cpp]), 1, 1, cpp)));
+    }
     if let Some(entry) = raw.get_entry(TiffCommonTag::BlackLevels) {
       let levels = match &entry.value {
         Value::Short(black) => black.iter().copied().map(Rational::from).collect(),
@@ -334,7 +357,7 @@ impl<'a> DngDecoder<'a> {
           log::warn!("File has BlackLevelRepeatDim tag but with invalid length: {}", value.len());
         }
       }
-      Ok(Some(BlackLevel::new(&levels, repeat.1, repeat.0, cpp)))
+      Ok(Some(BlackLevel::new(&shifted(levels), repeat.1, repeat.0, cpp)))
     } else {
       Ok(None)
     }

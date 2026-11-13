@@ -53,8 +53,10 @@ pub fn routes() -> Router<Arc<Server>> {
         .route("/manifest.webmanifest", get(|| async { file("application/manifest+json", include_bytes!("web/manifest.webmanifest")) }))
         .route("/mark.png", get(|| async { file("image/png", include_bytes!("../../../data/branding/mark.png")) }))
 
+        .route("/mapstyle.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/mapstyle.js")) }))
         .route("/map.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/map.js")) }))
         .route("/search.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/search.js")) }))
+        .route("/album.js", get(|| async { file("text/javascript; charset=utf-8", include_bytes!("web/album.js")) }))
         .route("/map/6.13.0/maplibre-gl.mjs", get(|| async { kept("text/javascript; charset=utf-8", include_bytes!("../../../data/map/maplibre-gl.mjs")) }))
         .route("/map/6.13.0/maplibre-gl-worker.mjs", get(|| async { kept("text/javascript; charset=utf-8", include_bytes!("../../../data/map/maplibre-gl-worker.mjs")) }))
         .route("/map/6.13.0/maplibre-gl.css", get(|| async { kept("text/css; charset=utf-8", include_bytes!("../../../data/map/maplibre-gl.css")) }))

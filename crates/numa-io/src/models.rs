@@ -28,7 +28,7 @@ pub const MODELS: [(&str, &str, &[ModelFile]); if cfg!(target_vendor = "apple") 
     )]),
 
     #[cfg(not(target_vendor = "apple"))]
-    ("SFace", "Recognising people · non-commercial use only · 39 MB", &[(
+    ("SFace", "Recognising people · Apache-2.0, trained on research-only data · 39 MB", &[(
         "face_recognition_sface_2021dec.onnx",
         "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
         38_696_353, "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
@@ -225,6 +225,8 @@ pub const AUTHORS: [(&str, &str); 16] = [
 
 pub const NONCOMMERCIAL: &str = "non-commercial use only";
 
+pub const RESEARCH_DATA: &str = "Apache-2.0, trained on research-only data";
+
 pub fn licence(description: &str) -> &str {
     description.split(" · ").nth(1).unwrap_or("")
 }
@@ -238,7 +240,9 @@ mod tests {
         for (name, description, _) in MODELS {
             assert!(AUTHORS.iter().any(|(model, _)| *model == name), "{name} has no author");
             if licence(description) == NONCOMMERCIAL {
-                assert!(["ViTMatte-S", "SFace"].contains(&name), "{name}: {description}");
+                assert!(["ViTMatte-S"].contains(&name), "{name}: {description}");
+            } else if licence(description) == RESEARCH_DATA {
+                assert!(["SFace"].contains(&name), "{name}: {description}");
             } else {
                 assert!(["MIT", "Apache-2.0", "MIT, Apache-2.0"].contains(&licence(description)), "{name}: {description}");
             }
@@ -248,9 +252,9 @@ mod tests {
     #[test]
     #[cfg(not(target_vendor = "apple"))]
     fn the_noncommercial_models_say_so_on_linux() {
-        for wanted in ["ViTMatte-S", "SFace"] {
+        for (wanted, says) in [("ViTMatte-S", NONCOMMERCIAL), ("SFace", RESEARCH_DATA)] {
             let (_, description, _) = MODELS.iter().find(|(name, ..)| *name == wanted).unwrap();
-            assert_eq!(licence(description), NONCOMMERCIAL, "{wanted}");
+            assert_eq!(licence(description), says, "{wanted}");
         }
     }
 

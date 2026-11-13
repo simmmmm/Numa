@@ -466,6 +466,8 @@ fn fill_photo_menu(state: &App) {
 
     edit.append(Some("How It Was Made"), Some("editor.how-made"));
     state.editor_page.photo_menu.insert_section(0, None, &edit);
+
+    state.editor_page.photo_menu.insert_section(1, Some("Copy"), &copy_menu());
 }
 
 fn build_info_panel(state: &App) -> gtk::Revealer {

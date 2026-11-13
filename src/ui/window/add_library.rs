@@ -35,6 +35,10 @@ pub(super) fn add_library_then(state: &App, window: &adw::ApplicationWindow, the
                 state.libraries.filter.borrow_mut().in_one_library();
                 reload_libraries(&state);
                 select_library(&state, library.id);
+
+                if state.stack.visible_child_name().as_deref() == Some("today") {
+                    super::today::show(&state);
+                }
                 state.toast(&match count {
                     0 => format!("No photos found in {}", path.display()),
                     n => format!("Added {n} photo(s) from {}", path.display()),

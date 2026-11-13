@@ -1,7 +1,7 @@
 use super::*;
 
 fn remote(id: &str, path: &str, updated: i64) -> Remote {
-    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), edited: false, updated, albums: None, deleted: None }
+    Remote { id: id.into(), path: path.into(), size: 10, mtime: 0, taken: None, rating: 0, flag: "none".into(), edited: false, updated, albums: None, caption: None, deleted: None }
 }
 
 fn local(path: &str, edits: Option<&str>, rating: u8) -> Local {
@@ -31,13 +31,13 @@ fn new_on_the_server_comes_down_and_new_here_goes_up() {
     assert_eq!(plan(&sent, &[remote("7", "2026/b.raf", 5)], &[local("2026/b.RAF", None, 0)]), vec![]);
 }
 
-const NONE: Parts = Parts { edits: false, marks: false, albums: false };
-const EDITS: Parts = Parts { edits: true, marks: false, albums: false };
-const MARKS: Parts = Parts { edits: false, marks: true, albums: false };
-const BOTH: Parts = Parts { edits: true, marks: true, albums: false };
+const NONE: Parts = Parts { edits: false, marks: false, albums: false, caption: false };
+const EDITS: Parts = Parts { edits: true, ..NONE };
+const MARKS: Parts = Parts { marks: true, ..NONE };
+const BOTH: Parts = Parts { edits: true, marks: true, ..NONE };
 
 fn both(path: &str, id: &str, theirs: Option<Remote>, down: Parts, up: Parts) -> Step {
-    Step::Both { path: path.into(), id: id.into(), theirs, down, up, albums: None }
+    Step::Both { path: path.into(), id: id.into(), theirs, down, up, albums: None, caption: None }
 }
 
 #[test]
@@ -154,12 +154,15 @@ fn the_command_lines_keep_the_token_off_them() {
         get_edits("nas", "3"),
         put_marks("nas", "3", 4, "pick"),
         super::super::send_into("nas", Path::new("/tmp/a.raf"), "ab", "1", "2026/03 Rome"),
+        put_caption("nas", "3", "The harbour at six."),
     ];
     for argv in &all {
         assert!(argv.windows(2).any(|pair| pair[0] == "--header" && pair[1] == "@-"), "{argv:?}");
     }
     assert_eq!(all[1].last().unwrap(), "http://nas:8283/api/v1/libraries/1/photos?since=5");
     assert_eq!(all[5].last().unwrap(), "http://nas:8283/api/v1/send/a.raf?library=1&dir=2026%2F03%20Rome");
+    assert_eq!(all[6].last().unwrap(), "http://nas:8283/api/v1/photos/3/caption");
+    assert!(all[6].iter().any(|word| word == "{\"caption\":\"The harbour at six.\"}"));
 }
 
 #[test]
@@ -260,7 +263,7 @@ fn a_photograph_put_back_comes_back_on_the_other_side() {
     assert_eq!(plan(&asked, &[], &[local("a.raf", None, 0)]), vec![]);
 
     let steps = plan(&after_here, &[back.clone()], &[local("a.raf", None, 3)]);
-    assert_eq!(steps, vec![Step::Both { path: "a.raf".into(), id: "7".into(), theirs: Some(back), down: EDITS, up: Parts::ALL, albums: None }]);
+    assert_eq!(steps, vec![Step::Both { path: "a.raf".into(), id: "7".into(), theirs: Some(back), down: EDITS, up: Parts::ALL, albums: None, caption: None }]);
 }
 
 #[test]
@@ -309,17 +312,17 @@ fn albums_go_both_ways_by_name() {
 
     let best = Local { albums: names(&["Rome", "Best"]), ..a.clone() };
     let up = Parts { albums: true, ..NONE };
-    assert_eq!(plan(&kept, &[], &[best]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: None, down: NONE, up, albums: Some(names(&["Best", "Rome"])) }]);
+    assert_eq!(plan(&kept, &[], &[best]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: None, down: NONE, up, albums: Some(names(&["Best", "Rome"])), caption: None }]);
 
     let theirs = Remote { albums: Some(vec![]), ..remote("1", "a.raf", 120) };
     let down = Parts { edits: true, albums: true, ..NONE };
-    assert_eq!(plan(&kept, &[theirs.clone()], &[a.clone()]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(theirs), down, up: NONE, albums: Some(vec![]) }]);
+    assert_eq!(plan(&kept, &[theirs.clone()], &[a.clone()]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(theirs), down, up: NONE, albums: Some(vec![]), caption: None }]);
 
     assert_eq!(plan(&kept, &[remote("1", "a.raf", 50)], &[a.clone()]), vec![]);
 
     let before = link(&[("1", &a, 50)]);
     let said = Remote { albums: Some(names(&["Rome"])), ..remote("1", "a.raf", 50) };
-    assert_eq!(plan(&before, &[said.clone()], &[a]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(said), down: NONE, up: NONE, albums: Some(names(&["Rome"])) }]);
+    assert_eq!(plan(&before, &[said.clone()], &[a]), vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs: Some(said), down: NONE, up: NONE, albums: Some(names(&["Rome"])), caption: None }]);
 }
 
 #[test]
@@ -381,7 +384,7 @@ fn the_way_is_kept_with_the_link() {
     assert_eq!(restored("{\"restored\":1,\"photos\":[{\"id\":12,\"path\":\"2026/a.raf\"}]}\n200"), Ok(vec![("12".into(), "2026/a.raf".into())]));
     assert_eq!(photos("[{\"id\":null,\"path\":\"a.raf\",\"deleted\":5,\"updated\":5}]\n200").unwrap()[0], Remote { size: 0, ..deleted("", "a.raf", 5) });
     assert_eq!(albums_at_home("[{\"key\":\"k1\",\"name\":\"Rome\",\"count\":3}]\n200"), Ok(vec![("k1".into(), "Rome".into())]));
-    assert!(list_changes("nas", "1", 5, true).last().unwrap().to_string_lossy().ends_with("/libraries/1/photos?since=5&gone=1&synced=1"));
+    assert!(list_changes("nas", "1", 5, true, 1).last().unwrap().to_string_lossy().ends_with("/libraries/1/photos?since=5&gone=1&rules=1&synced=1"));
     assert!(delete_photos("nas", &["3".into()]).iter().any(|arg| arg == "{\"ids\":[3]}"));
 }
 
@@ -425,4 +428,127 @@ fn a_round_killed_part_way_resumes_from_what_it_kept() {
     let steps = plan(&saved, &[home_a, home_b.clone()], &[a, b]);
     assert_eq!(steps, vec![both("b.raf", "2", Some(home_b), EDITS, Parts::ALL)], "a.raf is settled; b.raf is looked at");
     assert!(keep_now(KEEP_EVERY) && !keep_now(1) && !keep_now(0));
+}
+
+fn captioned(path: &str, caption: &str, changed: i64) -> Local {
+    Local { caption: caption.into(), caption_changed: changed, ..local(path, None, 0) }
+}
+
+fn agreed_on(ours: &Local, caption: &str) -> Link {
+    Link { photos: BTreeMap::from([(ours.path.clone(), Kept { caption: Some(caption.into()), ..ours.kept("1", 50) })]), ..Link::default() }
+}
+
+fn worded(theirs: Option<Remote>, down: Parts, up: Parts, caption: &str) -> Vec<Step> {
+    vec![Step::Both { path: "a.raf".into(), id: "1".into(), theirs, down, up, albums: None, caption: Some(caption.into()) }]
+}
+
+const WORDS: Parts = Parts { caption: true, ..NONE };
+
+#[test]
+fn a_caption_goes_the_way_it_changed() {
+    let a = captioned("a.raf", "The harbour at six.", 40);
+    let kept = agreed_on(&a, "The harbour at six.");
+    assert_eq!(plan(&kept, &[], &[a.clone()]), vec![]);
+
+    let longer = captioned("a.raf", "The harbour at six, before the boats.", 90);
+    assert_eq!(plan(&kept, &[], &[longer]), worded(None, NONE, WORDS, "The harbour at six, before the boats."));
+    assert_eq!(plan(&kept, &[], &[captioned("a.raf", "", 0)]), worded(None, NONE, WORDS, ""));
+
+    let down = Parts { edits: true, caption: true, ..NONE };
+    let theirs = Remote { caption: Some("The harbour.".into()), ..remote("1", "a.raf", 120) };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[a.clone()]), worded(Some(theirs), down, NONE, "The harbour."));
+    let theirs = Remote { caption: Some(String::new()), ..remote("1", "a.raf", 120) };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[a.clone()]), worded(Some(theirs), down, NONE, ""));
+
+    let theirs = Remote { caption: Some(" The harbour at six.\r\n".into()), ..remote("1", "a.raf", 50) };
+    assert_eq!(plan(&kept, &[theirs], &[a]), vec![]);
+}
+
+#[test]
+fn words_written_on_both_sides_are_both_kept() {
+    let agreed = Some("The harbour.");
+    assert_eq!(caption(agreed, "Six in the morning.", "Before the boats left.", true), "Before the boats left.\n\nSix in the morning.");
+    assert_eq!(caption(agreed, "Six in the morning.", "Before the boats left.", false), "Six in the morning.\n\nBefore the boats left.");
+
+    assert_eq!(caption(agreed, "The harbour at six.", "The harbour at six. Before the boats left.", false), "The harbour at six. Before the boats left.");
+
+    assert_eq!(caption(agreed, "", "Before the boats left.", false), "Before the boats left.");
+    assert_eq!(caption(agreed, "Six in the morning.", "", true), "Six in the morning.");
+
+    assert_eq!(caption(None, "Six in the morning.", "", true), "Six in the morning.");
+    assert_eq!(caption(None, "", "", false), "");
+    assert_eq!(caption(None, "Six.", "Boats.", false), "Six.\n\nBoats.");
+
+    let (long, other) = ("a".repeat(crate::catalog::CAPTION_LIMIT - 3), "The other side's words.");
+    assert_eq!(caption(agreed, &long, other, true), other);
+    assert_eq!(caption(agreed, &long, other, false), long);
+
+    let ours = captioned("a.raf", "Six in the morning.", 150);
+    let kept = agreed_on(&ours, "The harbour.");
+    let theirs = Remote { caption: Some("Before the boats left.".into()), ..remote("1", "a.raf", 160) };
+    let down = Parts { edits: true, caption: true, ..NONE };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[ours.clone()]), worded(Some(theirs.clone()), down, WORDS, "Before the boats left.\n\nSix in the morning."));
+    let later = Local { caption_changed: 170, ..ours.clone() };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[later]), worded(Some(theirs.clone()), down, WORDS, "Six in the morning.\n\nBefore the boats left."));
+
+    let undated = Local { caption_changed: 0, ..ours };
+    assert_eq!(plan(&kept, &[theirs.clone()], &[undated]), worded(Some(theirs), down, WORDS, "Six in the morning.\n\nBefore the boats left."));
+}
+
+#[test]
+fn a_caption_waits_for_a_home_that_knows_captions() {
+    let ours = captioned("a.raf", "The harbour at six.", 90);
+    let before = Link { everything: true, rules: ALBUMS, ..link(&[("1", &ours, 50)]) };
+    assert_eq!(plan(&before, &[], &[ours.clone()]), vec![]);
+    assert_eq!(plan(&before, &[remote("1", "a.raf", 50)], &[ours.clone()]), vec![]);
+    assert_eq!(rules_after(&before, &[remote("1", "a.raf", 50)]), ALBUMS);
+
+    assert_eq!(listed_after(&before), 100);
+
+    let said = Remote { caption: Some(String::new()), ..remote("1", "a.raf", 50) };
+    assert_eq!(plan(&before, &[said.clone()], &[ours.clone()]), worded(Some(said.clone()), NONE, WORDS, "The harbour at six."));
+    assert_eq!(rules_after(&before, &[said.clone()]), RULES);
+
+    assert_eq!(rules_after(&Link { rules: RULES, ..before.clone() }, &[]), RULES);
+    assert_eq!(rules_after(&Link::default(), &[deleted("1", "a.raf", 60)]), ALBUMS);
+
+    let plain = local("a.raf", None, 0);
+    let unsaid = Link { everything: true, rules: ALBUMS, ..link(&[("1", &plain, 50)]) };
+    assert_eq!(plan(&unsaid, &[said.clone()], &[plain]), worded(Some(said), NONE, NONE, ""));
+
+    assert_eq!(caption_put("{\"error\":\"Not found\"}\n404"), Ok(None));
+    assert_eq!(caption_put("\n405"), Ok(None));
+    assert_eq!(caption_put("{\"updated\":77}\n200"), Ok(Some(77)));
+    assert_eq!(caption_put("\n401"), Err(Failure::SignIn("Sign in again".into())));
+    assert_eq!(caption_put("{\"error\":\"A caption is at most 2000 characters.\"}\n400"), Err(Failure::Said("A caption is at most 2000 characters.".into())));
+}
+
+#[test]
+fn a_pairing_keeps_the_words_of_both_sides() {
+    let ours = captioned("a.raf", "The harbour at six.", 90);
+    let theirs = Remote { edited: true, rating: 4, caption: Some(String::new()), ..remote("1", "a.raf", 120) };
+    let steps = plan(&Link::default(), &[theirs.clone()], &[ours]);
+    assert_eq!(steps, worded(Some(theirs), BOTH, WORDS, "The harbour at six."));
+
+    let theirs = Remote { caption: Some("Before the boats left.".into()), ..remote("1", "a.raf", 120) };
+    let rated = local("a.raf", None, 3);
+    let down = Parts { edits: true, caption: true, ..NONE };
+    assert_eq!(plan(&Link::default(), &[theirs.clone()], &[rated]), worded(Some(theirs), down, BOTH, "Before the boats left."));
+}
+
+#[test]
+fn words_here_win_over_a_delete_and_an_arrival_is_kept_with_its_words() {
+    let a = captioned("a.raf", "The harbour.", 40);
+    let kept = agreed_on(&a, "The harbour.");
+    assert_eq!(plan(&kept, &[deleted("1", "a.raf", 120)], &[a]), vec![Step::Trash { path: "a.raf".into(), id: "1".into() }]);
+    let written = captioned("a.raf", "The harbour at six.", 110);
+    assert_eq!(plan(&kept, &[deleted("1", "a.raf", 120)], &[written]), vec![Step::Restore("a.raf".into())]);
+
+    let arrives = Remote { caption: Some(" Before the boats left.\n".into()), ..remote("7", "b.raf", 5) };
+    assert_eq!(arrives.kept().caption.as_deref(), Some("Before the boats left."));
+    assert_eq!(arrives.at_home().caption, " Before the boats left.\n");
+    assert_eq!((remote("7", "b.raf", 5).kept().caption, remote("7", "b.raf", 5).at_home().caption), (None, String::new()));
+
+    let before: Link = serde_json::from_str(r#"{"address":"nas","library":"2","name":"Garden","since":9,"photos":{"a.raf":{"id":"1","edits":"","rating":0,"flag":"none","updated":5}}}"#).unwrap();
+    assert_eq!(before.photos["a.raf"].caption, None);
 }

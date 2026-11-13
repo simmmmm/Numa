@@ -172,13 +172,21 @@ pub struct Kept {
 
     #[serde(default)]
     photo: i64,
+
+    #[serde(default)]
+    caption: Option<String>,
+
+    #[serde(default)]
+    chapters: Vec<String>,
 }
 
 pub fn keep(catalog: &Catalog, photo: &Photo, author: Option<String>) -> Kept {
     let names = catalog.albums_of(&[photo.id]).unwrap_or_default().remove(&photo.id).unwrap_or_default();
     let albums = catalog.albums().unwrap_or_default().into_iter().filter(|(_, name)| names.contains(name)).map(|(key, _)| key).collect();
     let edits = catalog.edits_json(photo.id).ok().flatten();
-    Kept { rating: photo.rating, flag: crate::photos::flag_name(photo.flag).into(), edits, albums, author, photo: photo.id }
+    let caption = catalog.caption(photo.id).ok().flatten();
+    let chapters = catalog.chapters_of(photo.id).unwrap_or_default();
+    Kept { rating: photo.rating, flag: crate::photos::flag_name(photo.flag).into(), edits, albums, author, photo: photo.id, caption, chapters }
 }
 
 impl Kept {
@@ -248,6 +256,15 @@ pub fn give(catalog: &Catalog, id: i64, path: &FilePath, kept: &Kept) {
     }
     for key in &kept.albums {
         let _ = catalog.set_in_album(key, &[id], true);
+    }
+    if let Some(caption) = &kept.caption {
+        let _ = catalog.set_caption(id, caption);
+    }
+
+    for key in &kept.chapters {
+        if let Ok(Some(chapter)) = catalog.chapter(key) {
+            let _ = catalog.put_in_chapter(&chapter.album, Some(key), &[id]);
+        }
     }
 }
 

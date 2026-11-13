@@ -1,9 +1,9 @@
 /* Written by dev/tokens.py from data/design/tokens.json. Do not edit. */
 :root {
-  --ground-window: #242424;
-  --ground-view: #1e1e1e;
-  --ground-raised: #303030;
-  --ground-sheet: #1b1b1b;
+  --ground-window: #141414;
+  --ground-view: #141414;
+  --ground-raised: #2a2a2a;
+  --ground-sheet: #141414;
   --ground-page: #141414;
   --ground-photo: #0e0e0e;
   --ground-chip: #2a2a2a;
@@ -67,22 +67,26 @@
   --space-16: 16px;
   --space-18: 18px;
   --space-20: 20px;
+  --space-24: 24px;
   --space-30: 30px;
+  --space-32: 32px;
   --space-44: 44px;
+  --space-48: 48px;
+  --space-64: 64px;
   --slider-row: 46px;
   --edge: 16px;
   --gap: 12px;
 
   --radius-track: 1px;
   --radius-histogram: 4px;
-  --radius-print: 6px;
-  --radius-pill: 7px;
+  --radius-print: 8px;
+  --radius-pill: 8px;
   --radius-action: 8px;
-  --radius-card: 10px;
+  --radius-card: 12px;
   --radius-chip: 16px;
-  --radius-sheet: 18px;
-  --radius-hud: 22px;
-  --radius-photo-card: 14px;
+  --radius-sheet: 20px;
+  --radius-hud: 24px;
+  --radius-photo-card: 12px;
 
   --track-height: 2px;
   --dot-panel: 10px;
@@ -95,6 +99,9 @@
   --rail-tab: 54px;
   --mark-intro: 140px;
   --mark-bar: 34px;
+  --hit-pointer: 28px;
+  --hit-touch: 44px;
+  --row: 28px;
 
   --shadow-print-front: 0 8px 20px rgba(0, 0, 0, 0.6);
   --shadow-print-back: 0 6px 16px rgba(0, 0, 0, 0.55);

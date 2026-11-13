@@ -8,7 +8,16 @@ pub const LINK: &str = "numa-home";
 
 pub const TRASHED: &str = "numa-home-trashed";
 
-pub const RULES: u32 = 1;
+pub const RULES: u32 = 2;
+
+pub const ALBUMS: u32 = 1;
+
+pub fn rules_after(link: &Link, remote: &[Remote]) -> u32 {
+    match remote.iter().any(|photo| photo.deleted.is_none() && photo.caption.is_some()) {
+        true => RULES,
+        false => link.rules.max(ALBUMS),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,6 +89,9 @@ pub struct Kept {
 
     #[serde(default)]
     pub albums: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub caption: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -92,6 +104,9 @@ pub struct Local {
     pub albums: Vec<String>,
 
     pub changed: i64,
+
+    pub caption: String,
+    pub caption_changed: i64,
 }
 
 impl Local {
@@ -109,6 +124,10 @@ impl Local {
         self.rating == kept.rating && self.flag == kept.flag
     }
 
+    fn caption_agrees(&self, kept: &Kept) -> bool {
+        kept.caption.as_ref().is_none_or(|agreed| *agreed == self.caption)
+    }
+
     fn untouched(&self) -> bool {
         self.edits.is_none() && self.rating == 0 && self.flag == "none"
     }
@@ -122,6 +141,7 @@ impl Local {
             updated,
             canon: Some(canon(self.edits.as_deref())),
             albums: None,
+            caption: None,
         }
     }
 }
@@ -151,6 +171,9 @@ pub struct Remote {
     pub albums: Option<Vec<String>>,
 
     #[serde(default)]
+    pub caption: Option<String>,
+
+    #[serde(default)]
     pub deleted: Option<i64>,
 }
 
@@ -165,6 +188,7 @@ impl Remote {
             taken: self.taken,
             rating: self.rating,
             flag: flag(&self.flag),
+            caption: self.caption.clone().unwrap_or_default(),
         }
     }
 
@@ -178,6 +202,7 @@ impl Remote {
             updated: self.updated,
             canon: (!self.edited).then(String::new),
             albums: self.albums.clone(),
+            caption: self.caption.as_deref().map(crate::catalog::tidy_caption),
         }
     }
 }
@@ -227,13 +252,15 @@ pub struct Parts {
     pub marks: bool,
 
     pub albums: bool,
+
+    pub caption: bool,
 }
 
 impl Parts {
-    pub const ALL: Parts = Parts { edits: true, marks: true, albums: false };
+    pub const ALL: Parts = Parts { edits: true, marks: true, albums: false, caption: false };
 
     pub fn any(self) -> bool {
-        self.edits || self.marks || self.albums
+        self.edits || self.marks || self.albums || self.caption
     }
 }
 
@@ -242,7 +269,7 @@ pub enum Step {
 
     Arrive(Remote),
 
-    Both { path: String, id: String, theirs: Option<Remote>, down: Parts, up: Parts, albums: Option<Vec<String>> },
+    Both { path: String, id: String, theirs: Option<Remote>, down: Parts, up: Parts, albums: Option<Vec<String>>, caption: Option<String> },
 
     Send(String),
 
@@ -279,6 +306,29 @@ pub fn same_albums(a: &[String], b: &[String]) -> bool {
     set(a) == set(b)
 }
 
+pub fn caption(agreed: Option<&str>, ours: &str, theirs: &str, theirs_later: bool) -> String {
+    let (first, second) = match theirs_later {
+        true => (theirs, ours),
+        false => (ours, theirs),
+    };
+    match agreed {
+        _ if ours == theirs => ours.to_string(),
+        Some(agreed) if agreed == ours => theirs.to_string(),
+        Some(agreed) if agreed == theirs => ours.to_string(),
+        _ if first.contains(second) => first.to_string(),
+        _ if second.contains(first) => second.to_string(),
+        _ => Some(format!("{first}\n\n{second}")).filter(|both| both.chars().count() <= crate::catalog::CAPTION_LIMIT).unwrap_or_else(|| first.to_string()),
+    }
+}
+
+fn captions(kept: Option<&Kept>, ours: &Local, theirs: Option<&Remote>) -> Option<(String, String)> {
+    let agreed = kept.and_then(|kept| kept.caption.as_deref());
+    let home = theirs.and_then(|theirs| theirs.caption.as_deref()).map(crate::catalog::tidy_caption).or_else(|| agreed.map(str::to_string))?;
+
+    let theirs_later = theirs.is_some_and(|theirs| ours.caption_changed > 0 && theirs.updated > ours.caption_changed);
+    Some((caption(agreed, &ours.caption, &home, theirs_later), home))
+}
+
 pub fn plan(link: &Link, remote: &[Remote], local: &[Local], trashed: &BTreeMap<String, i64>) -> Vec<Step> {
     let here: HashMap<&str, &Local> = local.iter().map(|photo| (photo.path.as_str(), photo)).collect();
 
@@ -297,7 +347,7 @@ pub fn plan(link: &Link, remote: &[Remote], local: &[Local], trashed: &BTreeMap<
                 seen.insert(path);
                 match here.get(path) {
 
-                    Some(ours) if !ours.edits_agree(kept) || !ours.marks_agree(kept) => Some(Step::Restore(path.to_string())),
+                    Some(ours) if !ours.edits_agree(kept) || !ours.marks_agree(kept) || !ours.caption_agrees(kept) => Some(Step::Restore(path.to_string())),
                     _ => Some(Step::Trash { path: path.to_string(), id: kept.id.clone() }),
                 }
             }
@@ -357,21 +407,25 @@ fn both(path: &str, kept: &Kept, ours: &Local, theirs: Option<&Remote>) -> Optio
     };
     let theirs_albums = theirs.and_then(|theirs| theirs.albums.as_deref()).or(kept.albums.as_deref());
     let albums = theirs_albums.map(|theirs_albums| (self::albums(kept.albums.as_deref(), &ours.albums, theirs_albums), theirs_albums));
+    let caption = captions(Some(kept), ours, theirs);
     let down = Parts {
 
         edits: changed.is_some(),
         marks: down_marks,
         albums: albums.as_ref().is_some_and(|(merged, _)| !same_albums(merged, &ours.albums)),
+        caption: caption.as_ref().is_some_and(|(merged, _)| *merged != ours.caption),
     };
     let up = Parts {
         edits: !ours.edits_agree(kept),
         marks: up_marks,
         albums: albums.as_ref().is_some_and(|(merged, theirs)| !same_albums(merged, theirs)),
+        caption: caption.as_ref().is_some_and(|(merged, theirs)| merged != theirs),
     };
     let albums = albums.map(|(merged, _)| merged);
+    let caption = caption.map(|(merged, _)| merged);
 
-    let first = kept.albums.is_none() && albums.is_some();
-    (down.any() || up.any() || first).then(|| Step::Both { path: path.to_string(), id: kept.id.clone(), theirs: theirs.cloned(), down, up, albums })
+    let first = (kept.albums.is_none() && albums.is_some()) || (kept.caption.is_none() && caption.is_some());
+    (down.any() || up.any() || first).then(|| Step::Both { path: path.to_string(), id: kept.id.clone(), theirs: theirs.cloned(), down, up, albums, caption })
 }
 
 fn fresh(ours: &Local, theirs: &Remote) -> Option<Step> {
@@ -385,7 +439,11 @@ fn fresh(ours: &Local, theirs: &Remote) -> Option<Step> {
     down.edits = true;
     down.albums = albums.as_ref().is_some_and(|(merged, _)| moved(merged, &ours.albums));
     up.albums = albums.as_ref().is_some_and(|(merged, theirs)| moved(merged, theirs));
-    Some(Step::Both { path: ours.path.clone(), id: theirs.id.clone(), theirs: Some(theirs.clone()), down, up, albums: albums.map(|(merged, _)| merged) })
+    let caption = captions(None, ours, Some(theirs));
+    down.caption = caption.as_ref().is_some_and(|(merged, _)| *merged != ours.caption);
+    up.caption = caption.as_ref().is_some_and(|(merged, theirs)| merged != theirs);
+    let (albums, caption) = (albums.map(|(merged, _)| merged), caption.map(|(merged, _)| merged));
+    Some(Step::Both { path: ours.path.clone(), id: theirs.id.clone(), theirs: Some(theirs.clone()), down, up, albums, caption })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -446,7 +504,7 @@ pub fn device_label(account: &str, device: &str) -> String {
 }
 
 pub fn listed_after(link: &Link) -> i64 {
-    match link.everything && link.rules >= RULES {
+    match link.everything && link.rules >= ALBUMS {
         true => link.since,
         false => 0,
     }
@@ -567,15 +625,30 @@ pub fn list_photos(address: &str, library: &str, since: i64) -> Vec<OsString> {
     get(address, &format!("libraries/{}/photos?since={since}", escaped(library)))
 }
 
-pub fn list_changes(address: &str, library: &str, since: i64, synced: bool) -> Vec<OsString> {
+pub fn list_changes(address: &str, library: &str, since: i64, synced: bool, rules: u32) -> Vec<OsString> {
     let synced = if synced { "&synced=1" } else { "" };
-    get(address, &format!("libraries/{}/photos?since={since}&gone=1{synced}", escaped(library)))
+    get(address, &format!("libraries/{}/photos?since={since}&gone=1&rules={rules}{synced}", escaped(library)))
 }
 
 fn post(address: &str, path: &str, body: &serde_json::Value) -> Vec<OsString> {
     let body = body.to_string();
     let rest = ["--max-time", "120", "--request", "POST", "--header", "@-", "--header", "Content-Type: application/json", "--data-binary", &body];
     curl(words(&rest), format!("{}/api/v1/{path}", base(address)))
+}
+
+pub fn album_call(address: &str, call: &super::album_sync::Call) -> Vec<OsString> {
+    let mut rest = vec!["--max-time", "120", "--request", call.method, "--header", "@-"];
+    if let Some(body) = &call.body {
+        rest.extend(["--header", "Content-Type: application/json", "--data-binary", body.as_str()]);
+    }
+    curl(words(&rest), format!("{}/api/v1/{}", base(address), call.path))
+}
+
+pub fn status_and_body(out: &str) -> (u16, String) {
+    match out.rsplit_once('\n') {
+        Some((body, status)) => (status.trim().parse().unwrap_or(0), body.to_string()),
+        None => (out.trim().parse().unwrap_or(0), String::new()),
+    }
 }
 
 fn numbers(ids: &[String]) -> Vec<i64> {
@@ -731,6 +804,19 @@ pub fn put_marks(address: &str, id: &str, rating: u8, flag: &str) -> Vec<OsStrin
     let body = serde_json::json!({ "rating": rating, "flag": flag }).to_string();
     let rest = ["--request", "PUT", "--header", "@-", "--header", "Content-Type: application/json", "--data-binary", &body];
     curl(words(&rest), format!("{}/api/v1/photos/{}/marks", base(address), escaped(id)))
+}
+
+pub fn put_caption(address: &str, id: &str, caption: &str) -> Vec<OsString> {
+    let body = serde_json::json!({ "caption": caption }).to_string();
+    let rest = ["--request", "PUT", "--header", "@-", "--header", "Content-Type: application/json", "--data-binary", &body];
+    curl(words(&rest), format!("{}/api/v1/photos/{}/caption", base(address), escaped(id)))
+}
+
+pub fn caption_put(out: &str) -> Result<Option<i64>, Failure> {
+    match out.rsplit_once('\n').map_or(out, |(_, status)| status).trim() {
+        "404" | "405" => Ok(None),
+        _ => updated(out).map(Some),
+    }
 }
 
 pub fn edits_put(out: &str) -> Result<(i64, bool), Failure> {

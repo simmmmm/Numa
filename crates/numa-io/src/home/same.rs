@@ -182,7 +182,7 @@ mod tests {
         let tied = seeded(&[here("b.raf", 20)], &[home("holiday/b.raf", 20, "2")], &[(0, 0)]);
         let link = Link { photos: tied, ..Link::default() };
         let local = Local { path: "b.raf".to_string(), rating: 4, flag: "none".to_string(), ..Local::default() };
-        let remote = Remote { id: "2".to_string(), path: "holiday/b.raf".to_string(), size: 20, mtime: 0, taken: None, rating: 0, flag: "none".to_string(), edited: false, updated: 5, albums: None, deleted: None };
+        let remote = Remote { id: "2".to_string(), path: "holiday/b.raf".to_string(), size: 20, mtime: 0, taken: None, rating: 0, flag: "none".to_string(), edited: false, updated: 5, albums: None, caption: None, deleted: None };
         let steps = plan(&link, &[remote], &[local], &BTreeMap::new());
 
         let [Step::Both { path, up, down, .. }] = steps.as_slice() else { panic!("{steps:?}") };

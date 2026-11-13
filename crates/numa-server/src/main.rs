@@ -1,5 +1,6 @@
 mod accounts;
 mod activity;
+mod album;
 mod book;
 mod auth;
 mod by;
@@ -36,6 +37,8 @@ mod sync;
 mod tidy;
 mod timeline;
 mod today;
+mod trip_link;
+mod album_sync;
 mod video;
 
 use std::collections::HashMap;
@@ -265,6 +268,13 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/people", get(timeline::people))
         .route("/api/v1/albums", get(timeline::albums))
         .route("/api/v1/albums/{key}", put(timeline::rename_album).delete(timeline::delete_album))
+        .route("/api/v1/albums/{key}/page", get(album::page))
+        .route("/api/v1/albums/{key}/kind", put(album::kind))
+        .route("/api/v1/albums/{key}/chapters", post(album::add_chapter))
+        .route("/api/v1/albums/{key}/places", post(album::take_places))
+        .route("/api/v1/chapters/{key}", put(album::change_chapter).delete(album::remove_chapter))
+        .route("/api/v1/chapters/{key}/photos", post(album::put_photos))
+        .route("/api/v1/places/find", get(album::find_places))
 
         .route("/api/v1/background", get(activity::status))
         .route("/api/v1/safe", get(safe::show))
@@ -305,6 +315,7 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/{id}/frame", get(edit::frame))
         .route("/api/v1/photos/{id}/edits", get(photos::edits_get).put(photos::edits_put).layer(axum::extract::DefaultBodyLimit::max(64 << 20)))
         .route("/api/v1/photos/{id}/marks", put(photos::marks))
+        .route("/api/v1/photos/{id}/caption", put(photos::caption))
         .route("/api/v1/libraries/{id}/photos", get(timeline::in_step))
         .route("/api/v1/libraries/{id}/restore", post(manage::restore_paths))
         .route("/api/v1/libraries/{id}/sync", delete(sync::stop))
@@ -315,6 +326,8 @@ fn router(server: Arc<Server>) -> Router {
         .merge(share::routes())
         .merge(shared::routes())
         .merge(collect::routes())
+        .merge(trip_link::routes())
+        .merge(album_sync::routes())
         .layer(axum::middleware::from_fn_with_state(server.clone(), guard::guarded))
         .with_state(server)
 }

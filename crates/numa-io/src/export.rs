@@ -206,6 +206,8 @@ pub struct Description {
     pub people: Vec<String>,
     pub albums: Vec<String>,
 
+    pub caption: Option<String>,
+
     pub position: Option<(f64, f64)>,
 }
 
@@ -233,7 +235,17 @@ impl Default for ExportSettings {
     }
 }
 
+pub const COPY_EDGES: [u32; 3] = [4096, 2048, 1080];
+
+pub fn copy_edge(kept: Option<u64>) -> u32 {
+    COPY_EDGES.into_iter().find(|&edge| Some(edge as u64) == kept).unwrap_or(COPY_EDGES[0])
+}
+
 impl ExportSettings {
+
+    pub fn copy(edge: u32) -> Self {
+        Self { format: Format::Png, size: Size::LongEdge(edge), metadata: false, keywords: false, ..Self::default() }
+    }
 
     pub fn summary(&self) -> String {
         let size = match self.size {
@@ -532,6 +544,9 @@ fn described_exif(settings: &ExportSettings, source: Option<&Path>, about: &Desc
     if settings.keywords {
         if about.rating > 0 {
             own.push((0x4746, Value::Short(vec![about.rating.min(5) as u16])));
+        }
+        if let Some(caption) = about.caption.as_deref().map(str::trim).filter(|caption| !caption.is_empty()) {
+            own.push((0x010E, Value::from(caption)));
         }
         let keywords: Vec<&str> = about.people.iter().chain(&about.albums).map(String::as_str).collect();
         if !keywords.is_empty() {
@@ -988,7 +1003,7 @@ mod tests {
             copyright: "© 2026 Sam".into(),
             ..ExportSettings::default()
         };
-        let about = Description { rating: 4, people: vec!["Alex".into()], albums: vec!["Beach best".into()], position: None };
+        let about = Description { rating: 4, people: vec!["Alex".into()], albums: vec!["Beach best".into()], caption: Some("The tide going out.".into()), position: None };
         let block = described_exif(&settings, None, &about).expect("an EXIF block");
         let exif = ::exif::Reader::new().read_raw(block[10..].to_vec()).expect("a TIFF a reader can read");
 
@@ -998,6 +1013,7 @@ mod tests {
         };
         assert_eq!(text(::exif::Tag::Artist).as_deref(), Some("Sam"));
         assert_eq!(text(::exif::Tag::Copyright).as_deref(), Some("© 2026 Sam"));
+        assert_eq!(text(::exif::Tag::ImageDescription).as_deref(), Some("The tide going out."));
         let rating = exif.fields().find(|field| field.tag.number() == 0x4746).expect("Rating");
         assert_eq!(rating.value.get_uint(0), Some(4));
         let keywords = exif.fields().find(|field| field.tag.number() == 0x9C9E).expect("XPKeywords");
@@ -1105,6 +1121,22 @@ mod tests {
         let tall = RgbImage::from_pixel(200, 400, image::Rgb([1, 2, 3]));
         let small = fit(tall, &at(100));
         assert_eq!((small.width(), small.height()), (50, 100));
+    }
+
+    #[test]
+    fn a_copy_goes_at_its_long_edge_and_never_larger() {
+        let sized = |width, height, edge| {
+            let frame = fit(RgbImage::new(width, height), &ExportSettings::copy(edge));
+            (frame.width(), frame.height())
+        };
+        assert_eq!(sized(6000, 4000, 4096), (4096, 2731), "the size Numa Home's toast says");
+        assert_eq!(sized(6000, 4000, 2048), (2048, 1365));
+        assert_eq!(sized(4000, 6000, 1080), (720, 1080), "a portrait on its own long edge");
+        assert_eq!(sized(1200, 800, 4096), (1200, 800), "a smaller photo at its own size");
+        let settings = ExportSettings::copy(1080);
+        assert!(!settings.format.is_deep() && !settings.hdr && settings.proof.is_none());
+        assert_eq!(settings.written_space(), numa_core::space::ColourSpace::Srgb);
+        assert_eq!((copy_edge(Some(2048)), copy_edge(Some(2000)), copy_edge(None)), (2048, 4096, 4096));
     }
 
     #[test]

@@ -46,5 +46,5 @@ if [ "$(find data/map -type f ! -name NOTICE.txt ! -name SHA256SUMS | wc -l)" !=
     exit 1
 fi
 maplibre=$(grep -o 'maplibre-gl-js/blob/v[0-9.]*/' data/map/maplibre-gl.mjs | head -1 | grep -o '[0-9][0-9.]*[0-9]')
-grep -qF "MapLibre GL JS $maplibre " data/map/NOTICE.txt && grep -qF "/map/$maplibre/" crates/numa-server/src/pages.rs && grep -qF "/map/$maplibre/" crates/numa-server/src/web/map.js \
-    || { echo "MapLibre GL JS $maplibre: data/map/NOTICE.txt, pages.rs and map.js must each name it" >&2; exit 1; }
+grep -qF "MapLibre GL JS $maplibre " data/map/NOTICE.txt && grep -qF "/map/$maplibre/" crates/numa-server/src/pages.rs && grep -qF "/map/$maplibre/" crates/numa-server/src/web/mapstyle.js \
+    || { echo "MapLibre GL JS $maplibre: data/map/NOTICE.txt, pages.rs and mapstyle.js must each name it" >&2; exit 1; }

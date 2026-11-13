@@ -80,6 +80,22 @@ fn nearest_of(at: (f32, f32), places: impl Iterator<Item = &'static Place>) -> O
     town.or(any.filter(|(far, _)| *far <= 50.0).map(|(_, place)| place))
 }
 
+fn folded_names() -> &'static [String] {
+    static FOLDED: OnceLock<Vec<String>> = OnceLock::new();
+    FOLDED.get_or_init(|| places().iter().map(|place| crate::words::folded(&place.name)).collect())
+}
+
+pub fn find(words: &str, most: usize) -> Vec<&'static Place> {
+    let words = crate::words::folded(words.trim());
+    if words.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+        return Vec::new();
+    }
+    let names = folded_names();
+    let begins = names.iter().zip(places()).filter(|(name, _)| name.starts_with(&words));
+    let contains = names.iter().zip(places()).filter(|(name, _)| !name.starts_with(&words) && name.contains(&words));
+    begins.chain(contains).map(|(_, place)| place).take(most).collect()
+}
+
 fn joined(names: &[&str]) -> String {
     match names {
         [] => String::new(),
@@ -162,5 +178,35 @@ mod tests {
             let pointer = |place: Option<&'static Place>| place.map(|place| place as *const Place);
             assert_eq!(pointer(nearest(at)), pointer(nearest_of(at, places().iter())), "{at:?}");
         }
+    }
+
+    #[test]
+    fn a_name_typed_finds_the_towns_that_begin_with_it_before_those_that_contain_it() {
+        let found = find("kyo", 50);
+        assert_eq!(found[0].name, "Kyoto");
+        let (begins, contains): (Vec<&&Place>, Vec<&&Place>) = found.iter().partition(|place| crate::words::folded(&place.name).starts_with("kyo"));
+        assert!(found[..begins.len()].iter().all(|place| crate::words::folded(&place.name).starts_with("kyo")), "those that begin come first");
+        assert!(contains.iter().any(|place| place.name == "Tokyo"), "Tokyo only contains it");
+        assert!(found[..begins.len()].windows(2).all(|pair| pair[0].people >= pair[1].people), "the most people first");
+        assert_eq!(find("KYOTO", 3)[0].name, "Kyoto");
+        assert_eq!(find("  kyoto ", 3)[0].name, "Kyoto");
+    }
+
+    #[test]
+    fn accents_and_case_make_no_difference_and_one_letter_asks_nothing() {
+        assert_eq!(find("sao pa", 8)[0].name, "São Paulo");
+        assert_eq!(find("São Pa", 8)[0].name, "São Paulo");
+        assert_eq!(find("lisb", 8)[0].name, "Lisbon");
+        assert!(find("k", 8).is_empty());
+        assert!(find(" k ", 8).is_empty());
+        assert!(find("", 8).is_empty());
+        assert!(find("zzzzqq", 8).is_empty());
+    }
+
+    #[test]
+    fn at_most_the_asked_number_are_found() {
+        assert_eq!(find("sa", 8).len(), 8);
+        assert_eq!(find("sa", 3).len(), 3);
+        assert!(find("sa", 0).is_empty());
     }
 }

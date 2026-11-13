@@ -22,8 +22,8 @@ use crate::{Fail, Server};
 
 const DAY: i64 = 86_400;
 
-const DAYS: i64 = 30;
-const MOST_DAYS: i64 = 365;
+pub(crate) const DAYS: i64 = 30;
+pub(crate) const MOST_DAYS: i64 = 365;
 const MOST_PHOTOS: usize = 2000;
 
 const ROBOTS: &str = "noindex, nofollow, noarchive, noimageindex, noai, noimageai";
@@ -44,6 +44,10 @@ pub fn tables(store: &Store) -> Result<(), String> {
         )?;
 
         for column in ["kind TEXT NOT NULL DEFAULT 'proof'", "max_files INTEGER", "max_bytes INTEGER", "dest INTEGER"] {
+            let _ = conn.execute(&format!("ALTER TABLE shares ADD COLUMN {column}"), []);
+        }
+
+        for column in ["route INTEGER NOT NULL DEFAULT 1", "follows INTEGER NOT NULL DEFAULT 1", "kept TEXT"] {
             let _ = conn.execute(&format!("ALTER TABLE shares ADD COLUMN {column}"), []);
         }
 
@@ -166,16 +170,27 @@ fn key(store: &Store) -> Result<[u8; 32], Fail> {
 }
 
 pub(crate) fn limited(share: i64) -> Result<(), Fail> {
-    static BUCKETS: Mutex<Option<HashMap<i64, (f32, Instant)>>> = Mutex::new(None);
+    paced(share, 120.0, 2.0)
+}
+
+pub(crate) fn paced(share: i64, most: f32, a_second: f32) -> Result<(), Fail> {
     let mut buckets = BUCKETS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (tokens, then) = buckets.get_or_insert_with(HashMap::new).entry(share).or_insert((120.0, Instant::now()));
-    *tokens = (*tokens + then.elapsed().as_secs_f32() * 2.0).min(120.0);
+    let (tokens, then) = buckets.get_or_insert_with(HashMap::new).entry(share).or_insert((most, Instant::now()));
+    *tokens = (*tokens + then.elapsed().as_secs_f32() * a_second).min(most);
     *then = Instant::now();
     if *tokens < 1.0 {
         return Err(Fail(StatusCode::TOO_MANY_REQUESTS, "Too many pictures at once; wait a moment.".into()));
     }
     *tokens -= 1.0;
     Ok(())
+}
+
+static BUCKETS: Mutex<Option<HashMap<i64, (f32, Instant)>>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn spend(share: i64, ahead: f32) {
+    let mut buckets = BUCKETS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    buckets.get_or_insert_with(HashMap::new).insert(share, (-ahead, Instant::now()));
 }
 
 pub(crate) fn robots<R: IntoResponse>(response: R) -> Response {
@@ -344,7 +359,11 @@ async fn relink(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id):
     }
     let (token, digest) = auth::token();
     server.store.with(|conn| conn.execute("UPDATE shares SET token = ?2 WHERE id = ?1", params![id, digest])).map_err(Fail::internal)?;
-    let at = if share.kind == "collect" { "c" } else { "s" };
+    let at = match share.kind.as_str() {
+        "collect" => "c",
+        "trip" => "t",
+        _ => "s",
+    };
     Ok(Json(json!({ "link": format!("/{at}/{token}"), "base": crate::reach::base(&server.store) })))
 }
 

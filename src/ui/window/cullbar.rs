@@ -130,7 +130,7 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
             }
             let making = state.libraries.new_album.borrow().clone();
             count.set_text(&match (chosen, &making) {
-                (0, Some(name)) => format!("Choose photographs for {name}"),
+                (0, Some(making)) => format!("Choose photographs for {}", making.name),
                 (0, None) => "Choose photographs".to_string(),
                 _ => format!("{number} chosen"),
             });
@@ -139,8 +139,8 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
             }
             album.set_visible(chosen > 0 && making.is_none());
             into.set_visible(chosen > 0 && making.is_some());
-            if let Some(name) = &making {
-                into.set_label(&format!("Add to {name}"));
+            if let Some(making) = &making {
+                into.set_label(&format!("Add to {}", making.name));
             }
             merge.set_sensitive(chosen >= 2);
             export.set_label(&format!("Export {number}…"));
@@ -155,7 +155,24 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     ));
     state.loupe.reveal.connect_reveal_child_notify(move |_| update());
     keep_focus(bar.upcast_ref());
+    lift_toasts(state, &bar);
     bar
+}
+
+fn lift_toasts(state: &App, bar: &gtk::ActionBar) {
+    let lift = glib::clone!(
+        #[strong(rename_to = toasts)] state.toasts,
+        move |bar: &gtk::ActionBar| {
+            if bar.is_revealed() && bar.is_mapped() {
+                toasts.add_css_class("over-bar");
+            } else {
+                toasts.remove_css_class("over-bar");
+            }
+        }
+    );
+    bar.connect_revealed_notify(lift.clone());
+    bar.connect_map(lift.clone());
+    bar.connect_unmap(lift);
 }
 
 fn more_button(state: &App) -> gtk::MenuButton {

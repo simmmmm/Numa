@@ -104,23 +104,41 @@ pub(super) fn new_album(state: &App, window: &adw::ApplicationWindow) {
     let ask = adw::AlertDialog::new(Some("New Album"), None);
     ask.set_extra_child(Some(&entry));
     ask.add_response("cancel", "Cancel");
+
+    ask.add_response("empty", "No Photos Yet");
     ask.add_response("choose", "Choose Photographs");
     ask.set_default_response(Some("choose"));
     ask.set_close_response("cancel");
     ask.set_response_enabled("choose", false);
+    ask.set_response_enabled("empty", false);
     entry.connect_changed(glib::clone!(
         #[weak] ask,
-        move |entry| ask.set_response_enabled("choose", !entry.text().trim().is_empty())
+        move |entry| {
+            let named = !entry.text().trim().is_empty();
+            ask.set_response_enabled("choose", named);
+            ask.set_response_enabled("empty", named);
+        }
     ));
     let (state, typed) = (state.clone(), entry.clone());
     ask.connect_response(None, move |_, response| {
         let name = typed.text().trim().to_string();
+        if response == "empty" && !name.is_empty() {
+            match state.catalog.create_album(&name) {
+                Ok(key) => {
+                    refresh_places(&state);
+                    show_place(&state, Place::Album(key));
+                    album_round::after_a_round(&state);
+                }
+                Err(err) => state.toast(&String::from(err)),
+            }
+            return;
+        }
         if response != "choose" || name.is_empty() {
             return;
         }
 
         show_place(&state, Place::Everywhere);
-        state.libraries.new_album.replace(Some(name));
+        state.libraries.new_album.replace(Some(Making { name, into: None }));
         state.grid.wall.set_choosing(true);
         state.grid.wall.grab_focus();
     });
@@ -129,20 +147,38 @@ pub(super) fn new_album(state: &App, window: &adw::ApplicationWindow) {
 }
 
 pub(super) fn into_new_album(state: &App) {
-    let Some(name) = state.libraries.new_album.borrow().clone() else { return };
+    let Some(making) = state.libraries.new_album.borrow().clone() else { return };
     let ids = selected_ids(state);
     if ids.is_empty() {
         return;
     }
-    let made = state.catalog.create_album(&name).map_err(String::from).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key));
+    let made = match &making.into {
+
+        Some(key) => state.catalog.set_in_album(key, &ids, true).map(|()| key.clone()),
+        None => state.catalog.create_album(&making.name).map_err(String::from).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key)),
+    };
     match made {
         Ok(key) => {
             state.libraries.new_album.replace(None);
             state.grid.wall.unpick();
+            sidebar::fill(state);
             show_place(state, Place::Album(key));
         }
         Err(err) => state.toast(&err),
     }
+}
+
+#[derive(Clone)]
+pub(super) struct Making {
+    pub(super) name: String,
+    pub(super) into: Option<String>,
+}
+
+pub(super) fn choose_into(state: &App, key: &str, name: &str) {
+    show_place(state, Place::Everywhere);
+    state.libraries.new_album.replace(Some(Making { name: name.to_string(), into: Some(key.to_string()) }));
+    state.grid.wall.set_choosing(true);
+    state.grid.wall.grab_focus();
 }
 
 pub(super) fn add_selection_to_album(state: &App, key: &str) {

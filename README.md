@@ -14,6 +14,7 @@
 </p>
 
 <p align="center">
+  <a href="https://numa.photo"><b>numa.photo</b></a> ·
   <a href="https://github.com/simmmmm/Numa/releases"><b>Download</b></a> ·
   <a href="https://guide.numa.photo">User guide</a> ·
   <a href="#installing">Installing</a> ·

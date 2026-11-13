@@ -20,6 +20,7 @@ function h(tag, props, ...children) {
 const ICONS = {
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
   on: '<path d="m9 18 6-6-6-6"/>',
@@ -39,6 +40,7 @@ const ICONS = {
   play: '<path d="M7 4.5v15a.5.5 0 0 0 .77.42l12-7.5a.5.5 0 0 0 0-.84l-12-7.5A.5.5 0 0 0 7 4.5z"/>',
   live: '<circle cx="12" cy="12" r="2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 3"/>',
 
+  route: '<circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="6" r="2.3"/><path d="M8.3 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.7"/>',
   burst: '<path d="M9 3h11a2 2 0 0 1 2 2v9"/><path d="M6 6h11a2 2 0 0 1 2 2v9"/><path d="M4 10h2l1.5-2h3l1.5 2H14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"/><circle cx="9" cy="15.5" r="2.5"/>',
 };
 
@@ -136,6 +138,7 @@ async function start() {
 
   if (status.setup) return firstStart('account');
   try { state.me = await api('me'); } catch (_) { return; }
+  adoptCopyEdge(state.me);
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
@@ -201,6 +204,7 @@ function signIn() {
 async function signInAs(name, password) {
   const me = await api('login', { method: 'POST', body: JSON.stringify({ name, password, device: browserName() }) });
   state.me = await api('me').catch(() => ({ name: me.name, admin: me.admin, manage: false, must_change: me.must_change }));
+  adoptCopyEdge(state.me);
   state.libraries = null;
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
@@ -310,11 +314,14 @@ function placesNav(path, params) {
     const entries = h('div', { class: 'place-entries extra', inert: !open }, list);
     const fill = items => list.replaceChildren(...items.map(([value, name, count, look]) => {
       const chosen = owner === key && params.get(key) === String(value);
+
+      const row = key === 'album' && look;
+      const trip = row?.kind === 'trip';
       look = key === 'person' ? h('img', { class: 'face', src: thumb(look, 256), loading: 'lazy', alt: '' })
-        : h('i', { class: 'tint', style: { background: key === 'library' ? `var(--library-tint-${look})` : null } });
+        : trip ? routeMark() : h('i', { class: 'tint', style: { background: key === 'library' ? `var(--library-tint-${look})` : null } });
       const entry = h('button', { class: 'place-entry' + (chosen ? ' chosen' : ''), 'aria-current': chosen ? 'page' : null,
-        onclick: () => go('/', { [key]: value }) }, look, h('span', { class: 'name' }, name), h('span', { class: 'caption' }, grouped(count)));
-      if (key === 'album') entry.addEventListener('contextmenu', event => { event.preventDefault(); menuAt(event.clientX, event.clientY, albumItems({ key: value, name })); });
+        onclick: () => go('/', { [key]: value }) }, look, h('span', { class: 'name' }, name), h('span', { class: 'caption' }, (trip && tripSaid(row)) || grouped(count)));
+      if (key === 'album') entry.addEventListener('contextmenu', event => { event.preventDefault(); menuAt(event.clientX, event.clientY, albumItems({ key: value, name, kind: row?.kind, may_change: changeable(row) })); });
       peekOn(entry, `${key}=${encodeURIComponent(value)}`, name, count);
       return entry;
     }), ...(key === 'album' ? [h('button', { class: 'place-entry new', onclick: newAlbum }, h('i', { class: 'plus' }, icon('plus')), h('span', { class: 'name' }, S.newAlbumEll))] : []));
@@ -379,7 +386,7 @@ function navEntries(key, fill) {
     library: () => Promise.all([libraries(), api('timeline', { quiet: true }).then(tintsOf)]).then(([list, tints]) =>
       list.filter(one => one.count || !one.mine).map(one => [one.id, libraryName(one), one.count, tints.get(one.id) ?? 0])),
     person: () => api('people').then(list => list.map(one => [one.name, one.name, one.count, one.portrait])),
-    album: () => api('albums').then(list => list.map(one => [one.key, one.name, one.count])),
+    album: () => api('albums').then(list => list.map(one => [one.key, one.name, one.count, one])),
   }[key];
   asked().then(list => { navLists[key] = list; fill(list); }).catch(() => {});
 }
@@ -487,6 +494,8 @@ const GAP = 3;
 
 async function timeline(main, params) {
   const narrowed = narrowedBy(params);
+
+  if (await albumPage(main, params, narrowed)) return;
   const query = new URLSearchParams([...narrowed, ...sortQuery()]).toString();
 
   const asked = api('timeline' + (query ? '?' + query : '')).then(months => ({ months }), error => ({ error }));
@@ -523,7 +532,7 @@ async function timeline(main, params) {
   state.sections.forEach(section => near.observe(section.el));
 }
 
-const FILTERS = ['library', 'album', 'person', 'place', 'region', 'camera', 'date', 'by', 'thing', 'flag', 'rating', 'q'];
+const FILTERS = ['library', 'album', 'chapter', 'person', 'place', 'region', 'camera', 'date', 'by', 'thing', 'flag', 'rating', 'q'];
 const narrowedBy = params => FILTERS.filter(key => params.get(key)).map(key => [key, params.get(key)]);
 const narrow = (params, change) => go('/', { ...Object.fromEntries(narrowedBy(params)), ...change });
 
@@ -534,11 +543,12 @@ const ratedSaid = n => Number(n) === 5 ? starsOf(5) : phrase('starsOrMore', { n 
 
 const dateName = value => value.length === 4 ? value : value.length === 7 ? monthName(value) : dayOf.format(Date.parse(value + 'T00:00:00Z') || 0);
 
-async function filterRow(params, narrowed) {
+async function filterRow(params, narrowed, page = {}) {
   const owner = Object.keys(OWNERS).find(key => params.get(key));
 
   const [list, albums] = await Promise.all([libraries().catch(() => []), params.get('album') ? api('albums').catch(() => []) : []]);
   const library = list.find(one => String(one.id) === params.get('library'));
+  const albumRow = albums.find?.(album => album.key === params.get('album'));
   const names = {
     library: library ? libraryName(library) : S.library,
     album: albums.find(album => album.key === params.get('album'))?.name || S.album,
@@ -552,7 +562,7 @@ async function filterRow(params, narrowed) {
   const said = (key, short) => {
     const value = params.get(key);
     const name = value === 'Unknown' ? S.unknown : value;
-    return { library: names.library, album: names.album, date: dateName(value), by: short ? name : phrase('takenByName', { name }),
+    return { library: names.library, album: names.album, chapter: chapterSaid(value), date: dateName(value), by: short ? name : phrase('takenByName', { name }),
       flag: FLAGGED[flag], rating: ratedSaid(rating) }[key] ?? value;
   };
   const preset = (label, on, change, spoken) => h('button', { class: 'chip preset' + (on ? ' chosen' : ''), 'aria-pressed': String(on), 'aria-label': spoken, onclick: () => narrow(params, change) }, label);
@@ -569,7 +579,7 @@ async function filterRow(params, narrowed) {
     active, count, !params.get('q') && sortButton(params), sizeSlider());
 
   const book = (params.get('library') || params.get('album')) &&
-    h('button', { class: 'chip', title: S.bookTip, onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, S.forABook);
+    h('button', { class: 'chip', 'data-book': '', title: S.bookTip, onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, S.forABook);
   const back = owner && { library: S.libraries, album: S.albums, person: S.people }[owner];
   const head = h('div', { class: 'collection-head' },
     back && h('button', { class: 'round small', 'aria-label': back, title: back, onclick: () => go(OWNERS[owner]) }, icon('back')),
@@ -586,7 +596,7 @@ async function filterRow(params, narrowed) {
       owner === 'album' && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {
         event.stopPropagation();
         const at = event.currentTarget.getBoundingClientRect();
-        menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album }));
+        menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album, kind: page.kind ?? albumRow?.kind, may_change: page.may_change ?? changeable(albumRow) }));
       } }, icon('more')),
       selectToggle()));
 
@@ -727,6 +737,8 @@ function monthSection(month, query) {
 }
 
 function layout(section) {
+
+  if (section.arrange) return section.arrange();
   const width = section.rows.clientWidth;
   if (!width || !section.photos) return;
   const tall = rowHeight();
@@ -937,7 +949,7 @@ async function albums(main) {
       h('button', { class: 'primary', onclick: newAlbum }, S.newAlbumEll)));
   }
   main.append(h('div', { class: 'filters' }, h('button', { class: 'chip', onclick: newAlbum }, S.newAlbumEll)), h('div', { class: 'places' }, list.map(album =>
-    collection(album.name, [counted(album.count), album.owner && !album.mine && phrase('sharedBy', { name: album.owner }), album.mine && album.people > 0 && phrase('sharedWith', { n: album.people })].filter(Boolean).join(' · '), 'album=' + encodeURIComponent(album.key), () => go('/', { album: album.key })))));
+    collection(album.kind === 'trip' ? [routeMark(), album.name] : album.name, [(album.kind === 'trip' && tripSaid(album)) || counted(album.count), album.owner && !album.mine && phrase('sharedBy', { name: album.owner }), album.mine && album.people > 0 && phrase('sharedWith', { n: album.people })].filter(Boolean).join(' · '), 'album=' + encodeURIComponent(album.key), () => go('/', { album: album.key })))));
 }
 
 function rights(user, said) {
@@ -1081,7 +1093,10 @@ function openViewer(section, at) {
   const inNuma = !/Android/i.test(navigator.userAgent) && h('a', {
     class: 'chip open-in-numa', title: S.openTip,
   }, S.openInNuma);
-  const corner = h('div', { class: 'corner right' }, inNuma, editButton, infoButton,
+
+  const copyButton = h('button', { class: 'round', 'aria-label': S.copyPhoto, title: copyTip(), onclick: event => copyPhoto(current(), event.currentTarget),
+    oncontextmenu: event => { event.preventDefault(); event.stopPropagation(); menu(corner, copyItems(current())); } }, icon('copy'));
+  const corner = h('div', { class: 'corner right' }, inNuma, editButton, infoButton, copyButton,
     h('button', { class: 'round', 'aria-label': S.download, onclick: event => {
       event.stopPropagation();
       const id = current().id;
@@ -1106,7 +1121,7 @@ function openViewer(section, at) {
   document.body.classList.add('viewing');
 
   const mark = Date.now();
-  state.viewer = { sections: state.sections, si: state.sections.indexOf(section), pi: at, photo: null, el, stage, image, info, hud, badge, noticed, infoButton, bar, edit, editButton, mark, opener, inNuma, scroll, anchor };
+  state.viewer = { sections: state.sections, si: state.sections.indexOf(section), pi: at, photo: null, el, stage, image, info, hud, badge, noticed, infoButton, bar, edit, editButton, copyButton, mark, opener, inNuma, scroll, anchor };
   history.pushState({ viewer: mark }, '');
   handle(stage, image);
   image.addEventListener('load', () => { if (state.viewer?.image === image && !state.viewer.zoom.full) fit(); });
@@ -1130,6 +1145,7 @@ function show() {
   leaveFilm(viewer);
   viewer.image.hidden = !!photo.video;
   viewer.editButton.disabled = !!photo.video;
+  viewer.copyButton.hidden = !!photo.video;
   if (photo.video) playFilm(viewer, photo);
   else {
 
@@ -1556,6 +1572,35 @@ function toggleInfo() {
   if (!viewer.info.hidden) fillInfo();
 }
 
+function captionField(detail) {
+  const label = h('div', { class: 'section-label' }, S.caption);
+  if (detail.level === 'view' || detail.video) return detail.caption ? [label, h('p', { class: 'words' }, detail.caption)] : [];
+  const area = h('textarea', { class: 'words', rows: 1, maxlength: 2000, placeholder: S.captionHint, 'aria-label': S.caption });
+  area.value = detail.caption || '';
+  const fit = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
+  let kept = area.value.trim();
+  let timer;
+  const keep = async () => {
+    clearTimeout(timer);
+    const words = area.value.trim();
+    if (words === kept) return;
+    const before = kept;
+    kept = words;
+    try {
+      await api(`photos/${detail.id}/caption`, { method: 'PUT', body: JSON.stringify({ caption: words }) });
+      detail.caption = words || null;
+    } catch (error) {
+      kept = before;
+      toast(phrase('notSaved', { error: error.message }));
+    }
+  };
+  area.addEventListener('input', () => { fit(); clearTimeout(timer); timer = setTimeout(keep, 900); });
+  area.addEventListener('change', keep);
+  area.addEventListener('keydown', event => { if (event.key === 'Escape') area.blur(); });
+  requestAnimationFrame(fit);
+  return [label, area];
+}
+
 async function fillInfo() {
   const viewer = state.viewer;
   const photo = viewer.detail;
@@ -1570,6 +1615,7 @@ async function fillInfo() {
   viewer.info.replaceChildren(...[
     h('div', { class: 'title' }, photo.name),
     h('div', { class: 'meta' }, when(photo.taken)),
+    ...captionField(photo),
     (photo.camera || photo.lens || photo.exposure) && label(S.camera),
     photo.camera && h('div', {}, photo.camera),
     photo.lens && h('div', { class: 'meta' }, photo.lens),

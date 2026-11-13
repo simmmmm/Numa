@@ -359,12 +359,26 @@ fn picking_a_profile_rewrites_its_note() {
 
 #[test]
 fn the_light_tokens_override_the_dark_ones() {
-    let (dark, light) = (stylesheet(true), stylesheet(false));
+    let (dark, light) = (stylesheet(true, false), stylesheet(false, false));
     let white = "@define-color numa_accent #ffffff;";
     let ink = "@define-color numa_accent #141414;";
     assert!(dark.contains(white) && !dark.contains(ink));
     assert!(light.find(ink) > light.find(white));
     assert!(light.ends_with(CSS));
+
+    assert!(dark.contains("@define-color numa_map_sea #0e0e0e;") && light.contains("@define-color numa_map_sea #e8e8e8;"));
+}
+
+#[test]
+fn high_contrast_raises_label_and_rule() {
+    let (dark, light) = (stylesheet(true, true), stylesheet(false, true));
+    let rest = "@define-color numa_label #8d8d8d;";
+    let raised = "@define-color numa_label #b4b4b4;";
+    assert!(dark.find(raised) > dark.find(rest));
+    assert!(light.find("@define-color numa_label #3d3d3d;") > light.find("@define-color numa_label #636363;"));
+    assert!(light.contains("@define-color numa_photo_label #b4b4b4;"));
+    assert!(dark.ends_with(CSS) && light.ends_with(CSS));
+    assert!(!stylesheet(true, false).contains(raised));
 }
 
 #[test]

@@ -699,6 +699,7 @@ fn show_map(state: &App, page: &Rc<Page>) {
             viewport.set_zoom_level(TOWN_MOST);
         }
         map.center_on(latitude, longitude);
+        map_view::settle(map);
         page.fitted.set(true);
     }
     if !page.fitted.get() {

@@ -330,7 +330,7 @@ fn editor_key(
     return match key.to_unicode() {
 
         Some('c' | 'C') if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) => {
-            copy_image(&state);
+            exporting::copy_photo(&state, open_job(&state));
             glib::Propagation::Stop
         }
         Some('c' | 'C') => {
@@ -375,6 +375,10 @@ fn library_key(
 
     if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
         return match key.to_unicode() {
+            Some('c' | 'C') if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) => {
+                exporting::copy_photo(&state, exporting::copy_job(&state));
+                glib::Propagation::Stop
+            }
             Some('v' | 'V') => {
                 paste_settings(&state, &window, false);
                 glib::Propagation::Stop

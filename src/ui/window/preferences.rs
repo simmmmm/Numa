@@ -531,6 +531,7 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     library_group.add(&row("Flag the selection rejected, again to clear", "X"));
     library_group.add(&row("Clear the selection's flag", "U"));
     library_group.add(&row("Paste copied edits onto the selection", "Ctrl+V"));
+    library_group.add(&row("Copy the chosen photo, or the album tile's, at the size kept", "Ctrl+Shift+C"));
     library_group.add(&row("Move the selection to the trash, after asking", "Delete"));
     page.add(&library_group);
 
@@ -551,7 +552,7 @@ pub(super) fn shortcuts_dialog(window: &adw::ApplicationWindow, menus: &[(&str, 
     editor_group.add(&row("Tone curve: drag to shape, right-click a point to remove it", "Drag / Right-click"));
     editor_group.add(&row("Panel tabs, in order", "Alt+1 – Alt+9"));
     editor_group.add(&row("Copy this photograph's edits", "Ctrl+C"));
-    editor_group.add(&row("Copy the edited picture", "Ctrl+Shift+C"));
+    editor_group.add(&row("Copy the edited photo at the size kept", "Ctrl+Shift+C"));
     editor_group.add(&row("Paste edits onto this photograph", "Ctrl+V"));
     editor_group.add(&row("Leave the mask, and then the photograph", "Esc"));
     editor_group.add(&row("Undo", "Ctrl+Z"));
@@ -571,11 +572,29 @@ fn key_row(title: &str, keys: &str) -> adw::ActionRow {
     row
 }
 
+fn values_row(section: &gio::MenuModel, label: &str) -> Option<String> {
+    let text = |at, name| section.item_attribute_value(at, name, Some(glib::VariantTy::STRING)).and_then(|value| value.get::<String>());
+    let actions: Vec<Option<String>> = (0..section.n_items()).map(|at| text(at, gio::MENU_ATTRIBUTE_ACTION)).collect();
+    let one = actions.first()?.as_ref()?;
+    if actions.len() < 2 || actions.iter().any(|action| action.as_ref() != Some(one)) {
+        return None;
+    }
+    let values: Vec<String> = (0..section.n_items()).filter_map(|at| text(at, gio::MENU_ATTRIBUTE_LABEL)).collect();
+    Some(format!("{label}: {}", values.join(", ")))
+}
+
 fn menu_rows(menu: &gio::MenuModel, app: Option<&gtk::Application>, seen: &mut std::collections::HashSet<String>, group: &adw::PreferencesGroup) -> usize {
     let text = |at, name| menu.item_attribute_value(at, name, Some(glib::VariantTy::STRING)).and_then(|value| value.get::<String>());
     let mut added = 0;
     for at in 0..menu.n_items() {
         if let Some(section) = menu.item_link(at, gio::MENU_LINK_SECTION) {
+            if let Some(row) = text(at, gio::MENU_ATTRIBUTE_LABEL).and_then(|label| values_row(&section, &label)) {
+                if seen.insert(row.clone()) {
+                    group.add(&key_row(&row, ""));
+                    added += 1;
+                }
+                continue;
+            }
             added += menu_rows(&section, app, seen, group);
             continue;
         }

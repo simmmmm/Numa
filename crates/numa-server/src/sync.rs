@@ -33,6 +33,16 @@ pub async fn with_albums(server: &Server, rows: &mut [Value]) -> Result<(), Fail
     Ok(())
 }
 
+pub async fn with_captions(server: &Server, library: i64, rows: &mut [Value]) -> Result<(), Fail> {
+
+    let captions = server.home.ask(move |catalog| catalog.captions(library)).await?.map_err(Fail::internal)?;
+    for row in rows {
+        let caption = row["id"].as_i64().and_then(|id| captions.get(&id)).map(|(caption, _)| caption.as_str()).unwrap_or_default();
+        row["caption"] = json!(caption);
+    }
+    Ok(())
+}
+
 pub fn note(server: &Server, headers: &HeaderMap, account: &str, library: i64) {
     let device = auth::presented(headers).and_then(|token| server.store.session_device(&auth::digest(&token))).unwrap_or_default();
     server.store.note_synced(library, account, &device);

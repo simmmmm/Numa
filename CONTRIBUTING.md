@@ -31,8 +31,9 @@ raising the limit.
   them.
 - New user-visible behaviour belongs in the [user guide](https://guide.numa.photo).
 
-This repository is updated from the development tree with each release, so a
-change you contribute appears in the next release.
+Changes to `crates/` are not accepted from outside for now; open an issue
+instead. This repository is updated from the development tree with each
+release.
 
 ## Packaging
 

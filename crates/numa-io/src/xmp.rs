@@ -22,6 +22,10 @@ pub fn description(settings: &ExportSettings, about: &Description, extra: Option
         if about.rating > 0 {
             attributes += &format!(r#" xmp:Rating="{}""#, about.rating.min(5));
         }
+
+        if let Some(caption) = about.caption.as_deref().map(str::trim).filter(|caption| !caption.is_empty()) {
+            elements += &format!(r#"<dc:description><rdf:Alt><rdf:li xml:lang="x-default">{}</rdf:li></rdf:Alt></dc:description>"#, escape(caption));
+        }
         let keywords: Vec<String> = about.people.iter().chain(&about.albums).cloned().collect();
         if !keywords.is_empty() {
             elements += &format!("<dc:subject>{}</dc:subject>", list("Bag", &keywords));
@@ -67,9 +71,11 @@ mod tests {
     #[test]
     fn the_catalogue_and_the_photographer_are_described() {
         let settings = ExportSettings { creator: "Sam".into(), copyright: "© 2026 T & co".into(), ..ExportSettings::default() };
-        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Portfolio".into()], position: None };
+        let caption = Some(" Low tide & a <red> boat,\nbefore six. ".to_string());
+        let about = Description { rating: 4, people: vec!["Anna".into()], albums: vec!["Portfolio".into()], caption, position: None };
         let text = description(&settings, &about, None).unwrap();
         assert!(text.contains(r#"xmp:Rating="4""#));
+        assert!(text.contains("<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Low tide &amp; a &lt;red&gt; boat,\nbefore six.</rdf:li></rdf:Alt></dc:description>"), "{text}");
         assert!(text.contains("<dc:creator><rdf:Seq><rdf:li>Sam</rdf:li></rdf:Seq></dc:creator>"));
         assert!(text.contains("© 2026 T &amp; co"));
         assert!(text.contains("<dc:subject><rdf:Bag><rdf:li>Anna</rdf:li><rdf:li>Portfolio</rdf:li></rdf:Bag></dc:subject>"));
@@ -79,5 +85,7 @@ mod tests {
 
         let quiet = ExportSettings { keywords: false, no_ai_training: false, ..ExportSettings::default() };
         assert_eq!(description(&quiet, &about, None), None, "nothing asked for, nothing written");
+        let plain = Description { caption: Some("  ".into()), ..Description::default() };
+        assert!(!description(&ExportSettings::default(), &plain, None).unwrap_or_default().contains("dc:description"), "no words, no caption");
     }
 }

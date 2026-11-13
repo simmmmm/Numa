@@ -34,6 +34,8 @@ const SIDE_WIDTH: i32 = 260;
 
 const HERO_EDGE: u32 = 3072;
 
+const CLEAR_OF_EDGE: i32 = 1;
+
 const FANS: usize = 6;
 
 pub(super) fn page(state: &App) -> gtk::Overlay {
@@ -41,6 +43,7 @@ pub(super) fn page(state: &App) -> gtk::Overlay {
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroller.set_vexpand(true);
+    scroller.set_margin_top(CLEAR_OF_EDGE);
     column.set_margin_bottom(32);
     scroller.set_child(Some(column));
 
@@ -245,41 +248,7 @@ fn fill_hero(state: &App, hero: &gtk::Box, seed: u64) {
         if day == seed { turn } else { 0 }
     };
     let (path, mtime, edits, id, whence) = pool[numa::io::import::day_pick(seed, 0, turn, pool.len())].clone();
-
-    let picture = gtk::Picture::new();
-    picture.set_content_fit(gtk::ContentFit::Cover);
-    picture.set_size_request(-1, HERO_HEIGHT);
-    picture.set_hexpand(true);
-    picture.set_overflow(gtk::Overflow::Hidden);
-    picture.update_property(&[gtk::accessible::Property::Label(&format!("Photograph of the day, {whence}"))]);
-
-    let (near, shown) = (picture.downgrade(), picture.downgrade());
-    let at_home = home_fetch::preview(
-        state,
-        id,
-        move |_| near.upgrade().is_some(),
-        move |_, texture| {
-            if let Some(picture) = shown.upgrade() {
-                picture.set_paintable(Some(&texture));
-            }
-        },
-    );
-    if !at_home {
-        let (wanted, shown) = (picture.downgrade(), picture.downgrade());
-        crate::ui::thumbnail::load_thumbnail_while(
-            &path,
-            mtime,
-            HERO_EDGE,
-            edits,
-            None,
-            move || wanted.upgrade().is_some(),
-            move |texture| {
-                if let Some(picture) = shown.upgrade() {
-                    picture.set_paintable(Some(&texture));
-                }
-            },
-        );
-    }
+    let picture = hero_picture(state, id, &path, mtime, edits, &whence);
 
     let over = gtk::Overlay::new();
     picture.add_css_class("hero-under");
@@ -352,6 +321,130 @@ fn fill_hero(state: &App, hero: &gtk::Box, seed: u64) {
     over.add_overlay(&actions);
 
     hero.append(&over);
+}
+
+fn hero_picture(state: &App, id: i64, path: &Path, mtime: i64, edits: Option<String>, whence: &str) -> gtk::Picture {
+
+    let face = state.catalog.faces_in(id).is_some_and(|faces| faces > 0);
+    let paintable = HeroPaintable::new(face);
+
+    let picture = gtk::Picture::for_paintable(&paintable);
+    picture.set_content_fit(gtk::ContentFit::Fill);
+    picture.set_size_request(-1, HERO_HEIGHT);
+    picture.set_hexpand(true);
+    picture.set_overflow(gtk::Overflow::Hidden);
+    picture.update_property(&[gtk::accessible::Property::Label(&format!("Photograph of the day, {whence}"))]);
+
+    let (near, shown) = (picture.downgrade(), paintable.downgrade());
+    let at_home = home_fetch::preview(
+        state,
+        id,
+        move |_| near.upgrade().is_some(),
+        move |_, texture| {
+            if let Some(paintable) = shown.upgrade() {
+                paintable.set_texture(texture);
+            }
+        },
+    );
+    if !at_home {
+        let (wanted, shown) = (picture.downgrade(), paintable.downgrade());
+        crate::ui::thumbnail::load_thumbnail_while(
+            path,
+            mtime,
+            HERO_EDGE,
+            edits,
+            None,
+            move || wanted.upgrade().is_some(),
+            move |texture| {
+                if let Some(paintable) = shown.upgrade() {
+                    paintable.set_texture(texture);
+                }
+            },
+        );
+    }
+    picture
+}
+
+fn band_top(photo: (f64, f64), band: (f64, f64), face: bool) -> f64 {
+    if photo.0 <= 0.0 || photo.1 <= 0.0 {
+        return 0.0;
+    }
+    let scale = (band.0 / photo.0).max(band.1 / photo.1);
+
+    let spare = ((photo.1 * scale).ceil() - band.1).max(0.0);
+    match face {
+        true => 0.0,
+        false => (spare / 2.0).floor(),
+    }
+}
+
+mod hero {
+    use super::*;
+    use gtk::gdk;
+    use gdk::subclass::prelude::PaintableImpl;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub(super) struct HeroPaintable {
+        pub(super) texture: RefCell<Option<gdk::Texture>>,
+        pub(super) face: Cell<bool>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for HeroPaintable {
+        const NAME: &'static str = "NumaHeroPaintable";
+        type Type = super::HeroPaintable;
+        type Interfaces = (gdk::Paintable,);
+    }
+
+    impl ObjectImpl for HeroPaintable {}
+
+    impl PaintableImpl for HeroPaintable {
+
+        fn intrinsic_width(&self) -> i32 {
+            self.texture.borrow().as_ref().map_or(0, |texture| texture.width())
+        }
+
+        fn intrinsic_height(&self) -> i32 {
+            self.texture.borrow().as_ref().map_or(0, |texture| texture.height())
+        }
+
+        fn snapshot(&self, snapshot: &gdk::Snapshot, width: f64, height: f64) {
+            let texture = self.texture.borrow();
+            let (Some(texture), Some(snapshot)) = (texture.as_ref(), snapshot.downcast_ref::<gtk::Snapshot>()) else { return };
+            let photo = (texture.width() as f64, texture.height() as f64);
+            let scale = (width / photo.0).max(height / photo.1);
+            let (drawn_width, drawn_height) = ((photo.0 * scale).ceil(), (photo.1 * scale).ceil());
+            let top = band_top(photo, (width, height), self.face.get());
+            snapshot.push_clip(&gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32));
+            snapshot.save();
+            snapshot.translate(&gtk::graphene::Point::new(((width - drawn_width) / 2.0).trunc() as f32, -top as f32));
+
+            texture.snapshot(snapshot, drawn_width, drawn_height);
+            snapshot.restore();
+            snapshot.pop();
+        }
+    }
+}
+
+glib::wrapper! {
+    struct HeroPaintable(ObjectSubclass<hero::HeroPaintable>) @implements gtk::gdk::Paintable;
+}
+
+impl HeroPaintable {
+    fn new(face: bool) -> Self {
+        use gtk::subclass::prelude::*;
+        let paintable: Self = glib::Object::new();
+        paintable.imp().face.set(face);
+        paintable
+    }
+
+    fn set_texture(&self, texture: gtk::gdk::Texture) {
+        use gtk::subclass::prelude::*;
+        self.imp().texture.replace(Some(texture));
+        self.invalidate_size();
+        self.invalidate_contents();
+    }
 }
 
 fn edit(state: &App, id: i64) {
@@ -956,4 +1049,37 @@ pub(super) fn open_these(state: &App, ids: &[i64], at: usize) {
         state.loupe.few.borrow_mut().selection = indices;
     }
     show_loupe(state, first);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::band_top;
+
+    const BAND: (f64, f64) = (1530.0, 600.0);
+
+    #[test]
+    fn a_portrait_with_a_face_is_shown_from_its_top() {
+
+        assert_eq!(band_top((2000.0, 3000.0), BAND, true), 0.0);
+        assert_eq!(band_top((2000.0, 3000.0), BAND, false), 847.0);
+    }
+
+    #[test]
+    fn without_a_face_the_middle_as_cover_has_it() {
+
+        assert_eq!(band_top((6000.0, 4000.0), BAND, false), 210.0);
+        assert_eq!(band_top((6000.0, 4000.0), BAND, true), 0.0);
+    }
+
+    #[test]
+    fn a_panorama_fills_the_height_and_loses_its_sides() {
+
+        assert_eq!(band_top((8000.0, 2000.0), BAND, false), 0.0);
+        assert_eq!(band_top((8000.0, 2000.0), BAND, true), 0.0);
+    }
+
+    #[test]
+    fn nothing_yet_is_no_offset() {
+        assert_eq!(band_top((0.0, 0.0), BAND, true), 0.0);
+    }
 }

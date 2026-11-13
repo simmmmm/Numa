@@ -370,32 +370,6 @@ pub(super) fn apply_history(state: &App, edit: EditState, as_shot: WhiteBalance)
     refresh_history(state);
 }
 
-pub(super) fn copy_image(state: &App) {
-    let job = state.open.borrow().as_ref().map(|photo| {
-        let document = photo.document.clone();
-        let working = photo.working.clone();
-        let scale = working.width.max(working.height) as f32 / photo.full_size.0.max(photo.full_size.1).max(1) as f32;
-        (document, working, scale)
-    });
-    let Some((document, working, scale)) = job else { return };
-    let state = state.clone();
-    glib::spawn_future_local(async move {
-        let Ok(image) = busy(&state, "Copying the picture…", move || {
-            let document = render::with_masks_resolved(&document, &working);
-            render::apply_stack(&document, &*working, scale)
-        })
-        .await
-        else {
-            return;
-        };
-        if let Some(display) = gtk::gdk::Display::default() {
-
-            display.clipboard().set_texture(&crate::ui::display::unconverted(image));
-            state.toast("Picture copied");
-        }
-    });
-}
-
 pub(super) fn texture_from(image: &image::RgbImage) -> gtk::gdk::Texture {
     crate::ui::display::texture(image)
 }

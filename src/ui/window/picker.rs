@@ -85,10 +85,27 @@ pub(super) fn current_place(state: &App) -> Place {
 pub(super) fn show_place(state: &App, place: Place) {
     let started = std::time::Instant::now();
 
+    let narrowed = state.libraries.filter.borrow_mut().chapter.take().is_some();
+    let album = match &place {
+        Place::Album(key) => Some(key.clone()),
+        _ => None,
+    };
     choose_place(state, place);
+    if narrowed {
+        reload_grid(state);
+    }
 
     library_page::show_head(state);
-    state.stack.set_visible_child_name("library");
+
+    match album {
+        Some(key) if album_page::has_page(state, &key) => album_page::show(state, &key),
+        Some(key) => {
+
+            state.libraries.album.key.replace(Some(key));
+            state.stack.set_visible_child_name("library");
+        }
+        None => state.stack.set_visible_child_name("library"),
+    }
     sidebar::mark(state);
 
     log::info!("a place: {} ms on the main thread", started.elapsed().as_millis());

@@ -872,7 +872,7 @@ fn in_step(state: &App, library: Library, how: How) {
                 Err(failure) => return let_go(&state, failure, &account, Some(&library)),
             }
         }
-        let asked = sync::list_changes(&account.address, &link.library, sync::listed_after(&link), synced && !how.looks());
+        let asked = sync::list_changes(&account.address, &link.library, sync::listed_after(&link), synced && !how.looks(), link.rules);
         match sync::photos(&curl(asked, account.header(), &Running::default()).await) {
             Ok(remote) => {
                 let since = sync::next_since(link.since, &remote);
@@ -912,12 +912,14 @@ fn local_photos(state: &App, library: &Library) -> Vec<(i64, Local)> {
     let ids: Vec<i64> = photos.iter().map(|photo| photo.id).collect();
     let mut albums = state.catalog.albums_of(&ids).unwrap_or_default();
     let changed = state.catalog.changed_times(library.id).unwrap_or_default();
+    let mut captions = state.catalog.captions(library.id).unwrap_or_default();
     photos
         .into_iter()
         .map(|photo| {
             let path = photo.path.strip_prefix(&library.path).unwrap_or(&photo.path).to_string_lossy().to_string();
 
             let edits = state.catalog.own_edits_json(photo.id).ok().flatten();
+            let (caption, caption_changed) = captions.remove(&photo.id).unwrap_or_default();
             let local = Local {
                 path,
                 edits,
@@ -925,6 +927,8 @@ fn local_photos(state: &App, library: &Library) -> Vec<(i64, Local)> {
                 flag: sync::flag_name(photo.flag).to_string(),
                 albums: albums.remove(&photo.id).unwrap_or_default(),
                 changed: changed.get(&photo.id).copied().unwrap_or(0),
+                caption,
+                caption_changed,
             };
             (photo.id, local)
         })
@@ -959,6 +963,7 @@ fn goes_up(step: &Step) -> bool {
 fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, since: i64, how: How, then: (Vec<String>, Option<String>)) {
     let local: Vec<Local> = local_photos(state, &library).into_iter().map(|(_, photo)| photo).collect();
     let mut steps = sync::plan(&link, &remote, &local, &trashed_here(state, library.id));
+    let rules = sync::rules_after(&link, &remote);
 
     let whole = !how.looks() || !steps.iter().any(|step| how.holds(step));
     let held = steps.iter().filter(|step| how.holds(step) && goes_up(step)).count();
@@ -1019,7 +1024,7 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
         if how == How::Import || (whole && finished && !done.hold) {
             link.since = since;
             if how != How::Import {
-                link.rules = sync::RULES;
+                link.rules = rules;
             }
         }
 
@@ -1028,6 +1033,10 @@ fn round(state: &App, library: Library, mut link: Link, remote: Vec<Remote>, sin
         }
         keep(&state, library.id, &link);
         ROUND.with(|round| round.set(false));
+
+        if finished {
+            album_round::after_a_round(&state);
+        }
         QUIET.with(|quiet| quiet.replace(None));
         let left = held + to_send.saturating_sub(done.went + done.deleted);
         say_state(&state, library.id, |shown| *shown = Shown { syncing: None, to_send: if finished { held } else { left }, waits: done.waits });
@@ -1223,11 +1232,11 @@ async fn one(ctx: &Ctx<'_>, link: &mut Link, here: &HashMap<String, (i64, Local)
                 Err(failure) => return Err(failure),
             }
         }
-        Step::Both { path, id, theirs, down, up, albums } => {
+        Step::Both { path, id, theirs, down, up, albums, caption } => {
             let Some((photo, ours)) = here.get(&path) else { return Ok(()) };
             let kept = link.photos.get(&path).cloned();
             let theirs_albums = theirs.as_ref().and_then(|theirs| theirs.albums.clone()).or_else(|| kept.as_ref().and_then(|kept| kept.albums.clone())).unwrap_or_default();
-            let sides = Sides { theirs: theirs.as_ref(), kept: kept.as_ref(), albums: albums.as_deref(), theirs_albums: &theirs_albums };
+            let sides = Sides { theirs: theirs.as_ref(), kept: kept.as_ref(), albums: albums.as_deref(), theirs_albums: &theirs_albums, caption: caption.as_deref() };
             let now = both(ctx, (*photo, ours), &id, sides, (down, up)).await?;
             done.changed += (down.any() && now.updated > 0) as usize;
             done.went += up.any() as usize;
@@ -1353,6 +1362,8 @@ fn arrive(state: &App, library: &Library, link: &mut Link, arrived: &[Remote], d
                 down: edits,
                 up: sync::Parts::default(),
                 albums: theirs.albums.clone(),
+
+                caption: theirs.kept().caption,
             };
             theirs.edited.then_some(down)
         })
@@ -1434,6 +1445,7 @@ struct Sides<'a> {
     kept: Option<&'a Kept>,
     albums: Option<&'a [String]>,
     theirs_albums: &'a [String],
+    caption: Option<&'a str>,
 }
 
 async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Sides<'_>, (down, up): (sync::Parts, sync::Parts)) -> Result<Kept, Failure> {
@@ -1476,6 +1488,9 @@ async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Side
         albums_here(state, photo, &ours.albums, albums)?;
         now.albums = albums.to_vec();
     }
+    if let (true, Some(caption)) = (down.caption, sides.caption) {
+        state.catalog.set_caption(photo, caption).map_err(Failure::Said)?;
+    }
     if up_edits {
         let stack = ctx.folder.join("edits.json");
         std::fs::write(&stack, ours.edits.as_deref().unwrap_or_default()).map_err(|err| Failure::Said(err.to_string()))?;
@@ -1492,8 +1507,17 @@ async fn both(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), id: &str, sides: Side
     if let (true, Some(albums)) = (up.albums, sides.albums) {
         at = at.max(albums_there(ctx, id, sides.theirs_albums, albums).await?);
     }
+
+    let mut agreed = sides.caption;
+    if let (true, Some(caption)) = (up.caption, sides.caption) {
+        match sync::caption_put(&curl(sync::put_caption(&account.address, id, caption), account.header(), running).await)? {
+            Some(updated) => at = at.max(updated),
+            None => agreed = None,
+        }
+    }
     let mut kept = now.kept(id, at);
     kept.albums = sides.albums.map(<[String]>::to_vec).or_else(|| sides.kept.and_then(|kept| kept.albums.clone()));
+    kept.caption = agreed.map(str::to_string).or_else(|| sides.kept.and_then(|kept| kept.caption.clone()));
     Ok(kept)
 }
 
@@ -1586,8 +1610,10 @@ async fn send(ctx: &Ctx<'_>, (photo, ours): (i64, &Local), library: &str) -> Res
     let dir = Path::new(&ours.path).parent().map(|dir| dir.to_string_lossy().to_string()).unwrap_or_default();
     let sha256 = sha256(&file).await?;
     let sent = api::sent(&curl(api::send_into(&account.address, &file, &sha256, library, &dir), account.header(), running).await)?;
-    let up = sync::Parts { edits: ours.edits.is_some(), marks: ours.rating != 0 || ours.flag != "none", albums: !ours.albums.is_empty() };
-    let sides = Sides { theirs: None, kept: None, albums: Some(&ours.albums), theirs_albums: &[] };
+
+    let caption = Some(ours.caption.as_str()).filter(|caption| !caption.is_empty());
+    let up = sync::Parts { edits: ours.edits.is_some(), marks: ours.rating != 0 || ours.flag != "none", albums: !ours.albums.is_empty(), caption: caption.is_some() };
+    let sides = Sides { theirs: None, kept: None, albums: Some(&ours.albums), theirs_albums: &[], caption };
     both(ctx, (photo, ours), &sent.id, sides, (sync::Parts::default(), up)).await
 }
 

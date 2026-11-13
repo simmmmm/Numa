@@ -1,3 +1,4 @@
+pub mod album_page;
 pub mod analysis;
 pub mod avif;
 pub mod book;
@@ -5,6 +6,7 @@ pub mod camera_look;
 pub mod capture;
 pub mod error;
 pub mod catalog;
+pub mod chapters;
 pub mod clocks;
 pub mod copy;
 pub mod dcp;

@@ -25,12 +25,12 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         let (server, photo) = (server.clone(), photo.clone());
         tokio::task::spawn_blocking(move || (numa_io::raw::summary(&path), crate::map::spot_of(&server, &photo))).await.map_err(Fail::internal)?
     };
-    let (people, albums) = server
+    let (people, albums, caption) = server
         .home
         .ask(move |catalog| {
             let people = catalog.people(library_of(id)).unwrap_or_default();
             let people: Vec<String> = people.into_iter().filter(|(_, ids)| ids.contains(&id)).map(|(name, _)| name).collect();
-            (people, catalog.albums_of(&[id]).unwrap_or_default().remove(&id).unwrap_or_default())
+            (people, catalog.albums_of(&[id]).unwrap_or_default().remove(&id).unwrap_or_default(), catalog.caption(id).ok().flatten())
         })
         .await?;
 
@@ -62,6 +62,8 @@ pub async fn detail(State(server): State<Arc<Server>>, Signed(me): Signed, Path(
         "size": size,
         "people": people,
         "albums": albums,
+
+        "caption": caption,
         "rating": photo.rating,
         "flag": flag_name(photo.flag),
         "edited": photo.edited,
@@ -361,6 +363,21 @@ pub async fn marks(State(server): State<Arc<Server>>, Signed(me): Signed, Path(i
         return Err(Fail::bad("A rating is 0 to 5 stars."));
     }
     changed(&server, id, move |catalog| catalog.set_rating(id, marks.rating).and_then(|()| catalog.set_flag(id, flag))).await
+}
+
+#[derive(Deserialize)]
+pub struct Caption {
+    caption: String,
+}
+
+pub async fn caption(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, Json(said): Json<Caption>) -> Result<Json<Value>, Fail> {
+    server.home.photo(&me, id, Level::Edit)?;
+    let limit = numa_io::catalog::CAPTION_LIMIT;
+    if numa_io::catalog::tidy_caption(&said.caption).chars().count() > limit {
+        return Err(Fail::bad(format!("A caption is at most {limit} characters.")));
+    }
+    server.home.ask(move |catalog| catalog.set_caption(id, &said.caption)).await?.map_err(Fail::internal)?;
+    Ok(Json(json!({ "updated": server.store.touch(id) })))
 }
 
 pub async fn changed(

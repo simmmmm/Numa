@@ -4,7 +4,7 @@ This is rawler 0.8.0 as published on crates.io (dnglab, git `ae01bcb2`),
 LGPL-2.1 (`LICENSE`), with the changes listed below. Numa carries it so that
 its raw decoders can be made faster; every change keeps the decoded frame
 bit for bit what 0.8.0 produces, checked by hashing the mosaic of every test
-raw before and after.
+raw before and after, except a fix that says so.
 
 Left out of the published crate: `src/bin`, `tests`, `benches`,
 `data/testdata`, and the targets and dev-dependencies in `Cargo.toml` that
@@ -198,3 +198,20 @@ two 7M4s, a 7CM2, an FX3 and an FX30) hash as before.
 
 Checked: the K-3 III Monochrome's DNG of raw.pixls.us (7081) develops, grey
 and cropped as its PEF (7082) does (`raw::tests::a_monochrome_sensor_develops_to_grey`).
+
+### DNG: the black in BlackLevelDeltaH and BlackLevelDeltaV (8 November 2026)
+
+- `decoders/dng.rs`: `get_blacklevels` adds the mean of `BlackLevelDeltaH`
+  and the mean of `BlackLevelDeltaV` to every black level, as dcraw, LibRaw
+  and RawTherapee do. A file with deltas and no `BlackLevel` gets the deltas
+  alone. Adobe DNG Converter writes some Canon raws (EOS 5D, 20D, 30D, 40D,
+  Rebel XSi, 1D Mark II) with `BlackLevel` 0 and all of their black, about
+  128 of 4095, in `BlackLevelDeltaV`. 0.8.0 read only `BlackLevel`, so no
+  black came off, and the white balance turned the rest magenta.
+- This fix changes the frame of such a DNG on purpose. A DNG without deltas
+  decodes as before. Upstream rawler now applies each row and column
+  (`BlackLevel::with_deltas`); take that at the next sync.
+
+Checked: 295 MIT-Adobe FiveK DNGs against their own embedded preview, median
+a* +10.25 before and +0.05 after; every Canon body within 0.8, the Nikon and
+Leica bodies unchanged. The corpus fingerprints hold.

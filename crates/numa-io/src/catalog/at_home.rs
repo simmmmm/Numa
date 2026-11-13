@@ -17,10 +17,12 @@ pub struct AtHome {
     pub taken: Option<i64>,
     pub rating: u8,
     pub flag: Flag,
+
+    pub caption: String,
 }
 
 pub(super) fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
-    let has_changed = conn.prepare("SELECT * FROM photos LIMIT 0").map(|statement| statement.column_names().contains(&"changed")).unwrap_or(true);
+    let has_changed = conn.prepare("SELECT * FROM photos LIMIT 0").map(|statement| statement.column_names().any(|name| name == "changed")).unwrap_or(true);
     if !has_changed {
         conn.execute("ALTER TABLE photos ADD COLUMN changed INTEGER", []).map_err(text)?;
     }
@@ -123,6 +125,11 @@ impl Catalog {
             let local = tx.last_insert_rowid();
             tx.execute("INSERT INTO at_home (photo_id, id, size) VALUES (?1, ?2, ?3)", params![local, photo.id, photo.size as i64])
                 .map_err(text)?;
+            let caption = super::tidy_caption(&photo.caption);
+            if !caption.is_empty() {
+                tx.execute("INSERT INTO captions (photo_id, text, changed) VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER))", params![local, caption])
+                    .map_err(text)?;
+            }
             crate::thumbs::stand_in(open.absolute(&photo.path), home_thumb(&open.root, &photo.id));
             added += 1;
         }
@@ -163,7 +170,7 @@ mod tests {
     use crate::catalog::Filter;
 
     fn at_home(path: &str, id: &str) -> AtHome {
-        AtHome { path: path.into(), id: id.into(), size: 3, mtime: 1_700_000_000, taken: Some(1_600_000_000), rating: 4, flag: Flag::Picked }
+        AtHome { path: path.into(), id: id.into(), size: 3, mtime: 1_700_000_000, taken: Some(1_600_000_000), rating: 4, flag: Flag::Picked, caption: " From the ferry. ".into() }
     }
 
     #[test]
@@ -182,6 +189,7 @@ mod tests {
         assert_eq!(photos.len(), 2);
         let away = photos.iter().find(|photo| photo.path.ends_with("away.RAF")).unwrap().clone();
         assert_eq!((away.rating, away.flag, away.taken), (4, Flag::Picked, Some(1_600_000_000)));
+        assert_eq!(catalog.caption(away.id).unwrap().as_deref(), Some("From the ferry."), "its caption comes with its row");
         assert_eq!(catalog.at_home(library.id).unwrap(), HashMap::from([(away.id, ("7".to_string(), 3))]));
         catalog.set_rating(away.id, 2).unwrap();
 
@@ -202,6 +210,7 @@ mod tests {
         assert_eq!(crate::thumbs::cached(&away.path, away.mtime, 640, None), None);
         let photos = catalog.photos(library.id, &Filter::default()).unwrap();
         assert_eq!(photos.iter().find(|photo| photo.id == away.id).map(|photo| photo.rating), Some(2));
+        assert_eq!(catalog.caption(away.id).unwrap().as_deref(), Some("From the ferry."), "and its caption");
 
         catalog.add_at_home(library.id, &[at_home("b.RAF", "9")]).unwrap();
         image::RgbImage::new(640, 480).save_with_format(home_thumb(&root, "9"), image::ImageFormat::Jpeg).unwrap();

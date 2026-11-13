@@ -716,6 +716,10 @@ fn add_legal_sections(about: &adw::AboutDialog) {
                 gtk::License::Custom,
                 Some("For non-commercial use only: its weights or their training data do not allow commercial use. See Model Licences."),
             ),
+            numa::io::models::RESEARCH_DATA => (
+                gtk::License::Apache20,
+                Some("Its weights are Apache-2.0. They were trained on face datasets licensed for research only. See Model Licences."),
+            ),
             _ => (gtk::License::Apache20, None),
         };
         about.add_legal_section(&format!("{name} model"), Some(&format!("{author} · downloaded separately")), licence, terms);

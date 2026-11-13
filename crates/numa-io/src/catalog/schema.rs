@@ -99,7 +99,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
 
     let analysis_columns: Vec<String> = conn
         .prepare("SELECT * FROM analysis LIMIT 0")
-        .map(|stmt| stmt.column_names().iter().map(|name| name.to_string()).collect())
+        .map(|stmt| stmt.column_names().map(|name| name.to_string()).collect())
         .unwrap_or_default();
     let expected = ["faces", "face_sharpness", "suggested"];
 
@@ -117,7 +117,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
 
     let has_name: bool = conn
         .prepare("SELECT * FROM libraries LIMIT 0")
-        .map(|stmt| stmt.column_names().iter().any(|column| *column == "name"))
+        .map(|stmt| stmt.column_names().any(|column| column == "name"))
         .unwrap_or(true);
     if !has_name {
         conn.execute("ALTER TABLE libraries ADD COLUMN name TEXT", [])
@@ -194,6 +194,40 @@ CREATE TABLE IF NOT EXISTS tidy_hashes (
     mtime INTEGER NOT NULL,
     size  INTEGER NOT NULL,
     hash  TEXT NOT NULL
+);
+
+-- LIB-064, TRIP-001: what an album was made, and its chapters. Tables of
+-- their own, as an album's name is: the photographs in a chapter are in each
+-- library's catalog (`chapter_photos`), these say which chapters there are
+-- and in what order. No new catalog version: an older Numa does not know the
+-- tables and leaves them alone. A plain album has no `album_kinds` row.
+CREATE TABLE IF NOT EXISTS album_kinds (
+    album TEXT PRIMARY KEY,
+    kind  TEXT NOT NULL
+);
+-- `first_day` and `last_day` are day numbers (seconds / 86 400), both or
+-- neither; `place` is a trip's chapter, with the town's own position.
+CREATE TABLE IF NOT EXISTS album_chapters (
+    key       TEXT PRIMARY KEY,
+    album     TEXT NOT NULL,
+    position  INTEGER NOT NULL,
+    name      TEXT NOT NULL,
+    words     TEXT NOT NULL DEFAULT '',
+    place     TEXT,
+    latitude  REAL,
+    longitude REAL,
+    first_day INTEGER,
+    last_day  INTEGER
+);
+CREATE INDEX IF NOT EXISTS album_chapters_album ON album_chapters(album, position);
+-- HOME-058: an album here that Numa Home has too: Home's key for it, what
+-- both last agreed of it (a document, `home::album_sync`), and Home's mark
+-- of that state. A table of its own and no new catalog version.
+CREATE TABLE IF NOT EXISTS album_at_home (
+    album  TEXT PRIMARY KEY,
+    id     TEXT NOT NULL UNIQUE,
+    agreed TEXT,
+    digest TEXT
 );
 "#;
 
@@ -413,6 +447,28 @@ CREATE TABLE IF NOT EXISTS file_positions (
     longitude REAL
 );
 
+-- LIB-062: a caption with a photograph, what the photographer wrote of it.
+-- A table of its own and no new version (`catalog/caption.rs` says why).
+-- `changed` is when its words last changed here, set by whoever writes it:
+-- the order two sides' words are kept in when both wrote (`sync::caption`).
+-- A photograph without a caption has no row.
+CREATE TABLE IF NOT EXISTS captions (
+    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    text     TEXT NOT NULL,
+    changed  INTEGER NOT NULL
+);
+
+-- LIB-064: which chapter of an album a photograph is in, kept in its
+-- library's catalog as `album_photos` is, so it goes where the folder goes.
+-- The chapter's key is named in the home catalog (`album_chapters`). A
+-- table of its own and no new version, as `captions` is.
+CREATE TABLE IF NOT EXISTS chapter_photos (
+    chapter  TEXT NOT NULL,
+    photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    PRIMARY KEY (chapter, photo_id)
+);
+CREATE INDEX IF NOT EXISTS chapter_photos_photo ON chapter_photos(photo_id);
+
 -- HOME-051: photographs of a Numa Home library whose originals are not on
 -- this computer: each one's id on the server and the original's size. The
 -- row in `photos` is ordinary; this says its file is not meant to be there,
@@ -483,7 +539,7 @@ pub(super) fn add_missing_columns(conn: &Connection) -> Result<(), String> {
     for (table, probe, sql) in BASELINE_COLUMNS {
         let has = conn
             .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
-            .map(|statement| statement.column_names().contains(probe))
+            .map(|statement| statement.column_names().any(|name| name == *probe))
             .unwrap_or(true);
         if !has {
             conn.execute_batch(sql).map_err(|err| err.to_string())?;

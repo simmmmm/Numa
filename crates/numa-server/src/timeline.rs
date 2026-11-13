@@ -41,9 +41,15 @@ pub struct Wanted {
     sort: Option<String>,
 
     reversed: Option<String>,
+
+    chapter: Option<String>,
 }
 
 impl Wanted {
+
+    pub(crate) fn of_album(album: &str, flag: Option<String>, rating: Option<u8>) -> Self {
+        Wanted { album: Some(album.to_string()), flag, rating, ..Wanted::default() }
+    }
 
     fn sorted(&self) -> Option<Sort> {
         match given(&self.sort).as_deref() {
@@ -113,33 +119,19 @@ pub async fn month(
     }
     let photos: Vec<Photo> = chosen(&server, &me, &wanted).await?.into_iter().filter(|photo| month == EVERYTHING || month_of(photo) == month).collect();
     let marks = Marks::of(&server, &photos);
-
-    let rows = tokio::task::spawn_blocking(move || {
-        photos
-            .iter()
-            .map(|photo| {
-                let aspect = photo.aspect.or_else(|| {
-                    numa_io::thumbs::cached_size(&photo.path, photo.mtime, numa_io::thumbs::LIBRARY_EDGE).map(|(w, h)| w as f32 / h as f32)
-                });
-                let aspect = aspect.or_else(|| numa_io::video::probe(&photo.path).and_then(|film| film.size).map(|(w, h)| w as f32 / h as f32));
-                let mut row = marks.tile(photo);
-                row["aspect"] = json!(aspect.unwrap_or(1.5));
-                row
-            })
-            .collect()
-    })
+    let rows = tokio::task::spawn_blocking(move || photos.iter().map(|photo| marks.shaped(photo)).collect::<Vec<Value>>())
     .await
     .map_err(Fail::internal)?;
     Ok(Json(rows))
 }
 
-struct Marks {
+pub(crate) struct Marks {
     bursts: HashMap<(i64, i64), usize>,
     live: HashSet<i64>,
 }
 
 impl Marks {
-    fn of<'a>(server: &Server, photos: impl IntoIterator<Item = &'a Photo>) -> Self {
+    pub(crate) fn of<'a>(server: &Server, photos: impl IntoIterator<Item = &'a Photo>) -> Self {
         let mut marks = Marks { bursts: HashMap::new(), live: server.home.live() };
         for library in photos.into_iter().map(|photo| library_of(photo.id)).collect::<HashSet<i64>>() {
             let files = server.home.files(library);
@@ -148,6 +140,16 @@ impl Marks {
             }
         }
         marks
+    }
+
+    pub(crate) fn shaped(&self, photo: &Photo) -> Value {
+        let aspect = photo.aspect.or_else(|| {
+            numa_io::thumbs::cached_size(&photo.path, photo.mtime, numa_io::thumbs::LIBRARY_EDGE).map(|(w, h)| w as f32 / h as f32)
+        });
+        let aspect = aspect.or_else(|| numa_io::video::probe(&photo.path).and_then(|film| film.size).map(|(w, h)| w as f32 / h as f32));
+        let mut row = self.tile(photo);
+        row["aspect"] = json!(aspect.unwrap_or(1.5));
+        row
     }
 
     fn tile(&self, photo: &Photo) -> Value {
@@ -242,6 +244,13 @@ async fn tests(server: &Arc<Server>, libraries: &[Library], photos: &[Photo], wa
     if let Some(stars) = wanted.rating {
         tests.push(("rating", Box::new(move |photo: &Photo| photo.rating >= stars)));
     }
+    if let (Some(chapter), Some(album)) = (given(&wanted.chapter), given(&wanted.album)) {
+        let of_chapter = server.home.ask(move |catalog| catalog.chapter_of(&album).unwrap_or_default()).await?;
+        tests.push(("chapter", Box::new(move |photo: &Photo| match chapter.as_str() {
+            "none" => !of_chapter.contains_key(&photo.id),
+            key => of_chapter.get(&photo.id).is_some_and(|have| have == key),
+        })));
+    }
     if let Some(date) = given(&wanted.date) {
         tests.push(("date", Box::new(move |photo: &Photo| numa_io::import::day(when(photo), 0).starts_with(&date))));
     }
@@ -309,24 +318,36 @@ pub async fn people(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
 
 pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Vec<Value>>, Fail> {
     let libraries: Vec<i64> = server.home.reach(&me).iter().map(|library| library.id).collect();
-    let shown: HashSet<i64> = server.home.shown(&me, &libraries).iter().map(|photo| photo.id).collect();
-    let albums = server
+    let shown: HashMap<i64, i64> = server.home.shown(&me, &libraries).iter().map(|photo| (photo.id, when(photo))).collect();
+    let (albums, kinds) = server
         .home
         .ask(move |catalog| {
             let albums = catalog.albums().unwrap_or_default();
-            albums.into_iter().map(|(key, name)| (in_album(catalog, &libraries, &key), key, name)).collect::<Vec<_>>()
+            let albums = albums.into_iter().map(|(key, name)| (in_album(catalog, &libraries, &key), key, name)).collect::<Vec<_>>();
+            (albums, catalog.album_kinds().unwrap_or_default())
         })
         .await?;
-
-    let rows = albums.into_iter().filter_map(|(ids, key, name)| {
-        let count = ids.iter().filter(|id| shown.contains(id)).count();
+    let mut rows = Vec::new();
+    for (ids, key, name) in albums {
+        let times: Vec<i64> = ids.iter().filter_map(|id| shown.get(id).copied()).collect();
         let owner = server.store.album_owner(&key);
         let mine = owner.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(&me.name));
+
+        if times.is_empty() && !((me.admin || mine) && server.home.album(&key).await?.is_empty()) {
+            continue;
+        }
+
+        let all = server.home.album(&key).await?;
+        let may_change = me.admin || mine || owner.is_none() && all.iter().all(|id| me.sight.level(*id) == Level::Edit);
         let people = server.store.album_people(&key).len();
         let add = crate::shared::may_add(&server.store, &me, &key);
-        (count > 0).then(|| json!({ "key": key, "name": name, "count": count, "owner": owner, "mine": mine, "people": people, "add": add }))
-    });
-    Ok(Json(rows.collect()))
+        let kind = kinds.get(&key).map_or("album", |kind| kind.name());
+        rows.push(json!({
+            "key": key, "name": name, "count": times.len(), "owner": owner, "mine": mine, "people": people, "add": add,
+            "may_change": may_change, "kind": kind, "first": times.iter().min(), "last": times.iter().max(),
+        }));
+    }
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
@@ -334,7 +355,7 @@ pub struct Renamed {
     name: String,
 }
 
-async fn seen(server: &Arc<Server>, me: &Account, key: &str) -> Result<(), Fail> {
+pub(crate) async fn seen(server: &Arc<Server>, me: &Account, key: &str) -> Result<(), Fail> {
     let ids = server.home.album(key).await?;
     let known = server.home.ask({
         let key = key.to_string();
@@ -364,9 +385,15 @@ pub async fn rename_album(State(server): State<Arc<Server>>, Signed(me): Signed,
 pub async fn delete_album(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>) -> Result<Json<Value>, Fail> {
     seen(&server, &me, &key).await?;
     let gone = key.clone();
+
+    let were = server.home.album(&key).await?;
     server.home.ask(move |catalog| catalog.delete_album(&key)).await?.map_err(Fail::bad)?;
     server.store.forget_album(&gone);
     server.home.forget_albums();
+    crate::album_sync::gone(&server.store, &gone);
+    for id in were {
+        server.store.touch(id);
+    }
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -397,12 +424,23 @@ async fn found(server: &Arc<Server>, libraries: Vec<Library>, q: String) -> Resu
         let who = who.unwrap_or_default();
         return Ok(photos.iter().filter(|photo| who.contains(&photo.id)).map(|photo| (photo.id, 1.0)).collect());
     }
+    let (asked, within) = (rest.clone(), ids.clone());
+    let captions: HashMap<i64, String> = server
+        .home
+        .ask(move |catalog| within.iter().flat_map(|library| catalog.captions(*library).unwrap_or_default()).map(|(id, (caption, _))| (id, caption)).collect())
+        .await?;
+    let said: Vec<(i64, f32)> = photos
+        .iter()
+        .filter(|photo| who.as_ref().is_none_or(|who| who.contains(&photo.id)))
+        .filter(|photo| captions.get(&photo.id).is_some_and(|caption| numa_io::catalog::caption_says(caption, &asked)))
+        .map(|photo| (photo.id, 1.0))
+        .collect();
     if !words::installed() {
-        let why = "Search in words starts once its model has downloaded; names work already.";
-        return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, why.into()));
+        let why = "Search in words starts once its model has downloaded; names and captions work already.";
+        return if said.is_empty() { Err(Fail(StatusCode::SERVICE_UNAVAILABLE, why.into())) } else { Ok(said) };
     }
     let server = server.clone();
-    tokio::task::spawn_blocking(move || {
+    let seen: Vec<(i64, f32)> = tokio::task::spawn_blocking(move || {
         let numbers = words::embed_text(&rest).map_err(Fail::internal)?;
         let indexes = indexes(&server, &libraries);
         let scored: Vec<(i64, f32)> = photos
@@ -413,10 +451,16 @@ async fn found(server: &Arc<Server>, libraries: Vec<Library>, q: String) -> Resu
                 Some((photo.id, words::cosine(index.get(&photo.path, photo.mtime)?, &numbers)))
             })
             .collect();
-        Ok(words::ranked(scored))
+        Ok::<_, Fail>(words::ranked(scored))
     })
     .await
-    .map_err(Fail::internal)?
+    .map_err(Fail::internal)??;
+    Ok(captioned_first(said, seen))
+}
+
+fn captioned_first(said: Vec<(i64, f32)>, seen: Vec<(i64, f32)>) -> Vec<(i64, f32)> {
+    let named: std::collections::HashSet<i64> = said.iter().map(|(id, _)| *id).collect();
+    said.into_iter().chain(seen.into_iter().filter(|(id, _)| !named.contains(id))).collect()
 }
 
 pub fn indexes<'a>(server: &'a Server, libraries: &[Library]) -> MutexGuard<'a, HashMap<i64, Index>> {
@@ -490,6 +534,8 @@ pub struct Since {
 
     gone: Option<u8>,
 
+    rules: Option<u32>,
+
     synced: Option<u8>,
 
     videos: Option<u8>,
@@ -506,7 +552,8 @@ pub async fn in_step(
     let now = crate::store::now();
     let library = server.home.libraries(&me).into_iter().find(|library| library.id == id);
     let library = library.ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?;
-    let since = asked.since.unwrap_or(0);
+    let behind = asked.rules.is_some_and(|rules| rules < numa_io::home::sync::RULES);
+    let since = if behind { 0 } else { asked.since.unwrap_or(0) };
     let updated = server.store.updated();
     let videos = asked.videos == Some(1);
     let photos = server.home.files(id);
@@ -537,6 +584,7 @@ pub async fn in_step(
     .map_err(Fail::internal)?;
     if asked.gone == Some(1) {
         crate::sync::with_albums(&server, &mut rows).await?;
+        crate::sync::with_captions(&server, id, &mut rows).await?;
         rows.extend(crate::sync::deletes(&server, id, since));
     }
     if asked.synced == Some(1) {
@@ -548,6 +596,12 @@ pub async fn in_step(
 #[cfg(test)]
 mod tests {
     use super::{order, Sort, Wanted};
+
+    #[test]
+    fn what_a_caption_names_comes_before_what_the_model_finds() {
+        let found = super::captioned_first(vec![(3, 1.0)], vec![(1, 0.4), (3, 0.3), (2, 0.2)]);
+        assert_eq!(found, [(3, 1.0), (1, 0.4), (2, 0.2)]);
+    }
 
     #[test]
     fn a_day_reads_forward_with_the_newest_day_on_top() {

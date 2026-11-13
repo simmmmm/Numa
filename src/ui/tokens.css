@@ -1,8 +1,8 @@
 /* Written by dev/tokens.py from data/design/tokens.json. Do not edit. */
-@define-color numa_ground_window #242424;
-@define-color numa_ground_view #1e1e1e;
-@define-color numa_ground_raised #303030;
-@define-color numa_ground_sheet #1b1b1b;
+@define-color numa_ground_window #141414;
+@define-color numa_ground_view #141414;
+@define-color numa_ground_raised #2a2a2a;
+@define-color numa_ground_sheet #141414;
 @define-color numa_ground_page #141414;
 @define-color numa_ground_photo #0e0e0e;
 @define-color numa_ground_chip #2a2a2a;
@@ -55,10 +55,10 @@
 @define-color numa_library_tint_5 #a993c8;
 @define-color numa_library_tint_6 #62b2b2;
 @define-color numa_library_tint_7 #ca7d7d;
-@define-color numa_photo_ground_window #242424;
-@define-color numa_photo_ground_view #1e1e1e;
-@define-color numa_photo_ground_raised #303030;
-@define-color numa_photo_ground_sheet #1b1b1b;
+@define-color numa_photo_ground_window #141414;
+@define-color numa_photo_ground_view #141414;
+@define-color numa_photo_ground_raised #2a2a2a;
+@define-color numa_photo_ground_sheet #141414;
 @define-color numa_photo_ground_page #141414;
 @define-color numa_photo_ground_chip #2a2a2a;
 @define-color numa_photo_ink #ffffff;
@@ -83,10 +83,10 @@
 @define-color numa_photo_edited #b9a2ff;
 @define-color numa_photo_info #8ab8ff;
 /* light */
-@define-color numa_ground_window #fafafb;
+@define-color numa_ground_window #ffffff;
 @define-color numa_ground_view #ffffff;
-@define-color numa_ground_raised #ffffff;
-@define-color numa_ground_sheet #f3f3f5;
+@define-color numa_ground_raised #e8e8e8;
+@define-color numa_ground_sheet #ffffff;
 @define-color numa_ground_page #ffffff;
 @define-color numa_ground_chip #e8e8e8;
 @define-color numa_ink rgba(0, 0, 6, 0.8);
@@ -110,3 +110,14 @@
 @define-color numa_star #865f0b;
 @define-color numa_edited #6a39ff;
 @define-color numa_info #005be8;
+/* contrast */
+@define-color numa_label #b4b4b4;
+@define-color numa_photo_label #b4b4b4;
+@define-color numa_rule rgba(255, 255, 255, 0.3);
+@define-color numa_photo_rule rgba(255, 255, 255, 0.3);
+@define-color numa_rule_sheet rgba(255, 255, 255, 0.3);
+@define-color numa_photo_rule_sheet rgba(255, 255, 255, 0.3);
+/* contrast light */
+@define-color numa_label #3d3d3d;
+@define-color numa_rule rgba(0, 0, 6, 0.3);
+@define-color numa_rule_sheet rgba(0, 0, 6, 0.3);

@@ -14,6 +14,8 @@ function pick(event, id) {
   if (event.shiftKey && picked.anchor != null && order.includes(picked.anchor)) {
     const [a, b] = [order.indexOf(picked.anchor), order.indexOf(id)].sort((x, y) => x - y);
     order.slice(a, b + 1).forEach(one => picked.ids.add(one));
+
+    getSelection()?.removeAllRanges();
   } else {
     if (picked.ids.has(id)) picked.ids.delete(id); else picked.ids.add(id);
     picked.anchor = id;
@@ -96,11 +98,93 @@ document.addEventListener('pointerdown', down => {
 
 document.addEventListener('dragstart', event => { if (event.target.closest?.('main .tile')) event.preventDefault(); });
 
+const COPY_EDGES = [4096, 2048, 1080];
+let copyEdge = COPY_EDGES[0];
+const keepCopyEdge = edge => { try { localStorage.setItem('numa-copy-edge', edge); } catch (_) {  } };
+try { copyEdge = COPY_EDGES.find(edge => edge === Number(localStorage.getItem('numa-copy-edge'))) || copyEdge; } catch (_) {  }
+
+function adoptCopyEdge(me) {
+  if (!COPY_EDGES.includes(me?.copy_edge)) return;
+  copyEdge = me.copy_edge;
+  keepCopyEdge(copyEdge);
+}
+const COPY_KEY = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘C' : 'Ctrl+C';
+const copyTip = () => phrase('copyTip', { edge: copyEdge, key: COPY_KEY });
+const photoOf = id => state.sections.flatMap(section => section.photos || []).find(photo => photo.id === id);
+
+let lastCopied = null;
+
+const copyItems = photo => COPY_EDGES.map(edge => h('button', { class: edge === copyEdge ? 'chosen' : null, role: 'menuitemradio', 'aria-checked': String(edge === copyEdge),
+  title: edge === copyEdge ? COPY_KEY : null, onclick: () => {
+    copyEdge = edge;
+    keepCopyEdge(edge);
+    if (state.viewer?.copyButton) state.viewer.copyButton.title = copyTip();
+    copyPhoto(photo, state.viewer?.copyButton);
+    if (state.me) state.me.copy_edge = edge;
+    api('me', { method: 'PUT', body: JSON.stringify({ copy_edge: edge }), quiet: true }).catch(() => {});
+  } }, phrase('copyEdge', { edge })));
+
+async function copyPhoto(photo, button) {
+  if (!photo || photo.video || copyPhoto.busy) return;
+  copyPhoto.busy = true;
+  button?.setAttribute('aria-busy', 'true');
+  waiting(true, 1);
+  const url = `/api/v1/photos/${photo.id}/jpeg?edge=${copyEdge}`;
+  const key = versioned(url, photo.id);
+  const jpeg = lastCopied?.key === key ? Promise.resolve(lastCopied.blob) : fetch(url)
+    .then(answer => { if (!answer.ok) throw new Error(answer.status); return answer.blob(); })
+    .then(blob => { lastCopied = { key, blob }; return blob; });
+  const bitmap = jpeg.then(blob => createImageBitmap(blob));
+  const size = async () => { const { width, height } = await bitmap; return `${width} × ${height}`; };
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      const png = bitmap.then(picture => {
+        const canvas = h('canvas', { width: picture.width, height: picture.height });
+        canvas.getContext('2d').drawImage(picture, 0, 0);
+        return new Promise((done, failed) => canvas.toBlob(blob => blob ? done(blob) : failed(new Error('png')), 'image/png'));
+      });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      toast(phrase('photoCopied', { size: await size() }));
+    } else toast(await copyAsPage(await jpeg) ? phrase('copiedForMail', { size: await size() }) : S.copyAgain);
+  } catch (_) {
+    toast(S.copyFailed);
+  } finally {
+    copyPhoto.busy = false;
+    button?.removeAttribute('aria-busy');
+    waiting(true, -1);
+  }
+}
+
+async function copyAsPage(blob) {
+  const data = await new Promise((done, failed) => {
+    const reader = new FileReader();
+    reader.onload = () => done(reader.result);
+    reader.onerror = failed;
+    reader.readAsDataURL(blob);
+  });
+  const put = event => { event.preventDefault(); event.clipboardData.setData('text/html', `<img src="${data}" alt="">`); };
+  document.addEventListener('copy', put);
+  const copied = document.execCommand('copy');
+  document.removeEventListener('copy', put);
+  return copied;
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key.toLowerCase() !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (event.target.closest?.('input, select, textarea, [contenteditable]') || !getSelection().isCollapsed || document.querySelector('dialog[open]')) return;
+  const viewer = state.viewer;
+  const photo = viewer ? viewer.photo : picked.ids.size === 1 && photoOf([...picked.ids][0]);
+  if (!photo || photo.video) return;
+  event.preventDefault();
+  copyPhoto(photo, viewer?.copyButton);
+});
+
 function unpick() {
   picked.ids.clear();
   picked.anchor = null;
   picked.mode = false;
   picked.album = null;
+  picked.into = null;
   paintPicked();
 }
 
@@ -257,7 +341,7 @@ async function selectionBar() {
 
   bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('chosenN', { n: grouped(n) })), everything),
     h('div', { class: 'acts' },
-      picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album) }, phrase('addTo', { album: picked.album }))
+      picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album, picked.into) }, phrase('addTo', { album: picked.album }))
         : h('button', { class: 'chip', onclick: () => albumDialog(ids) }, S.albumEll),
       round('star', S.starsAndFlag, actions.marks),
       round('download', S.downloadTip, actions.downloads),
@@ -277,6 +361,8 @@ async function chosenMenu(event, tile, id) {
   menuAt(event.clientX, event.clientY, [
     ids.length === 1 ? h('button', { onclick: () => { unpick(); tile.click(); } }, S.open) : h('div', { class: 'section-label' }, phrase('chosenN', { n: grouped(ids.length) })),
     actions.album(),
+
+    ids.length === 1 && photoOf(id) && !photoOf(id).video && [h('div', { class: 'rule' }), h('div', { class: 'section-label' }, S.copy), copyItems(photoOf(id))],
     h('div', { class: 'rule' }), h('div', { class: 'section-label' }, S.download), ...actions.downloads(),
     h('div', { class: 'rule' }), actions.marks(),
     h('div', { class: 'rule' }), actions.more(),
@@ -374,6 +460,8 @@ async function albumDialog(ids) {
 }
 
 const albumItems = album => [
+
+  ...(album.may_change === false ? [] : kindItems(album)),
   h('button', { onclick: () => shareDialog({ album: album.key, name: album.name }) }, S.shareProofsEll),
   h('button', { onclick: () => shareAlbumDialog(album) }, S.shareAlbumEll),
   h('button', { onclick: () => collectDialog({ album: album.key, name: album.name }) }, S.collectEll),
@@ -390,20 +478,30 @@ const albumItems = album => [
 ];
 
 async function newAlbum() {
-  const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' })], S.choosePhotosBtn);
+  const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' }), ...emptyAlbumChoice()], S.choosePhotosBtn);
   const name = (asked?.name || '').trim();
   if (!name) return;
+
+  if (asked.empty) return intoNewAlbum([], name);
   const start = () => { picked.mode = true; picked.album = name; paintPicked(); };
   if (location.hash === '#/') return start();
 
   addEventListener('hashchange', start, { once: true });
   go('/');
 }
-async function intoNewAlbum(ids, name) {
+
+async function intoNewAlbum(ids, name, key) {
   try {
-    const { album } = await api('photos/album', { method: 'POST', body: JSON.stringify({ ids, inside: true, name }) });
+    const { album } = await api('photos/album', { method: 'POST', body: JSON.stringify({ ids, inside: true, ...(key ? { album: key } : { name }) }) });
     go('/', { album });
   } catch (error) { toast(error.message); }
+}
+
+async function chooseInto(key) {
+  const name = (await api('albums').catch(() => [])).find?.(one => one.key === key)?.name || S.album;
+  const start = () => { picked.mode = true; picked.album = name; picked.into = key; paintPicked(); };
+  addEventListener('hashchange', start, { once: true });
+  go('/');
 }
 
 async function bookDialog(query) {

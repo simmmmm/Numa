@@ -30,7 +30,7 @@ pub struct PhotoClock {
 pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
     let has_camera = conn
         .prepare("SELECT * FROM photos LIMIT 0")
-        .map(|statement| statement.column_names().contains(&"camera"))
+        .map(|statement| statement.column_names().any(|name| name == "camera"))
         .unwrap_or(true);
     if !has_camera {
         conn.execute_batch(

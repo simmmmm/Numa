@@ -16,6 +16,7 @@ impl Catalog {
             open.conn.execute("UPDATE OR IGNORE album_photos SET album = ?1 WHERE album = ?2", params![keep, other]).map_err(text)?;
             open.conn.execute("DELETE FROM album_photos WHERE album = ?1", params![other]).map_err(text)?;
         }
+        self.merge_chapters(keep, other)?;
         self.home.execute("DELETE FROM albums WHERE key = ?1", params![other]).map_err(text)?;
         Ok(())
     }

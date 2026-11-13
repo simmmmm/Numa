@@ -92,6 +92,12 @@ mod filmstrip;
 mod culling;
 mod picker;
 mod albums;
+mod album_page;
+mod album_words;
+mod album_chapter;
+mod album_trip;
+mod album_round;
+mod album_share;
 mod client_picks;
 mod grid;
 mod scrubber;
@@ -133,6 +139,7 @@ mod geometry;
 mod auto_plan;
 mod overlays;
 mod info;
+mod caption;
 mod open;
 mod prefetch;
 mod clocks;
@@ -206,6 +213,7 @@ use geometry::*;
 use auto_plan::*;
 use overlays::*;
 use info::*;
+use caption::*;
 use open::*;
 use mask_toolbar::*;
 pub use header::show_app_about;
@@ -252,6 +260,8 @@ const OFFERED_MODELS: &str = "offered-models";
 const OFFERED_MENU_ENTRY: &str = "offered-menu-entry";
 const EXPORT_SETTINGS: &str = "export";
 
+const COPY_EDGE: &str = "copy-edge";
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct WindowState {
     width: i32,
@@ -263,19 +273,31 @@ const CSS: &str = include_str!("style.css");
 
 const TOKENS: &str = include_str!("tokens.css");
 
-fn stylesheet(dark: bool) -> String {
-    let (dark_half, light_half) = TOKENS.split_once("/* light */").unwrap_or((TOKENS, ""));
-    let light_half = if dark { "" } else { light_half };
-    format!("{dark_half}{light_half}{CSS}")
+fn stylesheet(dark: bool, high_contrast: bool) -> String {
+    let (tokens, contrast) = TOKENS.split_once("/* contrast */").unwrap_or((TOKENS, ""));
+    let (dark_half, light_half) = tokens.split_once("/* light */").unwrap_or((tokens, ""));
+    let (contrast_dark, contrast_light) = contrast.split_once("/* contrast light */").unwrap_or((contrast, ""));
+    let light = |half: &'static str| if dark { "" } else { half };
+    let contrast = if high_contrast { format!("{contrast_dark}{}", light(contrast_light)) } else { String::new() };
+
+    let sea = format!("@define-color numa_map_sea {};\n", map_view::colour(dark, "water"));
+    format!("{dark_half}{}{contrast}{sea}{CSS}", light(light_half))
 }
 
 fn load_css() {
     let provider = gtk::CssProvider::new();
     let style = adw::StyleManager::default();
-    provider.load_from_string(&stylesheet(style.is_dark()));
+    let load = |provider: &gtk::CssProvider, style: &adw::StyleManager| {
+        provider.load_from_string(&stylesheet(style.is_dark(), style.is_high_contrast()))
+    };
+    load(&provider, &style);
     style.connect_dark_notify(glib::clone!(
         #[strong] provider,
-        move |style| provider.load_from_string(&stylesheet(style.is_dark()))
+        move |style| load(&provider, style)
+    ));
+    style.connect_high_contrast_notify(glib::clone!(
+        #[strong] provider,
+        move |style| load(&provider, style)
     ));
 
     if let Some(display) = gtk::gdk::Display::default() {
@@ -473,6 +495,9 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
     ] {
         state.stack.add_named(&build_page(column), Some(name));
     }
+
+    state.stack.add_named(&album_page::build(state), Some("album"));
+    album_chapter::install_actions(state, window);
 
     state.stack.add_named(&places_page::build(state), Some("places"));
 

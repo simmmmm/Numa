@@ -16,7 +16,7 @@ use crate::auth::Signed;
 use crate::timeline::Wanted;
 use crate::{Fail, Server};
 
-const FILE: &str = "map/tiles.db";
+pub(crate) const FILE: &str = "map/tiles.db";
 
 pub const NAME: &str = "Map";
 

@@ -14,7 +14,7 @@ h1 { font-size: 20px; line-height: 25px; font-weight: 700; }
 .caption { font-size: 12px; line-height: 16px; color: var(--label); font-variant-numeric: tabular-nums; }
 .body { color: var(--label); }
 
-.primary { border: 0; cursor: pointer; font-weight: 600; background: var(--accent); color: var(--on-accent); height: 44px; border-radius: 22px; padding: 0 20px; justify-self: start; }
+.primary { border: 0; cursor: pointer; font-weight: 600; background: var(--accent); color: var(--on-accent); height: 44px; border-radius: 999px; padding: 0 20px; justify-self: start; }
 .primary:active { opacity: 0.7; }
 .primary[disabled] { opacity: 0.4; cursor: default; }
 input[type=text] { height: 40px; border: 0; border-radius: var(--radius-sheet); padding: 0 14px; background: var(--ground-chip); width: 100%; }
