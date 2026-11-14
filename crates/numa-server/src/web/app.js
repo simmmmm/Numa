@@ -577,15 +577,12 @@ async function filterRow(params, narrowed, page = {}) {
     preset(S.picks, flag === 'pick', { flag: flag === 'pick' ? null : 'pick' }),
     preset(rated(3), rating === '3', { rating: rating === '3' ? null : 3 }, ratedSaid(3)),
     active, count, !params.get('q') && sortButton(params), sizeSlider());
-
-  const book = (params.get('library') || params.get('album')) &&
-    h('button', { class: 'chip', 'data-book': '', title: S.bookTip, onclick: () => bookDialog(new URLSearchParams(narrowed).toString()) }, S.forABook);
   const back = owner && { library: S.libraries, album: S.albums, person: S.people }[owner];
   const head = h('div', { class: 'collection-head' },
     back && h('button', { class: 'round small', 'aria-label': back, title: back, onclick: () => go(OWNERS[owner]) }, icon('back')),
     h('div', { class: 'titles' }, h('h1', {}, owner ? names[owner] : params.get('q') ? S.search : S.photosPage), h('div', { class: 'caption' }, dates),
       owner === 'library' && library && syncedWith(library.id)),
-    h('div', { class: 'act' }, book,
+    h('div', { class: 'act' },
 
       owner === 'library' && library && tidyEntry(library),
       owner === 'library' && library && state.me.admin && !library.mine && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {

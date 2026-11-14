@@ -434,8 +434,6 @@ pub(super) struct State {
 
     pub(super) head_slot: gtk::Box,
 
-    pub(super) new_album: Rc<RefCell<Option<albums::Making>>>,
-
     pub(super) album: album_page::State,
 
     pub(super) words: words::State,
@@ -458,7 +456,6 @@ impl State {
             head: library_page::Head::new(),
             head_slot: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             bar: library_bar::Bar::new(),
-            new_album: Rc::default(),
             album: album_page::State::new(),
             words: words::State::new(),
             side: sidebar::State::new(),

@@ -1,6 +1,6 @@
 'use strict';
 
-const picked = { ids: new Set(), anchor: null, mode: false, album: null };
+const picked = { ids: new Set(), anchor: null, mode: false };
 const libraryOf = id => Math.floor(id / 2 ** 32);
 
 function pick(event, id) {
@@ -183,8 +183,6 @@ function unpick() {
   picked.ids.clear();
   picked.anchor = null;
   picked.mode = false;
-  picked.album = null;
-  picked.into = null;
   paintPicked();
 }
 
@@ -279,7 +277,6 @@ function chosenActions(ids, manage, own = {}) {
     ],
     more: () => [
       item(S.takenBy, () => byDialog(ids)),
-      item(S.forABook, () => bookDialog(`ids=${ids.join(',')}`)),
       item(S.shareProofsEll, () => shareDialog({ ids })),
       manage && h('div', { class: 'rule' }),
       manage && item(S.moveEll, () => moveDialog(ids, refresh)),
@@ -331,7 +328,7 @@ async function selectionBar() {
 
   const everything = h('button', { class: 'chip', onclick: selectAll }, S.selectAll);
   if (!n) {
-    bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, picked.album ? phrase('choosePhotosFor', { album: picked.album }) : S.choosePhotos), everything));
+    bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, S.choosePhotos), everything));
     return;
   }
   const [manage, edit] = await Promise.all([mayManage(ids), mayEdit(ids)]);
@@ -341,8 +338,7 @@ async function selectionBar() {
 
   bar.append(h('div', { class: 'lead' }, close, h('span', { class: 'count' }, phrase('chosenN', { n: grouped(n) })), everything),
     h('div', { class: 'acts' },
-      picked.album ? h('button', { class: 'chip add', onclick: () => intoNewAlbum(ids, picked.album, picked.into) }, phrase('addTo', { album: picked.album }))
-        : h('button', { class: 'chip', onclick: () => albumDialog(ids) }, S.albumEll),
+      h('button', { class: 'chip', onclick: () => albumDialog(ids) }, S.albumEll),
       round('star', S.starsAndFlag, actions.marks),
       round('download', S.downloadTip, actions.downloads),
       round('more', S.more, actions.more)));
@@ -408,7 +404,8 @@ document.addEventListener('keydown', event => {
     });
   }
 });
-window.addEventListener('hashchange', () => { unpick(); unshelve(); });
+
+window.addEventListener('hashchange', () => { if (route().path !== '/') unpick(); unshelve(); });
 
 function toast(text, action) {
   clearTimeout(toasts.timer);
@@ -478,59 +475,13 @@ const albumItems = album => [
 ];
 
 async function newAlbum() {
-  const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' }), ...emptyAlbumChoice()], S.choosePhotosBtn);
+  const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' })], S.create);
   const name = (asked?.name || '').trim();
   if (!name) return;
-
-  if (asked.empty) return intoNewAlbum([], name);
-  const start = () => { picked.mode = true; picked.album = name; paintPicked(); };
-  if (location.hash === '#/') return start();
-
-  addEventListener('hashchange', start, { once: true });
-  go('/');
-}
-
-async function intoNewAlbum(ids, name, key) {
   try {
-    const { album } = await api('photos/album', { method: 'POST', body: JSON.stringify({ ids, inside: true, ...(key ? { album: key } : { name }) }) });
+    const { album } = await api('photos/album', { method: 'POST', body: JSON.stringify({ ids: [], inside: true, name }) });
     go('/', { album });
   } catch (error) { toast(error.message); }
-}
-
-async function chooseInto(key) {
-  const name = (await api('albums').catch(() => [])).find?.(one => one.key === key)?.name || S.album;
-  const start = () => { picked.mode = true; picked.album = name; picked.into = key; paintPicked(); };
-  addEventListener('hashchange', start, { once: true });
-  go('/');
-}
-
-async function bookDialog(query) {
-  let plan;
-  try { plan = await api('book?' + query); } catch (error) { toast(error.message); return; }
-  let kept = 0;
-  try { kept = Number(localStorage.getItem('numa-book-product')) || 0; } catch (_) {  }
-  const product = h('select', { name: 'product', 'aria-label': S.photoBook },
-    plan.products.map((one, at) => h('option', { value: at, selected: at === kept }, one.name)));
-  const list = h('div', { class: 'chapters' });
-  const fill = () => list.replaceChildren(...plan.chapters.map((chapter, at) => h('label', { class: 'check' },
-    h('input', { type: 'checkbox', name: `c${at}`, checked: true }), `${String(at + 1).padStart(2, '0')} · ${chapter.name}`,
-    h('span', { class: 'caption' }, grouped(chapter.count)))));
-  const by = h('select', { name: 'by', 'aria-label': S.chaptersBy, hidden: !plan.albums, onchange: async () => {
-    try { plan = await api(`book?${query}&by=${by.value}`); fill(); } catch (error) { toast(error.message); }
-  } }, [['album', S.byAlbum], ['day', S.byDay]].map(([value, label]) => h('option', { value, selected: plan.by === value }, label)));
-  fill();
-  const asked = await dialog(`${plan.name} · ${counted(plan.count)}`,
-    S.bookText,
-    [by, list, product], S.makeBook);
-  if (!asked) return;
-  try { localStorage.setItem('numa-book-product', asked.product); } catch (_) {  }
-  const leave = plan.chapters.map((_, at) => at).filter(at => !asked[`c${at}`]);
-  if (leave.length === plan.chapters.length) return toast(S.leaveOne);
-  const link = h('a', { href: `/api/v1/book/zip?${query}&by=${plan.by}&mm=${plan.products[asked.product].mm}&leave=${leave.join(',')}`, download: '' });
-  document.body.append(link);
-  link.click();
-  link.remove();
-  toast(S.bookDownloads);
 }
 
 async function setBy(ids, account) {

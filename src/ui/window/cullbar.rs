@@ -102,14 +102,6 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
     let more = more_button(state);
     acts.extend([merge.clone().upcast(), export.clone().upcast(), more.clone().upcast()]);
 
-    let into = primary_button("Add to");
-    into.set_visible(false);
-    into.connect_clicked(glib::clone!(
-        #[strong] state,
-        move |_| into_new_album(&state)
-    ));
-
-    row.append(&into);
     row.append(&more);
     row.append(&export);
 
@@ -119,29 +111,18 @@ pub(super) fn build(state: &App) -> gtk::ActionBar {
         #[weak] merge,
         #[weak] export,
         #[weak] album,
-        #[weak] into,
         #[strong] state,
         move || {
-            let chosen = state.grid.wall.selected().len();
+            let chosen = state.grid.wall.chosen();
             let number = places::grouped(chosen as i64);
-
-            if !state.grid.wall.choosing() {
-                state.libraries.new_album.replace(None);
-            }
-            let making = state.libraries.new_album.borrow().clone();
-            count.set_text(&match (chosen, &making) {
-                (0, Some(making)) => format!("Choose photographs for {}", making.name),
-                (0, None) => "Choose photographs".to_string(),
+            count.set_text(&match chosen {
+                0 => "Choose photographs".to_string(),
                 _ => format!("{number} chosen"),
             });
             for act in &acts {
                 act.set_visible(chosen > 0);
             }
-            album.set_visible(chosen > 0 && making.is_none());
-            into.set_visible(chosen > 0 && making.is_some());
-            if let Some(making) = &making {
-                into.set_label(&format!("Add to {}", making.name));
-            }
+            album.set_visible(chosen > 0);
             merge.set_sensitive(chosen >= 2);
             export.set_label(&format!("Export {number}…"));
 
@@ -178,7 +159,6 @@ fn lift_toasts(state: &App, bar: &gtk::ActionBar) {
 fn more_button(state: &App) -> gtk::MenuButton {
     let more_menu = gio::Menu::new();
     more_menu.append(Some("Tonight…"), Some("win.tonight"));
-    more_menu.append(Some("For a Book…"), Some("win.book"));
 
     more_menu.append(Some("Copy File Names"), Some("win.copy-names"));
     let more = gtk::MenuButton::new();

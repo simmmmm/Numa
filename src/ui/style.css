@@ -653,7 +653,7 @@ entry.curve-value:focus-within {
 
 .filter-chips .filter-chip {
     border-radius: 999px;
-    padding: 4px 8px 4px 14px;
+    padding: 4px 8px 4px 12px;
     min-height: 30px;
 }
 
@@ -899,6 +899,20 @@ listview.filmstrip-frames > row {
 
 .found-chips > flowboxchild {
     padding: 0;
+}
+
+.chip-row > button:not(.image-button),
+.chip-row > menubutton > button:not(.image-button),
+.found-chips > flowboxchild > button:not(.image-button) {
+    padding-left: 12px;
+    padding-right: 12px;
+}
+
+.panel-card .chip-row > button,
+.panel-card .chip-row > menubutton > button,
+.panel-card .found-chips > flowboxchild > button {
+    padding-left: 8px;
+    padding-right: 8px;
 }
 
 .chip-row > button:hover:not(:checked),
@@ -1278,6 +1292,10 @@ button.numa-primary:disabled {
     box-shadow: 0 0 0 2px @numa_ground_hud;
 }
 
+.place-head label.caption {
+    line-height: normal;
+}
+
 .place-head {
     padding: 0 4px 0 0;
 }
@@ -1297,7 +1315,7 @@ toolbarview.see-through .top-bar {
 }
 
 toolbarview.see-through windowtitle .subtitle {
-    opacity: 0.85;
+    opacity: 0.7;
 }
 
 .hero-words label {

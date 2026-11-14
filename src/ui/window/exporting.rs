@@ -139,16 +139,6 @@ fn develop_one(mut job: ExportJob, settings: &export::ExportSettings, work: &Wor
     Ok((image, job.source.name(), raf))
 }
 
-fn named(to: &Path, settings: &export::ExportSettings) -> Result<PathBuf, String> {
-    if let Some(folder) = to.parent() {
-        std::fs::create_dir_all(folder).map_err(|err| format!("{}: {err}", folder.display()))?;
-    }
-    let mut name = to.as_os_str().to_owned();
-    name.push(".");
-    name.push(settings.format.extension());
-    Ok(PathBuf::from(name))
-}
-
 fn follow(text: &gtk::Label, bar: &gtk::ProgressBar, work: &Work, title: String, (index, total): (usize, usize)) -> glib::SourceId {
     glib::timeout_add_local(
         std::time::Duration::from_millis(500),
@@ -237,7 +227,6 @@ pub(super) fn run_export_then(
 
             let for_render = settings.clone();
             let job_source = job.source.clone();
-            let to = job.to.clone();
             let job_directory = directory.clone();
             let worker = work.clone();
             let develop = move || develop_one(job, &for_render, &worker);
@@ -265,10 +254,7 @@ pub(super) fn run_export_then(
                     let directory = job_directory;
                     Some(gtk::gio::spawn_blocking(move || {
 
-                        let destination = match to {
-                            Some(to) => named(&to, &settings)?,
-                            None => export::next_path(&directory, &name, &settings)?,
-                        };
+                        let destination = export::next_path(&directory, &name, &settings)?;
                         export::write(&image, &destination, &settings, raf.as_deref(), &about)
                             .map(|()| destination)
                     }))

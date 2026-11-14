@@ -1,7 +1,6 @@
 pub mod album_page;
 pub mod analysis;
 pub mod avif;
-pub mod book;
 pub mod camera_look;
 pub mod capture;
 pub mod error;

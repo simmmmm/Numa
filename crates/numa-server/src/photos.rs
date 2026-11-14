@@ -264,7 +264,7 @@ pub async fn jpeg(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id
     let _turn = server.renders.acquire().await.map_err(Fail::internal)?;
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         if let Some(edge) = edge {
-            return crate::book::develop(&photo, edge, &edits, scratch.parent().unwrap_or(&scratch), &settings);
+            return develop(&photo, edge, &edits, scratch.parent().unwrap_or(&scratch), &settings);
         }
         let image = thumbs::render(&photo.path, u32::MAX, &edits)?;
         std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|err| err.to_string())?;
@@ -286,6 +286,25 @@ const COPYRIGHT: &str = "jpegs:copyright";
 
 pub(crate) fn jpeg_settings(server: &Server) -> numa_io::export::ExportSettings {
     shared(server.store.setting(CREATOR).unwrap_or_default(), server.store.setting(COPYRIGHT).unwrap_or_default())
+}
+
+pub(crate) fn develop(photo: &Photo, edge: u32, edits: &str, scratch: &std::path::Path, settings: &numa_io::export::ExportSettings) -> Result<Vec<u8>, String> {
+    let mut image = numa_io::thumbs::render(&photo.path, edge, edits)?;
+    if edge < u32::MAX && image.width().max(image.height()) < edge {
+        let whole = numa_io::thumbs::render(&photo.path, u32::MAX, edits)?;
+        image = match whole.width().max(whole.height()) > edge {
+            true => image::DynamicImage::ImageRgb8(whole).thumbnail(edge, edge).into_rgb8(),
+            false => whole,
+        };
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+    let file = scratch.join(format!("jpeg-{}-{}-{at}.jpg", std::process::id(), photo.id));
+    std::fs::create_dir_all(scratch).map_err(|err| err.to_string())?;
+    let settings = numa_io::export::ExportSettings { quality: 95, ..settings.clone() };
+    let written = numa_io::export::save(&image, &file, &settings, Some(&photo.path));
+    let bytes = written.and_then(|()| std::fs::read(&file).map_err(|err| err.to_string()));
+    let _ = std::fs::remove_file(&file);
+    bytes
 }
 
 fn shared(creator: String, copyright: String) -> numa_io::export::ExportSettings {

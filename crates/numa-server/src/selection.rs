@@ -253,7 +253,7 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
     let scratch = server.data.join("tmp");
     let settings = crate::photos::jpeg_settings(&server);
     tokio::task::spawn_blocking(move || {
-        let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, crate::book::Pipe(tx)));
+        let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, Pipe(tx)));
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let (mut names, mut left_out) = (HashSet::new(), Vec::new());
         for ((library, photo), edits) in photos.iter().zip(&stacks) {
@@ -266,7 +266,7 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
                 }
                 name = format!("{} {at}.jpg", base.display());
             }
-            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::book::develop(photo, edge, edits, &scratch, &settings));
+            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::photos::develop(photo, edge, edits, &scratch, &settings));
             match developed {
                 Ok(bytes) => {
                     if zip.start_file(name, options).is_err() || zip.write_all(&bytes).is_err() {
@@ -287,4 +287,17 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
     headers.insert(header::CONTENT_DISPOSITION, crate::photos::attachment("Numa Home.zip"));
     Ok(response)
+}
+
+struct Pipe(tokio::sync::mpsc::Sender<Result<Vec<u8>, std::io::Error>>);
+
+impl Write for Pipe {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.blocking_send(Ok(bytes.to_vec())).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

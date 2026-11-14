@@ -12,6 +12,7 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     header.pack_start(&start);
 
     let (title, named) = build_header_title(state);
+    let album_title = named.clone();
     header.set_show_title(false);
     header.pack_start(&title);
     align_title(state, &title);
@@ -105,6 +106,8 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
         }
     });
 
+    album_page::follow_name(state, &album_title);
+
     header
 }
 
@@ -142,10 +145,12 @@ fn build_header_start(state: &App) -> gtk::Stack {
     state.loupe.reveal.bind_property("reveal-child", &back_out, "visible").sync_create().build();
 
     back_out.set_has_tooltip(true);
-    back_out.connect_query_tooltip(|_, _, _, _, tip| {
-        tip.set_text(Some(if tidy::is_looking() { "Back to Tidy Up (Esc)" } else { "Back to the grid (Esc)" }));
+    back_out.connect_query_tooltip(glib::clone!(
+        #[strong] state,
+        move |_, _, _, _, tip| {
+        tip.set_text(Some(if tidy::is_looking() { "Back to Tidy Up (Esc)" } else if album_page::is_looking(&state) { "Back to the album (Esc)" } else { "Back to the grid (Esc)" }));
         true
-    });
+    }));
     library_actions.prepend(&back_out);
 
     let rating = build_loupe_rating(state);
@@ -321,7 +326,6 @@ fn install_header_actions(state: &App, window: &adw::ApplicationWindow) {
     window.add_action(&open_link);
     home_sync::install(state, window);
     install_rescan_action(state, window);
-    book::install(state, window);
 }
 
 fn install_rescan_action(state: &App, window: &adw::ApplicationWindow) {
@@ -385,7 +389,6 @@ fn library_menu(main_menu: &gio::Menu) -> gio::Menu {
 
     let out = gio::Menu::new();
     out.append(Some("Tonight…"), Some("win.tonight"));
-    out.append(Some("For a Book…"), Some("win.book"));
     menu.append_section(None, &library);
     menu.append_section(None, &out);
     menu.append_section(None, main_menu);

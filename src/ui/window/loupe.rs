@@ -762,6 +762,7 @@ pub(super) fn close_loupe(state: &App) {
     if was_open {
         state.loupe.group.plain.set(false);
         tidy::back_from_loupe(state, back_to_grid);
+        album_page::back_from_loupe(state, back_to_grid);
     }
 }
 
@@ -960,8 +961,10 @@ fn reject_rest(state: &App) {
 
 fn refresh_burst(state: &App, at: usize) {
     let run = burst_run(state, at);
-    state.loupe.burst.set_visible(run.len() > 1);
-    if run.len() < 2 {
+
+    let plain = state.loupe.group.plain.get();
+    state.loupe.burst.set_visible(run.len() > 1 && !plain);
+    if run.len() < 2 || plain {
         return;
     }
 

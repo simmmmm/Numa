@@ -31,6 +31,7 @@ fn filter_of_this_place(state: &App, library: &Library) {
 pub(super) fn reload_grid(state: &App) {
 
     close_loupe(state);
+    let choice = choice_to_keep(state);
 
     thumbnail::cancel_pending();
 
@@ -115,6 +116,7 @@ pub(super) fn reload_grid(state: &App) {
     let (sections, months) = sections_of(state, &photos, filter.sort);
     *state.grid.cards.borrow_mut() = photos.into_iter().map(|photo| (photo.id, photo)).collect();
     state.grid.wall.fill(aspects, sections);
+    choose_again(state, choice);
     state.grid.scrubber.show(&state.grid.scroller, months, across_libraries.then(|| sidebar::tints(state)));
     if timing() {
         eprintln!(
@@ -129,6 +131,42 @@ pub(super) fn reload_grid(state: &App) {
     }
 
     sweep_thumbnails(state);
+}
+
+fn choice_to_keep(state: &App) -> Option<(Vec<Photo>, bool)> {
+    let wall = &state.grid.wall;
+    if !wall.choosing() && wall.chosen() < 2 {
+        return None;
+    }
+    let cards = state.grid.cards.borrow();
+    Some((selected_ids(state).iter().filter_map(|id| cards.get(id).cloned()).collect(), wall.choosing()))
+}
+
+fn choose_again(state: &App, choice: Option<(Vec<Photo>, bool)>) {
+    let Some((photos, choosing)) = choice else { return };
+    let ids: Vec<i64> = photos.iter().map(|photo| photo.id).collect();
+
+    let (indices, held) = split_choice(&state.grid.order.borrow(), &ids, |id| state.catalog.taken_of(id).is_some());
+    let mut cards = state.grid.cards.borrow_mut();
+    for photo in photos.into_iter().filter(|photo| held.contains(&photo.id)) {
+        cards.entry(photo.id).or_insert(photo);
+    }
+    drop(cards);
+    state.grid.wall.keep_choice(&indices, held, choosing);
+}
+
+fn split_choice(order: &[i64], chosen: &[i64], exists: impl Fn(i64) -> bool) -> (Vec<usize>, Vec<i64>) {
+    let at: HashMap<i64, usize> = order.iter().enumerate().map(|(index, id)| (*id, index)).collect();
+    let mut indices = Vec::new();
+    let mut held = Vec::new();
+    for &id in chosen {
+        match at.get(&id) {
+            Some(&index) => indices.push(index),
+            None if exists(id) => held.push(id),
+            None => {}
+        }
+    }
+    (indices, held)
 }
 
 fn sections_of(state: &App, photos: &[Photo], sort: Sort) -> (Vec<justified::Section>, Vec<scrubber::Month>) {
@@ -302,5 +340,16 @@ mod tests {
         assert_eq!(super::month_name(0), "January 1970");
 
         assert_eq!(super::month_name(1_793_489_400), "October 2026");
+    }
+
+    #[test]
+    fn a_new_filter_keeps_the_choice_by_id() {
+        let order = [40, 10, 30];
+        let (indices, held) = super::split_choice(&order, &[10, 20, 50], |id| id != 50);
+        assert_eq!(indices, vec![1]);
+        assert_eq!(held, vec![20]);
+
+        let (indices, held) = super::split_choice(&[10, 20, 30], &[10, 20], |_| true);
+        assert_eq!((indices, held), (vec![0, 1], vec![]));
     }
 }

@@ -147,7 +147,6 @@ use clocks::*;
 mod words;
 mod tokens;
 mod proof;
-mod book;
 use masks::*;
 use card_render::*;
 use colour::*;

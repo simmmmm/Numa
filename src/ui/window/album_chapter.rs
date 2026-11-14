@@ -276,21 +276,30 @@ pub(super) fn add_field(state: &App, page: &AlbumPage) -> gtk::Entry {
     entry
 }
 
-pub(super) fn start(state: &App, page: &AlbumPage) -> gtk::Box {
+pub(super) fn start(page: &AlbumPage) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    block.append(&kit::section_header("Nothing in it yet. Begin with"));
+    let empty = adw::StatusPage::new();
+    empty.add_css_class("compact");
+    empty.set_title("No Photographs Yet");
+
+    empty.set_description(Some(&glib::markup_escape_text(&format!("Select photographs in Photos or a library, right-click them and choose Add to Album, then {}.", page.name))));
+    block.append(&empty);
+
+    let mut ways = Vec::new();
+    if page.kind == AlbumKind::Album {
+        ways.push(("mark-location-symbolic", "A Trip", "Places, a map and the route between them.", "album.make-trip"));
+        ways.push(("emblem-favorite-symbolic", "A Wedding", "Six chapters to begin with, from Getting Ready to the Party.", "album.make-wedding"));
+    }
+    if page.kind != AlbumKind::Trip {
+        ways.push(("view-list-symbolic", "Chapters of Your Own", "Name the parts, and write a line under each.", "album.add-chapter"));
+    }
+    if ways.is_empty() {
+        return block;
+    }
+    block.append(&kit::section_header("Begin with"));
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);
-
-    let mut ways = vec![("image-x-generic-symbolic", "Choose Photos", "Pick them in Photos; they come here.", None)];
-    if page.kind == AlbumKind::Album {
-        ways.push(("mark-location-symbolic", "A Trip", "Places, a map and the route between them.", Some("album.make-trip")));
-        ways.push(("emblem-favorite-symbolic", "A Wedding", "Six chapters to begin with, from Getting Ready to the Party.", Some("album.make-wedding")));
-    }
-    if page.kind != AlbumKind::Trip {
-        ways.push(("view-list-symbolic", "Chapters of Your Own", "Name the parts, and write a line under each.", Some("album.add-chapter")));
-    }
     for (icon, title, line, action) in ways {
         let row = adw::ActionRow::new();
         row.set_title(title);
@@ -298,12 +307,8 @@ pub(super) fn start(state: &App, page: &AlbumPage) -> gtk::Box {
         row.set_activatable(true);
         row.add_prefix(&gtk::Image::from_icon_name(icon));
         row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-        let (state, key, name) = (state.clone(), page.key.clone(), page.name.clone());
-        row.connect_activated(move |row| match action {
-            Some(action) => {
-                let _ = row.activate_action(action, None);
-            }
-            None => albums::choose_into(&state, &key, &name),
+        row.connect_activated(move |row| {
+            let _ = row.activate_action(action, None);
         });
         list.append(&row);
     }

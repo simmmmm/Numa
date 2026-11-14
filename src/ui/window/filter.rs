@@ -69,7 +69,7 @@ pub(super) fn build_filter_bar(state: &App, window: &adw::ApplicationWindow) -> 
         #[weak] group,
         #[weak] export,
         move |wall| {
-            let chosen = wall.selected().len();
+            let chosen = wall.chosen();
             group.set_visible(chosen > 0);
             export.set_label(&match chosen {
                 0 | 1 => "Export".to_string(),

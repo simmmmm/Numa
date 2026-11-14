@@ -79,13 +79,23 @@ fn run_under_side(state: &App, page: &gtk::Overlay) {
     follow(split);
     split.connect_collapsed_notify(follow);
 
-    page.connect_realize(|page| {
-        let mut above = page.parent();
-        while let Some(widget) = above.filter(|widget| !widget.is::<adw::OverlaySplitView>()) {
-            widget.set_overflow(gtk::Overflow::Visible);
-            above = widget.parent();
+    page.connect_realize(open_above);
+    state.stack.connect_transition_running_notify(glib::clone!(
+        #[weak] page,
+        move |stack| {
+            if !stack.is_transition_running() {
+                open_above(&page);
+            }
         }
-    });
+    ));
+}
+
+fn open_above(page: &gtk::Overlay) {
+    let mut above = page.parent();
+    while let Some(widget) = above.filter(|widget| !widget.is::<adw::OverlaySplitView>()) {
+        widget.set_overflow(gtk::Overflow::Visible);
+        above = widget.parent();
+    }
 }
 
 pub(super) fn show(state: &App) {

@@ -148,7 +148,6 @@ pub(super) struct Head {
     more: gtk::MenuButton,
 
     kinds: gtk::Box,
-    book: gtk::Button,
     rename: gtk::Button,
     files: gtk::Button,
     stop: gtk::Button,
@@ -191,9 +190,6 @@ impl Head {
             }
             button
         };
-        let book = item("For a Book…");
-        book.set_action_name(Some("win.book"));
-        book.set_tooltip_text(Some("The picks here, as a photo book's chapter folders"));
         let rename = item("Rename…");
         let files = item("Show in Files");
         let stop = item("Stop Syncing…");
@@ -218,7 +214,6 @@ impl Head {
             ));
             kinds.append(&button);
         }
-        kinds.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         let pencil = gtk::Button::from_icon_name("document-edit-symbolic");
         pencil.add_css_class("flat");
         pencil.add_css_class("circular");
@@ -235,7 +230,7 @@ impl Head {
 
         titles_stack.set_vhomogeneous(false);
         let editing = Rc::new(Cell::new(false));
-        Self { back, title, caption, tokens, more, kinds, book, rename, files, stop, tidy, sync, pencil, edit, titles_stack, editing, owner: Rc::new(Cell::new("libraries")) }
+        Self { back, title, caption, tokens, more, kinds, rename, files, stop, tidy, sync, pencil, edit, titles_stack, editing, owner: Rc::new(Cell::new("libraries")) }
     }
 }
 
@@ -335,7 +330,7 @@ fn build_head(state: &App) -> gtk::Box {
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
     list.append(&head.kinds);
-    for button in [&head.tidy, &head.book, &head.rename, &head.files, &head.stop] {
+    for button in [&head.tidy, &head.rename, &head.files, &head.stop] {
         list.append(button);
         button.connect_clicked(glib::clone!(
             #[weak(rename_to = more)] head.more,
@@ -453,10 +448,9 @@ pub(super) fn show_head(state: &App) {
     };
     head.owner.set(owner);
     head.back.set_tooltip_text(Some(back));
-    let book = matches!(place, Place::Library(_) | Place::Album(_));
-    head.book.set_visible(book);
 
-    head.kinds.set_visible(matches!(&place, Place::Album(key) if !album_page::has_page(state, key)));
+    let kinds = matches!(&place, Place::Album(key) if !album_page::has_page(state, key));
+    head.kinds.set_visible(kinds);
     let here = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
     head.tidy.set_visible(here);
     head.rename.set_visible(here);
@@ -482,7 +476,8 @@ pub(super) fn show_head(state: &App) {
     head.stop.set_visible(stop);
     let on_disk = matches!(&place, Place::Library(library) if !home_sync::is_home(state, library.id));
     head.files.set_visible(on_disk);
-    head.more.set_visible(book || here || stop || on_disk);
+
+    head.more.set_visible(kinds || here || stop || on_disk);
 
     head.tokens.set_visible(false);
 }
@@ -833,7 +828,7 @@ fn install_photo_menu_popover(state: &App, menu: gio::Menu) {
                 state.grid.wall.select_only(index);
             }
 
-            state.export.copy.set_enabled(state.grid.wall.selected().len() == 1);
+            state.export.copy.set_enabled(state.grid.wall.chosen() == 1);
             rows_popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             rows_popover.popup();
         }
@@ -846,7 +841,8 @@ fn install_photo_menu_popover(state: &App, menu: gio::Menu) {
 
 pub(super) fn selected_ids(state: &App) -> Vec<i64> {
     let lazy = state.grid.lazy.borrow();
-    state.grid.wall.selected().into_iter().filter_map(|index| lazy.get(index).map(|card| card.id)).collect()
+    let shown = state.grid.wall.selected().into_iter().filter_map(|index| lazy.get(index).map(|card| card.id));
+    shown.chain(state.grid.wall.held()).collect()
 }
 
 pub(super) fn confirm_delete(state: &App, window: &adw::ApplicationWindow) {

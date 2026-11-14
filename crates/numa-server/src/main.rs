@@ -1,7 +1,6 @@
 mod accounts;
 mod activity;
 mod album;
-mod book;
 mod auth;
 mod by;
 mod cards;
@@ -260,8 +259,6 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/photos/marks", post(selection::marks))
         .route("/api/v1/photos/by", post(selection::by))
         .route("/api/v1/photos/zip", get(selection::zip))
-        .route("/api/v1/book", get(book::show))
-        .route("/api/v1/book/zip", get(book::zip))
         .route("/api/v1/today", get(today::today))
         .route("/api/v1/timeline", get(timeline::months))
         .route("/api/v1/timeline/{month}", get(timeline::month))

@@ -3,15 +3,12 @@ use super::*;
 pub(super) struct ExportJob {
     pub(super) source: Source,
     pub(super) document: Document,
-
-    pub(super) to: Option<PathBuf>,
 }
 
 pub(super) fn open_job(state: &App) -> Option<ExportJob> {
     state.open.borrow().as_ref().map(|photo| ExportJob {
         source: photo.source.clone(),
         document: photo.document.clone(),
-        to: None,
     })
 }
 
@@ -122,7 +119,7 @@ pub(super) fn photo_jobs(state: &App, photos: impl IntoIterator<Item = (i64, Pat
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| Document::new(path.to_string_lossy().to_string()));
-            ExportJob { source: Source::Photo { id, path }, document, to: None }
+            ExportJob { source: Source::Photo { id, path }, document }
         })
         .collect()
 }

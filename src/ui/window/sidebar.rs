@@ -94,6 +94,19 @@ pub(super) fn build(state: &App, window: &adw::ApplicationWindow, content: &impl
     scroller.set_child(Some(&side.list));
 
     side.peek.set_parent(&scroller);
+
+    scroller.vadjustment().connect_value_changed(glib::clone!(
+        #[strong] state,
+        move |_| unpeek(&state)
+    ));
+    window.connect_is_active_notify(glib::clone!(
+        #[strong] state,
+        move |window| {
+            if !window.is_active() {
+                unpeek(&state);
+            }
+        }
+    ));
     let bar = adw::HeaderBar::new();
     bar.pack_start(&mark_title());
     bar.set_title_widget(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
@@ -165,6 +178,8 @@ fn narrower_than(width: i32) -> adw::BreakpointCondition {
 }
 
 fn follow(state: &App) {
+
+    unpeek(state);
     let side = &state.libraries.side;
     side.toggle.set_visible(side.split.is_collapsed() && !away(state));
     if away(state) {
@@ -385,6 +400,9 @@ fn entry_row(state: &App, place: &Place, look: Look) -> gtk::ListBoxRow {
         Look::Face => {
             let face = gtk::Image::new();
             face.set_pixel_size(16);
+
+            face.set_valign(gtk::Align::Center);
+            face.set_halign(gtk::Align::Center);
             face.add_css_class("side-face");
             face.set_overflow(gtk::Overflow::Hidden);
             face.set_paintable(read.covers.first().and_then(|cover| places::texture(cover, 32)).as_ref());
@@ -462,15 +480,20 @@ fn peek_on(state: &App, row: &gtk::ListBoxRow, place: &Place) {
         #[strong] state,
         #[weak] row,
         #[strong] place,
-        move |_, _, _| {
+        move |motion, _, _| {
             unpeek(&state);
+
             let later = glib::timeout_add_local_once(PEEK_AFTER, glib::clone!(
                 #[strong] state,
-                #[weak] row,
+                #[strong] row,
+                #[strong] motion,
                 #[strong] place,
                 move || {
                     PEEKING.take();
-                    peek(&state, &row, &place);
+
+                    if motion.contains_pointer() && row.is_mapped() && state.libraries.side.split.shows_sidebar() {
+                        peek(&state, &row, &place);
+                    }
                 }
             ));
             PEEKING.replace(Some(later));

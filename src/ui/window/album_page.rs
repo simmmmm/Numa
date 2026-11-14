@@ -26,6 +26,10 @@ pub(super) struct State {
     pub(super) key: Rc<RefCell<Option<String>>>,
 
     turn: Rc<Cell<u32>>,
+
+    looking: Rc<Cell<Option<f64>>>,
+
+    title: Rc<RefCell<glib::WeakRef<gtk::Label>>>,
 }
 
 impl State {
@@ -38,6 +42,8 @@ impl State {
             side: gtk::Box::new(gtk::Orientation::Vertical, 16),
             key: Rc::default(),
             turn: Rc::default(),
+            looking: Rc::default(),
+            title: Rc::default(),
         }
     }
 }
@@ -82,6 +88,7 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
     title.add_css_class("title-1");
     title.set_xalign(0.0);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    state.libraries.album.title.replace(title.downgrade());
     words.append(&title);
     let figures = gtk::Box::new(gtk::Orientation::Horizontal, 32);
     figures.set_margin_top(12);
@@ -179,6 +186,27 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
     actions.set_margin_end(12);
     over.add_overlay(&actions);
     head.append(&over);
+}
+
+pub(super) fn follow_name(state: &App, bar: &adw::WindowTitle) {
+    let say = {
+        let (page, stack, bar) = (state.libraries.album.clone(), state.stack.clone(), bar.downgrade());
+        move || {
+            let Some(bar) = bar.upgrade() else { return };
+            if stack.visible_child_name().as_deref() != Some("album") {
+                return;
+            }
+
+            let gone = page.title.borrow().upgrade().zip(page.root.child()).and_then(|(title, viewport)| title.compute_bounds(&viewport)).is_some_and(|bounds| bounds.height() > 0.0 && bounds.y() + bounds.height() <= 0.0);
+            let name = if gone { page.name.borrow().clone() } else { String::new() };
+            bar.set_title(&name);
+        }
+    };
+
+    let later = move || glib::idle_add_local_once(say.clone());
+    let again = later.clone();
+    state.libraries.album.root.vadjustment().connect_value_changed(move |_| drop(again()));
+    state.stack.connect_visible_child_name_notify(move |_| drop(later()));
 }
 
 pub(super) fn has_page(state: &App, key: &str) -> bool {
@@ -294,7 +322,7 @@ fn paint(state: &App, page: &AlbumPage) {
     }
     let starting = page.layout.count == 0 && page.chapters.is_empty();
     if starting {
-        view.column.append(&album_chapter::start(state, page));
+        view.column.append(&album_chapter::start(page));
     }
     if trip {
         album_trip::fill_side(state, page, today);
@@ -374,6 +402,7 @@ fn more_tile(state: &App, album: &str, chapter: &str, rest: usize) -> gtk::Butto
 }
 
 pub(super) fn open_grid(state: &App, album: &str, chapter: &str, at: Option<i64>) {
+    let scrolled = Some(state.libraries.album.root.vadjustment().value());
     {
         let mut filter = state.libraries.filter.borrow_mut();
         filter.album = Some(album.to_string());
@@ -388,9 +417,30 @@ pub(super) fn open_grid(state: &App, album: &str, chapter: &str, at: Option<i64>
     if let Some(id) = at {
         let state = state.clone();
         glib::idle_add_local_once(move || {
-            loupe::show_in_loupe(&state, id);
+
+            state.loupe.group.plain.set(true);
+            let shown = loupe::show_in_loupe(&state, id);
+            state.loupe.group.plain.set(shown);
+            state.libraries.album.looking.set(scrolled.filter(|_| shown));
         });
     }
+}
+
+pub(super) fn back_from_loupe(state: &App, to_grid: bool) {
+    let Some(scrolled) = state.libraries.album.looking.take() else { return };
+    let ours = {
+        let filter = state.libraries.filter.borrow();
+        filter.chapter.is_some() && filter.album == *state.libraries.album.key.borrow()
+    };
+    if !to_grid || !ours {
+        return;
+    }
+    state.stack.set_visible_child_name("album");
+    state.libraries.album.root.vadjustment().set_value(scrolled);
+}
+
+pub(super) fn is_looking(state: &App) -> bool {
+    state.libraries.album.looking.get().is_some()
 }
 
 pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashMap<i64, &Photo>, chapter: &str, count: usize) -> gtk::Box {

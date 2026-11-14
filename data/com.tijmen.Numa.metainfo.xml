@@ -51,6 +51,16 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.51.1" date="2026-11-14">
+      <description>
+        <p>A click on a photograph on an album's page now opens that photograph alone. Escape goes back to the page, where you were.</p>
+        <p>The bar shows the album's name when you scroll down its page.</p>
+        <p>New Album… asks the name and makes the album at once. Its empty page says how to add photographs.</p>
+        <p>The photographs you chose stay chosen when you change the filter, the sorting or the library.</p>
+        <p>For a Book… is gone. Export gets its folders and its photo book sizes in a next version.</p>
+        <p>Today's photograph keeps the full width when you come back to Today. Smaller repairs: the faces in the side list, the names in the Albums window, and the space inside the round buttons.</p>
+      </description>
+    </release>
     <release version="0.51.0" date="2026-11-13">
       <description>
         <p>An album now has its own page. It shows a cover and the photographs by day. You can add chapters, each with a name and a few words. A photograph can have a caption.</p>

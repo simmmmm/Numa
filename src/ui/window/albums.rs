@@ -104,81 +104,31 @@ pub(super) fn new_album(state: &App, window: &adw::ApplicationWindow) {
     let ask = adw::AlertDialog::new(Some("New Album"), None);
     ask.set_extra_child(Some(&entry));
     ask.add_response("cancel", "Cancel");
-
-    ask.add_response("empty", "No Photos Yet");
-    ask.add_response("choose", "Choose Photographs");
-    ask.set_default_response(Some("choose"));
+    ask.add_response("create", "Create");
+    ask.set_default_response(Some("create"));
     ask.set_close_response("cancel");
-    ask.set_response_enabled("choose", false);
-    ask.set_response_enabled("empty", false);
+    ask.set_response_enabled("create", false);
     entry.connect_changed(glib::clone!(
         #[weak] ask,
-        move |entry| {
-            let named = !entry.text().trim().is_empty();
-            ask.set_response_enabled("choose", named);
-            ask.set_response_enabled("empty", named);
-        }
+        move |entry| ask.set_response_enabled("create", !entry.text().trim().is_empty())
     ));
     let (state, typed) = (state.clone(), entry.clone());
     ask.connect_response(None, move |_, response| {
         let name = typed.text().trim().to_string();
-        if response == "empty" && !name.is_empty() {
-            match state.catalog.create_album(&name) {
-                Ok(key) => {
-                    refresh_places(&state);
-                    show_place(&state, Place::Album(key));
-                    album_round::after_a_round(&state);
-                }
-                Err(err) => state.toast(&String::from(err)),
+        if response != "create" || name.is_empty() {
+            return;
+        }
+        match state.catalog.create_album(&name) {
+            Ok(key) => {
+                refresh_places(&state);
+                show_place(&state, Place::Album(key));
+                album_round::after_a_round(&state);
             }
-            return;
+            Err(err) => state.toast(&String::from(err)),
         }
-        if response != "choose" || name.is_empty() {
-            return;
-        }
-
-        show_place(&state, Place::Everywhere);
-        state.libraries.new_album.replace(Some(Making { name, into: None }));
-        state.grid.wall.set_choosing(true);
-        state.grid.wall.grab_focus();
     });
     ask.present(Some(window));
     entry.grab_focus();
-}
-
-pub(super) fn into_new_album(state: &App) {
-    let Some(making) = state.libraries.new_album.borrow().clone() else { return };
-    let ids = selected_ids(state);
-    if ids.is_empty() {
-        return;
-    }
-    let made = match &making.into {
-
-        Some(key) => state.catalog.set_in_album(key, &ids, true).map(|()| key.clone()),
-        None => state.catalog.create_album(&making.name).map_err(String::from).and_then(|key| state.catalog.set_in_album(&key, &ids, true).map(|()| key)),
-    };
-    match made {
-        Ok(key) => {
-            state.libraries.new_album.replace(None);
-            state.grid.wall.unpick();
-            sidebar::fill(state);
-            show_place(state, Place::Album(key));
-        }
-        Err(err) => state.toast(&err),
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct Making {
-    pub(super) name: String,
-    pub(super) into: Option<String>,
-}
-
-pub(super) fn choose_into(state: &App, key: &str, name: &str) {
-    show_place(state, Place::Everywhere);
-    state.libraries.new_album.replace(Some(Making { name: name.to_string(), into: Some(key.to_string()) }));
-    state.grid.wall.set_choosing(true);
-    state.grid.wall.grab_focus();
 }
 
 pub(super) fn add_selection_to_album(state: &App, key: &str) {
@@ -225,8 +175,11 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
         let row = adw::EntryRow::new();
         row.set_text(&name);
 
+        let read = places::row(state, &Place::Album(key.clone()));
+
+        set_row_title(&row, &places::photos(read.count as usize));
         let fan = places::fan(places::TILE);
-        places::show_covers(&fan, &places::row(state, &Place::Album(key.clone())).covers, places::TILE);
+        places::show_covers(&fan, &read.covers, places::TILE);
         row.add_prefix(&fan);
         row.set_show_apply_button(true);
         row.connect_apply(glib::clone!(

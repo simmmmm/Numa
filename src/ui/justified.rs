@@ -81,6 +81,8 @@ mod imp {
 
         pub(super) choosing: Cell<bool>,
 
+        pub(super) held: RefCell<Vec<i64>>,
+
         pub(super) sections: RefCell<Vec<Section>>,
         pub(super) heads: RefCell<Vec<(usize, gtk::Widget)>>,
         pub(super) spare_heads: RefCell<Vec<gtk::Widget>>,
@@ -252,7 +254,8 @@ impl Justified {
     pub fn fill(&self, aspects: Vec<f32>, sections: Vec<Section>) {
         let imp = self.imp();
 
-        let had_selection = imp.selected.borrow().contains(&true) | imp.choosing.replace(false);
+        let had_selection =
+            imp.selected.borrow().contains(&true) | imp.choosing.replace(false) | !imp.held.take().is_empty();
         let count = aspects.len();
         *imp.aspects.borrow_mut() = aspects;
         *imp.selected.borrow_mut() = vec![false; count];
@@ -381,8 +384,42 @@ impl Justified {
     }
 
     pub fn unselect_all(&self) {
+        let held = !self.imp().held.take().is_empty();
         let count = self.imp().selected.borrow().len();
+        if held && !self.imp().selected.borrow().contains(&true) {
+            self.emit_by_name::<()>("selection-changed", &[]);
+        }
         self.set_selection(vec![false; count]);
+    }
+
+    pub fn chosen(&self) -> usize {
+        self.imp().selected.borrow().iter().filter(|on| **on).count() + self.imp().held.borrow().len()
+    }
+
+    pub fn held(&self) -> Vec<i64> {
+        self.imp().held.borrow().clone()
+    }
+
+    pub fn keep_choice(&self, indices: &[usize], held: Vec<i64>, choosing: bool) {
+        let imp = self.imp();
+        imp.choosing.set(choosing);
+        *imp.held.borrow_mut() = held;
+        let mut selection = vec![false; self.len()];
+        for index in indices {
+            if let Some(on) = selection.get_mut(*index) {
+                *on = true;
+            }
+        }
+        if *imp.selected.borrow() == selection {
+            self.emit_by_name::<()>("selection-changed", &[]);
+        }
+        self.set_selection(selection);
+    }
+
+    fn let_go_held(&self) {
+        if !self.choosing() && !self.imp().held.take().is_empty() {
+            self.emit_by_name::<()>("selection-changed", &[]);
+        }
     }
 
     pub fn select_all(&self) {
@@ -403,7 +440,7 @@ impl Justified {
 
     pub fn unpick(&self) {
         let was = self.imp().choosing.replace(false);
-        if self.imp().selected.borrow().contains(&true) {
+        if self.imp().selected.borrow().contains(&true) || !self.imp().held.borrow().is_empty() {
             self.unselect_all();
         } else if was {
             self.emit_by_name::<()>("selection-changed", &[]);
@@ -661,6 +698,7 @@ impl Justified {
     }
 
     fn select_only_index(&self, index: usize) {
+        self.let_go_held();
         let mut selection = vec![false; self.imp().selected.borrow().len()];
         selection[index] = true;
         self.set_selection(selection);
@@ -671,6 +709,9 @@ impl Justified {
     fn select_run(&self, index: usize, keep: bool) {
         let imp = self.imp();
         let anchor = imp.anchor.get().unwrap_or(index);
+        if !keep {
+            self.let_go_held();
+        }
         let mut selection = if keep {
             imp.selected.borrow().clone()
         } else {
@@ -748,6 +789,9 @@ impl Justified {
             #[weak(rename_to = this)] self,
             move |gesture, _, _| {
                 let keep = gesture.current_event_state().contains(gdk::ModifierType::CONTROL_MASK);
+                if !keep {
+                    this.let_go_held();
+                }
                 let imp = this.imp();
                 *imp.band_base.borrow_mut() = if keep {
                     imp.selected.borrow().clone()
@@ -888,7 +932,7 @@ impl Justified {
             }
             return glib::Propagation::Stop;
         }
-        if key == gdk::Key::Escape && (self.choosing() || imp.selected.borrow().contains(&true)) {
+        if key == gdk::Key::Escape && (self.choosing() || self.chosen() > 0) {
             self.unpick();
             return glib::Propagation::Stop;
         }

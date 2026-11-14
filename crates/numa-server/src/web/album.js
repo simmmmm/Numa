@@ -37,16 +37,22 @@ async function albumPage(main, params, narrowed) {
   filters.head.classList.add('album-bar');
   view.dates = filters.dates;
 
-  filters.head.querySelector('.act .chip[data-book]')?.remove();
-
   if (page.kind === 'trip' && page.may_change) {
     filters.head.querySelector('.act')?.prepend(h('button', { class: 'primary', onclick: () => tripLinkDialog(key) }, S.tripShareEll));
   }
   view.body = h('div', { class: 'album-page' });
-  view.cover = h('header', { class: 'album-cover' });
+
+  view.cover = h('section', { class: 'album-cover' });
   main.append(filters.head, view.cover, view.body);
   albumNow = view;
   paint(view, page);
+
+  const named = () => {
+    if (!main.isConnected) return removeEventListener('scroll', named);
+    const title = view.cover.querySelector('.title');
+    filters.head.classList.toggle('named', !!title && title.getBoundingClientRect().bottom <= filters.head.getBoundingClientRect().bottom);
+  };
+  addEventListener('scroll', named, { passive: true });
   return true;
 }
 
@@ -418,8 +424,8 @@ function startBlock(view, page) {
   const way = (name, label, line, run) => h('button', { class: 'album-start-row', onclick: run },
     icon(name), h('span', { class: 'album-start-text' }, h('span', { class: 'name' }, label), h('span', { class: 'caption' }, line)), icon('on'));
   return h('div', { class: 'album-start' },
-    h('div', { class: 'section-label' }, S.startHead),
-    way('image', S.startPhotos, S.startPhotosLine, () => chooseInto(view.key)),
+    empty(S.noPhotosYet, phrase('albumEmptyLine', { album: page.name })),
+    page.kind !== 'trip' && h('div', { class: 'section-label' }, S.startHead),
     page.kind === 'album' && way('route', S.startTrip, S.startTripLine, () => setKind(album, 'trip')),
     page.kind === 'album' && way('star', S.startWedding, S.startWeddingLine, () => setKind(album, 'wedding')),
     page.kind !== 'trip' && way('edit', S.startChapters, S.startChaptersLine, () => addChapterDialog(album)));
@@ -647,9 +653,3 @@ function tripSaid(row) {
   return today >= first && today <= last ? phrase('dayN', { n: today - first + 1 }) : phrase(last === first ? 'tripDay' : 'tripDays', { n: last - first + 1 });
 }
 const routeMark = () => h('span', { class: 'route-mark', role: 'img', 'aria-label': S.aTrip }, icon('route'));
-
-function emptyAlbumChoice() {
-  const empty = h('input', { type: 'hidden', name: 'empty' });
-  const later = h('button', { type: 'button', class: 'album-quiet', onclick: event => { empty.value = '1'; event.currentTarget.form.requestSubmit(); } }, S.noPhotosYetChoice);
-  return [empty, later];
-}

@@ -75,7 +75,7 @@ pub(super) fn show_albums(state: &App) {
         true => {
             let empty = adw::StatusPage::new();
             empty.set_title("No Albums Yet");
-            empty.set_description(Some("Give one a name, then choose its photographs."));
+            empty.set_description(Some("Give one a name; its photographs go in from Photos or a library."));
             let new = primary_button("New Album…");
             new.add_css_class("pill");
             new.set_halign(gtk::Align::Center);

@@ -582,7 +582,6 @@ dialog.ask .buttons { display: flex; justify-content: flex-end; gap: 8px; margin
 dialog.ask .buttons .chip { height: 40px; border-radius: 20px; padding: 0 22px; }
 dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 dialog.ask input[type=checkbox] { accent-color: var(--accent); }
-dialog.ask .chapters { display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
 /* HOME-003 (#56): what an account sees, a tick per library and album, and
    once ticked its May edit switch on the right: chosen is white. */
 dialog.ask .grants { display: grid; gap: 8px; max-height: 50vh; overflow-y: auto; }
@@ -605,7 +604,6 @@ input.switch:checked { background: var(--accent); border-color: var(--accent); }
 input.switch:checked::after { transform: translateX(14px); background: var(--on-accent); }
 input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 dialog.ask .grants .section-label { margin-top: 8px; }
-dialog.ask .chapters .caption { margin-left: auto; }
 dialog.ask .year { width: 80px; margin-left: auto; }
 .primary:disabled { opacity: 0.4; cursor: default; }
 .shelf { display: grid; justify-items: center; gap: 4px; align-content: start; }
@@ -1042,12 +1040,11 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-add input::placeholder { color: var(--label); }
 .album-add .menu.suggest { min-width: 0; max-height: 300px; z-index: 3; }
 .album-add .menu.suggest button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-12); }
-.album-quiet { justify-self: start; padding: 0; border: 0; background: none; color: var(--label); cursor: pointer; }
-.album-quiet:hover { color: var(--ink); }
 
 /* An album with nothing in it: how it can begin, a row each. */
 .album-start { display: flex; flex-direction: column; align-items: stretch; margin-top: var(--space-8); }
 .album-start .section-label { margin-bottom: var(--space-6); }
+.album-start .empty { padding: var(--space-32) 0; }
 .album-start-row { display: flex; align-items: center; gap: var(--space-12); min-height: 56px; padding: var(--space-8) 0; border: 0; border-bottom: 1px solid var(--rule);
   background: none; text-align: left; cursor: pointer; color: var(--name); }
 .album-start-row:hover .name { color: var(--ink); }
@@ -1086,7 +1083,9 @@ textarea.album-words::placeholder { color: var(--label); }
 }
 /* The album's head: a bar with Back and the commands, then the cover with the
    name and the figures on its foot, as Today's photograph carries its words. */
+.album-bar { position: sticky; top: var(--head); z-index: 2; background: var(--ground-page); }
 .album-bar .titles { visibility: hidden; }
+.album-bar.named .titles { visibility: visible; }
 .album-cover { position: relative; padding: 0; border: 0; display: grid; align-content: end; margin-top: var(--space-12); height: min(360px, 48vh); min-height: 260px; border-radius: var(--radius-card); overflow: hidden; background: var(--ground-page); }
 .album-cover.bare { height: auto; min-height: 0; border-radius: 0; overflow: visible; }
 .album-cover > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }

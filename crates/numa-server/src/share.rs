@@ -760,7 +760,6 @@ pub(crate) mod tests {
                 format!("/api/v1/photos/{one}/thumb"),
                 format!("/api/v1/photos/{one}/preview"),
                 format!("/api/v1/photos/zip?ids={one}"),
-                "/api/v1/book/zip".to_string(),
                 "/api/v1/timeline".to_string(),
                 "/api/v1/people".to_string(),
                 "/api/v1/places".to_string(),
