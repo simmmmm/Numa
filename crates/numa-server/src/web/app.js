@@ -41,6 +41,13 @@ const ICONS = {
   live: '<circle cx="12" cy="12" r="2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 3"/>',
 
   route: '<circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="6" r="2.3"/><path d="M8.3 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.7"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  images: '<path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.296-1.296a2.41 2.41 0 0 0-3.408 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  bold: '<path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/>',
+  italic: '<line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/>',
   burst: '<path d="M9 3h11a2 2 0 0 1 2 2v9"/><path d="M6 6h11a2 2 0 0 1 2 2v9"/><path d="M4 10h2l1.5-2h3l1.5 2H14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"/><circle cx="9" cy="15.5" r="2.5"/>',
 };
 
@@ -98,9 +105,14 @@ async function fetched(path, options) {
   return body;
 }
 
-const grouped = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const grouped = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
 
 const filled = fraction => ({ transform: `scaleX(${Math.min(1, Math.max(0, fraction || 0))})` });
+
+const charCount = text => [...text].length;
+function charLimit(field, most) {
+  if (charCount(field.value) > most) field.value = [...field.value].slice(0, most).join('');
+}
 const counted = n => `${grouped(n)} ${n === 1 ? S.photo : S.photos}`;
 const starsOf = n => `${n} ${n === 1 ? S.star : S.stars}`;
 
@@ -142,6 +154,7 @@ async function start() {
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
+  whatsNew();
 }
 
 function gate(text, button, submit) {
@@ -209,6 +222,7 @@ async function signInAs(name, password) {
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
+  whatsNew();
 }
 
 async function libraries() {
@@ -320,8 +334,8 @@ function placesNav(path, params) {
       look = key === 'person' ? h('img', { class: 'face', src: thumb(look, 256), loading: 'lazy', alt: '' })
         : trip ? routeMark() : h('i', { class: 'tint', style: { background: key === 'library' ? `var(--library-tint-${look})` : null } });
       const entry = h('button', { class: 'place-entry' + (chosen ? ' chosen' : ''), 'aria-current': chosen ? 'page' : null,
-        onclick: () => go('/', { [key]: value }) }, look, h('span', { class: 'name' }, name), h('span', { class: 'caption' }, (trip && tripSaid(row)) || grouped(count)));
-      if (key === 'album') entry.addEventListener('contextmenu', event => { event.preventDefault(); menuAt(event.clientX, event.clientY, albumItems({ key: value, name, kind: row?.kind, may_change: changeable(row) })); });
+        onclick: () => go('/', { [key]: value }) }, look, h('span', { class: 'name' }, name), h('span', { class: 'caption' }, grouped(count)));
+      if (key === 'album') entry.addEventListener('contextmenu', event => { event.preventDefault(); menuAt(event.clientX, event.clientY, albumItems({ key: value, name, kind: row?.kind, may_change: changeable(row), count: row?.count, empty: row?.count === 0 && !row?.chapters })); });
       peekOn(entry, `${key}=${encodeURIComponent(value)}`, name, count);
       return entry;
     }), ...(key === 'album' ? [h('button', { class: 'place-entry new', onclick: newAlbum }, h('i', { class: 'plus' }, icon('plus')), h('span', { class: 'name' }, S.newAlbumEll))] : []));
@@ -470,8 +484,8 @@ const menuOver = (button, items) => {
 };
 
 const fault = message => h('p', { class: 'body fault' }, message);
-function empty(title, text, failed) {
-  return h('div', { class: 'empty' }, h('h2', {}, title), failed ? fault(text) : h('p', { class: 'body' }, text));
+function empty(title, text, failed, symbol) {
+  return h('div', { class: 'empty' }, symbol && icon(symbol), h('h2', {}, title), failed ? fault(text) : h('p', { class: 'body' }, text));
 }
 
 const SIZE = { min: 120, max: 440, step: 40, rest: 200 };
@@ -593,7 +607,11 @@ async function filterRow(params, narrowed, page = {}) {
       owner === 'album' && h('button', { class: 'round small', 'aria-label': S.more, title: S.more, 'aria-haspopup': 'menu', onclick: event => {
         event.stopPropagation();
         const at = event.currentTarget.getBoundingClientRect();
-        menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album, kind: page.kind ?? albumRow?.kind, may_change: page.may_change ?? changeable(albumRow) }));
+
+        const now = albumNow?.key === params.get('album') && albumNow.main.isConnected ? albumNow.page : null;
+        const count = now ? now.count : albumRow?.count ?? page.count;
+        menuAt(at.left, at.bottom + 6, albumItems({ key: params.get('album'), name: names.album, kind: now?.kind ?? page.kind ?? albumRow?.kind, may_change: page.may_change ?? changeable(albumRow),
+          count, empty: now ? !now.count && !now.chapters.length : count === 0 }));
       } }, icon('more')),
       selectToggle()));
 
@@ -1572,7 +1590,7 @@ function toggleInfo() {
 function captionField(detail) {
   const label = h('div', { class: 'section-label' }, S.caption);
   if (detail.level === 'view' || detail.video) return detail.caption ? [label, h('p', { class: 'words' }, detail.caption)] : [];
-  const area = h('textarea', { class: 'words', rows: 1, maxlength: 2000, placeholder: S.captionHint, 'aria-label': S.caption });
+  const area = h('textarea', { class: 'words', rows: 1, placeholder: S.captionHint, 'aria-label': S.caption });
   area.value = detail.caption || '';
   const fit = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
   let kept = area.value.trim();
@@ -1591,7 +1609,7 @@ function captionField(detail) {
       toast(phrase('notSaved', { error: error.message }));
     }
   };
-  area.addEventListener('input', () => { fit(); clearTimeout(timer); timer = setTimeout(keep, 900); });
+  area.addEventListener('input', () => { charLimit(area, 2000); fit(); clearTimeout(timer); timer = setTimeout(keep, 900); });
   area.addEventListener('change', keep);
   area.addEventListener('keydown', event => { if (event.key === 'Escape') area.blur(); });
   requestAnimationFrame(fit);

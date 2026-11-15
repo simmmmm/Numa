@@ -24,7 +24,7 @@ scale	1	src/ui/window/filter.rs
 scale	1	src/ui/window/lut.rs
 scale	1	src/ui/window/preferences.rs
 scale	1	src/ui/window/presets.rs
-size	58	src/ui/style.css
+size	57	src/ui/style.css
 sans	1	src/ui/window/watermark.rs
 busy	1	src/ui/window/ai_denoise.rs
 busy	1	src/ui/window/downloads.rs

@@ -63,6 +63,8 @@ fn redraw(state: &App) {
     home_sync::offer(state);
     if state.stack.visible_child_name().as_deref() == Some("libraries") {
         show_folders(state);
+    } else if state.stack.visible_child_name().as_deref() == Some("home") {
+        show_home(state);
     } else {
         show_head(state);
     }

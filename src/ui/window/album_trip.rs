@@ -7,7 +7,9 @@ const AROUND: f64 = 32.0;
 const DOT: f64 = 4.0;
 
 const MARK: f64 = 9.0;
-const LINE: f64 = 2.0;
+
+const LINE: f64 = 2.4;
+const LINE_AHEAD: f64 = 2.2;
 const DASH: [f64; 2] = [1.0, 6.0];
 
 const UNDER: f64 = 4.0;
@@ -23,11 +25,17 @@ pub(super) fn places_offered(state: &App, page: &AlbumPage) -> gtk::Box {
     block.append(&kit::section_header("Where these were taken"));
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
-    list.add_css_class("boxed-list");
+    list.add_css_class("album-plain");
+    list.add_css_class("album-towns");
     for offered in &page.layout.places {
         let row = adw::ActionRow::new();
         row.set_title(&glib::markup_escape_text(&offered.town.name));
         row.set_subtitle(&album_words::place_line(offered.first_day, offered.last_day, offered.ids.len()));
+
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.add_css_class("album-town-dot");
+        dot.set_valign(gtk::Align::Center);
+        row.add_prefix(&dot);
         list.append(&row);
     }
     block.append(&list);
@@ -88,7 +96,11 @@ pub(super) fn fill_side(state: &App, page: &AlbumPage, today: i64) {
     if !page.chapters.is_empty() {
         side.append(&kit::section_header("The Route"));
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        list.add_css_class("album-stops");
         for (at, (chapter, laid)) in page.chapters.iter().zip(&page.layout.chapters).enumerate() {
+            if at > 0 {
+                list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+            }
             let ahead = laid.count == 0 && chapter.place.is_some();
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             row.append(&album_page::mark(at + 1, ahead, false));
@@ -102,7 +114,10 @@ pub(super) fn fill_side(state: &App, page: &AlbumPage, today: i64) {
             row.append(&name);
             let said = gtk::Label::new(Some(&album_words::route_line(chapter, laid, here == Some(at))));
             said.add_css_class("caption");
-            said.add_css_class("dim-label");
+
+            if here != Some(at) {
+                said.add_css_class("dim-label");
+            }
             said.add_css_class("numeric");
             row.append(&said);
             let button = gtk::Button::new();
@@ -150,6 +165,14 @@ fn stack_pin(state: &App, stop: &Stop) -> gtk::Button {
     let mark = album_page::mark(stop.number.unwrap_or_default(), false, stop.here);
     mark.set_halign(gtk::Align::Start);
     over.add_overlay(&mark);
+
+    let count = gtk::Label::new(Some(&places::grouped(stop.count as i64)));
+    count.add_css_class("map-count");
+    count.add_css_class("numeric");
+    count.set_halign(gtk::Align::End);
+    count.set_valign(gtk::Align::Start);
+    count.set_margin_top(PEEK);
+    over.add_overlay(&count);
     let pin = gtk::Button::new();
     pin.add_css_class("flat");
     pin.add_css_class("map-pin");
@@ -217,10 +240,10 @@ fn route_map(state: &App, stops: Vec<Stop>, route: usize) -> gtk::Frame {
         small.set_size(9 * gtk::pango::SCALE);
         small.set_weight(gtk::pango::Weight::Bold);
         let quiet = gtk::gdk::RGBA::new(ink.red(), ink.green(), ink.blue(), ink.alpha() / 2.0);
-        cr.set_line_width(LINE);
         cr.set_line_cap(gtk::cairo::LineCap::Round);
         for pair in stops[..route].windows(2) {
             let done = pair[0].count > 0 && pair[1].count > 0;
+            cr.set_line_width(if done { LINE } else { LINE_AHEAD });
             cr.set_source_color(if done { &ink } else { &quiet });
             cr.set_dash(if done { &[] } else { &DASH }, 0.0);
             let (from, to) = (point(pair[0].at), point(pair[1].at));
@@ -229,6 +252,8 @@ fn route_map(state: &App, stops: Vec<Stop>, route: usize) -> gtk::Frame {
             let _ = cr.stroke();
         }
         cr.set_dash(&[], 0.0);
+
+        cr.set_line_width(2.0);
 
         let at: Vec<(f64, f64)> = stops.iter().map(|stop| point(stop.at)).collect();
         let mut taken: Vec<[f64; 4]> = at.iter().map(|(x, y)| [x - MARK, y - MARK, x + MARK, y + MARK]).collect();
@@ -277,7 +302,8 @@ fn route_map(state: &App, stops: Vec<Stop>, route: usize) -> gtk::Frame {
                 pangocairo::functions::show_layout(cr, &figure);
                 cr.set_operator(gtk::cairo::Operator::Over);
             }
-            let said = if been { format!("{} · {}", stop.name, places::grouped(stop.count as i64)) } else { stop.name.clone() };
+
+            let said = if been && mark { format!("{} · {}", stop.name, places::grouped(stop.count as i64)) } else { stop.name.clone() };
             let layout = area.create_pango_layout(Some(&said));
             let (wide, high) = layout.pixel_size();
             let (wide, high) = (f64::from(wide), f64::from(high));
@@ -289,13 +315,26 @@ fn route_map(state: &App, stops: Vec<Stop>, route: usize) -> gtk::Frame {
             pangocairo::functions::show_layout(cr, &layout);
         }
     });
+    let over = map_under(map.as_ref(), &area, bounds);
+    over.add_overlay(&pins);
+
+    if map.is_some() {
+        over.add_overlay(&map_view::credit());
+    }
+    let frame = gtk::Frame::new(None);
+    frame.add_css_class("album-map");
+    frame.set_child(Some(&over));
+    frame
+}
+
+fn map_under(map: Option<&libshumate::Map>, area: &gtk::DrawingArea, bounds: [f64; 4]) -> gtk::Overlay {
     let over = gtk::Overlay::new();
-    match &map {
+    match map {
         Some(map) => {
             map.set_can_target(false);
             map.set_size_request(-1, MAP);
             over.set_child(Some(map));
-            over.add_overlay(&area);
+            over.add_overlay(area);
 
             let fitted = map.clone();
             area.connect_resize(move |drawn, _, _| {
@@ -311,18 +350,15 @@ fn route_map(state: &App, stops: Vec<Stop>, route: usize) -> gtk::Frame {
                 viewport.connect_zoom_level_notify(move |_| drawn.queue_draw());
             }
         }
-        None => over.set_child(Some(&area)),
+        None => over.set_child(Some(area)),
     }
-    over.add_overlay(&pins);
-    let frame = gtk::Frame::new(None);
-    frame.add_css_class("album-map");
-    frame.set_child(Some(&over));
-    frame
+    over
 }
 
 fn place_field(state: &App, album: &str) -> gtk::Box {
     let entry = gtk::Entry::new();
     entry.set_placeholder_text(Some("Add a Place…"));
+    entry.set_primary_icon_name(Some("list-add-symbolic"));
     entry.set_max_length(numa::io::catalog::CHAPTER_NAME_LIMIT as i32);
     entry.add_css_class("album-add");
     let found = gtk::ListBox::new();

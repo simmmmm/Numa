@@ -6,7 +6,9 @@ use axum::http::{header, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
+use numa_io::album_page::DayLayout;
 use numa_io::catalog::{AlbumKind, Photo};
+use numa_io::markdown::parse;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -84,6 +86,8 @@ struct Shown<'a> {
     captions: &'a HashMap<i64, String>,
     ids: Vec<i64>,
     taken: Vec<i64>,
+
+    listed: HashMap<i64, usize>,
 }
 
 impl<'a> Shown<'a> {
@@ -94,18 +98,26 @@ impl<'a> Shown<'a> {
             captions: &loaded.captions,
             ids: Vec::new(),
             taken: Vec::new(),
+            listed: HashMap::new(),
         }
     }
 
     fn tiles(&mut self, shown: &[i64]) -> Vec<Value> {
         let mut rows = Vec::new();
         for photo in shown.iter().filter_map(|id| self.photos.get(id)).copied() {
-            let mut row = json!({ "n": self.ids.len(), "aspect": self.marks.shaped(photo)["aspect"] });
+            let n = match self.listed.get(&photo.id) {
+                Some(&n) => n,
+                None => {
+                    self.ids.push(photo.id);
+                    self.taken.push(when(photo));
+                    self.listed.insert(photo.id, self.ids.len() - 1);
+                    self.ids.len() - 1
+                }
+            };
+            let mut row = json!({ "n": n, "aspect": self.marks.shaped(photo)["aspect"] });
             if let Some(caption) = self.captions.get(&photo.id) {
                 row["caption"] = json!(caption);
             }
-            self.ids.push(photo.id);
-            self.taken.push(when(photo));
             rows.push(row);
         }
         rows
@@ -120,28 +132,35 @@ fn told(server: &Server, loaded: &Loaded, by: &str, expires: i64, route: bool) -
         .zip(&loaded.layout.chapters)
         .map(|(chapter, laid)| {
             let photos = shown.tiles(&laid.shown);
+            let by_day = guest_days(&mut shown, &laid.by_day, route);
             json!({
-                "name": chapter.name, "words": chapter.words, "place": chapter.place.as_ref().filter(|_| route).map(place_row),
-                "days": chapter.days.map(|(first, last)| [first, last]), "count": photos.len(), "photos": photos,
+                "name": chapter.name, "words": chapter.words, "spans": parse(&chapter.words), "place": chapter.place.as_ref().filter(|_| route).map(place_row),
+                "days": chapter.days.map(|(first, last)| [first, last]), "count": photos.len(), "photos": photos, "by_day": by_day,
             })
         })
         .collect();
-    let days: Vec<Value> = loaded
-        .layout
-        .days
-        .iter()
-        .map(|day| {
-            let places = if route { day.towns.clone() } else { Vec::new() };
-            json!({ "day": numa_io::import::day(day.day * 86_400, 0), "places": places, "photos": shown.tiles(&day.shown) })
-        })
-        .collect();
+    let days = guest_days(&mut shown, &loaded.layout.days, route);
     let positions: Vec<(f64, f64)> = loaded.chapters.iter().filter_map(|chapter| chapter.place.as_ref()).map(|place| (place.latitude, place.longitude)).collect();
     let guest = json!({
-        "name": loaded.name, "by": by, "expires": expires, "route": route,
+        "name": loaded.name, "by": by, "expires": expires, "route": route, "text": loaded.text, "spans": parse(&loaded.text),
         "first": shown.taken.iter().min(), "last": shown.taken.iter().max(), "count": shown.ids.len(), "km": route.then(|| numa_io::album_page::route_km(&positions)),
         "chapters": chapters, "days": days,
     });
     Kept { guest, ids: shown.ids }
+}
+
+fn guest_days(shown: &mut Shown, days: &[DayLayout], route: bool) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for day in days.iter().filter(|day| day.count > 0 || !day.report.trim().is_empty()) {
+        let places = if route { day.towns.clone() } else { Vec::new() };
+        let mut row = json!({ "day": numa_io::import::day(day.day * 86_400, 0), "places": places, "photos": shown.tiles(&day.shown), "rest": day.rest });
+        if !day.report.trim().is_empty() {
+            row["report"] = json!(day.report);
+            row["spans"] = json!(parse(&day.report));
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 async fn lay(server: &Arc<Server>, owner: &Account, key: &str, by: String, expires: i64, route: bool) -> Result<Kept, Fail> {
@@ -396,6 +415,21 @@ mod tests {
         let loose: Vec<i64> = days.iter().flat_map(|day| day["photos"].as_array().unwrap()).map(|photo| photo["n"].as_i64().unwrap()).collect();
         assert_eq!(loose, [1], "the days go on where the chapters stopped");
         assert!(days[0]["day"].as_str().unwrap().len() == 10 && days[0]["places"].is_array());
+
+        assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/text"), &fixture.sam, json!({ "text": "Two **cities**." })).0, 200);
+        let day = chapters[0]["by_day"][0]["day"].as_str().unwrap().to_string();
+        let page = json_of("GET", &format!("/api/v1/albums/{key}/page"), &fixture.sam, Value::Null).1;
+        let (kyoto, first) = (page["chapters"][0]["key"].as_str().unwrap().to_string(), page["chapters"][0]["by_day"][0]["number"].as_i64().unwrap());
+        assert_eq!(page["chapters"][0]["by_day"][0]["day"].as_str(), Some(day.as_str()));
+        assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/days/{first}"), &fixture.sam, json!({ "chapter": kyoto, "text": "Gardens, *all morning*." })).0, 200);
+        assert_eq!(json_of("POST", &format!("/api/v1/albums/{key}/days"), &fixture.sam, json!({ "chapter": kyoto, "day": first + 1 })).0, 204);
+        let told = get(&format!("/api/v1/t/{token}")).json();
+        assert_eq!((told["text"].as_str(), told["spans"][0]["lines"][0][1]["bold"].as_bool()), (Some("Two **cities**."), Some(true)));
+        let kyoto_days = told["chapters"][0]["by_day"].as_array().unwrap();
+        assert_eq!(kyoto_days.len(), 1, "the written day without words is left out: {kyoto_days:?}");
+        assert_eq!((kyoto_days[0]["report"].as_str(), kyoto_days[0]["spans"][0]["lines"][0][1]["italic"].as_bool()), (Some("Gardens, *all morning*."), Some(true)));
+        assert_eq!(kyoto_days[0]["photos"][0]["n"], told["chapters"][0]["photos"][0]["n"], "a photograph in a chapter and its day is one picture");
+        assert_eq!(told["count"].as_i64(), Some(2));
 
         for n in 0..2 {
             let picture = get(&format!("/api/v1/t/{token}/{n}"));

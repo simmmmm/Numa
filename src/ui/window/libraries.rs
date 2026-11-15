@@ -424,6 +424,8 @@ pub(super) struct State {
     pub(super) shelves: gtk::Box,
     pub(super) albums: gtk::Box,
     pub(super) people: gtk::Box,
+
+    pub(super) home: gtk::Box,
     pub(super) today: gtk::Box,
 
     pub(super) tidy: gtk::Box,
@@ -451,6 +453,7 @@ impl State {
             shelves: gtk::Box::new(gtk::Orientation::Vertical, 0),
             albums: gtk::Box::new(gtk::Orientation::Vertical, 0),
             people: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            home: gtk::Box::new(gtk::Orientation::Vertical, 0),
             today: gtk::Box::new(gtk::Orientation::Vertical, 0),
             tidy: gtk::Box::new(gtk::Orientation::Vertical, 0),
             head: library_page::Head::new(),

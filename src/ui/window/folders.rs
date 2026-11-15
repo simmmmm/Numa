@@ -1,4 +1,5 @@
 use super::*;
+use numa::io::home::same;
 
 const TILE: f32 = 132.0;
 
@@ -26,18 +27,11 @@ pub(super) fn show_folders(state: &App) {
     library_bar::forget_stacks();
     let libraries = state.libraries.all.borrow().clone();
 
-    let (at_home, here): (Vec<Library>, Vec<Library>) = libraries.iter().cloned().partition(|library| home_sync::is_home(state, library.id));
+    let here: Vec<Library> = libraries.iter().filter(|library| !home_sync::home_only(state, library.id)).cloned().collect();
     let (mut loose, mut grouped) = shelve_libraries(&here);
     places::in_order(state, &mut loose);
     places::shelves_in_order(state, &mut grouped);
 
-    if !state.catalog.recall::<bool>(INVITED_HOME).unwrap_or(false) {
-        if home::account(state).signed_in() {
-            state.catalog.remember(INVITED_HOME, &true);
-        } else if !libraries.is_empty() {
-            column.append(&home_invite(state));
-        }
-    }
     if libraries.is_empty() {
         let empty = adw::StatusPage::new();
         no_libraries_yet(state, &empty);
@@ -52,19 +46,36 @@ pub(super) fn show_folders(state: &App) {
     column.append(&row);
     let first: Vec<Place> = loose.into_iter().map(|library| Place::Library(library.clone())).collect();
     if !first.is_empty() {
-        column.append(&shelf(state, None, &first));
+        column.append(&shelf(state, None, &first, false));
     }
     for (parent, libraries) in grouped {
         let places: Vec<Place> = libraries.into_iter().map(|library| Place::Library(library.clone())).collect();
-        column.append(&shelf(state, Some(&parent), &places));
-    }
-    let mut at_home: Vec<&Library> = at_home.iter().collect();
-    places::in_order(state, &mut at_home);
-    if !at_home.is_empty() {
-        let places: Vec<Place> = at_home.into_iter().map(|library| Place::Library(library.clone())).collect();
-        column.append(&shelf(state, Some(home::NUMA_HOME), &places));
+        column.append(&shelf(state, Some(&parent), &places, false));
     }
     state.stack.set_visible_child_name("libraries");
+}
+
+pub(super) fn show_home(state: &App) {
+    let column = &state.libraries.home;
+    clear(column);
+    let mut at_home: Vec<&Library> = Vec::new();
+    let libraries = state.libraries.all.borrow().clone();
+    at_home.extend(libraries.iter().filter(|library| home_sync::is_linked(state, library.id)));
+    places::in_order(state, &mut at_home);
+    if !home::account(state).signed_in() {
+        column.append(&home_invite());
+    }
+    same_photos::banners(state, column, false);
+    if at_home.is_empty() && home::account(state).signed_in() {
+        let empty = adw::StatusPage::new();
+        empty.set_title("No Libraries at Numa Home Yet");
+        empty.set_description(Some("A library kept at Numa Home is here: sync one from the Libraries page."));
+        column.append(&empty);
+    } else if !at_home.is_empty() {
+        let places: Vec<Place> = at_home.into_iter().map(|library| Place::Library(library.clone())).collect();
+        column.append(&shelf(state, None, &places, true));
+    }
+    state.stack.set_visible_child_name("home");
 }
 
 pub(super) fn show_albums(state: &App) {
@@ -86,7 +97,7 @@ pub(super) fn show_albums(state: &App) {
         false => {
             same_photos::banners(state, column, false);
             column.append(&commands(&[("New Album…", "win.new-album")]));
-            column.append(&shelf(state, None, &albums));
+            column.append(&shelf(state, None, &albums, false));
         }
     }
     state.stack.set_visible_child_name("albums");
@@ -103,9 +114,7 @@ fn commands(entries: &[(&str, &str)]) -> gtk::Box {
     row
 }
 
-const INVITED_HOME: &str = "invited-home";
-
-fn home_invite(state: &App) -> gtk::Box {
+fn home_invite() -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     card.add_css_class("card");
     card.add_css_class("home-invite");
@@ -144,23 +153,6 @@ fn home_invite(state: &App) -> gtk::Box {
         let _ = button.activate_action("win.preferences", None);
     });
     card.append(&set_up);
-
-    let close = gtk::Button::from_icon_name("window-close-symbolic");
-    close.add_css_class("flat");
-    close.add_css_class("circular");
-    close.set_valign(gtk::Align::Start);
-    close.set_tooltip_text(Some("Not Now"));
-    close.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] card,
-        move |_| {
-            state.catalog.remember(INVITED_HOME, &true);
-            if let Some(column) = card.parent().and_downcast::<gtk::Box>() {
-                column.remove(&card);
-            }
-        }
-    ));
-    card.append(&close);
     card
 }
 
@@ -183,7 +175,7 @@ pub(super) fn libraries_crumb(state: &App) -> gtk::Button {
     crumb
 }
 
-pub(super) fn shelf(state: &App, heading: Option<&str>, places: &[Place]) -> gtk::Box {
+pub(super) fn shelf(state: &App, heading: Option<&str>, places: &[Place], home: bool) -> gtk::Box {
     let shelf = gtk::Box::new(gtk::Orientation::Vertical, 12);
     shelf.set_margin_bottom(24);
 
@@ -201,7 +193,7 @@ pub(super) fn shelf(state: &App, heading: Option<&str>, places: &[Place]) -> gtk
     flow.set_min_children_per_line(1);
     flow.set_max_children_per_line(12);
     for place in places {
-        flow.append(&folder(state, place));
+        flow.append(&folder(state, place, home));
     }
     shelf.append(&flow);
     shelf
@@ -215,7 +207,21 @@ fn two_lines(caption: &str) -> String {
     }
 }
 
-fn folder(state: &App, place: &Place) -> gtk::Button {
+pub(super) fn home_page_caption(state: &App, library: &Library, subtitle: &str) -> String {
+    let here = same::Origin::Here.words();
+    let facts = [format!("{} \u{b7} ", home::NUMA_HOME), format!("{here} \u{b7} ")]
+        .iter()
+        .find_map(|prefix| subtitle.strip_prefix(prefix.as_str()))
+        .unwrap_or(subtitle);
+    match home_sync::home_only(state, library.id) {
+        true => facts.to_string(),
+        false => format!("{ON_THIS_COMPUTER} \u{b7} {facts}"),
+    }
+}
+
+pub(super) const ON_THIS_COMPUTER: &str = "On This Computer";
+
+fn folder(state: &App, place: &Place, on_home_page: bool) -> gtk::Button {
     let read = places::row(state, place);
     let fan = places::fan(TILE);
     places::show_covers(&fan, &read.covers, TILE);
@@ -236,6 +242,7 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     stack.set_halign(gtk::Align::Center);
     stack.set_child(Some(&fan));
     if linked {
+
         let marks = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         marks.set_halign(gtk::Align::End);
         marks.set_valign(gtk::Align::End);
@@ -248,14 +255,19 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
             home_sync::follow_mark(library_id.unwrap_or_default(), &syncing);
             marks.append(&syncing);
         }
-        let house = gtk::Image::from_icon_name("go-home-symbolic");
-        house.add_css_class("home-badge");
-        house.set_tooltip_text(Some(home::NUMA_HOME));
-        marks.append(&house);
+        if !on_home_page {
+            let house = gtk::Image::from_icon_name("go-home-symbolic");
+            house.add_css_class("home-badge");
+            house.set_tooltip_text(Some(home::NUMA_HOME));
+            marks.append(&house);
+        }
         stack.add_overlay(&marks);
     }
     let prefix = format!("{} \u{b7} ", home::NUMA_HOME);
-    let caption = read.subtitle.strip_prefix(prefix.as_str()).filter(|_| at_home).unwrap_or(&read.subtitle).to_string();
+    let mut caption = read.subtitle.strip_prefix(prefix.as_str()).filter(|_| at_home).unwrap_or(&read.subtitle).to_string();
+    if let (true, Place::Library(library)) = (on_home_page, place) {
+        caption = home_page_caption(state, library, &read.subtitle);
+    }
 
     let under = gtk::Label::new(Some(&match &said {
         Some(said) => format!("{caption}\n{said}"),
@@ -287,15 +299,17 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
         _ => None,
     }.as_deref());
     if let Place::Library(library) = place {
-        library_menu(state, &button, library.clone(), at_home);
+        library_menu(state, &button, library.clone(), at_home, on_home_page);
 
-        library_bar::choosable(library, &stack, &button);
+        if !on_home_page {
+            library_bar::choosable(library, &stack, &button);
+        }
     }
     let place = place.clone();
     button.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| {
-            if matches!(&place, Place::Library(library) if library_bar::chose(&state, library.id)) {
+            if matches!(&place, Place::Library(library) if !on_home_page && library_bar::chose(&state, library.id)) {
                 return;
             }
             show_place(&state, place.clone())
@@ -304,7 +318,7 @@ fn folder(state: &App, place: &Place) -> gtk::Button {
     button
 }
 
-fn library_menu(state: &App, button: &gtk::Button, library: Library, at_home: bool) {
+fn library_menu(state: &App, button: &gtk::Button, library: Library, at_home: bool, on_home_page: bool) {
     let click = gtk::GestureClick::new();
     click.set_button(gtk::gdk::BUTTON_SECONDARY);
     click.connect_pressed(glib::clone!(
@@ -344,7 +358,10 @@ fn library_menu(state: &App, button: &gtk::Button, library: Library, at_home: bo
                             let count = state.catalog.photo_count(library.id).ok();
                             let again = glib::clone!(
                                 #[strong] state,
-                                move || show_folders(&state)
+                                move || match on_home_page {
+                                    true => show_home(&state),
+                                    false => show_folders(&state),
+                                }
                             );
                             confirm_remove_library(&state, &window, library.clone(), count, again);
                         }

@@ -307,6 +307,10 @@ pub fn same_albums(a: &[String], b: &[String]) -> bool {
 }
 
 pub fn caption(agreed: Option<&str>, ours: &str, theirs: &str, theirs_later: bool) -> String {
+    keep_both(agreed, ours, theirs, theirs_later, crate::catalog::CAPTION_LIMIT)
+}
+
+pub fn keep_both(agreed: Option<&str>, ours: &str, theirs: &str, theirs_later: bool, limit: usize) -> String {
     let (first, second) = match theirs_later {
         true => (theirs, ours),
         false => (ours, theirs),
@@ -317,7 +321,7 @@ pub fn caption(agreed: Option<&str>, ours: &str, theirs: &str, theirs_later: boo
         Some(agreed) if agreed == theirs => ours.to_string(),
         _ if first.contains(second) => first.to_string(),
         _ if second.contains(first) => second.to_string(),
-        _ => Some(format!("{first}\n\n{second}")).filter(|both| both.chars().count() <= crate::catalog::CAPTION_LIMIT).unwrap_or_else(|| first.to_string()),
+        _ => Some(format!("{first}\n\n{second}")).filter(|both| both.chars().count() <= limit).unwrap_or_else(|| first.to_string()),
     }
 }
 

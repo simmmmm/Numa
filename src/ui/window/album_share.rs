@@ -6,11 +6,6 @@ use numa::io::home::sync;
 const ENDS: [(&str, u32); 4] = [("7 days", 7), ("30 days", 30), ("90 days", 90), ("A year", 365)];
 
 pub(super) fn ask(state: &App, window: &adw::ApplicationWindow, album: &str) {
-    let Some(home) = state.catalog.albums_at_home().ok().and_then(|paired| paired.into_iter().find(|(key, ..)| key == album).map(|(_, id, ..)| id)) else {
-        state.toast(if account(state).signed_in() { "This trip is not at Numa Home yet. It goes with the next sync." } else { "A link to a trip is made at Numa Home. Sign in to Numa Home first." });
-        album_round::after_a_round(state);
-        return;
-    };
     let group = adw::PreferencesGroup::new();
     let route = adw::SwitchRow::new();
     route.set_title("Shows the Route and the Places");
@@ -33,16 +28,24 @@ pub(super) fn ask(state: &App, window: &adw::ApplicationWindow, album: &str) {
     dialog.add_response("make", "Copy Link");
     dialog.set_default_response(Some("make"));
     dialog.set_close_response("cancel");
-    let (state, parent, window) = (state.clone(), window.clone(), window.clone());
+    let (state, parent, window, album) = (state.clone(), window.clone(), window.clone(), album.to_string());
     dialog.connect_response(None, move |_, response| {
         if response != "make" {
             return;
         }
         let days = ENDS[(ends.selected() as usize).min(ENDS.len() - 1)].1;
         let body = serde_json::json!({ "route": route.is_active(), "follows": follows.is_active(), "days": days }).to_string();
-        let call = Call { method: "POST", path: format!("albums/{home}/links"), body: Some(body) };
-        let (state, window) = (state.clone(), window.clone());
+        let (state, window, album) = (state.clone(), window.clone(), album.clone());
         glib::spawn_future_local(async move {
+
+            let at_home = |state: &App| state.catalog.albums_at_home().ok().and_then(|paired| paired.into_iter().find(|(key, ..)| *key == album).map(|(_, id, ..)| id));
+            if at_home(&state).is_none() {
+                album_round::now(&state).await;
+            }
+            let Some(home) = at_home(&state) else {
+                return state.toast("This trip is not at Numa Home yet. Sign in to Numa Home, and it goes with the next sync.");
+            };
+            let call = Call { method: "POST", path: format!("albums/{home}/links"), body: Some(body) };
             let account = account(&state);
             let running: Running = Rc::default();
             let (status, said) = sync::status_and_body(&curl(sync::album_call(&account.address, &call), account.header(), &running).await);

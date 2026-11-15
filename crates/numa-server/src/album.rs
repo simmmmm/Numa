@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::Response;
 use axum::Json;
-use numa_io::album_page::{is_grid, lay_out, short, town_at, Facts, Layout};
+use numa_io::album_page::{is_grid, lay_out, short, town_at, DayLayout, Facts, Layout};
 use numa_io::catalog::{library_of, AlbumChapter, AlbumKind, ChapterPlace, Photo};
 use numa_io::chapters::{Shot, Town};
+use numa_io::album_export::{long_edge, Album as ExportAlbum, Folders, Shot as ExportShot};
+use numa_io::markdown::parse;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
@@ -40,6 +43,8 @@ pub(crate) struct Loaded {
     key: String,
     pub name: String,
     pub kind: AlbumKind,
+
+    pub text: String,
     may_change: bool,
     looking: bool,
     pub photos: Vec<Photo>,
@@ -72,11 +77,11 @@ async fn may_change(server: &Arc<Server>, me: &Account, key: &str) -> Result<boo
 async fn grid(server: &Arc<Server>, me: &Account, key: &str) -> Result<Option<Value>, Fail> {
     let may_change = may_change(server, me, key).await?;
     let asked = key.to_string();
-    let (name, kind, chapters) = server
+    let (name, kind, chapters, text) = server
         .home
         .ask(move |catalog| -> Result<_, String> {
             let name = catalog.albums()?.into_iter().find(|(have, _)| *have == asked).map(|(_, name)| name).unwrap_or_default();
-            Ok((name, catalog.album_kind(&asked)?, catalog.chapters(&asked)?.len()))
+            Ok((name, catalog.album_kind(&asked)?, catalog.chapters(&asked)?.len(), catalog.album_text(&asked)?))
         })
         .await?
         .map_err(Fail::internal)?;
@@ -85,7 +90,10 @@ async fn grid(server: &Arc<Server>, me: &Account, key: &str) -> Result<Option<Va
     }
     let times: Vec<i64> = chosen(server, me, &Wanted::of_album(key, None, None)).await?.iter().map(when).collect();
     Ok(is_grid(kind, chapters, &times).then(|| {
-        json!({ "key": key, "name": name, "kind": kind.name(), "may_change": may_change, "count": times.len(), "first": times.iter().min(), "last": times.iter().max(), "grid": true })
+        json!({
+            "key": key, "name": name, "kind": kind.name(), "may_change": may_change, "count": times.len(), "first": times.iter().min(), "last": times.iter().max(), "grid": true,
+            "text": text, "spans": parse(&text),
+        })
     }))
 }
 
@@ -99,14 +107,15 @@ pub(crate) async fn load(server: &Arc<Server>, me: &Account, key: &str, narrow: 
     }
     let (album, ids): (String, HashSet<i64>) = (key.to_string(), photos.iter().map(|photo| photo.id).collect());
     let libraries: HashSet<i64> = ids.iter().map(|&id| library_of(id)).collect();
-    let (name, kind, chapters, chapter_of, captions) = server
+    let (name, kind, chapters, chapter_of, captions, (text, days)) = server
         .home
         .ask(move |catalog| -> Result<_, String> {
             let name = catalog.albums()?.into_iter().find(|(have, _)| *have == album).map(|(_, name)| name).unwrap_or_default();
             let mut captions: HashMap<i64, String> =
                 libraries.iter().flat_map(|&library| catalog.captions(library).unwrap_or_default()).map(|(id, (text, _))| (id, text)).collect();
             captions.retain(|id, _| ids.contains(id));
-            Ok((name, catalog.album_kind(&album)?, catalog.chapters(&album)?, catalog.chapter_of(&album)?, captions))
+            let words = (catalog.album_text(&album)?, catalog.album_days(&album)?);
+            Ok((name, catalog.album_kind(&album)?, catalog.chapters(&album)?, catalog.chapter_of(&album)?, captions, words))
         })
         .await?
         .map_err(Fail::internal)?;
@@ -131,8 +140,8 @@ pub(crate) async fn load(server: &Arc<Server>, me: &Account, key: &str, narrow: 
         let shots = shots_of(&photos, &spots, &captions, &mut memo);
         let others = shots_of(&outside, &further, &HashMap::new(), &mut memo);
         let unread: HashSet<i64> = photos.iter().chain(&outside).map(|photo| photo.id).filter(|id| !spots.contains_key(id) && !further.contains_key(id)).collect();
-        let layout = lay_out(&Facts { shots: &shots, chapter_of: &chapter_of, chapters: &chapters, outside: &others, unread: &unread, trip, may_change: may_change && !link, filtered });
-        Loaded { key: owned, name, kind, may_change, looking: reading || reading_outside, photos, captions, chapters, layout }
+        let layout = lay_out(&Facts { shots: &shots, chapter_of: &chapter_of, chapters: &chapters, days: &days, outside: &others, unread: &unread, trip, may_change: may_change && !link, filtered });
+        Loaded { key: owned, name, kind, text, may_change, looking: reading || reading_outside, photos, captions, chapters, layout }
     })
     .await
     .map_err(Fail::internal)
@@ -144,8 +153,15 @@ pub(crate) fn place_row(place: &ChapterPlace) -> Value {
 
 fn chapter_row(chapter: &AlbumChapter) -> Value {
     json!({
-        "key": chapter.key, "name": chapter.name, "words": chapter.words,
+        "key": chapter.key, "name": chapter.name, "words": chapter.words, "spans": parse(&chapter.words),
         "place": chapter.place.as_ref().map(place_row), "days": chapter.days.map(|(first, last)| [first, last]),
+    })
+}
+
+pub(crate) fn day_row(day: &DayLayout, shown: Vec<Value>) -> Value {
+    json!({
+        "day": numa_io::import::day(day.day * 86_400, 0), "number": day.day, "places": day.towns, "count": day.count, "shown": shown,
+        "rest": day.rest, "strip": day.strip, "report": day.report, "spans": parse(&day.report), "written": day.count == 0,
     })
 }
 
@@ -186,14 +202,11 @@ fn said(server: &Server, loaded: &Loaded) -> Value {
             row["last"] = json!(laid.last);
             row["shown"] = json!(tiles(&laid.shown));
             row["offers"] = json!(offers);
+            row["by_day"] = json!(laid.by_day.iter().map(|day| day_row(day, tiles(&day.shown))).collect::<Vec<_>>());
             row
         })
         .collect();
-    let days: Vec<Value> = layout
-        .days
-        .iter()
-        .map(|day| json!({ "day": numa_io::import::day(day.day * 86_400, 0), "places": day.towns, "count": day.count, "shown": tiles(&day.shown) }))
-        .collect();
+    let days: Vec<Value> = layout.days.iter().map(|day| day_row(day, tiles(&day.shown))).collect();
     let places: Vec<Value> = layout
         .places
         .iter()
@@ -207,7 +220,8 @@ fn said(server: &Server, loaded: &Loaded) -> Value {
         .collect();
     json!({
         "key": loaded.key, "name": loaded.name, "kind": loaded.kind.name(), "may_change": loaded.may_change, "grid": false,
-        "count": layout.count, "picks": layout.picks, "first": layout.first, "last": layout.last, "looking": loaded.looking,
+        "text": loaded.text, "spans": parse(&loaded.text),
+        "count": layout.count, "photographs": loaded.photos.iter().filter(|photo| !numa_io::video::is_video(&photo.path)).count(), "picks": layout.picks, "first": layout.first, "last": layout.last, "looking": loaded.looking,
         "chapters": chapters, "days": days, "loose": layout.loose, "places": places,
     })
 }
@@ -400,6 +414,131 @@ pub async fn put_photos(State(server): State<Arc<Server>>, Signed(me): Signed, P
 }
 
 #[derive(Deserialize)]
+pub struct Words {
+    text: String,
+}
+
+fn words_said(text: String) -> Json<Value> {
+    let spans = parse(&text);
+    Json(json!({ "text": text, "spans": spans }))
+}
+
+pub async fn clean_text(Signed(_): Signed, Json(asked): Json<Words>) -> Result<Json<Value>, Fail> {
+    if asked.text.chars().count() > 10 * numa_io::markdown::TEXT_LIMIT {
+        return Err(Fail::bad("The text is too long to paste."));
+    }
+    Ok(words_said(numa_io::markdown::clean(&asked.text)))
+}
+
+pub async fn album_text(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>, Json(asked): Json<Words>) -> Result<Json<Value>, Fail> {
+    seen(&server, &me, &key).await?;
+    let kept = server
+        .home
+        .ask(move |catalog| -> Result<String, String> {
+            catalog.set_album_text(&key, &asked.text)?;
+            catalog.album_text(&key)
+        })
+        .await?
+        .map_err(Fail::bad)?;
+    Ok(words_said(kept))
+}
+
+#[derive(Deserialize)]
+pub struct NewDay {
+
+    day: i64,
+
+    chapter: Option<String>,
+}
+
+pub async fn add_day(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>, Json(asked): Json<NewDay>) -> Result<StatusCode, Fail> {
+    seen(&server, &me, &key).await?;
+    server.home.ask(move |catalog| catalog.add_day(&key, asked.chapter.as_deref().filter(|chapter| !chapter.is_empty()), asked.day)).await?.map_err(Fail::bad)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct Report {
+    chapter: Option<String>,
+    text: String,
+}
+
+pub async fn day_report(State(server): State<Arc<Server>>, Signed(me): Signed, Path((key, day)): Path<(String, i64)>, Json(asked): Json<Report>) -> Result<Json<Value>, Fail> {
+    seen(&server, &me, &key).await?;
+    let kept = server
+        .home
+        .ask(move |catalog| -> Result<String, String> {
+            let chapter = asked.chapter.filter(|chapter| !chapter.is_empty());
+            catalog.set_day_report(&key, chapter.as_deref(), day, &asked.text)?;
+            Ok(catalog.album_days(&key)?.into_iter().find(|have| have.day == day && have.chapter == chapter).map(|have| have.text).unwrap_or_default())
+        })
+        .await?
+        .map_err(Fail::bad)?;
+    Ok(words_said(kept))
+}
+
+#[derive(Deserialize)]
+pub struct WhichDay {
+    chapter: Option<String>,
+}
+
+pub async fn remove_day(State(server): State<Arc<Server>>, Signed(me): Signed, Path((key, day)): Path<(String, i64)>, Query(asked): Query<WhichDay>) -> Result<StatusCode, Fail> {
+    seen(&server, &me, &key).await?;
+    server.home.ask(move |catalog| catalog.remove_day(&key, asked.chapter.as_deref().filter(|chapter| !chapter.is_empty()), day)).await?.map_err(Fail::bad)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct ExportAsked {
+
+    folders: Option<String>,
+
+    texts: Option<bool>,
+
+    mm: Option<f32>,
+
+    edge: Option<u32>,
+}
+
+pub async fn export(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): Path<String>, Query(asked): Query<ExportAsked>) -> Result<Response, Fail> {
+    may_change(&server, &me, &key).await?;
+    let photos: Vec<Photo> = chosen(&server, &me, &Wanted::of_album(&key, None, None)).await?.into_iter().filter(|photo| !numa_io::video::is_video(&photo.path)).collect();
+    let album = key.clone();
+    let (name, kind, chapters, chapter_of, days, text) = server
+        .home
+        .ask(move |catalog| -> Result<_, String> {
+            let name = catalog.albums()?.into_iter().find(|(have, _)| *have == album).map(|(_, name)| name).unwrap_or_default();
+            Ok((name, catalog.album_kind(&album)?, catalog.chapters(&album)?, catalog.chapter_of(&album)?, catalog.album_days(&album)?, catalog.album_text(&album)?))
+        })
+        .await?
+        .map_err(Fail::internal)?;
+    let folders = match asked.folders.as_deref() {
+        None | Some("") => Folders::first_for(kind, chapters.len()),
+        Some("place") => Folders::ByPlaceAndDay,
+        Some("chapter") => Folders::ByChapterAndDay,
+        Some("day") => Folders::ByDay,
+        Some("one") => Folders::OneFolder,
+        Some(_) => return Err(Fail::bad("Folders are by place, chapter or day, or one folder.")),
+    };
+    let shots: Vec<ExportShot> = photos.iter().map(|photo| ExportShot { id: photo.id, taken: when(photo), path: photo.path.clone() }).collect();
+    let plan = numa_io::album_export::plan(&ExportAlbum { name: &name, text: &text, chapters: &chapters, chapter_of: &chapter_of, shots: &shots, days: &days }, folders, asked.texts.unwrap_or(true));
+    let edge = match (asked.mm, asked.edge) {
+        (Some(mm), _) => long_edge(mm.clamp(50.0, 1_000.0)),
+        (None, Some(edge)) => edge.clamp(256, 16_384),
+        (None, None) => u32::MAX,
+    };
+    let inside = |folder: &str, name: &str| if folder.is_empty() { format!("{}/{name}", plan.root) } else { format!("{}/{folder}/{name}", plan.root) };
+    let by_id: HashMap<i64, Photo> = photos.into_iter().map(|photo| (photo.id, photo)).collect();
+    let zipped = crate::selection::Zipped {
+        folders: std::iter::once(format!("{}/", plan.root)).chain(plan.folders.iter().map(|folder| format!("{}/{folder}/", plan.root))).collect(),
+        texts: plan.texts.iter().map(|text| (inside(&text.folder, &text.name), format!("{}\n", text.text))).collect(),
+        photos: plan.files.iter().filter_map(|file| Some((inside(&file.folder, &format!("{}.jpg", file.name)), by_id.get(&file.id)?.clone()))).collect(),
+        edge,
+    };
+    crate::selection::streamed(server, zipped, &format!("{}.zip", plan.root)).await
+}
+
+#[derive(Deserialize)]
 pub struct Find {
     q: Option<String>,
 }
@@ -439,15 +578,28 @@ mod tests {
     }
 
     #[test]
+    fn pasted_text_is_cleaned_as_the_core_cleans_it() {
+        let sam = &fixture().sam;
+        let (status, said) = json_of("POST", "/api/v1/texts/clean", sam, json!({ "text": "# Day\r\n\n* **six** o'clock\n1. the *train*" }));
+        assert_eq!((status, said["text"].as_str()), (200, Some("Day\n\n- **six** o'clock\n- the *train*")), "{said}");
+        assert_eq!((said["spans"][1]["list"].as_bool(), said["spans"][1]["lines"][0][0]["bold"].as_bool()), (Some(true), Some(true)));
+        let long = "a".repeat(10 * numa_io::markdown::TEXT_LIMIT + 1);
+        assert_eq!(json_of("POST", "/api/v1/texts/clean", sam, json!({ "text": long })).0, 400);
+        assert_eq!(ask("POST", "/api/v1/texts/clean", None, r#"{"text":"x"}"#, "").status, 401);
+    }
+
+    #[test]
     fn an_empty_album_is_its_makers_to_list_read_and_make_a_wedding() {
         let sam = &fixture().sam;
         let key = made(sam, "Empty Wedding Plans", &[]);
         let listed = ask("GET", "/api/v1/albums", Some(sam), "", "").json();
         let row = listed.as_array().unwrap().iter().find(|row| row["key"] == key.as_str()).expect("listed for its maker");
         assert_eq!((row["count"].as_i64(), row["kind"].as_str(), row["first"].is_null(), row["last"].is_null()), (Some(0), Some("album"), true, true));
+        assert_eq!(row["chapters"], 0);
 
         let (status, empty) = page(sam, &key);
         assert_eq!(status, 200, "{empty}");
+        assert_eq!(empty["photographs"], 0);
         assert_eq!((empty["name"].as_str(), empty["kind"].as_str(), empty["may_change"].as_bool(), empty["count"].as_i64(), empty["loose"].as_i64()), (Some("Empty Wedding Plans"), Some("album"), Some(true), Some(0), Some(0)));
         assert!(empty["chapters"].as_array().unwrap().is_empty() && empty["days"].as_array().unwrap().is_empty() && empty["places"].as_array().unwrap().is_empty());
 
@@ -470,7 +622,8 @@ mod tests {
         assert!(wedding["chapters"][0]["place"].is_null() && wedding["chapters"][0]["days"].is_null() && wedding["chapters"][0]["first"].is_null());
         assert_eq!(wedding["chapters"][0]["count"], 0);
         let kinds = ask("GET", "/api/v1/albums", Some(sam), "", "").json();
-        assert_eq!(kinds.as_array().unwrap().iter().find(|row| row["key"] == key.as_str()).unwrap()["kind"], "wedding");
+        let row = kinds.as_array().unwrap().iter().find(|row| row["key"] == key.as_str()).unwrap();
+        assert_eq!((row["kind"].as_str(), row["chapters"].as_i64()), (Some("wedding"), Some(6)), "with chapters it is not an empty album to the side list");
         assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/kind"), sam, json!({ "kind": "boat" })).0, 400);
 
         let (status, added) = json_of("POST", &format!("/api/v1/albums/{key}/chapters"), sam, json!({ "name": "  Speeches " }));
@@ -576,6 +729,87 @@ mod tests {
         let (status, gone) = json_of("PUT", &format!("/api/v1/chapters/{chapter}"), sam, json!({ "name": "Back" }));
         assert_eq!((status, gone["error"].as_str()), (404, Some("There is no such chapter.")));
         assert_eq!(json_of("POST", &photos, sam, json!({ "ids": [ids[0]], "inside": true })).0, 404);
+    }
+
+    #[test]
+    fn the_albums_words_are_written_read_by_day_and_guarded() {
+        let fixture = fixture();
+        let (sam, ids) = (&fixture.sam, fixture.ids);
+        let key = made(sam, "Words Porto", &ids[..2]);
+        let (status, kept) = json_of("PUT", &format!("/api/v1/albums/{key}/text"), sam, json!({ "text": "# Porto\n\n* by **train**" }));
+        assert_eq!((status, kept["text"].as_str()), (200, Some("Porto\n\n- by **train**")), "{kept}");
+        assert_eq!((kept["spans"][1]["list"].as_bool(), kept["spans"][1]["lines"][0][1]["bold"].as_bool()), (Some(true), Some(true)));
+        let (_, page_now) = page(sam, &key);
+        let day = page_now["days"][0]["number"].as_i64().unwrap();
+        assert_eq!((page_now["text"].as_str(), page_now["days"][0]["report"].as_str(), page_now["days"][0]["written"].as_bool()), (Some("Porto\n\n- by **train**"), Some(""), Some(false)));
+
+        let (status, said) = json_of("PUT", &format!("/api/v1/albums/{key}/days/{day}"), sam, json!({ "chapter": "", "text": "Rain, then *sun*." }));
+        assert_eq!((status, said["text"].as_str()), (200, Some("Rain, then *sun*.")), "{said}");
+        assert_eq!(json_of("POST", &format!("/api/v1/albums/{key}/days"), sam, json!({ "day": day + 40 })).0, 204);
+        let (_, read) = page(sam, &key);
+        let days = read["days"].as_array().unwrap();
+        let last = days.last().unwrap();
+        assert_eq!((days[0]["report"].as_str(), last["number"].as_i64(), last["written"].as_bool(), last["count"].as_i64()), (Some("Rain, then *sun*."), Some(day + 40), Some(true), Some(0)));
+
+        let (_, added) = json_of("POST", &format!("/api/v1/albums/{key}/chapters"), sam, json!({ "name": "Ribeira" }));
+        let chapter = added["key"].as_str().unwrap().to_string();
+        assert_eq!(json_of("POST", &format!("/api/v1/chapters/{chapter}/photos"), sam, json!({ "ids": [ids[0]], "inside": true })).0, 200);
+        assert_eq!(json_of("PUT", &format!("/api/v1/chapters/{chapter}"), sam, json!({ "words": "The **river** side." })).0, 204);
+        let (_, read) = page(sam, &key);
+        let ribeira = &read["chapters"][0];
+        assert_eq!((ribeira["spans"][0]["lines"][0][1]["text"].as_str(), ribeira["by_day"][0]["count"].as_i64()), (Some("river"), Some(1)));
+        assert_eq!(json_of("PUT", &format!("/api/v1/chapters/{chapter}"), sam, json!({ "words": "x".repeat(10_001) })).0, 400);
+        assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/days/{day}"), sam, json!({ "chapter": "ffff", "text": "Elsewhere." })).0, 400);
+
+        let (looker, stranger) = (account("Words Looker", Level::View), account("Words Stranger", Level::None));
+        assert_eq!(page(&looker, &key).1["text"].as_str(), Some("Porto\n\n- by **train**"));
+        for (who, want) in [(&looker, 403), (&stranger, 404)] {
+            assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/text"), who, json!({ "text": "Mine." })).0, want);
+            assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/days/{day}"), who, json!({ "text": "Mine." })).0, want);
+            assert_eq!(json_of("POST", &format!("/api/v1/albums/{key}/days"), who, json!({ "day": day })).0, want);
+            assert_eq!(json_of("DELETE", &format!("/api/v1/albums/{key}/days/{}", day + 40), who, Value::Null).0, want);
+        }
+        assert_eq!(json_of("DELETE", &format!("/api/v1/albums/{key}/days/{}", day + 40), sam, Value::Null).0, 204);
+        assert_eq!(page(sam, &key).1["days"].as_array().unwrap().iter().filter(|day| day["written"] == true).count(), 0);
+        assert_eq!(json_of("DELETE", &format!("/api/v1/albums/{key}"), sam, Value::Null).0, 200);
+    }
+
+    #[test]
+    fn an_album_goes_out_as_a_zip_of_folders_by_chapter_and_day_with_its_texts() {
+        let fixture = fixture();
+        let (sam, ids) = (&fixture.sam, fixture.ids);
+        let key = made(sam, "Zip Café Porto", &ids[..2]);
+        let (_, added) = json_of("POST", &format!("/api/v1/albums/{key}/chapters"), sam, json!({ "name": "Ribeira" }));
+        let chapter = added["key"].as_str().unwrap().to_string();
+        assert_eq!(json_of("POST", &format!("/api/v1/chapters/{chapter}/photos"), sam, json!({ "ids": [ids[0]], "inside": true })).0, 200);
+        assert_eq!(json_of("PUT", &format!("/api/v1/chapters/{chapter}"), sam, json!({ "words": "The river." })).0, 204);
+        assert_eq!(json_of("PUT", &format!("/api/v1/albums/{key}/text"), sam, json!({ "text": "Two days." })).0, 200);
+        let (_, page_now) = page(sam, &key);
+        let day = page_now["chapters"][0]["by_day"][0]["number"].as_i64().unwrap();
+        assert_eq!(json_of("POST", &format!("/api/v1/albums/{key}/days"), sam, json!({ "chapter": chapter, "day": day + 30 })).0, 204);
+
+        let answer = ask("GET", &format!("/api/v1/albums/{key}/export?folders=chapter&edge=256"), Some(sam), "", "");
+        assert_eq!((answer.status, answer.header("content-type")), (200, Some("application/zip")));
+        assert!(answer.header("content-disposition").is_some_and(|said| said.contains("UTF-8''Zip%20Caf%C3%A9%20Porto.zip")), "{:?}", answer.header("content-disposition"));
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(answer.body.clone())).unwrap();
+        let names: Vec<String> = (0..zip.len()).map(|at| zip.by_index(at).unwrap().name().unwrap().to_string()).collect();
+        let has = |want: &dyn Fn(&str) -> bool| names.iter().any(|name| want(name));
+        assert!(has(&|name| name == "Zip Café Porto/Zip Café Porto.md"), "{names:?}");
+        assert!(has(&|name| name == "Zip Café Porto/01 · Ribeira/01 · Ribeira.md"));
+        assert!(has(&|name| name.starts_with("Zip Café Porto/01 · Ribeira/01 · ") && name.contains("/0001 · ") && name.ends_with(".jpg")), "{names:?}");
+        assert!(has(&|name| name.starts_with("Zip Café Porto/01 · Ribeira/02 · ") && name.ends_with('/')), "the written day's folder: {names:?}");
+        assert!(has(&|name| name.starts_with("Zip Café Porto/02 · ") && name.contains("/0002 · ")), "the photograph in no chapter, after the chapters: {names:?}");
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("Zip Café Porto/01 · Ribeira/01 · Ribeira.md").unwrap(), &mut text).unwrap();
+        assert_eq!(text, "The river.\n");
+
+        let quiet = ask("GET", &format!("/api/v1/albums/{key}/export?texts=false&folders=one&mm=210"), Some(sam), "", "");
+        let zip = zip::ZipArchive::new(std::io::Cursor::new(quiet.body.clone())).unwrap();
+        assert!(zip.file_names().all(|name| !name.unwrap().ends_with(".md")), "the switch off writes no text");
+        assert_eq!(ask("GET", &format!("/api/v1/albums/{key}/export?folders=sideways"), Some(sam), "", "").status, 400);
+        let stranger = account("Zip Stranger", Level::None);
+        assert_eq!(ask("GET", &format!("/api/v1/albums/{key}/export"), Some(&stranger), "", "").status, 404);
+        assert_eq!(json_of("DELETE", &format!("/api/v1/albums/{key}"), sam, Value::Null).0, 200);
     }
 
     #[test]

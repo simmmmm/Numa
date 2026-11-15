@@ -42,7 +42,10 @@ pub(super) fn fill_the_window(state: &App, window: &adw::ApplicationWindow) {
     super::home_sync::keep_in_step(state);
 
     super::import_done::recheck_now_and_then(state);
-    downloads::at_startup(state, super::wizard::open_if_first_start(state, window));
+    let first_start = super::wizard::open_if_first_start(state, window);
+    downloads::at_startup(state, first_start);
+
+    super::whats_new::consider(state, window, first_start);
     integrate_appimage(state);
 
     consider_update_check(state, window);

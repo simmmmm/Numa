@@ -36,10 +36,6 @@ async function albumPage(main, params, narrowed) {
 
   filters.head.classList.add('album-bar');
   view.dates = filters.dates;
-
-  if (page.kind === 'trip' && page.may_change) {
-    filters.head.querySelector('.act')?.prepend(h('button', { class: 'primary', onclick: () => tripLinkDialog(key) }, S.tripShareEll));
-  }
   view.body = h('div', { class: 'album-page' });
 
   view.cover = h('section', { class: 'album-cover' });
@@ -125,16 +121,16 @@ function figuresOf(page) {
   const all = [];
   if (span) {
     const today = todayNumber(), long = span[1] - span[0] + 1;
-    if (trip && today >= span[0] && today <= span[1]) all.push([S.figDay, today - span[0] + 1, phrase('ofN', { n: long })]);
-    else if (long > 1) all.push([S.figDays, long]);
+    if (trip && today >= span[0] && today <= span[1]) all.push([S.figDay, grouped(today - span[0] + 1), phrase('ofN', { n: grouped(long) })]);
+    else if (long > 1) all.push([S.figDays, grouped(long)]);
   }
   if (trip) {
-    if (chapters.length) all.push([S.figPlaces, filled, phrase('ofN', { n: chapters.length })]);
+    if (chapters.length) all.push([S.figPlaces, grouped(filled), phrase('ofN', { n: grouped(chapters.length) })]);
 
     const km = routeLength(chapters.filter(chapter => chapter.count));
     if (km) all.push([S.figTravelled, grouped(km), S.kmUnit]);
-  } else if (chapters.length) all.push([S.figChapters, filled, phrase('ofN', { n: chapters.length })]);
-  all.push([S.figPhotos, grouped(page.count)]);
+  } else if (chapters.length) all.push([S.figChapters, grouped(filled), phrase('ofN', { n: grouped(chapters.length) })]);
+  if (page.count) all.push([S.figPhotos, grouped(page.count)]);
   return all;
 }
 
@@ -146,14 +142,18 @@ function coverOf(page) {
 function fillCover(view, page) {
   const cover = coverOf(page);
   const trip = page.kind === 'trip';
+  const figures = figuresOf(page);
   view.cover.className = 'album-cover' + (cover ? '' : ' bare');
   view.cover.replaceChildren(...[
     cover && h('img', { src: thumb(cover.id, 2048), alt: '', decoding: 'async' }),
     cover && h('div', { class: 'scrim' }),
+
+    trip && page.may_change && h('div', { class: 'cover-act' },
+      h('button', { class: 'primary', onclick: () => tripLinkDialog(view.key) }, S.tripShareEll)),
     h('div', { class: 'say' },
       h('div', { class: 'section-label' }, overName(page)),
       h('div', { class: 'title', 'aria-hidden': 'true' }, page.name || view.main.querySelector('.album-bar h1')?.textContent || ''),
-      h('dl', { class: 'album-figures' }, figuresOf(page).map(([label, value, of]) => h('div', {}, h('dt', { class: 'section-label' }, label), h('dd', {}, String(value), of && h('span', {}, ' ' + of))))),
+      figures.length > 0 && h('dl', { class: 'album-figures' }, figures.map(([label, value, of]) => h('div', {}, h('dt', { class: 'section-label' }, label), h('dd', {}, String(value), of && h('span', {}, ' ' + of))))),
       trip && page.chapters.length > 1 && h('div', { class: 'album-parts', role: 'img', 'aria-label': phrase('placesOfTotal', { n: page.chapters.filter(chapter => chapter.count).length, m: page.chapters.length }) },
         page.chapters.map(chapter => h('i', { class: chapter.count ? 'been' : '' })))),
   ].filter(Boolean));
@@ -170,6 +170,17 @@ function paint(view, page) {
   const trip = page.kind === 'trip';
   const sections = [];
   const column = h('div', { class: 'album-column' });
+  const nothing = !page.count && !page.chapters.length;
+  const starting = nothing && !page.places?.length && !view.query && page.may_change;
+
+  const words = !(nothing && !page.places?.length) && textField(view, {
+    spans: page.spans, placeholder: trip ? S.writeTrip : S.writeAbout, label: S.albumText,
+    keep: text => api(`albums/${encodeURIComponent(view.key)}/text`, { method: 'PUT', body: JSON.stringify({ text }) }),
+  });
+  if (words) {
+    words.classList.add('album-lead');
+    column.append(words);
+  }
   const offered = trip && page.places?.length ? placesOffered(view, page) : null;
   if (offered) column.append(offered);
 
@@ -182,9 +193,10 @@ function paint(view, page) {
     });
     column.append(line);
   }
-  column.append(...page.days.map(day => dayBlock(view, day, sections)));
-  const nothing = !page.count && !page.chapters.length;
-  const starting = nothing && !page.places?.length && !view.query && page.may_change;
+
+  const loose = page.days.map(day => dayBlock(view, day, sections, null)).filter(Boolean);
+  const adding = !page.chapters.length && !nothing && page.may_change && !view.query;
+  if (loose.length || adding) column.append(h('div', { class: 'album-days' }, loose, adding && addDayRow(view, null)));
   if (nothing && !page.places?.length) column.append(starting ? startBlock(view, page) : h('p', { class: 'body' }, view.query ? S.noFilterMatch : S.albumNothingYet));
   else if (view.query && !page.chapters.length && !page.days.length) column.append(empty(S.nothingHere, S.noFilterMatch));
 
@@ -197,7 +209,7 @@ function paint(view, page) {
     if (page.chapters.length || page.may_change) side.push(routeBlock(view, page));
   } else if (page.chapters.length) side.push(chapterList(view, page));
   const sided = side.length > 0;
-  view.body.className = 'album-page' + (sided ? ' sided' : '');
+  view.body.className = 'album-page' + (sided ? ' sided' : '') + (nothing && !page.places?.length ? ' starting' : '');
   view.body.replaceChildren(...[column, sided && h('aside', { class: 'album-side' + (trip ? '' : ' list'), 'aria-label': trip ? S.tripMap : S.chaptersHead }, side)].filter(Boolean));
   view.dates.textContent = '';
   fillCover(view, page);
@@ -219,9 +231,9 @@ async function refill(view) {
   scrollTo(0, kept);
 }
 
-function groupOf(sections, photos) {
+function groupOf(sections, photos, rest) {
   const box = h('div', { class: 'album-photos' });
-  const section = { photos, rows: box, count: photos.length, load: async () => photos, arrange: () => arrange(section) };
+  const section = { photos, rest: rest?.n > 0 ? rest : null, rows: box, count: photos.length, load: async () => photos, arrange: () => arrange(section) };
   sections.push(section);
   return box;
 }
@@ -231,38 +243,25 @@ function arrange(section) {
   if (!width) return;
   const parts = [];
   let run = [];
-  const flush = () => { if (run.length) parts.push(justified(section, run, width)); run = []; };
+  const flush = () => { if (run.length) parts.push(rows(section, run, width)); run = []; };
   for (const photo of section.photos) {
     if (photo.caption) { flush(); parts.push(figure(section, photo, width)); } else run.push(photo);
   }
+  if (section.rest) run.push({ rest: section.rest, aspect: 1 });
   flush();
   section.rows.replaceChildren(...parts);
 }
 
-function justified(section, photos, width) {
-  const box = h('div', { class: 'rows' });
-  const tall = rowHeight();
-  const tiles = [];
-  let row = [], sum = 0, top = 0;
-  const place = (list, height) => {
-    let left = 0;
-    for (const photo of list) {
-      const wide = aspect(photo) * height;
-      tiles.push(tile(section, photo, { left: left + 'px', top: top + 'px', width: wide + 'px', height: height + 'px' }, height, wide));
-      left += wide + GAP;
-    }
-    top += height + GAP;
-  };
-  for (const photo of photos) {
-    row.push(photo);
-    sum += aspect(photo);
-    const height = (width - GAP * (row.length - 1)) / sum;
-    if (height <= tall) { place(row, height); row = []; sum = 0; }
-  }
-  if (row.length) place(row, tall);
-  box.style.height = Math.max(0, top - GAP) + 'px';
-  box.append(...tiles);
-  return box;
+const TILE_HIGH = 148;
+function rows(section, photos, width) {
+  const across = width < 480 ? 3 : 4;
+  const wide = (width - GAP * (across - 1)) / across;
+  const tiles = photos.map((photo, at) => {
+    const style = { left: (at % across) * (wide + GAP) + 'px', top: Math.floor(at / across) * (TILE_HIGH + GAP) + 'px', width: wide + 'px', height: TILE_HIGH + 'px' };
+    return photo.rest ? restTile(photo.rest, style) : tile(section, photo, style, TILE_HIGH, wide);
+  });
+  const lines = Math.ceil(photos.length / across);
+  return h('div', { class: 'rows', style: { height: lines * TILE_HIGH + (lines - 1) * GAP + 'px' } }, tiles);
 }
 
 function figure(section, photo, width) {
@@ -274,7 +273,25 @@ function figure(section, photo, width) {
 
 const markOf = (page, chapter, number) => h('span', { class: 'album-mark' + (isAhead(page, chapter) ? ' ahead' : '') + (page.kind === 'trip' && hereNow(chapter) ? ' here' : ''), 'aria-hidden': 'true' }, String(number));
 
-const restTile = (view, count, shown, change) => count > shown && h('a', { class: 'album-rest', href: albumLink(view, change) }, h('b', {}, '+' + grouped(count - shown)), h('span', {}, S.showAllPlain));
+function stripOf(sections, photos) {
+  const rows = h('div', { class: 'album-strip-row' });
+  const slide = (way, said, symbol) => h('button', { type: 'button', class: 'album-strip-go ' + way, 'aria-label': said, title: said, tabindex: '-1',
+    onclick: () => rows.scrollBy({ left: (way === 'back' ? -0.85 : 0.85) * rows.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }, icon(symbol));
+  const back = slide('back', S.stripBack, 'back'), on = slide('on', S.stripOn, 'on');
+  const ends = () => {
+    back.hidden = rows.scrollLeft <= 1;
+    on.hidden = rows.scrollLeft + rows.clientWidth >= rows.scrollWidth - 1;
+  };
+  rows.addEventListener('scroll', ends, { passive: true });
+  const section = { photos, rows, count: photos.length, load: async () => photos, arrange: () => {
+    if (!rows.childElementCount) rows.replaceChildren(...photos.map(photo => tile(section, photo, { width: aspect(photo) * TILE_HIGH + 'px', height: TILE_HIGH + 'px' }, TILE_HIGH, aspect(photo) * TILE_HIGH)));
+    ends();
+  } };
+  sections.push(section);
+  return h('div', { class: 'album-photos album-strip' }, rows, back, on);
+}
+
+const restTile = (rest, style) => h('a', { class: 'album-rest', href: rest.href, style }, h('b', {}, '+' + grouped(rest.n)), h('span', {}, S.showAllPlain));
 
 function chapterBlock(view, chapter, sections, number) {
   const page = view.page;
@@ -282,53 +299,296 @@ function chapterBlock(view, chapter, sections, number) {
   const bare = !chapter.count;
   const may = page.may_change;
   const shown = chapter.shown || [];
-  const photos = shown.length ? groupOf(sections, shown) : null;
+
+  const days = chapter.by_day;
+  const photos = !days && shown.length ? groupOf(sections, shown, { n: chapter.count - shown.length, href: albumLink(view, { chapter: chapter.key }) }) : null;
   return h('section', { class: 'album-chapter' + (bare ? ' bare' : '') + (ahead ? ' ahead' : ''), 'data-chapter': chapter.key },
     markOf(page, chapter, number),
     h('div', { class: 'section-label' }, chapterLine(chapter, ahead)),
     h('div', { class: 'album-title' }, h('h2', {}, chapter.name), may && chapterMenu(view, chapter)),
-    wordsField(view, chapter, false),
+    textField(view, {
+      spans: chapter.spans, label: S.chapterWords,
+      placeholder: chapter.place ? S.writePlace : chapter.count ? S.writeAbout : S.writeWhat,
+      keep: words => api(`chapters/${chapter.key}`, { method: 'PUT', body: JSON.stringify({ words }) }),
+    }),
     photos,
-    restTile(view, chapter.count, shown.length, { chapter: chapter.key }),
+    days && days.map(day => dayBlock(view, day, sections, chapter)),
+    days && may && addDayRow(view, chapter),
     (chapter.offers || []).map(offer => offerRow(view, chapter, offer)));
 }
 
-function dayBlock(view, day, sections) {
-  const places = day.places?.length ? ' · ' + day.places.join(', ') : '';
-  return h('section', { class: 'album-day' },
-    h('div', { class: 'section-label' }, dayName(dayNumber(Date.parse(day.day + 'T00:00:00Z') / 1000)) + places),
-    groupOf(sections, day.shown),
-    restTile(view, day.count, day.shown.length, { date: day.day }));
+const dayHead = day => {
+  const date = new Date(day + 'T00:00:00Z');
+  return `${part(date, { weekday: 'long' })} ${date.getUTCDate()} ${part(date, { month: 'long' })}`;
+};
+
+function dayBlock(view, day, sections, chapter) {
+  const may = view.page.may_change;
+  if (!may && day.written && !day.spans?.length) return null;
+  const where = `albums/${encodeURIComponent(view.key)}/days/${day.number}`;
+  const show = chapter ? { chapter: chapter.key, date: day.day } : { date: day.day };
+  return h('section', { class: 'album-day', 'data-day': day.number },
+    h('div', { class: 'album-day-head' }, h('h3', {}, dayHead(day.day)), h('span', { class: 'caption' }, day.count ? counted(day.count) : S.noPhotosDay)),
+    textField(view, {
+      spans: day.spans, placeholder: phrase('writeAboutDay', { day: part(new Date(day.day + 'T00:00:00Z'), { weekday: 'long' }) }), label: S.dayReport,
+      keep: text => api(where, { method: 'PUT', body: JSON.stringify({ chapter: chapter?.key ?? null, text }) }),
+      left: async text => {
+        if (!day.written || text) return;
+        try { await api(where + (chapter ? '?chapter=' + encodeURIComponent(chapter.key) : ''), { method: 'DELETE' }); await refill(view); } catch (error) { toast(error.message); }
+      },
+    }),
+    day.shown?.length > 0 && (day.strip ? stripOf(sections, day.shown) : groupOf(sections, day.shown, { n: day.rest, href: albumLink(view, show) })));
 }
 
-function wordsField(view, chapter, small) {
-  const look = 'album-words' + (small ? ' small' : '');
-  if (!view.page.may_change) return chapter.words ? h('p', { class: look }, chapter.words) : null;
-  const area = h('textarea', { class: look, rows: 1, maxlength: 2000, placeholder: chapter.count ? S.writeAbout : S.writeWhat, 'aria-label': S.chapterWords });
-  area.value = chapter.words || '';
-  const fit = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
-  let kept = area.value.trim();
-  let timer;
-  const keep = async () => {
-    clearTimeout(timer);
-    const words = area.value.trim();
-    if (words === kept) return;
-    const before = kept;
-    kept = words;
+function addDayRow(view, chapter) {
+  const iso = number => new Date(number * 86400000).toISOString().slice(0, 10);
+  return h('button', { class: 'album-add-day', type: 'button', onclick: async () => {
+    const page = view.page;
+    const span = page.kind === 'trip' ? daysOf(page) : null;
+    const shown = chapter ? page.chapters.find(one => one.key === chapter.key)?.by_day || [] : page.days;
+    const last = shown.length ? Math.max(...shown.map(day => day.number)) : null;
+    const keep = span || chapter?.days;
+    let first = last != null ? last + 1 : chapter?.days?.[0] ?? todayNumber();
+    if (keep) first = Math.min(keep[1], Math.max(keep[0], first));
+    const field = h('input', { type: 'date', name: 'day', required: true, 'aria-label': S.dayDate,
+      min: span && iso(span[0]), max: span && iso(span[1]), value: iso(first) });
+    const asked = await dialog(S.addDay, null, [field], S.add);
+    const number = asked?.day && Math.floor(Date.parse(asked.day + 'T00:00:00Z') / 86400000);
+    if (!Number.isFinite(number)) return;
     try {
-      await api(`chapters/${chapter.key}`, { method: 'PUT', body: JSON.stringify({ words }) });
-      chapter.words = words;
-    } catch (error) {
-      kept = before;
-      toast(phrase('notSaved', { error: error.message }));
+      await api(`albums/${encodeURIComponent(view.key)}/days`, { method: 'POST', body: JSON.stringify({ day: number, chapter: chapter?.key ?? null }) });
+      await refill(view);
+      const scope = chapter ? view.body.querySelector(`.album-chapter[data-chapter="${chapter.key}"]`) : view.body;
+      scope?.querySelector(`.album-day[data-day="${number}"] .text-field`)?.open();
+    } catch (error) { toast(error.message); }
+  } }, icon('plus'), S.addDayEll);
+}
+
+const TEXT_LIMIT = 10000;
+
+const textNodes = blocks => (blocks || []).map(block => {
+  const run = one => {
+    let node = document.createTextNode(one.text);
+    if (one.italic) node = h('i', {}, node);
+    if (one.bold) node = h('b', {}, node);
+    return node;
+  };
+  return block.list ? h('ul', {}, block.lines.map(line => h('li', {}, line.map(run))))
+    : h('p', {}, block.lines.map((line, at) => [at > 0 && h('br'), line.map(run)]));
+});
+
+function blocksOf(root) {
+  const blocks = [];
+  let block = null, runs = [];
+  const line = () => { if (runs.length) (block ??= { list: false, lines: [] }).lines.push(runs); runs = []; };
+  const finish = () => { line(); if (block?.lines.length) blocks.push(block); block = null; };
+  const add = (text, look, list) => {
+    const bold = Number(look.fontWeight) >= 600, italic = look.fontStyle === 'italic';
+    block ??= { list, lines: [] };
+    const last = runs.at(-1);
+    if (last && last.bold === bold && last.italic === italic) last.text += text; else runs.push({ text, bold, italic });
+  };
+  const walk = (node, list) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const look = getComputedStyle(child.parentElement);
+        child.data.replace(/\u00a0/g, ' ').replace(/\u200b/g, '').split('\n').forEach((text, at) => { if (at) line(); if (text) add(text, look, list); });
+      } else if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      else if (child.tagName === 'BR') line();
+      else if (child.tagName === 'UL' || child.tagName === 'OL') { finish(); block = { list: true, lines: [] }; walk(child, true); finish(); }
+      else if (list && /^(LI|P|DIV)$/.test(child.tagName)) { line(); walk(child, true); line(); }
+      else if (/^(P|DIV|LI)$/.test(child.tagName)) { finish(); walk(child, false); finish(); }
+      else walk(child, list);
     }
   };
-  view.keeps.add(keep);
-  area.addEventListener('input', () => { fit(); clearTimeout(timer); timer = setTimeout(keep, 900); });
-  area.addEventListener('change', keep);
-  area.addEventListener('keydown', event => { if (event.key === 'Escape') area.blur(); });
-  requestAnimationFrame(fit);
-  return area;
+  walk(root, false);
+  finish();
+  return blocks;
+}
+
+const escapedWords = words => {
+  const all = [...words];
+  return all.map((c, at) => c === '*' ? '\\*' : c === '\\' && [undefined, '*', '\\', '-'].includes(all[at + 1]) ? '\\\\' : c).join('');
+};
+function writeLine(line) {
+  const close = (bold, italic) => (italic ? '*' : '') + (bold ? '**' : '');
+  let out = '', bold = false, italic = false, gap = '';
+  for (const one of line) {
+    const core = one.text.trim();
+    if (!core) { gap += one.text; continue; }
+    const lead = one.text.slice(0, one.text.length - one.text.trimStart().length);
+    gap += lead;
+    const reset = (bold && !one.bold) || (one.bold && !bold && italic);
+    if (reset) { out += close(bold, italic); bold = italic = false; } else if (italic && !one.italic) { out += '*'; italic = false; }
+
+    const reopen = !(reset && !gap);
+    out += gap;
+    gap = '';
+    if (reopen && one.bold && !bold) { out += '**'; bold = true; }
+    if (reopen && one.italic && !italic) { out += '*'; italic = true; }
+    out += escapedWords(core);
+    gap += one.text.slice(lead.length + core.length);
+  }
+  return (out + close(bold, italic)).trim();
+}
+const writeBlocks = blocks => blocks.map(block => block.lines.map(writeLine).filter(Boolean)
+  .map(line => block.list ? '- ' + line : line === '-' || line.startsWith('- ') ? '\\' + line : line).join('\n')).filter(Boolean).join('\n\n');
+
+function richBlocks(html) {
+  if (!html) return null;
+  const root = new DOMParser().parseFromString(html, 'text/html').body;
+
+  const styled = (node, name) => (node.getAttribute('style') || '').match(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;!]+)`, 'i'))?.[1].trim().toLowerCase();
+  const weight = node => {
+    const said = styled(node, 'font-weight');
+    if (said) return said === 'bold' || said === 'bolder' || Number(said) >= 600;
+    return /^(B|STRONG)$/.test(node.tagName) ? true : null;
+  };
+  const slant = node => {
+    const said = styled(node, 'font-style');
+    if (said) return said === 'italic' || said === 'oblique';
+    return /^(I|EM)$/.test(node.tagName) ? true : null;
+  };
+  const blocks = [];
+  let block = null, runs = [], marked = false;
+  const line = () => { if (runs.some(run => run.text.trim())) (block ??= { list: false, lines: [] }).lines.push(runs); runs = []; };
+  const finish = () => { line(); if (block?.lines.length) blocks.push(block); block = null; };
+  const walk = (node, bold, italic, list) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const words = child.data.replace(/[\s\u00a0]+/g, ' ');
+        if (!words.trim() && !runs.length) continue;
+        block ??= { list, lines: [] };
+        marked ||= bold || italic;
+        const last = runs.at(-1);
+        if (last && last.bold === bold && last.italic === italic) last.text += words; else runs.push({ text: words, bold, italic });
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE || /^(SCRIPT|STYLE|HEAD|TITLE|TEMPLATE)$/.test(child.tagName)) continue;
+      const b = weight(child) ?? bold, i = slant(child) ?? italic;
+      if (child.tagName === 'BR') line();
+      else if (child.tagName === 'UL' || child.tagName === 'OL') { finish(); block = { list: true, lines: [] }; walk(child, b, i, true); finish(); }
+      else if (list && child.tagName === 'LI') { line(); walk(child, b, i, true); line(); }
+      else if (/^(P|DIV|LI|H[1-6]|BLOCKQUOTE|TR)$/.test(child.tagName)) { finish(); walk(child, b, i, false); finish(); }
+      else walk(child, b, i, list);
+    }
+  };
+  walk(root, false, false, false);
+  finish();
+  if (!marked) return null;
+  blocks.forEach(one => one.lines.forEach(runs => { runs[0].text = runs[0].text.trimStart(); runs.at(-1).text = runs.at(-1).text.trimEnd(); }));
+  return blocks;
+}
+
+function pastedHtml(blocks, text) {
+  const box = document.createElement('div');
+  const nodes = textNodes(blocks);
+  if (nodes.length === 1 && nodes[0].tagName === 'P') box.append(text.match(/^[ \t]*/)[0], ...nodes[0].childNodes, text.match(/[ \t]*$/)[0]);
+  else box.append(...nodes);
+  return box.innerHTML;
+}
+
+function textField(view, { spans, placeholder, label, keep, left }) {
+  if (!view.page.may_change) return spans?.length ? h('div', { class: 'album-text' }, textNodes(spans)) : null;
+  const area = h('div', { class: 'text-area', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': label, 'data-placeholder': placeholder }, textNodes(spans));
+  const command = (name, said, symbol) => h('button', { type: 'button', tabindex: '-1', 'data-command': name, 'aria-label': said, title: said, 'aria-pressed': 'false',
+    onmousedown: event => event.preventDefault(), onclick: () => { document.execCommand(name); changed(); } }, icon(symbol));
+  const status = h('span', { class: 'text-kept', 'aria-live': 'polite' });
+  const prompt = h('button', { type: 'button', class: 'text-prompt', onclick: () => open() }, icon('pencil'), h('span', {}, placeholder));
+  const done = h('button', { type: 'button', class: 'text-done', onmousedown: event => event.preventDefault(), onclick: () => shut() }, icon('check'), S.done);
+  const commands = [command('bold', S.textBold, 'bold'), command('italic', S.textItalic, 'italic'), command('insertUnorderedList', S.textList, 'list')];
+  const bar = h('div', { class: 'text-bar', role: 'toolbar', 'aria-label': S.textFormat }, commands, status, done);
+  const editor = h('div', { class: 'text-edit' }, area, h('span', { class: 'text-pencil', 'aria-hidden': 'true' }, icon('pencil')), bar);
+  const box = h('div', { class: 'text-field' }, prompt, editor);
+  const mark = () => { for (const button of commands) button.setAttribute('aria-pressed', String(document.queryCommandState(button.dataset.command))); };
+  const blank = () => box.classList.toggle('blank', !area.textContent.trim());
+  const now = () => writeBlocks(blocksOf(area));
+
+  let sent = null, latest = null, timer = 0;
+  const flush = async () => {
+    clearTimeout(timer);
+    if (sent === null) return;
+    const text = area.isConnected ? now() : latest ?? sent;
+    if (text === sent) return;
+    const before = sent;
+    sent = text;
+    try { await keep(text); if (box.classList.contains('on')) status.textContent = S.textKept; } catch (error) { sent = before; toast(phrase('wordsNotKept', { error: error.message })); }
+  };
+  const changed = () => { latest = now(); status.textContent = ''; blank(); mark(); clearTimeout(timer); timer = setTimeout(flush, 900); };
+  view.keeps.add(flush);
+  const open = () => { box.classList.add('on'); area.focus(); };
+
+  const shut = () => { area.blur(); document.activeElement?.blur(); if (box.classList.contains('blank')) prompt.focus(); };
+  area.addEventListener('focus', () => {
+    sent ??= now();
+    box.classList.add('on');
+    mark();
+    document.execCommand('defaultParagraphSeparator', false, 'p');
+
+    const away = () => flush();
+    addEventListener('hashchange', away, { once: true });
+    addEventListener('pagehide', away, { once: true });
+  });
+  editor.addEventListener('focusout', event => {
+    if (editor.contains(event.relatedTarget)) return;
+    box.classList.remove('on');
+    status.textContent = '';
+    flush().then(() => left?.(sent ?? now()));
+  });
+  area.addEventListener('keydown', event => { if (event.key === 'Escape') shut(); });
+  document.addEventListener('visibilitychange', function hidden() {
+    if (!area.isConnected) return document.removeEventListener('visibilitychange', hidden);
+    if (document.visibilityState === 'hidden') flush();
+  });
+  document.addEventListener('selectionchange', function moved() {
+    if (!area.isConnected) return document.removeEventListener('selectionchange', moved);
+    if (box.classList.contains('on')) mark();
+  });
+  typing(area, now, changed);
+  blank();
+  box.open = open;
+  return box;
+}
+
+function typing(area, now, changed) {
+
+  const full = extra => charCount(area.textContent) + extra > TEXT_LIMIT - 200 && charCount(now()) + extra > TEXT_LIMIT;
+  area.addEventListener('beforeinput', event => {
+    if (event.inputType.startsWith('insert') && event.inputType !== 'insertFromPaste' && full(charCount(event.data || ' '))) event.preventDefault();
+
+    if (event.inputType.startsWith('format') && !['formatBold', 'formatItalic'].includes(event.inputType)) event.preventDefault();
+  });
+
+  area.addEventListener('paste', async event => {
+    event.preventDefault();
+    const text = (event.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
+    const rich = richBlocks(event.clipboardData?.getData('text/html') || '');
+    const room = TEXT_LIMIT - charCount(now());
+    if (room <= 0 || (!text && !rich)) return;
+    const at = getSelection().rangeCount ? getSelection().getRangeAt(0).cloneRange() : null;
+    let blocks = rich;
+    if (!blocks) try { blocks = (await api('texts/clean', { method: 'POST', body: JSON.stringify({ text }), quiet: true })).spans; } catch (_) { blocks = null; }
+    if (!area.isConnected) return;
+    if (at) { getSelection().removeAllRanges(); getSelection().addRange(at); }
+    if (blocks?.length && charCount(writeBlocks(blocks)) <= room) document.execCommand('insertHTML', false, pastedHtml(blocks, text));
+    else if (text) document.execCommand('insertText', false, [...text].slice(0, room).join(''));
+  });
+  area.addEventListener('drop', event => event.preventDefault());
+  area.addEventListener('input', event => {
+
+    const at = getSelection(), node = at.anchorNode;
+    if (event.inputType === 'insertText' && event.data === ' ' && node?.nodeType === Node.TEXT_NODE && at.anchorOffset === 2 && /^-[ \u00a0]/.test(node.data)
+      && !node.parentElement.closest('li') && !node.previousSibling && area.contains(node)) {
+      const range = document.createRange();
+      range.setStart(node, 0);
+      range.setEnd(node, 2);
+      at.removeAllRanges();
+      at.addRange(range);
+      document.execCommand('delete');
+      document.execCommand('insertUnorderedList');
+    }
+    changed();
+  });
 }
 
 function chapterMenu(view, chapter) {
@@ -359,10 +619,8 @@ function lookAt(ids) {
 }
 
 function pauseWhy(view, chapter, offer) {
-  const chapters = view.page.chapters;
-  const before = chapters[chapters.findIndex(one => one.key === chapter.key) - 1];
-  if (before && !before.count && (before.offers || []).some(one => one.why === 'pause')) return S.offerNext;
-  return offer.after ? phrase('offerAfter', { name: offer.after }) : S.offerFirst;
+  if (offer.after) return phrase('offerAfter', { name: offer.after });
+  return view.page.chapters[0]?.key === chapter.key ? S.offerFirst : S.offerNext;
 }
 
 function offerRow(view, chapter, offer) {
@@ -374,7 +632,7 @@ function offerRow(view, chapter, offer) {
     : offer.why === 'days' ? S.offerWhyDays
       : offer.why === 'pause' ? pauseWhy(view, chapter, offer) : '';
   const ids = offer.ids;
-  const some = [...new Set([ids[0], ids[Math.floor(ids.length / 2)], ids[ids.length - 1]])].filter(id => id != null);
+  const some = ids.slice(0, 3);
   const big = !chapter.count;
   const add = h('button', { class: 'chip', onclick: async () => {
     add.disabled = true;
@@ -406,7 +664,7 @@ function placesOffered(view, page) {
     try {
       const { added } = await api(`albums/${encodeURIComponent(view.key)}/places`, { method: 'POST', body: JSON.stringify({}) });
       await refill(view);
-      toast(phrase('placesAdded', { n: grouped(added) }));
+      toast(added === 1 ? S.onePlaceAdded : phrase('placesAdded', { n: grouped(added) }));
     } catch (error) { add.disabled = false; toast(error.message); }
   } }, phrase('addN', { n: grouped(places.length) }));
   return h('section', { class: 'album-offered' },
@@ -424,11 +682,11 @@ function startBlock(view, page) {
   const way = (name, label, line, run) => h('button', { class: 'album-start-row', onclick: run },
     icon(name), h('span', { class: 'album-start-text' }, h('span', { class: 'name' }, label), h('span', { class: 'caption' }, line)), icon('on'));
   return h('div', { class: 'album-start' },
-    empty(S.noPhotosYet, phrase('albumEmptyLine', { album: page.name })),
+    empty(S.noPhotosYet, phrase('albumEmptyLine', { album: page.name }), false, 'images'),
     page.kind !== 'trip' && h('div', { class: 'section-label' }, S.startHead),
     page.kind === 'album' && way('route', S.startTrip, S.startTripLine, () => setKind(album, 'trip')),
-    page.kind === 'album' && way('star', S.startWedding, S.startWeddingLine, () => setKind(album, 'wedding')),
-    page.kind !== 'trip' && way('edit', S.startChapters, S.startChaptersLine, () => addChapterDialog(album)));
+    page.kind === 'album' && way('heart', S.startWedding, S.startWeddingLine, () => setKind(album, 'wedding')),
+    page.kind !== 'trip' && way('list', S.startChapters, S.startChaptersLine, () => addChapterDialog(album)));
 }
 
 function addField(view, page) {
@@ -615,6 +873,57 @@ async function tripLinkDialog(key) {
   reload();
 }
 
+const EDGES = [4096, 2560, 2048, 1600, 1080];
+const BOOK_SIZES = [['21 × 28 cm', 280], ['30 × 30 cm', 300], ['21 × 21 cm', 210], ['33 × 28 cm', 330.2]];
+const dpi300 = mm => Math.round(mm / 25.4 * 300);
+
+async function exportDialog(key) {
+  let page;
+  try { page = await api(`albums/${encodeURIComponent(key)}/page`); } catch (error) { toast(error.message); return; }
+  const first = page.kind === 'trip' ? 'place' : page.chapters?.length ? 'chapter' : 'day';
+  const folders = h('select', { 'aria-label': S.exportFolders },
+    [['place', S.byPlaceAndDay], ['chapter', S.byChapterAndDay], ['day', S.byDay], ['one', S.oneFolder]].map(([value, label]) => h('option', { value, selected: value === first }, label)));
+  const texts = h('input', { type: 'checkbox', role: 'switch', class: 'switch', checked: true });
+  const size = h('select', { 'aria-label': S.exportSize },
+    h('option', { value: '' }, S.fullSize), EDGES.map(edge => h('option', { value: 'edge=' + edge }, phrase('longEdgePx', { n: edge }))),
+    BOOK_SIZES.map(([name, mm]) => h('option', { value: 'mm=' + mm }, phrase('bookSize', { name }))), h('option', { value: 'custom' }, S.customSize));
+  const cm = h('input', { type: 'number', min: 5, max: 100, step: 0.5, value: 28, 'aria-label': S.customCm, inputmode: 'decimal' });
+  const edge = h('span', { class: 'caption' });
+  const asked = () => size.value === 'custom' ? 'mm=' + Math.round(Number(cm.value) * 10) : size.value;
+  const said = () => {
+    const value = asked();
+
+    const px = value.startsWith('mm=') ? dpi300(Number(value.slice(3))) : 0;
+    edge.textContent = px > 0 ? phrase('pixels', { n: grouped(px) }) : '';
+    custom.hidden = size.value !== 'custom';
+    long.hidden = !px;
+  };
+  const row = (label, control) => h('label', { class: 'trip-row' }, h('span', { class: 'trip-what' }, h('span', {}, label)), control);
+  const custom = row(S.customCm, cm), long = row(S.longEdge, edge);
+  size.addEventListener('change', said);
+  cm.addEventListener('input', said);
+
+  const count = page.photographs ?? page.count;
+  const go = h('button', { class: 'primary', type: 'submit' }, count === 1 ? S.exportOne : phrase('exportN', { n: grouped(count) }));
+  const title = phrase('exportAlbum', { name: page.name });
+  const box = h('dialog', { class: 'ask', 'aria-label': title, onclose: () => box.remove() }, h('form', { method: 'dialog', onsubmit: event => {
+    event.preventDefault();
+    const query = [`folders=${folders.value}`, !texts.checked && 'texts=false', asked()].filter(Boolean).join('&');
+    const link = h('a', { href: `/api/v1/albums/${encodeURIComponent(key)}/export?${query}`, download: '', hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    box.close();
+  } },
+  h('h2', {}, title),
+  h('div', { class: 'trip-links' }, h('div', { class: 'section-label' }, S.exportGroup)),
+  row(S.exportFolders, folders), row(S.exportTexts, texts), row(S.exportSize, size), custom, long,
+  h('div', { class: 'buttons' }, h('button', { class: 'chip', type: 'button', onclick: () => box.close() }, S.cancel), go)));
+  said();
+  document.body.append(box);
+  box.showModal();
+}
+
 async function setKind(album, kind) {
   try {
     await api(`albums/${encodeURIComponent(album.key)}/kind`, { method: 'PUT', body: JSON.stringify({ kind }) });
@@ -639,8 +948,10 @@ function kindItems(album) {
   const kind = album.kind || 'album';
   return [
     kind !== 'trip' && h('button', { onclick: () => addChapterDialog(album) }, S.addChapterEll),
+    kind === 'trip' && h('button', { onclick: () => tripLinkDialog(album.key) }, S.tripShareEll),
     kind === 'album' ? [h('button', { onclick: () => setKind(album, 'trip') }, S.makeTrip), h('button', { onclick: () => setKind(album, 'wedding') }, S.makeWedding)]
       : h('button', { onclick: () => setKind(album, 'album') }, S.makeAlbum),
+    album.count > 0 && h('button', { onclick: () => exportDialog(album.key) }, S.exportEll),
     h('div', { class: 'rule' }),
   ].flat().filter(Boolean);
 }

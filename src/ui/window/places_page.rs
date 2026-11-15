@@ -312,9 +312,7 @@ pub(super) fn build(state: &App) -> gtk::Box {
     overlay.add_overlay(&chips);
     overlay.add_overlay(&streets.line);
     let zoom = zoom_buttons();
-    let credit = gtk::Label::new(Some(map_view::CREDIT));
-    credit.add_css_class("caption");
-    credit.add_css_class("map-credit");
+    let credit = map_view::credit();
     let pop = gtk::Popover::new();
     pop.set_parent(&overlay);
     pop.add_css_class("map-pop");
@@ -347,8 +345,6 @@ pub(super) fn build(state: &App) -> gtk::Box {
         towns: Cell::new(None),
     });
     overlay.add_overlay(&zoom);
-    credit.set_halign(gtk::Align::End);
-    credit.set_valign(gtk::Align::End);
     overlay.add_overlay(&credit);
     for (at, chip) in page.quick.iter().enumerate() {
         chip.set_focus_on_click(false);

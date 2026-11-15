@@ -199,6 +199,8 @@ main { padding: 0 var(--edge) 48px; }
 
 .empty { padding: 80px 0; display: grid; gap: 8px; justify-items: center; text-align: center; }
 .empty h2 { font-size: 20px; line-height: 25px; font-weight: 700; margin: 0; }
+/* The thin monochrome symbol over an empty page's title. */
+.empty > svg { width: 48px; height: 48px; color: var(--label); stroke-width: 1.2; }
 
 /* People, libraries and albums. */
 .places { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 30px 18px; padding-top: 22px; }
@@ -580,6 +582,7 @@ dialog.ask form { display: grid; gap: 12px; }
 dialog.ask h2 { font-size: 17px; line-height: 22px; margin: 0; }
 dialog.ask .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 dialog.ask .buttons .chip { height: 40px; border-radius: 20px; padding: 0 22px; }
+dialog.ask ul.lines { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 15px; line-height: 22px; }
 dialog.ask label.check { display: flex; gap: 8px; align-items: center; color: var(--name); }
 dialog.ask input[type=checkbox] { accent-color: var(--accent); }
 /* HOME-003 (#56): what an account sees, a tick per library and album, and
@@ -770,8 +773,10 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .today .place { align-content: start; }
 .arrival { display: grid; gap: 10px; }
 .strip { display: flex; gap: 4px; overflow: hidden; }
-.strip button { flex: none; height: 104px; min-width: 60px; padding: 0; border: 0; border-radius: 4px; overflow: hidden; background: var(--ground-raised); cursor: pointer; }
+.strip button { position: relative; flex: none; height: 104px; min-width: 60px; padding: 0; border: 0; border-radius: 4px; overflow: hidden; background: var(--ground-raised); cursor: pointer; }
 .strip img { height: 100%; width: auto; display: block; }
+.strip video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--standard); pointer-events: none; }
+.strip video.in { opacity: 1; }
 .waiting { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-12); }
 .waiting > .head { grid-column: 1 / -1; }
 .wait { display: flex; align-items: center; gap: 12px; padding: var(--space-16); border-radius: var(--radius-card); background: var(--ground-view); min-width: 0; }
@@ -797,6 +802,14 @@ dialog.ask .year { width: 80px; margin-left: auto; }
   .place-entry:not(.chosen):hover { background: var(--ground-chip); color: var(--ink); }
   .place-entry:hover .caption { color: var(--name); }
   .tile:hover .check, .place:hover .check { opacity: 1; }
+  .text-prompt:hover { background: var(--rule-sheet); color: var(--ink); }
+  .text-field:not(.on):not(.blank) .text-edit:hover::before { content: ''; position: absolute; inset: calc(var(--space-8) * -1) calc(var(--space-12) * -1); border-radius: var(--radius-action); background: var(--rule-sheet); pointer-events: none; }
+  .text-field:not(.on):not(.blank) .text-edit:hover .text-pencil { display: block; }
+  .text-bar button:not([aria-pressed=true]):hover { background: var(--track); color: var(--ink); }
+  /* The chevrons slide the strip, so its bar can go. */
+  .album-strip-row { scrollbar-width: none; }
+  .album-strip-row::-webkit-scrollbar { display: none; }
+  .album-strip:hover .album-strip-go { display: grid; }
 }
 
 /* Touch (P15): every control has a hit area of 44 × 44 at least, whatever is
@@ -987,26 +1000,53 @@ main.map-page { padding: 0; display: grid; grid-template-columns: 300px minmax(0
 .album-title { display: flex; align-items: center; gap: var(--space-8); margin-top: var(--space-6); }
 .album-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
 .album-chapter.bare .album-title h2 { color: var(--name); }
-.album-words { margin: var(--space-8) 0 0; font-size: 15px; line-height: 24px; color: var(--name); white-space: pre-wrap; overflow-wrap: anywhere; }
-.album-words.small { margin: 0; padding-left: var(--space-24); font-size: 13px; line-height: 18px; color: var(--label); }
-/* The field is the words themselves: a rule only while it is empty or written in. */
-textarea.album-words { display: block; width: 100%; padding: 0 0 var(--space-6); border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent;
-  font-family: inherit; resize: none; overflow: hidden; caret-color: var(--accent); transition: border-color var(--quick); }
-textarea.album-words.small { padding: 0 0 var(--space-6) var(--space-24); }
-textarea.album-words:placeholder-shown { border-bottom-color: var(--rule); }
-textarea.album-words:focus, textarea.album-words:focus-visible { outline: none; border-bottom-color: var(--accent); }
-textarea.album-words::placeholder { color: var(--label); }
+/* The album's words, a place's introduction and a day's report. At rest an
+   empty one is a pencil and its prompt, a written one the page's text; while
+   it is written, a raised field with Bold, Italic, List and Done under it. */
+.album-text { margin-top: var(--space-8); font-size: 15px; line-height: 22px; color: var(--name); overflow-wrap: anywhere; }
+.album-text p, .text-area p { margin: 0; }
+.album-text p + *, .album-text ul + *, .text-area p + *, .text-area ul + * { margin-top: var(--space-8); }
+.album-text ul, .text-area ul { margin: 0; padding-left: var(--space-20); }
+.album-text b, .text-area b { color: var(--ink); }
+.text-field { margin-top: var(--space-8); }
+.text-prompt { display: flex; align-items: center; gap: var(--space-8); width: calc(100% + var(--space-20)); min-height: 36px; margin: 0 calc(var(--space-10) * -1); padding: 0 var(--space-10);
+  border: 0; border-radius: var(--radius-action); background: none; color: var(--label); font-size: 15px; line-height: 22px; text-align: left; cursor: pointer; }
+.text-prompt svg { flex: none; width: 16px; height: 16px; }
+.text-field:not(.blank) .text-prompt, .text-field.on .text-prompt, .text-field.blank:not(.on) .text-edit { display: none; }
+.text-edit { position: relative; border-radius: var(--radius-card); }
+.text-field.on .text-edit { background: var(--ground-raised); box-shadow: inset 0 0 0 1px var(--rule); }
+.text-field.on .text-edit:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.text-area { position: relative; font-size: 15px; line-height: 22px; color: var(--name); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; cursor: text; }
+.text-field.on .text-area { min-height: 120px; padding: var(--space-14) var(--space-16); color: var(--ink); }
+.text-field.blank .text-area::before { content: attr(data-placeholder); position: absolute; color: var(--label); pointer-events: none; }
+.text-pencil { position: absolute; top: 0; right: 0; display: none; color: var(--label); pointer-events: none; }
+.text-pencil svg { width: 16px; height: 16px; display: block; }
+.text-bar { display: none; align-items: center; gap: var(--space-2); padding: var(--space-6) var(--space-8); border-top: 1px solid var(--rule); }
+.text-field.on .text-bar { display: flex; }
+.text-bar button { height: var(--hit-pointer); min-width: var(--hit-pointer); padding: 0; border: 0; border-radius: var(--radius-action); background: none; color: var(--name); display: grid; place-items: center; cursor: pointer; }
+.text-bar button svg { width: 16px; height: 16px; }
+.text-bar button[aria-pressed=true] { background: var(--track-hover); color: var(--ink); }
+.text-kept { margin-left: auto; padding: 0 var(--space-8); font-size: 12px; line-height: 16px; color: var(--label); }
+.text-bar .text-done { display: inline-flex; gap: var(--space-4); padding: 0 var(--space-10); color: var(--ink); font-size: 13px; line-height: 18px; font-weight: 600; }
 .album-photos { display: grid; gap: var(--space-10); margin-top: var(--space-14); }
+/* A day past twelve: one row that slides sideways, a round chevron at each
+   end while there is more that way. */
+.album-strip { display: block; position: relative; min-width: 0; }
+.album-strip-row { display: flex; gap: var(--tile-gap); overflow-x: auto; overscroll-behavior-x: contain; }
+.album-strip-row .tile { position: relative; flex: none; }
+.album-strip-go { position: absolute; top: 50%; z-index: 1; display: none; place-items: center; width: 32px; height: 32px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%;
+  background: var(--ground-bar); color: var(--ink); box-shadow: var(--shadow-badge); cursor: pointer; }
+.album-strip-go svg { width: 18px; height: 18px; }
+.album-strip-go.back { left: var(--space-8); }
+.album-strip-go.on { right: var(--space-8); }
 .album-figure { margin: 0; display: grid; gap: var(--space-8); }
 .album-caption { margin: 0; font-size: 13px; line-height: 18px; color: var(--name); overflow-wrap: anywhere; white-space: pre-wrap; }
-.album-link { align-self: flex-start; margin-top: var(--space-12); font-size: 13px; line-height: 20px; font-weight: 600; color: var(--name); text-decoration: none; font-variant-numeric: tabular-nums; }
-.album-link:hover { color: var(--ink); }
 .album-more { flex: none; width: var(--hit-pointer); height: var(--hit-pointer); padding: 0; border: 0; border-radius: var(--radius-chip); background: none; color: var(--label); display: inline-grid; place-items: center; cursor: pointer; }
 .album-more svg { width: 16px; height: 16px; }
 .album-more:hover { color: var(--ink); }
 @media (hover: hover) {
   .album-more { opacity: 0; }
-  .album-chapter:hover .album-more, .album-planned:hover .album-more, .album-more:focus-visible, .album-more[aria-expanded=true] { opacity: 1; }
+  .album-chapter:hover .album-more, .album-more:focus-visible, .album-more[aria-expanded=true] { opacity: 1; }
 }
 @media (pointer: coarse) { .album-more { width: var(--hit-touch); height: var(--hit-touch); } }
 
@@ -1027,9 +1067,6 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-place .name { flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--name); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-place .caption { flex: none; }
 .album-ahead .section-label, .album-offered .section-label { margin-bottom: var(--space-6); }
-.album-planned .album-words.small { border-bottom: 1px solid var(--rule); padding-top: var(--space-6); padding-bottom: var(--space-10); }
-.album-planned textarea.album-words.small:placeholder-shown { border-bottom-color: transparent; }
-.album-planned textarea.album-words.small:focus { border-bottom-color: var(--accent); }
 
 /* The quiet row at the end, and its suggestions. */
 .album-add { position: relative; display: flex; align-items: center; gap: var(--space-10); min-height: 36px; color: var(--label); }
@@ -1042,16 +1079,16 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-add .menu.suggest button { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-12); }
 
 /* An album with nothing in it: how it can begin, a row each. */
-.album-start { display: flex; flex-direction: column; align-items: stretch; margin-top: var(--space-8); }
+.album-page.starting { grid-template-columns: minmax(0, 1fr); }
+.album-start { display: flex; flex-direction: column; align-items: stretch; width: 100%; max-width: var(--column, 880px); margin: var(--space-8) auto 0; }
 .album-start .section-label { margin-bottom: var(--space-6); }
 .album-start .empty { padding: var(--space-32) 0; }
-.album-start-row { display: flex; align-items: center; gap: var(--space-12); min-height: 56px; padding: var(--space-8) 0; border: 0; border-bottom: 1px solid var(--rule);
+.album-start-row { display: flex; align-items: center; gap: var(--space-12); min-height: 52px; padding: var(--space-8) 0; border: 0; border-bottom: 1px solid var(--rule);
   background: none; text-align: left; cursor: pointer; color: var(--name); }
-.album-start-row:hover .name { color: var(--ink); }
-.album-start-row > svg { flex: none; width: 20px; height: 20px; color: var(--label); }
-.album-start-row > svg:last-child { width: 16px; height: 16px; }
-.album-start-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.album-start-text .name { font-size: 15px; line-height: 22px; font-weight: 600; }
+.album-start-row > svg { flex: none; width: 16px; height: 16px; color: var(--name); }
+.album-start-text { flex: 1 1 auto; min-width: 0; display: grid; gap: var(--space-2); }
+.album-start-text .name { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ink); }
+.album-start-text .caption { color: var(--name); }
 
 /* The side: the chapters as a list; a trip's map and what is ahead. */
 .album-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 36px; padding: 0; border: 0; border-bottom: 1px solid var(--rule);
@@ -1070,6 +1107,10 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-dot .album-pin-name { top: calc(100% + var(--space-4)); color: var(--name); font-weight: 400; }
 .album-map .pin { margin-bottom: var(--space-16); }
 @media (max-width: 899px) {
+  /* One column on a phone: the album's words under the cover, then the map. */
+  .album-page.sided { gap: var(--space-44); }
+  .album-page.sided > .album-column { display: contents; }
+  .album-page.sided .album-lead { order: -2; }
   .album-side .album-map { order: -1; }
   .album-side .album-ahead { order: 1; }
 }
@@ -1089,9 +1130,12 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-cover { position: relative; padding: 0; border: 0; display: grid; align-content: end; margin-top: var(--space-12); height: min(360px, 48vh); min-height: 260px; border-radius: var(--radius-card); overflow: hidden; background: var(--ground-page); }
 .album-cover.bare { height: auto; min-height: 0; border-radius: 0; overflow: visible; }
 .album-cover > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.album-cover .cover-act { position: absolute; top: var(--space-12); right: var(--space-12); z-index: 1; }
+.album-cover.bare .cover-act { right: 0; }
+.album-cover .cover-act .primary { height: var(--chip-height); border-radius: var(--radius-chip); padding: 0 var(--space-16); }
 .album-cover .scrim { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to bottom, transparent 30%, var(--ground-hud) 62%, var(--ground-page) calc(100% - 2px)); }
-/* The words stand on a scrim of their own, opaque from where the first line starts, so they read on any cover (white on a white photograph was 1.7:1). */
-.album-cover .say { position: relative; display: grid; gap: var(--space-4); padding: var(--space-32) var(--space-24) var(--space-24); min-width: 0; background: linear-gradient(to bottom, transparent, var(--ground-page) var(--space-32)); }
+/* The words stand on a scrim of their own, opaque 16 above the first line, so they read on any cover (white on a white photograph was 1.7:1). */
+.album-cover .say { position: relative; display: grid; gap: var(--space-4); padding: var(--space-48) var(--space-24) var(--space-24); min-width: 0; background: linear-gradient(to bottom, transparent, var(--ground-page) var(--space-32)); }
 .album-cover.bare .say { padding: var(--space-12) 0 0; background: none; }
 .album-cover .section-label { color: var(--name); }
 .album-cover .title { font-size: 32px; line-height: 40px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1100,7 +1144,7 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-figures dd { margin: 0; font-size: 20px; line-height: 25px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .album-figures dd span { font-size: 13px; font-weight: 400; color: var(--name); }
 .album-parts { display: flex; gap: var(--space-4); margin-top: var(--space-12); max-width: 520px; }
-.album-parts i { flex: 1 1 0; height: 4px; border-radius: var(--radius-histogram); background: var(--rule); }
+.album-parts i { flex: 1 1 0; height: 4px; border-radius: var(--radius-histogram); background: color-mix(in srgb, var(--ink) 28%, transparent); }
 .album-parts i.been { background: var(--ink); }
 /* The line the chapters hang on, a chapter's number on it, and how far it is to the next. */
 .album-line { display: grid; }
@@ -1113,13 +1157,23 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-leg { min-height: var(--space-24); padding-bottom: var(--space-8); font-size: 12px; line-height: 16px; color: var(--label); font-variant-numeric: tabular-nums; }
 .album-mark { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--ground-page); font-size: 12px; line-height: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .album-mark.ahead { background: var(--ground-page); color: var(--label); box-shadow: inset 0 0 0 2px var(--label); }
-.album-mark.here { box-shadow: 0 0 0 4px var(--rule); }
+.album-mark.here { box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink) 28%, transparent); }
 .album-line .album-chapter > .album-mark { position: absolute; left: 0; top: 0; }
 .album-chapter.ahead .album-title h2 { color: var(--label); }
-/* "+82 Show All" under a chapter's rows. */
-.album-rest { align-self: flex-start; display: inline-flex; align-items: baseline; gap: var(--space-8); margin-top: var(--space-10); min-height: 36px; padding: var(--space-8) var(--space-16); border-radius: var(--radius-pill); background: var(--ground-raised); color: var(--name); text-decoration: none; font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; }
-.album-rest b { color: var(--ink); font-weight: 700; }
-.album-rest:hover { color: var(--ink); }
+/* "+82 Show All": the last tile of the rows. */
+.album-rest { position: absolute; display: grid; place-content: center; gap: var(--space-2); text-align: center; border-radius: var(--radius-histogram); background: var(--ground-raised); color: var(--name); text-decoration: none; font-size: 12px; line-height: 16px; }
+.album-rest b { font-size: 15px; line-height: 20px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.album-rest:hover b, .album-rest:hover { color: var(--ink); }
+/* A day of a place, or of an album without places: its head, its report, its photographs; a rule between two days. */
+.album-day { padding-top: var(--space-24); }
+.album-day + .album-day { margin-top: var(--space-16); padding-top: var(--space-16); border-top: 1px solid var(--rule); }
+.album-days { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.album-days > .album-day:first-child { padding-top: 0; }
+.album-day-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-8); }
+.album-day-head h3 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+.album-add-day { align-self: flex-start; display: inline-flex; align-items: center; gap: var(--space-8); margin-top: var(--space-20); min-height: var(--hit-pointer); padding: 0; border: 0; background: none; color: var(--name); font-size: 13px; line-height: 18px; cursor: pointer; }
+.album-add-day svg { width: 16px; height: 16px; }
+.album-add-day:hover { color: var(--ink); }
 /* The Route under the map: a row for each place. */
 .album-route { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
 .album-route .section-label { margin-bottom: var(--space-6); }
@@ -1128,6 +1182,8 @@ textarea.album-words::placeholder { color: var(--label); }
 .album-stop.has .name { font-weight: 600; color: var(--ink); }
 .album-stop.here { background: var(--ground-raised); border-radius: var(--radius-pill); border-bottom-color: transparent; padding: 0 var(--space-8); margin: 0 calc(var(--space-8) * -1); }
 .album-stop .caption { flex: none; }
+/* Here Now stands on ground-raised, where label is too faint: its words in name. */
+.album-stop.here .caption { color: var(--name); }
 /* The same number on the map: over a stack's corner, or as the place ahead itself. */
 .pin > .album-mark { position: absolute; left: -12px; top: -8px; width: 20px; height: 20px; }
 .album-dot.numbered { width: auto; height: auto; border: 0; background: none; }

@@ -1,9 +1,9 @@
 use super::*;
-use numa::io::catalog::{AlbumKind, AlbumPage, PageAsked, Photo, NO_CHAPTER};
+use numa::io::catalog::{AlbumKind, AlbumPage, PageAsked, Photo};
 
 const TILE: i32 = 148;
 
-const WIDE: i32 = 320;
+const WIDE: (f64, f64) = (1.25, 16.0 / 9.0);
 
 const COLUMN: i32 = 880;
 const SIDE: i32 = 320;
@@ -12,7 +12,11 @@ const GAP: i32 = 32;
 const COVER: i32 = 280;
 const COVER_EDGE: u32 = 2048;
 
+const INSET: i32 = 1;
+
 const RAIL: i32 = 40;
+
+pub(super) type AskedDay = (Option<String>, i64);
 
 #[derive(Clone)]
 pub(super) struct State {
@@ -30,6 +34,10 @@ pub(super) struct State {
     looking: Rc<Cell<Option<f64>>>,
 
     title: Rc<RefCell<glib::WeakRef<gtk::Label>>>,
+
+    pub(super) contents: Rc<Cell<(usize, usize)>>,
+
+    pub(super) focus_day: Rc<RefCell<Option<AskedDay>>>,
 }
 
 impl State {
@@ -44,6 +52,8 @@ impl State {
             turn: Rc::default(),
             looking: Rc::default(),
             title: Rc::default(),
+            contents: Rc::default(),
+            focus_day: Rc::default(),
         }
     }
 }
@@ -70,6 +80,7 @@ pub(super) fn build(state: &App) -> gtk::ScrolledWindow {
     page.root.set_hscrollbar_policy(gtk::PolicyType::Never);
     page.root.set_vexpand(true);
     page.root.set_child(Some(&clamp));
+    text_field::leave_on_press_outside(&page.root);
     page.root.clone()
 }
 
@@ -85,7 +96,7 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
     words.set_hexpand(true);
     words.append(&kit::section_header(&album_words::over_name(page)));
     let title = gtk::Label::new(Some(&page.name));
-    title.add_css_class("title-1");
+    title.add_css_class("album-name");
     title.set_xalign(0.0);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     state.libraries.album.title.replace(title.downgrade());
@@ -97,12 +108,12 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
         one.append(&kit::section_header(figure.label));
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let value = gtk::Label::new(Some(&figure.value));
-        value.add_css_class("title-2");
+        value.add_css_class("album-figure");
         value.add_css_class("numeric");
         line.append(&value);
         if !figure.of.is_empty() {
             let of = gtk::Label::new(Some(&figure.of));
-            of.add_css_class("dim-label");
+            of.add_css_class("album-of");
             of.add_css_class("numeric");
             of.set_valign(gtk::Align::Baseline);
             line.append(&of);
@@ -110,7 +121,10 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
         one.append(&line);
         figures.append(&one);
     }
-    words.append(&figures);
+
+    if figures.first_child().is_some() {
+        words.append(&figures);
+    }
 
     if page.kind == AlbumKind::Trip && page.chapters.len() > 1 {
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -130,16 +144,14 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
         bar.update_property(&[gtk::accessible::Property::Label(&format!("{filled} of {} places", page.chapters.len()))]);
         words.append(&bar);
     }
+
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_valign(gtk::Align::Start);
-    if page.kind == AlbumKind::Trip {
-
-        let share = gtk::Button::with_label("Share…");
-        share.add_css_class("numa-primary");
-        share.set_action_name(Some("album.share"));
-        actions.append(&share);
-    }
-    actions.append(&album_chapter::album_menu(state));
+    actions.set_visible(page.kind == AlbumKind::Trip);
+    let share = gtk::Button::with_label("Share…");
+    share.add_css_class("numa-primary");
+    share.set_action_name(Some("album.share"));
+    actions.append(&share);
 
     let by_id: HashMap<i64, &Photo> = page.photos.iter().map(|photo| (photo.id, photo)).collect();
     let shown: Vec<&Photo> = page.layout.chapters.iter().flat_map(|laid| &laid.shown).chain(page.layout.days.iter().flat_map(|day| &day.shown)).filter_map(|id| by_id.get(id).copied()).collect();
@@ -154,7 +166,8 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Cover);
     picture.set_can_shrink(true);
-    picture.set_size_request(-1, COVER);
+    picture.set_hexpand(true);
+    picture.set_size_request(-1, COVER - 2 * INSET);
     picture.update_property(&[gtk::accessible::Property::Label(&format!("Cover of {}", page.name))]);
     let (wanted, shown) = (picture.downgrade(), picture.clone());
     thumbnail::load_thumbnail_while(
@@ -166,10 +179,19 @@ fn fill_head(state: &App, page: &AlbumPage, today: i64) {
         move || wanted.upgrade().is_some(),
         move |texture| shown.set_paintable(Some(&texture)),
     );
+
+    let inset = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    inset.add_css_class("album-cover-picture");
+    inset.set_overflow(gtk::Overflow::Hidden);
+    inset.set_margin_top(INSET);
+    inset.set_margin_bottom(INSET);
+    inset.set_margin_start(INSET);
+    inset.set_margin_end(INSET);
+    inset.append(&picture);
     let over = gtk::Overlay::new();
     over.add_css_class("album-cover");
     over.set_overflow(gtk::Overflow::Hidden);
-    over.set_child(Some(&picture));
+    over.set_child(Some(&inset));
     let scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
     scrim.add_css_class("album-scrim");
     scrim.set_can_target(false);
@@ -276,8 +298,13 @@ fn paint(state: &App, page: &AlbumPage) {
     fill_head(state, page, today);
     folders::clear(&view.column);
     folders::clear(&view.side);
+    view.contents.set((page.layout.count, page.chapters.len()));
     let photos: HashMap<i64, &Photo> = page.photos.iter().map(|photo| (photo.id, photo)).collect();
     let trip = page.kind == AlbumKind::Trip;
+    let starting = page.layout.count == 0 && page.chapters.is_empty() && page.layout.days.is_empty();
+    if !starting {
+        view.column.append(&album_text(state, page));
+    }
     if trip && !page.layout.places.is_empty() {
         view.column.append(&album_trip::places_offered(state, page));
     }
@@ -317,10 +344,10 @@ fn paint(state: &App, page: &AlbumPage) {
         }
         view.column.append(&line);
     }
-    for day in &page.layout.days {
-        view.column.append(&day_block(state, page, day, &photos));
+
+    if !starting && (page.chapters.is_empty() || !page.layout.days.is_empty()) {
+        view.column.append(&album_days::days(state, page, None, &page.layout.days, &photos, page.chapters.is_empty()));
     }
-    let starting = page.layout.count == 0 && page.chapters.is_empty();
     if starting {
         view.column.append(&album_chapter::start(page));
     }
@@ -370,24 +397,24 @@ pub(super) fn mark(number: usize, ahead: bool, here: bool) -> gtk::Label {
     mark
 }
 
-fn day_block(state: &App, page: &AlbumPage, day: &numa::io::album_page::DayLayout, photos: &HashMap<i64, &Photo>) -> gtk::Box {
-    let block = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let mut head = album_words::day_name(day.day);
-    if !day.towns.is_empty() {
-        head = format!("{head} · {}", day.towns.join(", "));
-    }
-    block.append(&kit::section_header(&head));
-    block.append(&tiles(state, page, &day.shown, photos, NO_CHAPTER, day.count));
-    block
+fn album_text(state: &App, page: &AlbumPage) -> gtk::Box {
+    let album = page.key.clone();
+    let keep = Box::new(move |state: &App, words: &str| state.catalog.set_album_text(&album, words));
+    let left = Box::new(|state: &App, _: &str, changed: bool| {
+        if changed {
+            album_round::after_a_round(state);
+        }
+    });
+    let prompt = if page.kind == AlbumKind::Trip { "Write about the trip" } else { "Write about it" };
+    text_field::field(state, &page.text, prompt, "The album's text", text_field::Kept { keep, left })
 }
 
-fn more_tile(state: &App, album: &str, chapter: &str, rest: usize) -> gtk::Button {
+fn more_tile(state: &App, album: &str, chapter: &str, day: i64, rest: usize) -> gtk::Button {
     let count = gtk::Label::new(Some(&format!("+{}", places::grouped(rest as i64))));
     count.add_css_class("heading");
     count.add_css_class("numeric");
     let said = gtk::Label::new(Some("Show All"));
     said.add_css_class("caption");
-    said.add_css_class("dim-label");
     let words = gtk::Box::new(gtk::Orientation::Vertical, 4);
     words.set_valign(gtk::Align::Center);
     words.append(&count);
@@ -397,11 +424,11 @@ fn more_tile(state: &App, album: &str, chapter: &str, rest: usize) -> gtk::Butto
     button.set_size_request(-1, TILE);
     button.set_child(Some(&words));
     let (state, album, chapter) = (state.clone(), album.to_string(), chapter.to_string());
-    button.connect_clicked(move |_| open_grid(&state, &album, &chapter, None));
+    button.connect_clicked(move |_| open_grid(&state, &album, &chapter, Some(day), None));
     button
 }
 
-pub(super) fn open_grid(state: &App, album: &str, chapter: &str, at: Option<i64>) {
+pub(super) fn open_grid(state: &App, album: &str, chapter: &str, day: Option<i64>, at: Option<i64>) {
     let scrolled = Some(state.libraries.album.root.vadjustment().value());
     {
         let mut filter = state.libraries.filter.borrow_mut();
@@ -410,6 +437,9 @@ pub(super) fn open_grid(state: &App, album: &str, chapter: &str, at: Option<i64>
         filter.all_libraries = false;
         filter.person = None;
     }
+
+    let date = day.map(|day| numa::io::import::day(day * 86_400, 0));
+    state.libraries.narrow.replace(filter_menu::Narrow { date, ..Default::default() });
     reload_grid(state);
     library_page::show_head(state);
     state.stack.set_visible_child_name("library");
@@ -443,7 +473,7 @@ pub(super) fn is_looking(state: &App) -> bool {
     state.libraries.album.looking.get().is_some()
 }
 
-pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashMap<i64, &Photo>, chapter: &str, count: usize) -> gtk::Box {
+pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashMap<i64, &Photo>, chapter: &str, day: i64, count: usize) -> gtk::Box {
     let all = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let mut row: Option<gtk::FlowBox> = None;
     for photo in shown.iter().filter_map(|id| photos.get(id).copied()) {
@@ -452,6 +482,7 @@ pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashM
                 row = None;
                 all.append(&tile(state, &page.key, chapter, photo, None));
                 let words = gtk::Label::new(Some(caption));
+                words.add_css_class("album-caption");
                 words.set_wrap(true);
                 words.set_xalign(0.0);
                 words.set_selectable(true);
@@ -476,7 +507,7 @@ pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashM
     }
 
     if count > shown.len() {
-        let more = more_tile(state, &page.key, chapter, count - shown.len());
+        let more = more_tile(state, &page.key, chapter, day, count - shown.len());
         match row {
             Some(flow) => flow.insert(&more, -1),
             None => {
@@ -489,11 +520,13 @@ pub(super) fn tiles(state: &App, page: &AlbumPage, shown: &[i64], photos: &HashM
     all
 }
 
-fn tile(state: &App, album: &str, chapter: &str, photo: &Photo, width: Option<i32>) -> gtk::Button {
+fn tile(state: &App, album: &str, chapter: &str, photo: &Photo, height: Option<i32>) -> gtk::Button {
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Cover);
     picture.set_can_shrink(true);
-    picture.set_size_request(-1, width.unwrap_or(WIDE));
+    if let Some(height) = height {
+        picture.set_size_request(-1, height);
+    }
     let over = gtk::Overlay::new();
     over.set_child(Some(&picture));
     over.set_overflow(gtk::Overflow::Hidden);
@@ -521,7 +554,20 @@ fn tile(state: &App, album: &str, chapter: &str, photo: &Photo, width: Option<i3
     let button = gtk::Button::new();
     button.add_css_class("flat");
     button.add_css_class("album-photo");
-    button.set_child(Some(&over));
+    match height {
+        Some(_) => button.set_child(Some(&over)),
+
+        None => {
+            let wide = Shaped::new(&over);
+            let (shaped, wanted) = (wide.clone(), picture.clone());
+            wanted.connect_paintable_notify(move |picture| {
+                if let Some(paintable) = picture.paintable() {
+                    shaped.set_aspect(paintable.intrinsic_aspect_ratio().clamp(WIDE.0, WIDE.1));
+                }
+            });
+            button.set_child(Some(&wide));
+        }
+    }
     button.set_tooltip_text(photo.path.file_name().and_then(|name| name.to_str()));
 
     let keys = gtk::EventControllerKey::new();
@@ -536,6 +582,78 @@ fn tile(state: &App, album: &str, chapter: &str, photo: &Photo, width: Option<i3
     });
     button.add_controller(keys);
     let (state, album, chapter, id) = (state.clone(), album.to_string(), chapter.to_string(), photo.id);
-    button.connect_clicked(move |_| open_grid(&state, &album, &chapter, Some(id)));
+    button.connect_clicked(move |_| open_grid(&state, &album, &chapter, None, Some(id)));
     button
+}
+
+glib::wrapper! {
+
+    pub struct Shaped(ObjectSubclass<shaped::Imp>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Shaped {
+    fn new(child: &impl IsA<gtk::Widget>) -> Self {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        let shaped: Self = glib::Object::new();
+        shaped.imp().aspect.set(1.5);
+        child.set_parent(&shaped);
+        shaped
+    }
+
+    fn set_aspect(&self, aspect: f64) {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        if aspect.is_finite() && aspect > 0.0 && aspect != self.imp().aspect.get() {
+            self.imp().aspect.set(aspect);
+            self.queue_resize();
+        }
+    }
+}
+
+mod shaped {
+    use super::*;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub struct Imp {
+        pub(super) aspect: Cell<f64>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Imp {
+        const NAME: &'static str = "NumaShaped";
+        type Type = super::Shaped;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for Imp {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for Imp {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::HeightForWidth
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            match orientation {
+                gtk::Orientation::Vertical => {
+                    let high = (f64::from(for_size.max(0)) / self.aspect.get()).round() as i32;
+                    (high, high, -1, -1)
+                }
+                _ => self.obj().first_child().map_or((0, 0, -1, -1), |child| child.measure(orientation, -1)),
+            }
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            if let Some(child) = self.obj().first_child() {
+                child.allocate(width, height, baseline, None);
+            }
+        }
+    }
 }

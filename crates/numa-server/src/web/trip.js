@@ -25,7 +25,7 @@ function icon(name) {
   return box.firstChild;
 }
 
-const grouped = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const grouped = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
 const counted = n => `${grouped(n)} ${n === 1 ? S.photo : S.photos}`;
 const picture = (n, edge) => `${base}/${n}?edge=${edge}`;
 const altOf = photo => photo.caption || phrase('proofOpen', { n: photo.n + 1 });
@@ -94,12 +94,12 @@ function shot(photo, edge, ratio) {
   return button;
 }
 
-function photosOf(list) {
+function photosOf(list, rest = 0) {
   const parts = [];
   let run = [], sum = 0;
   const flush = () => {
     if (!run.length) return;
-    const row = h('div', { class: 'row' }, run.map(photo => shot(photo, 1024)));
+    const row = h('div', { class: 'row' }, run.map(photo => photo.more || shot(photo, 1024)));
     row.style.setProperty('--sum', sum);
     parts.push(row);
     run = []; sum = 0;
@@ -116,6 +116,12 @@ function photosOf(list) {
       if (sum >= 4 || run.length === 4) flush();
     }
   }
+  if (rest > 0) {
+    const more = h('span', { class: 'shot more', role: 'img', 'aria-label': phrase('tripMore', { n: grouped(rest) }) }, h('b', {}, '+' + grouped(rest)));
+    more.style.setProperty('--a', 1);
+    run.push({ more });
+    sum += 1;
+  }
   flush();
   return parts.length ? h('div', { class: 'photos' }, parts) : null;
 }
@@ -123,30 +129,57 @@ function photosOf(list) {
 const prints = list => h('div', { class: 'stack' }, [2, 1, 0].map(at => h('div', { class: 'print' },
   list[at] && h('img', { src: picture(list[at].n, 1024), loading: 'lazy', alt: '' }))));
 
+const textOf = blocks => blocks?.length ? h('div', { class: 'words' }, blocks.map(block => {
+  const run = one => {
+    let node = one.text;
+    if (one.italic) node = h('i', {}, node);
+    if (one.bold) node = h('b', {}, node);
+    return node;
+  };
+  return block.list ? h('ul', {}, block.lines.map(line => h('li', {}, line.map(run))))
+    : h('p', {}, block.lines.map((line, at) => [at > 0 && h('br'), line.map(run)]));
+})) : null;
+
+const told = day => day.photos.length > 0 || day.spans?.length > 0;
+const dayHead = text => {
+  const date = new Date(text + 'T00:00:00Z');
+  return `${part(date, { weekday: 'long' })} ${date.getUTCDate()} ${part(date, { month: 'long' })}`;
+};
+
 function chapterBlock(chapter, at) {
+  const days = chapter.by_day?.filter(told);
   return h('section', { id: `chapter-${at}` }, h('div', { class: 'label' }, chapterLine(chapter)), h('h2', {}, chapter.name),
-    chapter.words && h('p', { class: 'words' }, chapter.words), photosOf(chapter.photos));
+    chapter.spans ? textOf(chapter.spans) : chapter.words && h('p', { class: 'words' }, chapter.words),
+    days ? days.map(day => dayBlock(day, false)) : photosOf(chapter.photos));
 }
 
-function dayBlock(day) {
-  return h('section', {}, h('div', { class: 'label' }, dayName(day.day) + (day.places?.length ? ' · ' + day.places.join(', ') : '')), photosOf(day.photos));
+function dayBlock(day, loose) {
+  const places = loose && day.places?.length ? ' · ' + day.places.join(', ') : '';
+  return h('section', { class: 'day' }, h('h3', {}, dayHead(day.day), places && h('span', { class: 'caption' }, places)), textOf(day.spans), photosOf(day.photos, day.rest));
+}
+
+function inOrder(trip, shown) {
+  const seen = new Set();
+  const lists = [...shown.flatMap(([chapter]) => chapter.by_day ? chapter.by_day.map(day => day.photos) : [chapter.photos]), ...trip.days.map(day => day.photos)];
+  return lists.flat().filter(photo => !seen.has(photo.n) && seen.add(photo.n));
 }
 
 function render(trip) {
-  all = [...trip.chapters.flatMap(chapter => chapter.photos), ...trip.days.flatMap(day => day.photos)];
-  const lead = all.find(photo => photo.caption) || all[0];
   const chapters = trip.chapters.map((chapter, at) => [chapter, at]);
-  const shown = chapters.filter(([chapter]) => chapter.photos.length);
-  const ahead = chapters.filter(([chapter]) => !chapter.photos.length).map(([chapter]) => chapter.name);
+  const has = chapter => chapter.photos.length > 0 || (chapter.by_day || []).some(told);
+  const shown = chapters.filter(([chapter]) => has(chapter));
+  const ahead = chapters.filter(([chapter]) => !has(chapter)).map(([chapter]) => chapter.name);
+  all = inOrder(trip, shown);
+  const lead = all.find(photo => photo.caption) || all[0];
   const mapped = trip.route && chapters.some(([chapter]) => chapter.place);
   const map = mapped && h('div', { class: 'map' }, h('div', { class: 'canvas', role: 'img', 'aria-label': S.tripMap }), h('div', { class: 'caption' }, S.osmCredit));
   main.replaceChildren(
     lead && coverOf(lead),
-    h('header', { class: 'column' }, h('div', { class: 'label' }, phrase('tripBy', { name: trip.by })), h('h1', {}, trip.name), h('div', { class: 'facts' }, factsOf(trip))),
+    h('header', { class: 'column' }, h('div', { class: 'label' }, phrase('tripBy', { name: trip.by })), h('h1', {}, trip.name), h('div', { class: 'facts' }, factsOf(trip)), textOf(trip.spans)),
     map,
     h('div', { class: 'column story' },
       shown.map(([chapter, at]) => chapterBlock(chapter, at)),
-      trip.days.filter(day => day.photos.length).map(dayBlock),
+      trip.days.filter(told).map(day => dayBlock(day, true)),
       ahead.length > 0 && h('section', {}, h('div', { class: 'label' }, S.aheadHead), h('p', { class: 'ahead-line' }, ahead.join(' · ')))),
     h('footer', {}, h('span', { class: 'made' }, h('img', { class: 'mark', src: '/icon.svg', alt: '' }), S.tripMadeWith),
       h('span', {}, phrase('tripEndsOn', { date: longDate(trip.expires) }))));

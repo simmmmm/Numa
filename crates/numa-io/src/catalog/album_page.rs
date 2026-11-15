@@ -18,6 +18,8 @@ pub struct AlbumPage {
     pub name: String,
     pub kind: AlbumKind,
 
+    pub text: String,
+
     pub grid: bool,
 
     pub photos: Vec<Photo>,
@@ -94,7 +96,8 @@ impl Catalog {
         let times: Vec<i64> = whole.iter().map(when).collect();
         if is_grid(kind, chapters.len(), &times) {
             let layout = Layout { count: photos.len(), picks: 0, first: times.iter().min().copied(), last: times.iter().max().copied(), chapters: Vec::new(), days: Vec::new(), loose: 0, places: Vec::new() };
-            return Ok(AlbumPage { key: key.to_string(), name, kind, grid: true, photos, captions: HashMap::new(), chapters, layout, unread: Vec::new() });
+            let text = self.album_text(key)?;
+            return Ok(AlbumPage { key: key.to_string(), name, kind, text, grid: true, photos, captions: HashMap::new(), chapters, layout, unread: Vec::new() });
         }
         let ids: Vec<i64> = photos.iter().map(|photo| photo.id).collect();
         let captions = self.captions_of(&ids)?;
@@ -107,10 +110,11 @@ impl Catalog {
         let (mut memo, mut unread) = (Memo::new(), HashSet::new());
         let shots = self.shots(&photos, &captions, &mut memo, &mut unread)?;
         let others = self.shots(&outside, &HashMap::new(), &mut memo, &mut unread)?;
-        let layout = lay_out(&Facts { shots: &shots, chapter_of: &chapter_of, chapters: &chapters, outside: &others, unread: &unread, trip: kind == AlbumKind::Trip, may_change: true, filtered });
+        let days = self.album_days(key)?;
+        let layout = lay_out(&Facts { shots: &shots, chapter_of: &chapter_of, chapters: &chapters, days: &days, outside: &others, unread: &unread, trip: kind == AlbumKind::Trip, may_change: true, filtered });
         let mut unread: Vec<i64> = unread.into_iter().collect();
         unread.sort_unstable();
-        Ok(AlbumPage { key: key.to_string(), name, kind, grid: false, photos, captions, chapters, layout, unread })
+        Ok(AlbumPage { key: key.to_string(), name, kind, text: self.album_text(key)?, grid: false, photos, captions, chapters, layout, unread })
     }
 
     pub fn take_places(&self, key: &str) -> Result<Vec<AlbumChapter>, String> {
@@ -209,6 +213,13 @@ mod tests {
         assert_eq!(page.photos.iter().map(|photo| photo.id).collect::<Vec<_>>(), ids, "the oldest first, across libraries");
         assert!(catalog.album_page("no-such-album", &asked()).is_err());
 
+        catalog.set_album_text(&album, "Two weeks, *mostly* rain.").unwrap();
+        catalog.add_day(&album, None, START / DAY + 3).unwrap();
+        let page = catalog.album_page(&album, &asked()).unwrap();
+        assert_eq!(page.text, "Two weeks, *mostly* rain.");
+        assert_eq!(page.layout.days.iter().map(|day| day.count).collect::<Vec<_>>(), [2, 1, 0, 3], "the written day stands between the second and the third");
+        catalog.remove_day(&album, None, START / DAY + 3).unwrap();
+
         frame(&dir.join("One"), "LATER.JPG", START + 90 * DAY);
         let one = catalog.libraries().unwrap().into_iter().find(|library| library.path.ends_with("One")).unwrap();
         catalog.sync_library(&one).unwrap();
@@ -216,6 +227,7 @@ mod tests {
         catalog.set_in_album(&album, &[later], true).unwrap();
         let long = catalog.album_page(&album, &asked()).unwrap();
         assert!(long.grid && long.layout.days.is_empty() && long.layout.count == 7);
+        assert_eq!(long.text, "Two weeks, *mostly* rain.", "the grid has the album's text too");
 
         catalog.add_chapter(&album, "Tokyo", None, None).unwrap();
         assert!(!catalog.album_page(&album, &asked()).unwrap().grid);

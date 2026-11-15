@@ -99,8 +99,13 @@ pub async fn today(State(server): State<Arc<Server>>, Signed(me): Signed, Query(
             let shelf = server.home.shown(&me, &[library.id]);
             photos += shelf.len();
             let new: Vec<i64> = shelf.iter().map(|photo| photo.id).filter(|id| arrived.contains_key(id)).collect();
+
+            let films: Vec<i64> = match crate::video::ffmpeg() {
+                Some(_) => Vec::new(),
+                None => shelf.iter().filter(|photo| arrived.contains_key(&photo.id) && numa_io::video::is_video(&photo.path)).map(|photo| photo.id).collect(),
+            };
             if let Some(at) = new.iter().map(|id| arrived[id]).max().filter(|_| named.contains_key(&library.id)) {
-                came.push((at, library.id, new));
+                came.push((at, library.id, new, films));
             }
             taken.extend(shelf.iter().filter(|photo| !numa_io::video::is_video(&photo.path) && (!own.is_set() || own.keeps(photo.id))).map(|photo| (photo.id, when(photo), photo.rating, photo.flag)));
             if let Some((name, mine)) = named.get(&library.id).filter(|_| !shelf.is_empty()) {
@@ -112,9 +117,11 @@ pub async fn today(State(server): State<Arc<Server>>, Signed(me): Signed, Query(
         let arrived: Vec<Value> = came
             .into_iter()
             .take(ARRIVALS)
-            .map(|(at, library, ids)| {
+            .map(|(at, library, ids, films)| {
                 let (name, mine) = &named[&library];
-                json!({ "library": library, "name": name, "mine": mine, "count": ids.len(), "at": at, "ids": &ids[..ids.len().min(STRIP)] })
+                let shown = &ids[..ids.len().min(STRIP)];
+                let films: Vec<&i64> = films.iter().filter(|id| shown.contains(id)).collect();
+                json!({ "library": library, "name": name, "mine": mine, "count": ids.len(), "at": at, "ids": shown, "films": films })
             })
             .collect();
 

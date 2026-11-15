@@ -1795,7 +1795,6 @@ menubutton.scope-chevron > button {
 
 button.album-photo { padding: 0; min-height: 0; min-width: 0; border-radius: 6px; }
 .album-tile { border-radius: 6px; }
-textview.album-words, textview.album-words > text { background: none; font-size: 15px; }
 .album-offer { padding: 8px 0; }
 .album-map { border-radius: 14px; background: @numa_map_sea; }
 
@@ -1803,22 +1802,82 @@ textview.album-words, textview.album-words > text { background: none; font-size:
 entry.album-add { min-height: 32px; }
 
 .album-cover { border-radius: 12px; }
+.album-cover-picture { border-radius: 14px; }
 
-.album-say { padding: 32px 24px 8px; background: linear-gradient(to bottom, alpha(@window_bg_color, 0), @window_bg_color 32px); }
+.album-say { padding: 48px 24px 8px; background: linear-gradient(to bottom, alpha(@window_bg_color, 0), alpha(@window_bg_color, 0.16) 8px, alpha(@window_bg_color, 0.5) 16px, alpha(@window_bg_color, 0.84) 24px, @window_bg_color 32px); }
 .album-scrim { background: linear-gradient(to bottom, alpha(@window_bg_color, 0.4), alpha(@window_bg_color, 0) 24%, alpha(@window_bg_color, 0) 36%, alpha(@window_bg_color, 0.8) 72%, @window_bg_color); }
+.album-say label.section-header, .album-say label.album-of { color: @numa_name; }
+label.album-name { font-size: 32px; font-weight: 700; }
+label.album-figure { font-size: 20px; font-weight: 700; }
+label.album-of { font-size: 13px; font-weight: 400; }
 
 .album-part { min-height: 4px; border-radius: 2px; background: alpha(@window_fg_color, 0.28); }
 .album-part.been { background: @window_fg_color; }
 
 .album-rail { min-width: 2px; background: @window_fg_color; }
-.album-rail.ahead { min-width: 0; background: none; border-left: 2px dotted alpha(@window_fg_color, 0.5); }
-.album-mark { min-width: 24px; min-height: 24px; border-radius: 12px; background: @window_fg_color; color: @window_bg_color; font-size: 12px; font-weight: 800; }
-.album-mark.ahead { background: @window_bg_color; color: alpha(@window_fg_color, 0.7); box-shadow: inset 0 0 0 2px alpha(@window_fg_color, 0.5); }
+.album-rail.ahead { min-width: 0; background: none; border-left: 2px dotted @numa_label; }
+.album-mark { min-width: 24px; min-height: 24px; border-radius: 12px; background: @window_fg_color; color: @window_bg_color; font-size: 12px; font-weight: 700; }
+.album-mark.ahead { background: @window_bg_color; color: @numa_label; box-shadow: inset 0 0 0 2px @numa_label; }
 .album-mark.here { box-shadow: 0 0 0 4px alpha(@window_fg_color, 0.28); }
 
-.album-day { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; background: alpha(@window_fg_color, 0.06); }
-.album-days > flowboxchild { padding: 0; min-height: 0; }
+label.album-chapter-name { font-size: 20px; font-weight: 700; }
+label.album-chapter-name.bare { color: @numa_name; }
+label.album-chapter-name.ahead { color: @numa_label; }
+
+label.album-caption { font-size: 13px; line-height: 18px; color: @numa_name; }
+
 button.album-more { border-radius: 6px; background: @raised_bg_color; box-shadow: none; }
+button.album-more label.caption { color: @numa_name; }
+
+separator.album-day-rule { margin: 16px 0; background: @numa_rule; }
+label.album-day-name { font-size: 15px; font-weight: 600; }
+label.album-day-count { font-size: 12px; color: @numa_label; }
+button.album-add-day { color: @numa_name; font-weight: 400; }
+
+.text-field { border-radius: 8px; }
+
+.text-field.written { margin: 0 -10px; }
+.text-field.writing { margin: 0 -16px; }
+button.text-field-prompt { margin: 0 -10px; }
+.text-field.written { padding: 6px 10px; }
+.text-field.written:hover { background: alpha(@window_fg_color, 0.04); }
+.text-field.writing { padding: 14px 16px 8px; border-radius: 12px; background: @raised_bg_color; box-shadow: inset 0 0 0 1px @numa_rule; }
+.text-field.writing:focus-within { box-shadow: inset 0 0 0 1px alpha(@numa_accent, 0.5); }
+.text-field.writing textview { min-height: 88px; }
+button.text-field-prompt { padding: 6px 10px; border-radius: 8px; min-height: 0; font-size: 15px; font-weight: 400; color: @numa_label; }
+button.text-field-prompt:hover { color: @numa_ink; background: alpha(@window_fg_color, 0.06); }
+.text-field-pencil { color: @numa_label; opacity: 0; }
+.text-field.written:hover .text-field-pencil { opacity: 1; }
+.text-field textview, .text-field textview > text { background: none; font-size: 15px; color: @numa_ink; }
+.text-field-hint { font-size: 15px; color: @numa_label; }
+.text-field-foot { margin-top: 12px; }
+.text-field-foot separator { background: @numa_rule; }
+.text-field-bar { margin-top: 8px; }
+.text-field-kept { margin: 0 12px; font-size: 12px; color: @numa_label; }
+button.text-field-done { min-height: 28px; padding: 0 8px; border-radius: 8px; font-weight: 600; color: @numa_ink; }
+.text-field-bar button:not(.text-field-done) { min-width: 28px; min-height: 28px; padding: 0; border-radius: 8px; color: @numa_name; background: none; box-shadow: none; }
+.text-field-bar button.in { color: @numa_ink; background: @numa_ground_chip; }
+
+.album-empty image.icon { -gtk-icon-size: 48px; color: @numa_label; }
+.album-empty .title { font-size: 20px; font-weight: 700; }
+.album-empty .description { color: @numa_label; }
+
+list.album-plain { background: none; }
+list.album-plain > row:not(:last-child) { border-bottom: 1px solid @numa_rule; }
+list.album-begin > row { min-height: 52px; }
+list.album-begin row .title { font-weight: 600; }
+list.album-begin row image { color: @numa_name; }
+
+list.album-towns row .title { font-size: 13px; font-weight: 600; }
+.album-town-dot { min-width: 8px; min-height: 8px; border-radius: 5px; border: 1.5px solid @numa_ink; }
 
 button.album-stop { padding: 8px; border-radius: 8px; font-weight: 400; }
 button.album-stop.here { background: @raised_bg_color; }
+button.album-stop.here label.caption { color: @numa_name; }
+.album-stops > separator { background: @numa_rule; }
+
+listview.album-strip { background: none; }
+listview.album-strip > row { padding: 0; margin-right: 4px; border-radius: 6px; }
+listview.album-strip > row:focus-visible { outline-offset: -2px; }
+button.album-strip-chevron { min-width: 32px; min-height: 32px; padding: 0; color: @numa_ink; background: @numa_ground_hud; box-shadow: none; }
+button.album-strip-chevron:hover { background: @numa_ground_bar; }

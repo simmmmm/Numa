@@ -323,12 +323,16 @@ pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
         .home
         .ask(move |catalog| {
             let albums = catalog.albums().unwrap_or_default();
-            let albums = albums.into_iter().map(|(key, name)| (in_album(catalog, &libraries, &key), key, name)).collect::<Vec<_>>();
+
+            let albums = albums
+                .into_iter()
+                .map(|(key, name)| (in_album(catalog, &libraries, &key), catalog.chapters(&key).map_or(0, |chapters| chapters.len()), key, name))
+                .collect::<Vec<_>>();
             (albums, catalog.album_kinds().unwrap_or_default())
         })
         .await?;
     let mut rows = Vec::new();
-    for (ids, key, name) in albums {
+    for (ids, chapters, key, name) in albums {
         let times: Vec<i64> = ids.iter().filter_map(|id| shown.get(id).copied()).collect();
         let owner = server.store.album_owner(&key);
         let mine = owner.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(&me.name));
@@ -344,7 +348,7 @@ pub async fn albums(State(server): State<Arc<Server>>, Signed(me): Signed) -> Re
         let kind = kinds.get(&key).map_or("album", |kind| kind.name());
         rows.push(json!({
             "key": key, "name": name, "count": times.len(), "owner": owner, "mine": mine, "people": people, "add": add,
-            "may_change": may_change, "kind": kind, "first": times.iter().min(), "last": times.iter().max(),
+            "may_change": may_change, "kind": kind, "chapters": chapters, "first": times.iter().min(), "last": times.iter().max(),
         }));
     }
     Ok(Json(rows))

@@ -1,0 +1,61 @@
+# The words of each shared screen. Every client shows each one, exactly so
+# (A feature works the same on every client). A screen's words come from its
+# card in the design system. Add a screen's words when it is built on every
+# client; a word missing on a client counts as a difference (dev/parity.py).
+
+[album page]
+No Photographs Yet
+Begin with
+A Trip
+A Wedding
+Chapters of Your Own
+Places, a map and the route between them.
+Six chapters to begin with, from Getting Ready to the Party.
+Name the parts, and write a line under each.
+Write about it
+Write what you want of it
+Show All
+Here Now
+Ahead
+Travelled
+Chapters
+Places
+Chapter removed
+Name of the chapter
+
+[album menu]
+New Album…
+Add a Chapter…
+Share…
+Make a Trip
+Make a Wedding
+Make an Album
+Rename…
+Delete Album…
+Add to Album
+Select All
+
+[trip]
+The Route
+Add a Place…
+A Link to the Trip
+Shows the Route and the Places
+Follows the Trip
+Copy Link
+
+[album export]
+By Place and Day
+By Chapter and Day
+One Folder
+Put the texts beside the photographs
+Full size
+px on the long edge
+Custom Size
+Long edge in centimetres
+
+[photo info]
+Write what you remember
+
+[what's new]
+Read More
+Continue

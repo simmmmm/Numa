@@ -382,7 +382,7 @@ async function refreshAround(ids) {
 }
 
 document.addEventListener('keydown', event => {
-  if (state.viewer || event.target.matches?.('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  if (state.viewer || event.target.closest?.('input, select, textarea, [contenteditable]') || document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape' && openMenu) closeMenu();
   else if (event.key === 'Escape' && (shelved.ids.size || shelved.mode)) unshelve();
   else if (event.key === 'Escape' && (picked.ids.size || picked.mode)) unpick();
@@ -456,23 +456,27 @@ async function albumDialog(ids) {
   try { await api('photos/album', { method: 'POST', body: JSON.stringify(body) }); toast(asked.out ? S.outOfAlbum : S.inAlbum); } catch (error) { toast(error.message); }
 }
 
-const albumItems = album => [
-
-  ...(album.may_change === false ? [] : kindItems(album)),
-  h('button', { onclick: () => shareDialog({ album: album.key, name: album.name }) }, S.shareProofsEll),
-  h('button', { onclick: () => shareAlbumDialog(album) }, S.shareAlbumEll),
-  h('button', { onclick: () => collectDialog({ album: album.key, name: album.name }) }, S.collectEll),
-  h('button', { onclick: async () => {
+const albumItems = album => {
+  const rename = h('button', { onclick: async () => {
     const asked = await dialog(S.renameAlbum, null, [h('input', { type: 'text', name: 'name', value: album.name, required: true, autocomplete: 'off' })], S.rename);
     const name = (asked?.name || '').trim();
     if (!name || name === album.name) return;
     try { await api('albums/' + encodeURIComponent(album.key), { method: 'PUT', body: JSON.stringify({ name }) }); navLists.album = null; render(); } catch (error) { toast(error.message); }
-  } }, S.renameEll),
-  h('button', { onclick: async () => {
+  } }, S.renameEll);
+  const remove = h('button', { onclick: async () => {
     if (!await ask(phrase('deleteAlbumQ', { name: album.name }), S.deleteAlbumText, S.deleteAlbum)) return;
     try { await api('albums/' + encodeURIComponent(album.key), { method: 'DELETE' }); navLists.album = null; go('/albums'); toast(S.albumDeleted); } catch (error) { toast(error.message); }
-  } }, S.deleteAlbumEll),
-];
+  } }, S.deleteAlbumEll);
+  if (album.empty) return [rename, remove];
+  return [
+
+    ...(album.may_change === false ? [] : kindItems(album)),
+    h('button', { onclick: () => shareDialog({ album: album.key, name: album.name }) }, S.shareProofsEll),
+    h('button', { onclick: () => shareAlbumDialog(album) }, S.shareAlbumEll),
+    h('button', { onclick: () => collectDialog({ album: album.key, name: album.name }) }, S.collectEll),
+    rename, remove,
+  ];
+};
 
 async function newAlbum() {
   const asked = await dialog(S.newAlbum, null, [h('input', { type: 'text', name: 'name', placeholder: S.albumName, required: true, autocomplete: 'off' })], S.create);

@@ -16,6 +16,7 @@ CAP=10G dev/capped.sh cargo test --workspace --release
 python3 dev/shape.py
 python3 dev/style.py
 python3 dev/style_web.py
+python3 dev/parity.py
 python3 dev/tokens.py --check
 python3 dev/smoke-readme.py
 if command -v cargo-deny >/dev/null; then

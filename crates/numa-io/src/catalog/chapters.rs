@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use super::{global_id, split_id, text, tidy_caption, Catalog};
+use super::{global_id, split_id, text, Catalog};
 
 pub const CHAPTER_NAME_LIMIT: usize = 80;
 
-pub const CHAPTER_WORDS_LIMIT: usize = super::CAPTION_LIMIT;
+pub const CHAPTER_WORDS_LIMIT: usize = crate::markdown::TEXT_LIMIT;
 
 pub const WEDDING: [&str; 6] = ["Getting Ready", "Ceremony", "Portraits", "Dinner", "First Dance", "Party"];
 
@@ -201,10 +201,7 @@ impl Catalog {
     }
 
     pub fn set_chapter_words(&self, key: &str, words: &str) -> Result<(), String> {
-        let words = tidy_caption(words);
-        if words.chars().count() > CHAPTER_WORDS_LIMIT {
-            return Err(format!("A chapter's words are at most {CHAPTER_WORDS_LIMIT} characters."));
-        }
+        let words = super::album_text::kept_text(words, "A chapter's words")?;
         self.home.execute("UPDATE album_chapters SET words = ?1 WHERE key = ?2", params![words, key]).map_err(text)?;
         Ok(())
     }
@@ -290,6 +287,7 @@ impl Catalog {
 
     pub fn rekey_chapter(&self, old: &str, new: &str) -> Result<(), String> {
         self.home.execute("UPDATE album_chapters SET key = ?2 WHERE key = ?1", params![old, new]).map_err(text)?;
+        self.rekey_days(old, new)?;
         for library in self.libraries()? {
             let Ok(open) = self.library(library.id) else { continue };
             if open.offline {
@@ -321,6 +319,7 @@ impl Catalog {
     pub fn remove_chapter(&self, key: &str) -> Result<(), String> {
         let Some(chapter) = self.chapter(key)? else { return Ok(()) };
         self.forget_rows(&[key.to_string()])?;
+        self.days_out_of_chapter(&chapter.album, key)?;
         self.home.execute("DELETE FROM album_chapters WHERE key = ?1", [key]).map_err(text)?;
         let keys = self.keys_of(&chapter.album)?;
         self.number(&keys)
@@ -520,6 +519,23 @@ mod tests {
         assert!(catalog.set_chapter_words(&chapter.key, &"x".repeat(CHAPTER_WORDS_LIMIT + 1)).is_err());
         catalog.set_chapter_words(&chapter.key, "   ").unwrap();
         assert_eq!(catalog.chapter(&chapter.key).unwrap().unwrap().words, "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_albums_size_counts_its_photographs_in_every_library_and_its_chapters() {
+        let (catalog, holiday, summer, dir) = two_libraries("sizes");
+        let empty = catalog.create_album("Empty").unwrap();
+        let planned = catalog.create_album("Planned").unwrap();
+        let full = catalog.create_album("Full").unwrap();
+        catalog.add_chapter(&planned, "Morning", None, None).unwrap();
+        let ids = [id_of(&catalog, &holiday, "A.JPG"), id_of(&catalog, &holiday, "B.JPG"), id_of(&catalog, &summer, "C.JPG")];
+        catalog.set_in_album(&full, &ids, true).unwrap();
+        catalog.add_chapter(&full, "Beach", None, None).unwrap();
+        let sizes = catalog.album_sizes().unwrap();
+        assert_eq!(sizes.get(&empty), None);
+        assert_eq!(sizes.get(&planned), Some(&(0, 1)));
+        assert_eq!(sizes.get(&full), Some(&(3, 1)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

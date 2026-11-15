@@ -24,7 +24,7 @@ FROM debian:trixie-slim
 LABEL org.opencontainers.image.source=https://github.com/simmmmm/numa-home
 LABEL org.opencontainers.image.licenses=GPL-3.0-or-later
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl tar tzdata libvulkan1 mesa-vulkan-drivers \
+ && apt-get install -y --no-install-recommends ca-certificates curl tar tzdata libvulkan1 mesa-vulkan-drivers ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/numa-server /usr/local/bin/numa-server
 COPY LICENSE data/THIRD_PARTY_LICENSES-server.txt data/MODELS-LICENSES.txt data/places/NOTICE.txt /usr/share/doc/numa-home/

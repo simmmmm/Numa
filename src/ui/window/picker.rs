@@ -43,8 +43,6 @@ pub(super) fn refresh_places(state: &App) {
         Vec::new()
     });
     let libraries = state.libraries.all.borrow().clone();
-
-    let (at_home, here): (Vec<Library>, Vec<Library>) = libraries.iter().cloned().partition(|library| home_sync::is_home(state, library.id));
     {
         let mut filter = state.libraries.filter.borrow_mut();
         if filter.person.as_ref().is_some_and(|person| !names.iter().any(|name| name.eq_ignore_ascii_case(person))) {
@@ -56,12 +54,10 @@ pub(super) fn refresh_places(state: &App) {
     }
     fill_albums_menu(state, &albums);
 
-    let mut here: Vec<&Library> = here.iter().collect();
-    places::in_order(state, &mut here);
-    let mut at_home: Vec<&Library> = at_home.iter().collect();
-    places::in_order(state, &mut at_home);
+    let mut libraries: Vec<&Library> = libraries.iter().collect();
+    places::in_order(state, &mut libraries);
     let mut places = vec![Place::Everywhere];
-    places.extend(here.into_iter().chain(at_home).map(|library| Place::Library(library.clone())));
+    places.extend(libraries.into_iter().map(|library| Place::Library(library.clone())));
     places.extend(albums.into_iter().map(|(key, _)| Place::Album(key)));
     places.extend(names.into_iter().map(Place::Person));
     *state.libraries.places.borrow_mut() = places;
@@ -92,6 +88,8 @@ pub(super) fn show_place(state: &App, place: Place) {
     };
     choose_place(state, place);
     if narrowed {
+
+        state.libraries.narrow.replace(Default::default());
         reload_grid(state);
     }
 

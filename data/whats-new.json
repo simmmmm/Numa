@@ -1,0 +1,37 @@
+{
+  "note": "What is new, in plain words, for people who just updated. One list per version, newest first, at most six lines, each one sentence. Every client shows the same lines (Linux, Mac, iPad, iPhone, Numa Home) and numa.photo shows them on its download and What's New pages.",
+  "versions": [
+    {
+      "version": "0.52.0",
+      "date": "2026-11-15",
+      "lines": [
+        "Write about every day of a trip: each day has its own part of the page, with your words and its photos.",
+        "Tap the pencil to write an album's story, a note to each place or a day's report, with bold, italic and lists.",
+        "A day with many photos shows them all in one row that you slide sideways.",
+        "Export an album in folders by place and by day, with your words beside the photos, ready for a photo book.",
+        "Numa Home has its own page, next to Libraries.",
+        "After an update, Numa shows once what is new, as here."
+      ]
+    },
+    {
+      "version": "0.51.1",
+      "date": "2026-11-14",
+      "lines": [
+        "Click a photo in an album to see it on its own; Escape takes you back to the album.",
+        "The album's name stays in the top bar when you scroll down.",
+        "New Album\u2026 makes the album at once, with a page that tells you how to add photos.",
+        "For a Book\u2026 is gone: Export does its job from the next version."
+      ]
+    },
+    {
+      "version": "0.51.0",
+      "date": "2026-11-13",
+      "lines": [
+        "An album now reads by day, with chapters you can name and write about.",
+        "Make an album a trip, with its places, a map and the route between them, or a wedding.",
+        "Share a trip with a link: guests see the map, the places and the photos.",
+        "Copy a photo at 4096, 2048 or 1080 pixels."
+      ]
+    }
+  ]
+}

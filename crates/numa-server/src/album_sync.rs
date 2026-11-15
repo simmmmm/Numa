@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use numa_io::catalog::{AlbumChapter, AlbumKind, ChapterPlace};
-use numa_io::home::album_sync::{digest, AlbumDoc, ChapterDoc, PlaceDoc, Sent};
+use numa_io::home::album_sync::{day_doc, day_kept, digest, AlbumDoc, ChapterDoc, PlaceDoc, Sent, TextDoc};
 use rusqlite::params;
 use serde_json::{json, Value};
 
@@ -43,11 +43,12 @@ fn all_gone(store: &Store) -> Vec<String> {
 
 async fn doc(server: &Arc<Server>, me: &Account, key: &str) -> Result<AlbumDoc, Fail> {
     let asked = key.to_string();
-    let (name, kind, chapters, chapter_of) = server
+    let (name, kind, chapters, chapter_of, (text, days)) = server
         .home
         .ask(move |catalog| -> Result<_, String> {
             let name = catalog.albums()?.into_iter().find(|(have, _)| *have == asked).map(|(_, name)| name).ok_or("There is no such album.")?;
-            Ok((name, catalog.album_kind(&asked)?, catalog.chapters(&asked)?, catalog.chapter_of(&asked)?))
+            let words = (catalog.album_text_kept(&asked)?.unwrap_or_default(), catalog.album_days(&asked)?);
+            Ok((name, catalog.album_kind(&asked)?, catalog.chapters(&asked)?, catalog.chapter_of(&asked)?, words))
         })
         .await?
         .map_err(|why| Fail(StatusCode::NOT_FOUND, why))?;
@@ -69,7 +70,8 @@ async fn doc(server: &Arc<Server>, me: &Account, key: &str) -> Result<AlbumDoc, 
             }
         }
     }
-    Ok(AlbumDoc { id: key.to_string(), name, kind: kind.name().to_string(), chapters })
+    let text = Some(TextDoc { text: text.0, changed: text.1 });
+    Ok(AlbumDoc { id: key.to_string(), name, kind: kind.name().to_string(), chapters, text, reports: Some(days.iter().map(day_doc).collect()) })
 }
 
 async fn list(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Value>, Fail> {
@@ -135,6 +137,8 @@ async fn put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): P
     let moves: Vec<(String, Vec<i64>, Vec<i64>)> = sent.chapters.iter().map(|chapter| (chapter.chapter.key.clone(), mine(&chapter.into), mine(&chapter.out))).collect();
     let chapters: Vec<AlbumChapter> = sent.chapters.iter().map(|chapter| kept(&key, &chapter.chapter)).collect();
     let (album, name, kind) = (key.clone(), sent.name.trim().to_string(), AlbumKind::named(&sent.kind).unwrap_or(AlbumKind::Album));
+
+    let (text, days) = (sent.text, sent.reports.map(|days| days.iter().map(day_kept).collect::<Vec<_>>()));
     let touched = server
         .home
         .ask(move |catalog| -> Result<Vec<i64>, String> {
@@ -152,6 +156,12 @@ async fn put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): P
                 catalog.put_chapter(&album, chapter)?;
             }
             catalog.order_chapters(&album, &chapters.iter().map(|chapter| chapter.key.clone()).collect::<Vec<_>>())?;
+            if let Some(text) = &text {
+                catalog.put_album_text(&album, &text.text, text.changed)?;
+            }
+            if let Some(days) = &days {
+                catalog.put_album_days(&album, days)?;
+            }
             let mut touched = Vec::new();
             for (chapter, _, out) in &moves {
                 catalog.take_from_chapter(chapter, out)?;
@@ -310,6 +320,44 @@ mod tests {
         a.delete_album(&mine).unwrap();
         assert!(sent(&a, sam));
         assert_eq!(json_of("GET", &format!("/api/v1/sync/albums/{mine}"), sam, Value::Null).0, 404);
+    }
+
+    #[test]
+    fn an_albums_text_and_its_reports_travel_and_a_device_from_before_takes_none_away() {
+        let sam = &fixture().sam;
+        let (a, a_ids) = device("texts-a");
+        let album = a.create_album("Sync Texts Porto").unwrap();
+        a.set_in_album(&album, &a_ids, true).unwrap();
+        let ribeira = a.add_chapter(&album, "Ribeira", None, None).unwrap().key;
+        a.set_album_text(&album, "Four days by the **river**.").unwrap();
+        a.set_day_report(&album, Some(&ribeira), 20_760, "Boats at six.").unwrap();
+        a.add_day(&album, None, 20_765).unwrap();
+        assert!(sent(&a, sam));
+        let doc = home_doc(sam, &album);
+        assert_eq!(doc["text"]["text"], "Four days by the **river**.");
+        let reports = doc["reports"].as_array().unwrap();
+        assert_eq!(reports.iter().map(|day| (day["chapter"].as_str().unwrap(), day["day"].as_i64().unwrap(), day["text"].as_str().unwrap())).collect::<Vec<_>>(), [("", 20_765, ""), (ribeira.as_str(), 20_760, "Boats at six.")]);
+
+        let (b, _) = device("texts-b");
+        assert!(round(&b, sam).came >= 1);
+        assert_eq!(b.album_text(&album).unwrap(), "Four days by the **river**.");
+        assert_eq!(b.album_days(&album).unwrap(), a.album_days(&album).unwrap());
+
+        let chapters: Vec<Value> = doc["chapters"].as_array().unwrap().iter().map(|chapter| json!({ "key": chapter["key"], "name": chapter["name"], "words": "Old words.", "place": null, "days": null, "in": [], "out": [] })).collect();
+        let (status, _) = json_of("PUT", &format!("/api/v1/sync/albums/{album}"), sam, json!({ "base": doc["digest"], "name": "Sync Texts Porto", "kind": "album", "chapters": chapters }));
+        assert_eq!(status, 200);
+        let after = home_doc(sam, &album);
+        assert_eq!((after["text"].clone(), after["reports"].clone(), after["chapters"][0]["words"].as_str()), (doc["text"].clone(), doc["reports"].clone(), Some("Old words.")));
+
+        round(&a, sam);
+        round(&b, sam);
+        a.set_day_report(&album, Some(&ribeira), 20_760, "Boats at six, then fog.").unwrap();
+        b.set_day_report(&album, Some(&ribeira), 20_760, "Port at the lodge.").unwrap();
+        assert!(sent(&a, sam));
+        assert!(sent(&b, sam));
+        let both = b.album_days(&album).unwrap().into_iter().find(|day| day.day == 20_760).unwrap().text;
+        assert!(both.contains("Boats at six, then fog.") && both.contains("Port at the lodge."), "{both:?}");
+        assert_eq!(json_of("DELETE", &format!("/api/v1/albums/{album}"), sam, Value::Null).0, 200);
     }
 
     #[test]

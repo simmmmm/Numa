@@ -9,24 +9,27 @@ thread_local! {
 }
 
 pub(super) fn after_a_round(state: &App) {
+    let state = state.clone();
+    glib::spawn_future_local(async move { now(&state).await });
+}
+
+pub(super) async fn now(state: &App) {
     if GOING.with(|going| going.replace(true)) {
         return;
     }
-    let state = state.clone();
-    glib::spawn_future_local(async move {
-        match go(&state).await {
-            Ok((came, went)) if came + went > 0 => {
-                log::info!("Numa Home: {came} albums changed here, {went} went up");
-                refresh_places(&state);
-                if state.stack.visible_child_name().as_deref() == Some("album") {
-                    album_page::refill(&state);
-                }
+    match go(state).await {
+        Ok((came, went)) if came + went > 0 => {
+            log::info!("Numa Home: {came} albums changed here, {went} went up");
+            refresh_places(state);
+
+            if came > 0 && state.stack.visible_child_name().as_deref() == Some("album") {
+                album_page::refill(state);
             }
-            Ok(_) => {}
-            Err(err) => log::warn!("Numa Home, albums: {err}"),
         }
-        GOING.with(|going| going.set(false));
-    });
+        Ok(_) => {}
+        Err(err) => log::warn!("Numa Home, albums: {err}"),
+    }
+    GOING.with(|going| going.set(false));
 }
 
 async fn go(state: &App) -> Result<(usize, usize), String> {

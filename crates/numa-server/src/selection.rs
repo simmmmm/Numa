@@ -241,8 +241,35 @@ pub async fn zip(State(server): State<Arc<Server>>, Signed(me): Signed, Query(li
 }
 
 async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) -> Result<Response, Fail> {
-    let mut stacks = Vec::with_capacity(photos.len());
-    for (_, photo) in &photos {
+    let mut names = HashSet::new();
+    let mut named = Vec::with_capacity(photos.len());
+    for (library, photo) in photos {
+        let base = std::path::Path::new(&format!("{}/{}", library.label(), within(&library, &photo.path))).with_extension("");
+
+        let mut name = format!("{}.jpg", base.display());
+        for at in 2.. {
+            if names.insert(name.clone()) {
+                break;
+            }
+            name = format!("{} {at}.jpg", base.display());
+        }
+        named.push((name, photo));
+    }
+    streamed(server, Zipped { photos: named, edge, ..Zipped::default() }, "Numa Home.zip").await
+}
+
+#[derive(Default)]
+pub(crate) struct Zipped {
+    pub folders: Vec<String>,
+    pub texts: Vec<(String, String)>,
+    pub photos: Vec<(String, Photo)>,
+
+    pub edge: u32,
+}
+
+pub(crate) async fn streamed(server: Arc<Server>, zipped: Zipped, file_name: &str) -> Result<Response, Fail> {
+    let mut stacks = Vec::with_capacity(zipped.photos.len());
+    for (_, photo) in &zipped.photos {
         stacks.push(match crate::photos::edits(&server, photo).await? {
             Some(edits) => edits,
             None => serde_json::to_string(&numa_core::document::Document::new(photo.path.to_string_lossy().into_owned())).map_err(Fail::internal)?,
@@ -255,21 +282,22 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
     tokio::task::spawn_blocking(move || {
         let mut zip = zip::ZipWriter::new_stream(std::io::BufWriter::with_capacity(1 << 20, Pipe(tx)));
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let (mut names, mut left_out) = (HashSet::new(), Vec::new());
-        for ((library, photo), edits) in photos.iter().zip(&stacks) {
-            let base = std::path::Path::new(&format!("{}/{}", library.label(), within(library, &photo.path))).with_extension("");
-
-            let mut name = format!("{}.jpg", base.display());
-            for at in 2.. {
-                if names.insert(name.clone()) {
-                    break;
-                }
-                name = format!("{} {at}.jpg", base.display());
+        for folder in &zipped.folders {
+            if zip.add_directory(folder.as_str(), options).is_err() {
+                return;
             }
-            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::photos::develop(photo, edge, edits, &scratch, &settings));
+        }
+        for (name, text) in &zipped.texts {
+            if zip.start_file(name.as_str(), options).is_err() || zip.write_all(text.as_bytes()).is_err() {
+                return;
+            }
+        }
+        let mut left_out = Vec::new();
+        for ((name, photo), edits) in zipped.photos.iter().zip(&stacks) {
+            let developed = runtime.block_on(server.renders.acquire()).map_err(|err| err.to_string()).and_then(|_turn| crate::photos::develop(photo, zipped.edge, edits, &scratch, &settings));
             match developed {
                 Ok(bytes) => {
-                    if zip.start_file(name, options).is_err() || zip.write_all(&bytes).is_err() {
+                    if zip.start_file(name.as_str(), options).is_err() || zip.write_all(&bytes).is_err() {
                         return;
                     }
                 }
@@ -285,7 +313,7 @@ async fn jpegs(server: Arc<Server>, photos: Vec<(Library, Photo)>, edge: u32) ->
     let mut response = Body::from_stream(stream).into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
-    headers.insert(header::CONTENT_DISPOSITION, crate::photos::attachment("Numa Home.zip"));
+    headers.insert(header::CONTENT_DISPOSITION, crate::photos::attachment(file_name));
     Ok(response)
 }
 

@@ -39,6 +39,7 @@ mod today;
 mod trip_link;
 mod album_sync;
 mod video;
+mod whats_new;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -181,6 +182,7 @@ fn main() -> Result<(), String> {
     let store = store::Store::open(&data.join("server.db"))?;
     share::tables(&store)?;
     shared::tables(&store)?;
+    whats_new::adopt(&store)?;
     let server = Server::new(store, photos, sent, data)?;
     if !server.store.has_accounts() {
         log::warn!("Numa Home is not set up yet. Set it up from your home network, or from elsewhere with this code: {}", server.setup_code);
@@ -269,9 +271,14 @@ fn router(server: Arc<Server>) -> Router {
         .route("/api/v1/albums/{key}/kind", put(album::kind))
         .route("/api/v1/albums/{key}/chapters", post(album::add_chapter))
         .route("/api/v1/albums/{key}/places", post(album::take_places))
+        .route("/api/v1/albums/{key}/text", put(album::album_text))
+        .route("/api/v1/albums/{key}/export", get(album::export))
+        .route("/api/v1/albums/{key}/days", post(album::add_day))
+        .route("/api/v1/albums/{key}/days/{day}", put(album::day_report).delete(album::remove_day))
         .route("/api/v1/chapters/{key}", put(album::change_chapter).delete(album::remove_chapter))
         .route("/api/v1/chapters/{key}/photos", post(album::put_photos))
         .route("/api/v1/places/find", get(album::find_places))
+        .route("/api/v1/texts/clean", post(album::clean_text))
 
         .route("/api/v1/background", get(activity::status))
         .route("/api/v1/safe", get(safe::show))
@@ -325,6 +332,7 @@ fn router(server: Arc<Server>) -> Router {
         .merge(collect::routes())
         .merge(trip_link::routes())
         .merge(album_sync::routes())
+        .merge(whats_new::routes())
         .layer(axum::middleware::from_fn_with_state(server.clone(), guard::guarded))
         .with_state(server)
 }

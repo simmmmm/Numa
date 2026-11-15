@@ -66,6 +66,7 @@ mod same_photos;
 mod home_fetch;
 mod startup;
 mod wizard;
+mod whats_new;
 mod self_test;
 mod places;
 mod cullbar;
@@ -98,6 +99,9 @@ mod album_chapter;
 mod album_trip;
 mod album_round;
 mod album_share;
+mod album_days;
+mod text_field;
+mod export_album;
 mod client_picks;
 mod grid;
 mod scrubber;
@@ -490,6 +494,7 @@ fn build_window_content(state: &App, window: &adw::ApplicationWindow) {
     for (column, name) in [
         (&state.libraries.albums, "albums"),
         (&state.libraries.people, "people"),
+        (&state.libraries.home, "home"),
         (&state.libraries.tidy, "tidy"),
     ] {
         state.stack.add_named(&build_page(column), Some(name));

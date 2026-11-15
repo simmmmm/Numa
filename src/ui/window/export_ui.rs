@@ -3,12 +3,15 @@ use super::*;
 pub(super) struct ExportJob {
     pub(super) source: Source,
     pub(super) document: Document,
+
+    pub(super) to: Option<PathBuf>,
 }
 
 pub(super) fn open_job(state: &App) -> Option<ExportJob> {
     state.open.borrow().as_ref().map(|photo| ExportJob {
         source: photo.source.clone(),
         document: photo.document.clone(),
+        to: None,
     })
 }
 
@@ -119,35 +122,44 @@ pub(super) fn photo_jobs(state: &App, photos: impl IntoIterator<Item = (i64, Pat
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| Document::new(path.to_string_lossy().to_string()));
-            ExportJob { source: Source::Photo { id, path }, document }
+            ExportJob { source: Source::Photo { id, path }, document, to: None }
         })
         .collect()
 }
 
 pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: Vec<ExportJob>) {
-    let Some(library) = state.libraries.current.borrow().clone() else {
+    export_dialog_for(state, parent, jobs, None);
+}
+
+pub(super) fn export_dialog_for(state: &App, parent: &impl IsA<gtk::Widget>, jobs: Vec<ExportJob>, album: Option<export_album::Group>) {
+    let library = state.libraries.current.borrow().clone();
+
+    let fallback = || library.as_ref().map(|library| library.export_dir()).or_else(|| glib::user_special_dir(glib::UserDirectory::Pictures));
+    let settings = state.export.settings.borrow().clone();
+    let Some(folder) = settings.folder.clone().or_else(fallback).filter(|_| library.is_some() || album.is_some()) else {
         state.toast("No library selected — pick one to export into");
         return;
     };
-
-    let settings = state.export.settings.borrow().clone();
-    let destination = Rc::new(RefCell::new(settings.folder.clone().unwrap_or_else(|| library.export_dir())));
+    let destination = Rc::new(RefCell::new(folder));
+    let opened_size = settings.size;
     let controls = Controls::new(state, &destination);
     controls.write(&settings);
 
     let home = home::Destination::new(state);
 
+    let count = album.as_ref().map_or(jobs.len(), |album| album.count);
     let jobs_holder = Rc::new(RefCell::new(jobs));
-    let count = jobs_holder.borrow().len();
 
     let dialog = adw::Dialog::new();
-    dialog.set_title(&match count {
-        1 => "Export this photograph".to_string(),
-        many => format!("Export {many} photographs"),
+
+    dialog.set_title(&match (&album, count) {
+        (Some(album), _) => format!("Export {}", album.name),
+        (None, 1) => "Export this photograph".to_string(),
+        (None, many) => format!("Export {} photographs", places::grouped(many as i64)),
     });
     dialog.set_content_width(480);
     dialog.set_content_height(720);
-    let export = primary_button("Export");
+    let export = primary_button(&album.as_ref().map_or("Export".to_string(), export_album::Group::button));
     let header = dialog_header(&dialog, &export);
     let clamp = adw::Clamp::new();
     clamp.set_child(Some(&controls.page));
@@ -163,13 +175,24 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
     view.set_content(Some(&scroller));
     dialog.set_child(Some(&view));
     dialog.set_default_widget(Some(&export));
-    controls.page.prepend(&home.group);
-    home.connect_changed(glib::clone!(
-        #[strong] controls,
-        #[strong(rename_to = group)] home.group,
-        #[weak] export,
-        move |how| controls.show_home(how, &group, &export)
-    ));
+    match &album {
+
+        Some(album) => {
+            controls.page.prepend(&album.group);
+            controls.template.set_visible(false);
+            controls.size.set_visible(false);
+            album.follow(&controls.size);
+        }
+        None => {
+            controls.page.prepend(&home.group);
+            home.connect_changed(glib::clone!(
+                #[strong] controls,
+                #[strong(rename_to = group)] home.group,
+                #[weak] export,
+                move |how| controls.show_home(how, &group, &export)
+            ));
+        }
+    }
 
     export.connect_clicked(glib::clone!(
         #[strong] state,
@@ -177,13 +200,21 @@ pub(super) fn export_dialog(state: &App, parent: &impl IsA<gtk::Widget>, jobs: V
         #[weak] dialog,
         move |_| {
             let chosen = controls.read();
-            *state.export.settings.borrow_mut() = chosen.clone();
-            state.catalog.remember(EXPORT_SETTINGS, &chosen);
+
+            let kept = match &album {
+                Some(_) => export::ExportSettings { size: opened_size, ..chosen.clone() },
+                None => chosen.clone(),
+            };
+            *state.export.settings.borrow_mut() = kept.clone();
+            state.catalog.remember(EXPORT_SETTINGS, &kept);
             refresh_export_button(&state);
 
             let jobs = std::mem::take(&mut *jobs_holder.borrow_mut());
             let directory = destination.borrow().clone();
             dialog.close();
+            if let Some(album) = &album {
+                return album.run(&state, export::ExportSettings { size: album.size(), ..chosen }, directory);
+            }
             home.remember(&state);
             if let Some(how) = home.chosen() {
                 return home::send(&state, jobs, how, chosen);
@@ -629,7 +660,7 @@ fn preset_row(state: &App, controls: &Controls) -> adw::ComboRow {
     row
 }
 
-const EDGES: [u32; 5] = [4096, 2560, 2048, 1600, 1080];
+pub(super) const EDGES: [u32; 5] = [4096, 2560, 2048, 1600, 1080];
 
 pub(super) fn folder_row(destination: &Rc<RefCell<PathBuf>>) -> adw::ActionRow {
     let folder = adw::ActionRow::new();

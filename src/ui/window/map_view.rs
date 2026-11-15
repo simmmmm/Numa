@@ -13,6 +13,15 @@ pub(super) fn file() -> PathBuf {
 
 pub(super) const CREDIT: &str = "© OpenStreetMap · Protomaps";
 
+pub(super) fn credit() -> gtk::Label {
+    let credit = gtk::Label::new(Some(CREDIT));
+    credit.add_css_class("caption");
+    credit.add_css_class("map-credit");
+    credit.set_halign(gtk::Align::End);
+    credit.set_valign(gtk::Align::End);
+    credit
+}
+
 mod imp {
     use super::*;
 

@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::{AlbumChapter, AlbumKind, Catalog, ChapterPlace, Filter, CHAPTER_WORDS_LIMIT};
-use crate::home::sync::{Link, LINK};
+use crate::catalog::{AlbumChapter, AlbumDay, AlbumKind, Catalog, ChapterPlace, Filter, CHAPTER_WORDS_LIMIT};
+use crate::home::sync::{keep_both, Link, LINK};
+use crate::markdown::TEXT_LIMIT;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaceDoc {
@@ -27,6 +28,26 @@ pub struct ChapterDoc {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TextDoc {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub changed: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DayDoc {
+
+    #[serde(default)]
+    pub chapter: String,
+    pub day: i64,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub changed: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AlbumDoc {
 
     pub id: String,
@@ -35,6 +56,20 @@ pub struct AlbumDoc {
     pub kind: String,
     #[serde(default)]
     pub chapters: Vec<ChapterDoc>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextDoc>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reports: Option<Vec<DayDoc>>,
+}
+
+pub fn day_doc(day: &AlbumDay) -> DayDoc {
+    DayDoc { chapter: day.chapter.clone().unwrap_or_default(), day: day.day, text: day.text.clone(), changed: day.changed }
+}
+
+pub fn day_kept(doc: &DayDoc) -> AlbumDay {
+    AlbumDay { chapter: Some(doc.chapter.clone()).filter(|key| !key.is_empty()), day: doc.day, text: doc.text.clone(), changed: doc.changed }
 }
 
 fn three<T: PartialEq + Clone>(agreed: Option<&T>, ours: &T, theirs: &T) -> T {
@@ -84,6 +119,43 @@ fn chapter(agreed: Option<&ChapterDoc>, ours: &ChapterDoc, theirs: &ChapterDoc) 
         place: three(agreed.map(|a| &a.place), &ours.place, &theirs.place),
         days: three(agreed.map(|a| &a.days), &ours.days, &theirs.days),
         photos: set(agreed.map(|a| &a.photos), &ours.photos, &theirs.photos),
+    }
+}
+
+fn text(agreed: Option<&TextDoc>, ours: &TextDoc, theirs: &TextDoc) -> TextDoc {
+    let words = keep_both(agreed.map(|a| a.text.as_str()), &ours.text, &theirs.text, theirs.changed > ours.changed, TEXT_LIMIT);
+    let changed = match (words == ours.text, words == theirs.text) {
+        (true, false) => ours.changed,
+        (false, true) => theirs.changed,
+        _ => ours.changed.max(theirs.changed),
+    };
+    TextDoc { text: words, changed }
+}
+
+fn reports(agreed: Option<&Vec<DayDoc>>, ours: &[DayDoc], theirs: &[DayDoc]) -> Vec<DayDoc> {
+    let by_key = |days: &[DayDoc]| -> BTreeMap<(String, i64), DayDoc> { days.iter().map(|day| ((day.chapter.clone(), day.day), day.clone())).collect() };
+    let (a, o, t) = (agreed.map(|days| by_key(days)).unwrap_or_default(), by_key(ours), by_key(theirs));
+    let keys: BTreeSet<&(String, i64)> = o.keys().chain(t.keys()).collect();
+    let mut merged = Vec::new();
+    for key in keys {
+        let was = a.get(key);
+        let now = match (o.get(key), t.get(key)) {
+            (Some(ours), Some(theirs)) => {
+                let words = text(was.map(|was| TextDoc { text: was.text.clone(), changed: was.changed }).as_ref(), &TextDoc { text: ours.text.clone(), changed: ours.changed }, &TextDoc { text: theirs.text.clone(), changed: theirs.changed });
+                Some(DayDoc { text: words.text, changed: words.changed, ..theirs.clone() })
+            }
+            (Some(one), None) | (None, Some(one)) => (was != Some(one)).then(|| one.clone()),
+            (None, None) => None,
+        };
+        merged.extend(now);
+    }
+    merged
+}
+
+fn known<T: Clone>(agreed: Option<&T>, ours: &Option<T>, theirs: &Option<T>, merge: impl Fn(Option<&T>, &T, &T) -> T) -> Option<T> {
+    match (ours, theirs) {
+        (Some(ours), Some(theirs)) => Some(merge(agreed, ours, theirs)),
+        (one, None) | (None, one) => one.clone(),
     }
 }
 
@@ -149,7 +221,9 @@ pub fn merge(agreed: Option<&AlbumDoc>, ours: &AlbumDoc, theirs: &AlbumDoc) -> A
             }
         }
     }
-    AlbumDoc { id: theirs.id.clone(), name: three(agreed.map(|a| &a.name), &ours.name, &theirs.name), kind, chapters }
+    let text = known(agreed.and_then(|a| a.text.as_ref()), &ours.text, &theirs.text, text);
+    let reports = known(agreed.and_then(|a| a.reports.as_ref()), &ours.reports, &theirs.reports, |a, o, t| reports(a, o, t));
+    AlbumDoc { id: theirs.id.clone(), name: three(agreed.map(|a| &a.name), &ours.name, &theirs.name), kind, chapters, text, reports }
 }
 
 pub struct Held {
@@ -205,7 +279,9 @@ pub fn local_doc(catalog: &Catalog, album: &str, id: &str, held: &Held) -> Resul
             chapter.photos.insert(home.clone());
         }
     }
-    Ok(AlbumDoc { id: id.to_string(), name, kind: catalog.album_kind(album)?.name().to_string(), chapters })
+    let (words, changed) = catalog.album_text_kept(album)?.unwrap_or_default();
+    let reports = catalog.album_days(album)?.iter().map(day_doc).collect();
+    Ok(AlbumDoc { id: id.to_string(), name, kind: catalog.album_kind(album)?.name().to_string(), chapters, text: Some(TextDoc { text: words, changed }), reports: Some(reports) })
 }
 
 fn within(doc: &AlbumDoc, held: &Held) -> AlbumDoc {
@@ -246,6 +322,16 @@ pub fn apply(catalog: &Catalog, album: &str, merged: &AlbumDoc, held: &Held) -> 
         if !into.is_empty() {
 
             let _ = catalog.put_in_chapter(album, Some(&chapter.key), &into);
+        }
+    }
+
+    if let Some(text) = merged.text.as_ref().filter(|text| now.text.as_ref() != Some(*text)) {
+        catalog.put_album_text(album, &text.text, text.changed)?;
+    }
+    if let Some(reports) = &merged.reports {
+        let days: Vec<AlbumDay> = reports.iter().map(day_kept).collect();
+        if catalog.album_days(album)? != days {
+            catalog.put_album_days(album, &days)?;
         }
     }
     Ok(())
@@ -476,7 +562,7 @@ impl Round {
                 continue;
             }
             let ours = local_doc(catalog, album, album, &self.held)?;
-            let nothing = AlbumDoc { id: album.clone(), name: ours.name.clone(), kind: "album".into(), chapters: Vec::new() };
+            let nothing = AlbumDoc { id: album.clone(), name: ours.name.clone(), kind: "album".into(), ..AlbumDoc::default() };
             let body = up(&ours, &nothing, None);
             self.waiting.push(Waiting::Put { album: album.clone(), id: album.clone(), merged: ours });
             calls.push(Call { method: "PUT", path: format!("sync/albums/{album}"), body: Some(body) });
@@ -515,7 +601,7 @@ fn up(now: &AlbumDoc, theirs: &AlbumDoc, base: Option<&str>) -> String {
             serde_json::json!({ "key": chapter.key, "name": chapter.name, "words": chapter.words, "place": chapter.place, "days": chapter.days, "in": into, "out": out })
         })
         .collect();
-    serde_json::json!({ "base": base, "name": now.name, "kind": now.kind, "chapters": chapters }).to_string()
+    serde_json::json!({ "base": base, "name": now.name, "kind": now.kind, "chapters": chapters, "text": now.text, "reports": now.reports }).to_string()
 }
 
 #[derive(Deserialize)]
@@ -526,6 +612,11 @@ pub struct Sent {
     pub kind: String,
     #[serde(default)]
     pub chapters: Vec<SentChapter>,
+
+    #[serde(default)]
+    pub text: Option<TextDoc>,
+    #[serde(default)]
+    pub reports: Option<Vec<DayDoc>>,
 }
 
 #[derive(Deserialize)]
@@ -552,7 +643,50 @@ mod tests {
     }
 
     fn album(name: &str, kind: &str, chapters: Vec<ChapterDoc>) -> AlbumDoc {
-        AlbumDoc { id: "h1".into(), name: name.into(), kind: kind.into(), chapters }
+        AlbumDoc { id: "h1".into(), name: name.into(), kind: kind.into(), chapters, ..AlbumDoc::default() }
+    }
+
+    fn day(chapter: &str, day: i64, text: &str, changed: i64) -> DayDoc {
+        DayDoc { chapter: chapter.into(), day, text: text.into(), changed }
+    }
+
+    fn with(text: Option<(&str, i64)>, days: Option<Vec<DayDoc>>) -> AlbumDoc {
+        AlbumDoc { text: text.map(|(text, changed)| TextDoc { text: text.into(), changed }), reports: days, ..album("J", "trip", vec![]) }
+    }
+
+    #[test]
+    fn the_albums_text_and_its_days_go_three_ways_and_both_sides_words_are_kept_the_later_first() {
+        let agreed = with(Some(("Ten days.", 10)), Some(vec![day("k", 1, "Rain.", 10), day("", 2, "", 10), day("k", 3, "Boat.", 10)]));
+
+        let ours = with(Some(("Ten days by train.", 30)), Some(vec![day("k", 1, "Rain all day.", 30), day("k", 3, "Boat.", 10), day("k", 4, "", 30)]));
+        let theirs = with(Some(("Ten days, north.", 20)), Some(vec![day("k", 1, "Wet.", 20), day("", 2, "", 10)]));
+        let merged = merge(Some(&agreed), &ours, &theirs);
+        assert_eq!(merged.text, Some(TextDoc { text: "Ten days by train.\n\nTen days, north.".into(), changed: 30 }));
+        let days = merged.reports.unwrap();
+        assert_eq!(days, [day("k", 1, "Rain all day.\n\nWet.", 30), day("k", 4, "", 30)], "both removals hold; both words kept, the later first");
+
+        let changed = with(Some(("Ten days.", 10)), Some(vec![day("", 2, "Packed.", 40), day("k", 1, "Rain.", 10), day("k", 3, "Boat.", 10)]));
+        let removed = with(Some(("Ten days.", 10)), Some(vec![]));
+        assert_eq!(merge(Some(&agreed), &changed, &removed).reports.unwrap(), [day("", 2, "Packed.", 40)]);
+        assert_eq!(merge(Some(&agreed), &agreed, &changed).reports.unwrap(), changed.reports.clone().unwrap());
+    }
+
+    #[test]
+    fn a_side_that_does_not_know_texts_takes_none_away() {
+        let ours = with(Some(("Ten days.", 10)), Some(vec![day("", 1, "Rain.", 10)]));
+        let before = with(None, None);
+
+        let merged = merge(Some(&ours), &ours, &before);
+        assert_eq!((merged.text, merged.reports), (ours.text.clone(), ours.reports.clone()));
+
+        let merged = merge(Some(&before), &ours, &with(Some(("Ten days.", 10)), Some(vec![])));
+        assert_eq!(merged.reports.unwrap(), [day("", 1, "Rain.", 10)], "nothing agreed of it: nothing was removed");
+
+        let old: AlbumDoc = serde_json::from_str(r#"{"id":"h1","name":"J","kind":"trip","chapters":[]}"#).unwrap();
+        assert_eq!((old.text.clone(), old.reports.clone()), (None, None));
+        assert!(!serde_json::to_string(&old).unwrap().contains("reports"));
+        let sent: Sent = serde_json::from_str(r#"{"base":null,"name":"J","kind":"trip","chapters":[]}"#).unwrap();
+        assert!(sent.text.is_none() && sent.reports.is_none());
     }
 
     #[test]

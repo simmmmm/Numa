@@ -58,9 +58,13 @@ fn size_text(megabytes: u64) -> String {
     }
 }
 
+pub(super) fn beside() -> bool {
+    std::env::args().nth(1).is_some_and(|arg| arg == "--self-test")
+        || ["NUMA_OPEN", "NUMA_COMPARE", "NUMA_IMPORT"].iter().any(|name| std::env::var_os(name).is_some())
+}
+
 pub(super) fn open_if_first_start(state: &App, window: &adw::ApplicationWindow) -> bool {
-    let beside = std::env::args().nth(1).is_some_and(|arg| arg == "--self-test")
-        || ["NUMA_OPEN", "NUMA_COMPARE", "NUMA_IMPORT"].iter().any(|name| std::env::var_os(name).is_some());
+    let beside = beside();
     let libraries = state.catalog.libraries().map_or(0, |libraries| libraries.len());
     let asked = state.catalog.recall::<bool>(WIZARD);
     if beside || !opens(asked, libraries) {

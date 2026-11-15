@@ -11,8 +11,6 @@
   --ink: #ffffff;
   --name: #bdbdbd;
   --label: #8d8d8d;
-  --tab-rest: #7a7a7a;
-  --rail-rest: #9a9a9a;
   --intro-word: #e8e8e8;
   --rule: rgba(255, 255, 255, 0.1);
   --rule-sheet: rgba(255, 255, 255, 0.08);
@@ -20,11 +18,9 @@
   --track-hover: rgba(255, 255, 255, 0.18);
   --thumb-rest: rgba(255, 255, 255, 0.36);
   --rest-tick: rgba(255, 255, 255, 0.35);
-  --select-fill: rgba(255, 255, 255, 0.16);
   --accent: #ffffff;
   --on-accent: #141414;
   --reject: #ff7a66;
-  --reject-on-photo: #ff9a8a;
   --star-rest: #5e5e5e;
   --mask-wash: rgba(242, 77, 77, 0.4);
   --mask-erase: rgba(255, 255, 255, 0.35);
@@ -78,6 +74,7 @@
   --gap: 12px;
 
   --radius-track: 1px;
+  --radius-tick: 4px;
   --radius-histogram: 4px;
   --radius-print: 8px;
   --radius-pill: 8px;
@@ -96,12 +93,17 @@
   --print-height: 104px;
   --stack-width: 140px;
   --chip-height: 32px;
-  --rail-tab: 54px;
+  --rail-tab: 60px;
   --mark-intro: 140px;
   --mark-bar: 34px;
   --hit-pointer: 28px;
   --hit-touch: 44px;
   --row: 28px;
+  --icon-s: 16px;
+  --icon: 20px;
+  --icon-l: 24px;
+  --column: 880px;
+  --tile-gap: 4px;
 
   --shadow-print-front: 0 8px 20px rgba(0, 0, 0, 0.6);
   --shadow-print-back: 0 6px 16px rgba(0, 0, 0, 0.55);
@@ -110,12 +112,9 @@
   --shadow-badge: 0 1px 3px rgba(0, 0, 0, 0.85);
   --focus-ring: 0 0 0 2px #141414, 0 0 0 4px #ffffff;
 
-  --quiet-name: 0.8;
-  --quiet-value: 0.55;
   --print-mid: 0.9;
   --print-back: 0.8;
   --pressed: 0.7;
-  --mark-in-bar: 0.9;
 
   --font-system: -apple-system, "SF Pro Text", "Adwaita Sans", Cantarell, system-ui, sans-serif;
   --font-apple: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;

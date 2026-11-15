@@ -32,6 +32,8 @@ mod at_home;
 
 mod tidy;
 
+mod albums;
+
 mod album_merge;
 
 mod caption;
@@ -39,6 +41,9 @@ pub use caption::{caption_says, tidy_caption, CAPTION_LIMIT};
 
 mod chapters;
 pub use chapters::{AlbumChapter, AlbumKind, ChapterPlace, CHAPTER_NAME_LIMIT, CHAPTER_WORDS_LIMIT, WEDDING};
+
+mod album_text;
+pub use album_text::{joined, kept_text, AlbumDay};
 
 mod album_page;
 pub use album_page::{AlbumPage, PageAsked, NO_CHAPTER};
@@ -1670,55 +1675,6 @@ impl Catalog {
         Ok(names)
     }
 
-    pub fn albums(&self) -> Result<Vec<(String, String)>, String> {
-        let mut statement =
-            self.home.prepare("SELECT key, name FROM albums ORDER BY name COLLATE NOCASE").map_err(text)?;
-        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(text)?;
-        rows.collect::<Result<_, _>>().map_err(text)
-    }
-
-    pub fn create_album(&self, name: &str) -> Result<String, Error> {
-        let name = album_name(name)?;
-
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(text)?.as_nanos();
-        let key = format!("{nanos:x}");
-        self.home
-            .execute("INSERT INTO albums (key, name) VALUES (?1, ?2)", params![key, name])
-            .map_err(|err| album_taken(err, name))?;
-        Ok(key)
-    }
-
-    pub fn rename_album(&self, key: &str, name: &str) -> Result<(), Error> {
-        let name = album_name(name)?;
-        self.home
-            .execute("UPDATE albums SET name = ?1 WHERE key = ?2", params![name, key])
-            .map_err(|err| album_taken(err, name))?;
-        Ok(())
-    }
-
-    pub fn delete_album(&self, key: &str) -> Result<(), String> {
-        for library in self.libraries()? {
-            let Ok(open) = self.library(library.id) else { continue };
-            open.conn.execute("DELETE FROM album_photos WHERE album = ?1", params![key]).map_err(text)?;
-        }
-        self.forget_chapters_of(key)?;
-        self.home.execute("DELETE FROM albums WHERE key = ?1", params![key]).map_err(text)?;
-        Ok(())
-    }
-
-    pub fn set_in_album(&self, key: &str, photo_ids: &[i64], inside: bool) -> Result<(), String> {
-        let sql = if inside {
-            "INSERT OR IGNORE INTO album_photos (album, photo_id) VALUES (?1, ?2)"
-        } else {
-            "DELETE FROM album_photos WHERE album = ?1 AND photo_id = ?2"
-        };
-        self.update_each(photo_ids, sql, key, None)?;
-        if inside {
-            return Ok(());
-        }
-        self.leave_chapters_of(key, photo_ids)
-    }
-
     pub fn photos(&self, library_id: i64, filter: &Filter) -> Result<Vec<Photo>, String> {
         let open = self.library(library_id)?;
 
@@ -2076,20 +2032,6 @@ impl Catalog {
         open.connected()?;
         open.conn.execute("UPDATE photos SET edits = ?1 WHERE id = ?2", params![json, local]).map_err(text)?;
         Ok(())
-    }
-}
-
-fn album_name(name: &str) -> Result<&str, Error> {
-    match name.trim() {
-        "" => Err(Error::NeedsAName { of: Named::Album }),
-        name => Ok(name),
-    }
-}
-
-fn album_taken(err: rusqlite::Error, name: &str) -> Error {
-    match err.sqlite_error_code() {
-        Some(rusqlite::ErrorCode::ConstraintViolation) => Error::AlbumExists { name: name.to_string() },
-        _ => err.to_string().into(),
     }
 }
 

@@ -229,6 +229,26 @@ CREATE TABLE IF NOT EXISTS album_at_home (
     agreed TEXT,
     digest TEXT
 );
+-- LIB-063: the album's own text, and its days: a day's report, under the
+-- chapter it sits in ('' for none, never null: a key with a null in it is
+-- never the same twice), or a day added to write on without photographs.
+-- A row is a day on the page. The texts are the one Markdown subset
+-- (`crate::markdown`); `changed` is when the words last changed, the order
+-- two sides' words are kept in (`home::album_sync`). Tables of their own
+-- and no new catalog version: an older Numa leaves them as they are.
+CREATE TABLE IF NOT EXISTS album_texts (
+    album   TEXT PRIMARY KEY,
+    text    TEXT NOT NULL,
+    changed INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS album_days (
+    album   TEXT NOT NULL,
+    chapter TEXT NOT NULL DEFAULT '',
+    day     INTEGER NOT NULL,
+    text    TEXT NOT NULL DEFAULT '',
+    changed INTEGER NOT NULL,
+    PRIMARY KEY (album, chapter, day)
+);
 "#;
 
 pub(super) const LIBRARY_SCHEMA: &str = r#"

@@ -1,0 +1,5 @@
+# parity baseline: differences per client and listed. May only shrink.
+listed 2
+words apple 0
+words home 0
+words linux 0

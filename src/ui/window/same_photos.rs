@@ -74,6 +74,7 @@ pub(super) fn look_later(state: &App) {
 fn show_again(state: &App) {
     match state.stack.visible_child_name().as_deref() {
         Some("libraries") => show_folders(state),
+        Some("home") => show_home(state),
         Some("albums") => show_albums(state),
         _ => {}
     }

@@ -21,7 +21,7 @@ thread_local! {
 
 enum Look {
 
-    Tint(usize),
+    Tint(usize, bool),
 
     House,
 
@@ -249,20 +249,28 @@ fn fill_now(state: &App) {
     };
     add(place_row("weather-clear-symbolic", "Today"), Target::Page("today"));
     add(place_row("image-x-generic-symbolic", "Photos"), Target::Place(Place::Everywhere));
-    for (label, page, key) in [("Libraries", "libraries", "library"), ("People", "people", "person"), ("Albums", "albums", "album")] {
+    let at_home = places.iter().any(|place| matches!(place, Place::Library(library) if home_sync::is_linked(state, library.id)));
+    for (label, page, key) in [
+        ("Libraries", "libraries", "library"),
+        (home::NUMA_HOME, "home", "home"),
+        ("People", "people", "person"),
+        ("Albums", "albums", "album"),
+    ] {
         let is_open = open.iter().any(|one| one == key);
-        add(group_row(state, label, key, is_open), Target::Page(page));
-        if !is_open {
+
+        let foldable = key != "home" || at_home;
+        add(group_row(state, label, key, is_open && foldable, foldable), Target::Page(page));
+        if !is_open || !foldable {
             continue;
         }
         let mut tint = 0;
         let kinds = if key == "album" { state.catalog.album_kinds().unwrap_or_default() } else { HashMap::new() };
         for place in &places {
             let look = match (place, key) {
-                (Place::Library(library), "library") if home_sync::is_home(state, library.id) => Look::House,
-                (Place::Library(_), "library") => {
+                (Place::Library(library), "home") if home_sync::is_linked(state, library.id) => Look::House,
+                (Place::Library(library), "library") if !home_sync::home_only(state, library.id) => {
                     tint += 1;
-                    Look::Tint((tint - 1) % TINTS)
+                    Look::Tint((tint - 1) % TINTS, home_sync::is_linked(state, library.id))
                 }
                 (Place::Person(_), "person") => Look::Face,
                 (Place::Album(album), "album") if kinds.get(album) == Some(&numa::io::catalog::AlbumKind::Trip) => Look::Route,
@@ -270,7 +278,10 @@ fn fill_now(state: &App) {
                 _ => continue,
             };
             let row = entry_row(state, place, look);
-            peek_on(state, &row, place);
+            peek_on(state, &row, place, key == "home");
+            if let Place::Album(album) = place {
+                album_menu(state, &row, album);
+            }
             add(row, Target::Place(place.clone()));
         }
         if key == "album" {
@@ -293,7 +304,7 @@ pub(super) fn tints(state: &App) -> HashMap<i64, usize> {
         .borrow()
         .iter()
         .filter_map(|place| match place {
-            Place::Library(library) if !home_sync::is_home(state, library.id) => Some(library.id),
+            Place::Library(library) if !home_sync::home_only(state, library.id) => Some(library.id),
             _ => None,
         })
         .enumerate()
@@ -335,19 +346,28 @@ fn counted_row(symbol: &str, label: &str, count: Option<usize>) -> gtk::ListBoxR
     row
 }
 
-fn group_row(state: &App, label: &str, key: &'static str, open: bool) -> gtk::ListBoxRow {
+fn group_row(state: &App, label: &str, key: &'static str, open: bool, foldable: bool) -> gtk::ListBoxRow {
     let symbol = match key {
         "library" => "folder-symbolic",
+        "home" => "go-home-symbolic",
         "person" => "system-users-symbolic",
         _ => "view-grid-symbolic",
     };
     let line = named(symbol, label);
+    let row = gtk::ListBoxRow::new();
+    row.set_child(Some(&line));
+    if !foldable {
+        return row;
+    }
     let fold = gtk::Button::from_icon_name(if open { "pan-down-symbolic" } else { "pan-end-symbolic" });
     fold.add_css_class("flat");
     fold.add_css_class("circular");
     fold.add_css_class("side-fold");
     fold.set_valign(gtk::Align::Center);
-    fold.set_tooltip_text(Some(&format!("Every one of {}", label.to_lowercase())));
+    fold.set_tooltip_text(Some(&match key {
+        "home" => "Every library at Numa Home".to_string(),
+        _ => format!("Every one of {}", label.to_lowercase()),
+    }));
     fold.connect_clicked(glib::clone!(
         #[strong] state,
         move |_| {
@@ -363,8 +383,6 @@ fn group_row(state: &App, label: &str, key: &'static str, open: bool) -> gtk::Li
         }
     ));
     line.append(&fold);
-    let row = gtk::ListBoxRow::new();
-    row.set_child(Some(&line));
     row
 }
 
@@ -374,10 +392,10 @@ fn entry_row(state: &App, place: &Place, look: Look) -> gtk::ListBoxRow {
 
     line.set_margin_start(28);
     match look {
-        Look::Tint(_) | Look::Dot => {
+        Look::Tint(..) | Look::Dot => {
             let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             dot.add_css_class("library-tint");
-            if let Look::Tint(tint) = look {
+            if let Look::Tint(tint, _) = look {
                 dot.add_css_class(&format!("tint-{tint}"));
             }
             dot.set_valign(gtk::Align::Center);
@@ -419,11 +437,45 @@ fn entry_row(state: &App, place: &Place, look: Look) -> gtk::ListBoxRow {
     count.add_css_class("dim-label");
     count.add_css_class("numeric");
     line.append(&name);
+    if matches!(look, Look::Tint(_, true)) {
+        let house = gtk::Image::from_icon_name("go-home-symbolic");
+        house.set_pixel_size(12);
+        house.add_css_class("dim-label");
+        house.set_tooltip_text(Some(home::NUMA_HOME));
+        line.append(&house);
+    }
     line.append(&count);
 
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&line));
     row
+}
+
+fn album_menu(state: &App, row: &gtk::ListBoxRow, album: &str) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    let album = album.to_string();
+    click.connect_pressed(glib::clone!(
+        #[strong] state,
+        #[weak] row,
+        move |_, _, x, y| {
+            let kind = state.catalog.album_kind(&album).unwrap_or(numa::io::catalog::AlbumKind::Album);
+            let photos = places::row(&state, &Place::Album(album.clone())).count.max(0) as usize;
+            let chapters = state.catalog.chapters(&album).map_or(0, |chapters| chapters.len());
+            let model = gio::Menu::new();
+            album_chapter::fill_menu(&model, kind, (photos, chapters), Some(&album));
+            let popover = gtk::PopoverMenu::from_model(Some(&model));
+            popover.set_parent(&row);
+            popover.set_has_arrow(false);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.connect_closed(|popover| {
+                let popover = popover.clone();
+                glib::idle_add_local_once(move || popover.unparent());
+            });
+            popover.popup();
+        }
+    ));
+    row.add_controller(click);
 }
 
 fn new_album_row() -> gtk::ListBoxRow {
@@ -456,6 +508,7 @@ pub(super) fn mark(state: &App) {
             let place = current_place(state);
             let owner = match place {
                 Place::Everywhere => "page:photos",
+                Place::Library(ref library) if home_sync::home_only(state, library.id) => "page:home",
                 Place::Library(_) => "page:libraries",
                 Place::Album(_) => "page:albums",
                 Place::Person(_) => "page:people",
@@ -474,7 +527,7 @@ pub(super) fn mark(state: &App) {
     side.list.select_row(row);
 }
 
-fn peek_on(state: &App, row: &gtk::ListBoxRow, place: &Place) {
+fn peek_on(state: &App, row: &gtk::ListBoxRow, place: &Place, home: bool) {
     let motion = gtk::EventControllerMotion::new();
     motion.connect_enter(glib::clone!(
         #[strong] state,
@@ -492,7 +545,7 @@ fn peek_on(state: &App, row: &gtk::ListBoxRow, place: &Place) {
                     PEEKING.take();
 
                     if motion.contains_pointer() && row.is_mapped() && state.libraries.side.split.shows_sidebar() {
-                        peek(&state, &row, &place);
+                        peek(&state, &row, &place, home);
                     }
                 }
             ));
@@ -513,7 +566,7 @@ fn unpeek(state: &App) {
     state.libraries.side.peek.popdown();
 }
 
-fn peek(state: &App, row: &gtk::ListBoxRow, place: &Place) {
+fn peek(state: &App, row: &gtk::ListBoxRow, place: &Place, home: bool) {
     let side = &state.libraries.side;
     let Some(bounds) = side.peek.parent().and_then(|parent| row.compute_bounds(&parent)) else { return };
     let read = places::row(state, place);
@@ -524,7 +577,11 @@ fn peek(state: &App, row: &gtk::ListBoxRow, place: &Place) {
     name.add_css_class("heading");
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name.set_max_width_chars(22);
-    let caption = gtk::Label::new(Some(&read.subtitle));
+    let said = match place {
+        Place::Library(library) if home => home_page_caption(state, library, &read.subtitle),
+        _ => read.subtitle.clone(),
+    };
+    let caption = gtk::Label::new(Some(&said));
     caption.add_css_class("caption");
     caption.add_css_class("dim-label");
     let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -549,6 +606,7 @@ fn go(state: &App, window: &adw::ApplicationWindow, target: Target) {
     match target {
         Target::Page("today") => today::show(state),
         Target::Page("libraries") => show_folders(state),
+        Target::Page("home") => show_home(state),
         Target::Page("albums") => show_albums(state),
         Target::Page("people") => show_people(state),
         Target::Page("tidy") => tidy::show(state),

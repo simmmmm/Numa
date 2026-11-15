@@ -1,3 +1,4 @@
+pub mod album_export;
 pub mod album_page;
 pub mod analysis;
 pub mod avif;
@@ -27,6 +28,7 @@ pub mod lensfun;
 pub mod luts;
 pub mod made;
 pub mod map;
+pub mod markdown;
 pub mod mask_store;
 pub mod masks;
 pub mod models;
@@ -47,6 +49,7 @@ pub mod track;
 pub mod update;
 pub mod upscale;
 pub mod video;
+pub mod whats_new;
 pub mod words;
 pub mod xmp;
 

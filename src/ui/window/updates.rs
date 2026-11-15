@@ -60,12 +60,13 @@ pub(super) fn check_for_update(state: &App, window: &adw::ApplicationWindow) {
     let (state, window) = (state.clone(), window.clone());
     glib::spawn_future_local(async move {
         let Ok((Some(json), _)) = process.communicate_utf8_future(None).await else { return };
-        let Some((version, page)) = numa::io::update::newer_release(&json, env!("CARGO_PKG_VERSION")) else { return };
+
+        let Some((version, _)) = numa::io::update::newer_release(&json, env!("CARGO_PKG_VERSION")) else { return };
         let toast = adw::Toast::new(&format!("Numa {version} is available"));
         toast.set_button_label(Some("What's New"));
         toast.set_timeout(0);
         toast.connect_button_clicked(move |_| {
-            gtk::UriLauncher::new(&page).launch(Some(&window), gio::Cancellable::NONE, |_| {});
+            gtk::UriLauncher::new(numa::io::whats_new::DOWNLOAD_LINUX).launch(Some(&window), gio::Cancellable::NONE, |_| {});
         });
         state.toasts.add_toast(toast);
     });

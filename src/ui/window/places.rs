@@ -16,7 +16,7 @@ fn card_edge(tile: f32) -> u32 {
     tile as u32 * 2
 }
 
-const GROUP: char = '\u{2009}';
+const GROUP: char = '\u{00a0}';
 
 thread_local! {
 
@@ -364,9 +364,9 @@ mod tests {
         assert_eq!(grouped(7), "7");
         assert_eq!(grouped(999), "999");
 
-        assert_eq!(grouped(1147), "1\u{2009}147");
-        assert_eq!(grouped(11748), "11\u{2009}748");
-        assert_eq!(grouped(1234567), "1\u{2009}234\u{2009}567");
+        assert_eq!(grouped(1147), "1\u{a0}147");
+        assert_eq!(grouped(11748), "11\u{a0}748");
+        assert_eq!(grouped(1234567), "1\u{a0}234\u{a0}567");
     }
 
     #[test]
@@ -383,6 +383,6 @@ mod tests {
     fn a_place_with_no_dates_says_only_how_many() {
         assert_eq!(subtitle(0, None, None), "No photos");
         assert_eq!(subtitle(1, None, None), "1 photo");
-        assert_eq!(subtitle(1147, None, None), "1\u{2009}147 photos");
+        assert_eq!(subtitle(1147, None, None), "1\u{a0}147 photos");
     }
 }

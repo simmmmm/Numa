@@ -105,6 +105,10 @@ pub(super) fn is_home(state: &App, library: i64) -> bool {
     way_of(state, library) == Some(Way::Down)
 }
 
+pub(super) fn home_only(state: &App, library: i64) -> bool {
+    is_home(state, library) && !is_synced(state, library)
+}
+
 pub(super) fn home_root() -> PathBuf {
     let pictures = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"));
     pictures.join(NUMA_HOME)

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::catalog::{AlbumChapter, AlbumKind};
+use crate::catalog::{joined, AlbumChapter, AlbumDay, AlbumKind};
 use crate::chapters::{self, day_of, DayOf, PlaceOffered, Run, Shot, Town, SHOWN};
 
 pub const MOST_OFFERED: usize = 2_000;
@@ -15,6 +15,8 @@ pub struct Facts<'a> {
 
     pub chapter_of: &'a HashMap<i64, String>,
     pub chapters: &'a [AlbumChapter],
+
+    pub days: &'a [AlbumDay],
 
     pub outside: &'a [Shot],
 
@@ -44,13 +46,23 @@ pub struct ChapterLayout {
     pub days: Vec<(i64, usize)>,
     pub shown: Vec<i64>,
     pub offers: Vec<Offer>,
+
+    pub by_day: Vec<DayLayout>,
 }
 
 pub struct DayLayout {
     pub day: i64,
     pub towns: Vec<String>,
+
     pub count: usize,
+
     pub shown: Vec<i64>,
+
+    pub rest: usize,
+
+    pub strip: bool,
+
+    pub report: String,
 }
 
 pub struct Layout {
@@ -88,6 +100,12 @@ pub fn lay_out(facts: &Facts) -> Layout {
     };
     let by_pause = if offering { pauses(facts.chapters, &in_chapter, &loose) } else { HashMap::new() };
     let album_span = span(facts.shots);
+
+    let mut rows: HashMap<Option<&str>, Vec<&AlbumDay>> = HashMap::new();
+    for row in facts.days {
+        let chapter = row.chapter.as_deref().filter(|key| keys.contains(key));
+        rows.entry(chapter).or_default().push(row);
+    }
     let chapters = facts
         .chapters
         .iter()
@@ -98,7 +116,8 @@ pub fn lay_out(facts: &Facts) -> Layout {
                 true => offers_of(chapter, mine.is_empty(), &pool, album_span, &by_pause),
                 false => Vec::new(),
             };
-            ChapterLayout { count: mine.len(), first, last, days: days_of(mine), shown: chapters::shown(mine, SHOWN), offers }
+            let by_day = with_written(by_day(mine), rows.get(&Some(chapter.key.as_str())).map(Vec::as_slice).unwrap_or_default());
+            ChapterLayout { count: mine.len(), first, last, days: days_of(mine), shown: chapters::shown(mine, SHOWN), offers, by_day }
         })
         .collect();
     let places = match facts.trip && offering {
@@ -112,7 +131,7 @@ pub fn lay_out(facts: &Facts) -> Layout {
         first,
         last,
         chapters,
-        days: by_day(&loose),
+        days: with_written(by_day(&loose), rows.get(&None).map(Vec::as_slice).unwrap_or_default()),
         loose: loose.len(),
         places,
     }
@@ -142,9 +161,22 @@ fn by_day(loose: &[Shot]) -> Vec<DayLayout> {
     }
     let day = |day: DayOf| {
         let shots = &of_day[&day.day];
-        DayLayout { day: day.day, towns: day.towns, count: day.ids.len(), shown: chapters::shown(shots, SHOWN) }
+        let strip = day.ids.len() > SHOWN;
+        let shown = if strip { day.ids.clone() } else { chapters::shown(shots, SHOWN) };
+        DayLayout { day: day.day, towns: day.towns, count: day.ids.len(), rest: day.ids.len() - shown.len(), shown, strip, report: String::new() }
     };
     chapters::days(loose).into_iter().map(day).collect()
+}
+
+fn with_written(mut days: Vec<DayLayout>, rows: &[&AlbumDay]) -> Vec<DayLayout> {
+    for row in rows {
+        match days.iter_mut().find(|day| day.day == row.day) {
+            Some(day) => day.report = joined(&day.report, &row.text),
+            None => days.push(DayLayout { day: row.day, towns: Vec::new(), count: 0, shown: Vec::new(), rest: 0, strip: false, report: row.text.clone() }),
+        }
+    }
+    days.sort_by_key(|day| day.day);
+    days
 }
 
 fn pauses(chapters: &[AlbumChapter], in_chapter: &HashMap<&str, Vec<Shot>>, loose: &[Shot]) -> HashMap<String, (Run, Option<String>)> {
@@ -274,6 +306,7 @@ mod tests {
         shots: Vec<Shot>,
         outside: Vec<Shot>,
         chapters: Vec<AlbumChapter>,
+        days: Vec<AlbumDay>,
         of: HashMap<i64, String>,
         trip: bool,
         may_change: bool,
@@ -282,7 +315,7 @@ mod tests {
 
     impl Setup {
         fn new(shots: Vec<Shot>) -> Self {
-            Setup { shots, outside: Vec::new(), chapters: Vec::new(), of: HashMap::new(), trip: false, may_change: true, filtered: false }
+            Setup { shots, outside: Vec::new(), chapters: Vec::new(), days: Vec::new(), of: HashMap::new(), trip: false, may_change: true, filtered: false }
         }
 
         fn in_chapter(mut self, key: &str, ids: &[i64]) -> Self {
@@ -296,6 +329,7 @@ mod tests {
                 shots: &self.shots,
                 chapter_of: &self.of,
                 chapters: &self.chapters,
+                days: &self.days,
                 outside: &self.outside,
                 unread: &unread,
                 trip: self.trip,
@@ -317,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn an_album_by_day_shows_twelve_at_most_the_captioned_and_picks_first() {
+    fn a_day_past_twelve_is_one_strip_of_all_its_photographs() {
         let mut shots: Vec<Shot> = (0..20).map(|n| shot(n, at(0, 9, n))).collect();
         shots[17].captioned = true;
         shots[18].picked = true;
@@ -328,9 +362,9 @@ mod tests {
         assert_eq!((layout.count, layout.loose, layout.picks, layout.chapters.len()), (23, 23, 1, 0));
         assert_eq!(layout.days.iter().map(|day| day.day).collect::<Vec<_>>(), [20_548, 20_549], "the oldest day first");
         let first = &layout.days[0];
-        assert_eq!((first.count, first.shown.len()), (20, 12));
-        assert!(first.shown.contains(&17) && first.shown.contains(&18), "the captioned and the picked are shown: {:?}", first.shown);
+        assert_eq!((first.count, first.shown.len(), first.rest, first.strip), (20, 20, 0, true), "all of them, no Show All");
         assert!(first.shown.windows(2).all(|pair| pair[0] < pair[1]), "in time order");
+        assert!(!layout.days[1].strip, "three are a grid");
         assert_eq!(layout.days[1].towns, ["Annecy", "Talloires"], "the town with most photographs first");
         assert_eq!((layout.first, layout.last), (Some(at(0, 9, 0)), Some(at(1, 9, 9))));
     }
@@ -462,8 +496,36 @@ mod tests {
         let outside = vec![shot(50, at(1, 8, 0))];
         let chapters = vec![chapter("k", Some(KYOTO), Some((20_548, 20_550)))];
         let (of, unread) = (HashMap::new(), HashSet::from([50]));
-        let layout = lay_out(&Facts { shots: &shots, chapter_of: &of, chapters: &chapters, outside: &outside, unread: &unread, trip: false, may_change: true, filtered: false });
+        let layout = lay_out(&Facts { shots: &shots, chapter_of: &of, chapters: &chapters, days: &[], outside: &outside, unread: &unread, trip: false, may_change: true, filtered: false });
         assert_eq!(offered(&layout, 0, "days").unwrap().ids, [1], "50 may have a position yet to be read");
+    }
+
+    fn report(chapter: Option<&str>, day: i64, text: &str) -> AlbumDay {
+        AlbumDay { chapter: chapter.map(str::to_string), day, text: text.into(), changed: 0 }
+    }
+
+    #[test]
+    fn a_chapter_reads_by_day_with_its_reports_and_written_days_in_date_order() {
+        let mut shots: Vec<Shot> = (0..15).map(|n| shot(n, at(1, 9, n))).collect();
+        shots.push(shot(20, at(3, 9, 0)));
+        shots.push(shot(30, at(2, 9, 0)));
+        let mut setup = Setup::new(shots).in_chapter("k", &(0..15).chain([20]).collect::<Vec<_>>());
+        setup.chapters = vec![chapter("k", Some(KYOTO), None)];
+        setup.days = vec![
+            report(Some("k"), 20_549, "Temples, *all day*."),
+            report(Some("k"), 20_550, "A day to write on."),
+            report(None, 20_552, ""),
+            report(Some("gone"), 20_550, "Kept from a chapter that went."),
+            report(None, 20_550, "Packed."),
+        ];
+        let layout = setup.laid();
+        let kyoto: Vec<(i64, usize, usize, usize, bool, &str)> = layout.chapters[0].by_day.iter().map(|day| (day.day - 20_548, day.count, day.shown.len(), day.rest, day.strip, day.report.as_str())).collect();
+        assert_eq!(kyoto, [(1, 15, 15, 0, true, "Temples, *all day*."), (2, 0, 0, 0, false, "A day to write on."), (3, 1, 1, 0, false, "")]);
+        assert_eq!(layout.chapters[0].by_day[0].shown, (0..15).collect::<Vec<_>>(), "the strip holds them all, in time order");
+        assert_eq!(layout.chapters[0].days, [(20_549, 15), (20_551, 1)], "the counts clients had stay as they were");
+        let loose: Vec<(i64, usize, &str)> = layout.days.iter().map(|day| (day.day - 20_548, day.count, day.report.as_str())).collect();
+        assert_eq!(loose, [(2, 1, "Kept from a chapter that went.\n\nPacked."), (4, 0, "")]);
+        assert_eq!(layout.loose, 1, "a written day holds no photograph");
     }
 
     #[test]

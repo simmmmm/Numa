@@ -51,6 +51,16 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <releases>
+    <release version="0.52.0" date="2026-11-15">
+      <description>
+        <p>Write about every day of a trip: each day has its own part of the page, with your words and its photos.</p>
+        <p>Tap the pencil to write an album's story, a note to each place or a day's report, with bold, italic and lists.</p>
+        <p>A day with many photos shows them all in one row that you slide sideways.</p>
+        <p>Export an album in folders by place and by day, with your words beside the photos, ready for a photo book.</p>
+        <p>Numa Home has its own page, next to Libraries.</p>
+        <p>After an update, Numa shows once what is new, as here.</p>
+      </description>
+    </release>
     <release version="0.51.1" date="2026-11-14">
       <description>
         <p>A click on a photograph on an album's page now opens that photograph alone. Escape goes back to the page, where you were.</p>

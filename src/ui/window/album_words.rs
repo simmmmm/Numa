@@ -5,7 +5,6 @@ use super::places;
 
 const DAY: i64 = 86_400;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
 
 fn date(day: i64) -> (i64, usize, i64) {
 
@@ -18,11 +17,6 @@ fn date(day: i64) -> (i64, usize, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (yoe + era * 400 + i64::from(m <= 2), m as usize, d)
-}
-
-pub(super) fn day_name(day: i64) -> String {
-    let (_, month, date) = date(day);
-    format!("{} {date} {}", WEEKDAYS[day.rem_euclid(7) as usize], MONTHS[month - 1])
 }
 
 pub(super) fn days_span(first: i64, last: i64, year: bool) -> String {
@@ -67,11 +61,8 @@ pub(super) fn here_now(page: &AlbumPage, today: i64) -> Option<usize> {
 pub(super) fn figures(page: &AlbumPage, today: i64) -> Vec<Figure> {
     let layout = &page.layout;
     let figure = |label, value: String, of: &str| Figure { label, value, of: of.to_string() };
-    let mut days: Vec<i64> = page.chapters.iter().filter_map(|chapter| chapter.days).flat_map(|(first, last)| [first, last]).collect();
-    days.extend(layout.first.iter().chain(&layout.last).map(|when| when.div_euclid(DAY)));
-    let span = days.iter().min().zip(days.iter().max()).map(|(first, last)| (*first, *last));
     let mut all = Vec::new();
-    if let Some((first, last)) = span {
+    if let Some((first, last)) = span(page) {
         let long = last - first + 1;
         if page.kind == AlbumKind::Trip && first <= today && today <= last {
             all.push(figure("Day", places::grouped(today - first + 1), &format!("of {}", places::grouped(long))));
@@ -92,21 +83,26 @@ pub(super) fn figures(page: &AlbumPage, today: i64) -> Vec<Figure> {
     } else if !page.chapters.is_empty() {
         all.push(figure("Chapters", places::grouped(filled as i64), &format!("of {}", places::grouped(page.chapters.len() as i64))));
     }
-    all.push(figure("Photos", places::grouped(layout.count as i64), ""));
+    if layout.count > 0 {
+        all.push(figure("Photos", places::grouped(layout.count as i64), ""));
+    }
     all
 }
 
-pub(super) fn over_name(page: &AlbumPage) -> String {
-    let layout = &page.layout;
+pub(super) fn span(page: &AlbumPage) -> Option<(i64, i64)> {
     let mut days: Vec<i64> = page.chapters.iter().filter_map(|chapter| chapter.days).flat_map(|(first, last)| [first, last]).collect();
-    days.extend(layout.first.iter().chain(&layout.last).map(|when| when.div_euclid(DAY)));
+    days.extend(page.layout.first.iter().chain(&page.layout.last).map(|when| when.div_euclid(DAY)));
+    days.iter().min().zip(days.iter().max()).map(|(first, last)| (*first, *last))
+}
+
+pub(super) fn over_name(page: &AlbumPage) -> String {
     let kind = match page.kind {
         AlbumKind::Trip => "Trip",
         AlbumKind::Wedding => "Wedding",
         AlbumKind::Album => "Album",
     };
-    match days.iter().min().zip(days.iter().max()) {
-        Some((first, last)) => format!("{kind} · {}", days_span(*first, *last, true)),
+    match span(page) {
+        Some((first, last)) => format!("{kind} · {}", days_span(first, last, true)),
         None => kind.to_string(),
     }
 }
@@ -180,13 +176,11 @@ mod tests {
 
         let fri = 20_651;
         assert_eq!(date(fri), (2026, 7, 17));
-        assert_eq!(day_name(fri), "Fri 17 Jul");
         assert_eq!(days_span(fri, fri + 2, true), "17–19 Jul 2026");
         assert_eq!(days_span(fri, fri, false), "17 Jul");
         assert_eq!(days_span(fri, fri + 20, false), "17 Jul – 6 Aug");
         assert_eq!(days_span(fri + 160, fri + 175, true), "24 Dec 2026 – 8 Jan 2027");
         assert_eq!(date(0), (1970, 1, 1));
-        assert_eq!(day_name(0), "Thu 1 Jan");
         assert_eq!(hours(15 * 3_600 + 10 * 60, 16 * 3_600 + 2 * 60 + 59), "15:10–16:02");
         assert_eq!((nights(1), nights(3)), ("1 night".to_string(), "3 nights".to_string()));
         assert_eq!(place_line(fri, fri + 3, 14), "17–20 Jul · 14 photos");
@@ -205,10 +199,10 @@ mod tests {
     }
 
     fn page(kind: AlbumKind, chapters: Vec<AlbumChapter>, counts: &[usize], count: usize, taken: Option<(i64, i64)>) -> AlbumPage {
-        let laid = counts.iter().map(|&count| ChapterLayout { count, first: None, last: None, days: Vec::new(), shown: Vec::new(), offers: Vec::new() }).collect();
+        let laid = counts.iter().map(|&count| ChapterLayout { count, first: None, last: None, days: Vec::new(), shown: Vec::new(), offers: Vec::new(), by_day: Vec::new() }).collect();
         let (first, last) = taken.unzip();
         let layout = Layout { count, picks: 0, first, last, chapters: laid, days: Vec::new(), loose: 0, places: Vec::new() };
-        AlbumPage { key: "a".into(), name: "A".into(), kind, grid: false, photos: Vec::new(), captions: Default::default(), chapters, layout, unread: Vec::new() }
+        AlbumPage { key: "a".into(), name: "A".into(), kind, text: String::new(), grid: false, photos: Vec::new(), captions: Default::default(), chapters, layout, unread: Vec::new() }
     }
 
     fn said(page: &AlbumPage, today: i64) -> Vec<(&'static str, String, String)> {
@@ -271,15 +265,15 @@ mod tests {
         let album = page(AlbumKind::Album, Vec::new(), &[], 30, Some((FRI * DAY, (FRI + 2) * DAY)));
         assert_eq!(said(&album, FRI + 1), [one("Days", "3", ""), one("Photos", "30", "")], "an album has no Day n of m, and no Chapters without them");
         let empty = page(AlbumKind::Album, Vec::new(), &[], 0, None);
-        assert_eq!(said(&empty, FRI), [one("Photos", "0", "")]);
+        assert!(said(&empty, FRI).is_empty(), "a figure that says nothing is left out: an empty album has none");
     }
 
     #[test]
     fn every_figure_groups_its_digits_as_the_kilometres_do() {
         let long = page(AlbumKind::Trip, vec![chapter(Some(AMSTERDAM), Some((FRI, FRI + 4_724)))], &[3_694], 3_694, None);
-        assert_eq!(said(&long, FRI + 3_693)[0], one("Day", "3\u{2009}694", "of 4\u{2009}725"));
-        assert_eq!(said(&long, FRI - 1)[0], one("Days", "4\u{2009}725", ""));
-        assert_eq!(said(&long, FRI)[2], one("Photos", "3\u{2009}694", ""));
+        assert_eq!(said(&long, FRI + 3_693)[0], one("Day", "3\u{a0}694", "of 4\u{a0}725"));
+        assert_eq!(said(&long, FRI - 1)[0], one("Days", "4\u{a0}725", ""));
+        assert_eq!(said(&long, FRI)[2], one("Photos", "3\u{a0}694", ""));
     }
 
     #[test]

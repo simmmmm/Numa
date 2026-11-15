@@ -62,6 +62,8 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
     library_end.append(&search);
     end.add_named(&library_end, Some("library"));
     end.add_named(&gtk::Box::new(gtk::Orientation::Horizontal, 0), Some("folders"));
+
+    end.add_named(&album_chapter::header_end(state), Some("album"));
     end.add_named(&state.editor_page.header_end, Some("editor"));
     header.pack_end(&end);
 
@@ -78,6 +80,7 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
             named.set_title(match page.as_str() {
                 "today" => "Today",
                 "libraries" => "Libraries",
+                "home" => home::NUMA_HOME,
                 "albums" => "Albums",
                 "people" => "People",
                 "tidy" => "Tidy Up",
@@ -96,7 +99,7 @@ pub(super) fn build_header(state: &App, window: &adw::ApplicationWindow) -> adw:
             start.set_visible_child_name(name);
 
             start.set_visible(name == "editor" || (name == "library" && loupe.reveals_child()));
-            end.set_visible_child_name(name);
+            end.set_visible_child_name(if page == "album" { "album" } else { name });
             menu_button.set_menu_model(Some(match name {
                 "editor" => &editor_menu,
                 "library" => &library_menu,

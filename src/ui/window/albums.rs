@@ -205,11 +205,11 @@ pub(super) fn albums_dialog(state: &App, window: &adw::ApplicationWindow) {
                     .and_then(|albums| albums.into_iter().find(|(k, _)| *k == key).map(|(_, name)| name))
                     .unwrap_or_else(|| name.clone());
                 let confirm = adw::AlertDialog::new(
-                    Some(&format!("Delete {name}?")),
-                    Some("The photographs stay where they are, with their ratings and edits; only the album goes."),
+                    Some(&format!("Delete the album {name}?")),
+                    Some("Its photographs stay in their libraries."),
                 );
                 confirm.add_response("cancel", "Cancel");
-                confirm.add_response("delete", "Delete");
+                confirm.add_response("delete", "Delete Album");
                 confirm.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
                 confirm.set_default_response(Some("cancel"));
                 confirm.set_close_response("cancel");

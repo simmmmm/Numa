@@ -42,7 +42,7 @@ async function today(main, params) {
       h('div', { class: 'head' }, h('span', { class: 'name' }, libraryName(group)), h('span', { class: 'caption' }, `${counted(group.count)} · ${cameAgo(group.at)}`),
         h('button', { class: 'chip', onclick: () => go('/', { library: group.library }) }, S.open)),
       h('div', { class: 'strip' }, group.ids.map((id, at) => h('button', { 'aria-label': phrase('stripPhoto', { library: libraryName(group), n: at + 1, of: group.ids.length }), onclick: () => openIds(group.ids, at) },
-        h('img', { src: thumb(id, 256), loading: 'lazy', alt: '' })))))));
+        h('img', { src: thumb(id, 256), loading: 'lazy', alt: '' }), group.films?.includes(id) && firstFrame({ id })))))));
 
   const { tidy, faces, folders } = found.waiting;
   const wait = (n, one, more, caption, label, to) => n > 0 && h('div', { class: 'wait' },

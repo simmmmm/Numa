@@ -90,6 +90,10 @@ fn cost(path: &str, query: Option<&str>) -> Option<f64> {
         let ids = query.and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("ids="))).unwrap_or("");
         return Some(25.0 * ids.split([',', '%']).filter(|id| !id.is_empty()).count().max(1) as f64);
     }
+
+    if path.starts_with("/api/v1/albums/") && path.ends_with("/export") {
+        return Some(25.0);
+    }
     let rest = path.strip_prefix("/api/v1/photos/")?;
     match rest.rsplit_once('/')?.1 {
         "thumb" => Some(1.0),
@@ -132,6 +136,7 @@ mod tests {
         assert_eq!(cost("/api/v1/photos/12/live", None), Some(25.0));
         assert_eq!(cost("/api/v1/photos/12/jpeg", Some("edge=2048")), Some(4.0));
         assert_eq!(cost("/api/v1/photos/zip", Some("ids=1,2,3&as=jpeg")), Some(75.0));
+        assert_eq!(cost("/api/v1/albums/abc/export", Some("folders=day")), Some(25.0));
         assert_eq!(cost("/api/v1/photos/12", None), None);
         assert_eq!(cost("/api/v1/timeline", None), None);
     }

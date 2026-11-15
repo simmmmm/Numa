@@ -205,7 +205,7 @@ impl Head {
         more.set_valign(gtk::Align::Center);
         more.set_tooltip_text(Some("More"));
         let kinds = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        for (label, action) in [("Add a Chapter…", "album.add-chapter"), ("Make a Trip", "album.make-trip"), ("Make a Wedding", "album.make-wedding")] {
+        for (label, action) in [("Add a Chapter…", "album.add-chapter"), ("Make a Trip", "album.make-trip"), ("Make a Wedding", "album.make-wedding"), ("Export…", "album.export")] {
             let button = item(label);
             button.set_action_name(Some(action));
             button.connect_clicked(glib::clone!(
@@ -241,6 +241,7 @@ fn build_head(state: &App) -> gtk::Box {
         #[strong] state,
         move |_| match state.libraries.head.owner.get() {
             "albums" => show_albums(&state),
+            "home" => show_home(&state),
             "people" => show_people(&state),
             _ => show_folders(&state),
         }
@@ -442,6 +443,7 @@ pub(super) fn show_head(state: &App) {
     head.tokens.set_label(&searched.unwrap_or_default().to_uppercase());
     let (owner, back) = match place {
         Place::Everywhere => ("", ""),
+        Place::Library(ref library) if home_sync::home_only(state, library.id) => ("home", home::NUMA_HOME),
         Place::Library(_) => ("libraries", "Libraries"),
         Place::Album(_) => ("albums", "Albums"),
         Place::Person(_) => ("people", "People"),
