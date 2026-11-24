@@ -19,6 +19,10 @@ fn cache_path(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> Pa
     cache_dir().join(key(path, mtime, max_edge, edits))
 }
 
+pub fn in_cache(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> PathBuf {
+    cache_path(path, mtime, max_edge, edits)
+}
+
 fn key(path: &Path, mtime: i64, max_edge: u32, edits: Option<&str>) -> String {
     let joined: Vec<String> = path.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
     let mut text = format!("{CACHE_VERSION}\0{}\0{mtime}\0{max_edge}", joined.join("/"));

@@ -22,7 +22,8 @@ pub fn tables(store: &Store) -> Result<(), String> {
             "CREATE TABLE IF NOT EXISTS album_owner (album TEXT PRIMARY KEY, owner TEXT NOT NULL COLLATE NOCASE);
              CREATE TABLE IF NOT EXISTS album_people (
                  album TEXT NOT NULL, account TEXT NOT NULL COLLATE NOCASE, may_add INTEGER NOT NULL DEFAULT 0,
-                 PRIMARY KEY (album, account));",
+                 PRIMARY KEY (album, account));
+             CREATE TABLE IF NOT EXISTS album_held (album TEXT NOT NULL, photo INTEGER NOT NULL, PRIMARY KEY (album, photo));",
         )
     })
 }
@@ -37,8 +38,8 @@ pub struct Shared {
 
 impl Shared {
 
-    pub fn pool(&self) -> Vec<&str> {
-        self.owner.iter().map(String::as_str).chain(self.people.iter().filter(|(_, add)| *add).map(|(name, _)| name.as_str())).collect()
+    pub fn adders(&self) -> Vec<&str> {
+        self.people.iter().filter(|(_, add)| *add).map(|(name, _)| name.as_str()).collect()
     }
 }
 
@@ -75,7 +76,38 @@ impl Store {
     pub fn forget_album(&self, key: &str) {
         let _ = self.with(|conn| {
             conn.execute("DELETE FROM album_owner WHERE album = ?1", [key])?;
+            conn.execute("DELETE FROM album_held WHERE album = ?1", [key])?;
             conn.execute("DELETE FROM album_people WHERE album = ?1", [key])
+        });
+    }
+
+    pub fn album_held(&self, key: &str) -> Vec<i64> {
+        self.with(|conn| {
+            let mut statement = conn.prepare("SELECT photo FROM album_held WHERE album = ?1")?;
+            let rows = statement.query_map([key], |row| row.get(0))?;
+            rows.collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn hold_in_album(&self, key: &str, photos: &[i64]) -> Result<(), String> {
+        let mut conn = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let work = conn.transaction().and_then(|tx| {
+            for photo in photos {
+                tx.execute("INSERT OR IGNORE INTO album_held (album, photo) VALUES (?1, ?2)", params![key, photo])?;
+            }
+            tx.commit()
+        });
+        work.map_err(|err| err.to_string())
+    }
+
+    pub fn offer_to_album(&self, key: &str, photos: &[i64]) {
+        let mut conn = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = conn.transaction().and_then(|tx| {
+            for photo in photos {
+                tx.execute("DELETE FROM album_held WHERE album = ?1 AND photo = ?2", params![key, photo])?;
+            }
+            tx.commit()
         });
     }
 
@@ -107,8 +139,9 @@ fn may_manage_people(store: &Store, me: &Account, key: &str) -> bool {
     may_share(store, me, key) || store.album_owner(key).is_none() && me.sight.household
 }
 
-pub fn reachable(ids: &[i64], pool: &[crate::grants::Sight]) -> Vec<i64> {
-    ids.iter().copied().filter(|id| pool.iter().any(|sight| sight.level(*id) >= Level::Edit)).collect()
+pub fn reachable(ids: &[i64], owner: Option<&crate::grants::Sight>, adders: &[crate::grants::Sight], held: &[i64]) -> Vec<i64> {
+    let edits = |sight: &crate::grants::Sight, id: &i64| sight.level(*id) >= Level::Edit;
+    ids.iter().copied().filter(|id| owner.is_some_and(|owner| edits(owner, id)) || !held.contains(id) && adders.iter().any(|adder| edits(adder, id))).collect()
 }
 
 async fn known(server: &Arc<Server>, key: &str) -> Result<(), Fail> {
@@ -165,6 +198,16 @@ async fn share(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key):
             people.push((name, add));
         }
     }
+
+    let before = server.store.album_people(&key);
+    let new: Vec<&String> = people.iter().filter(|(name, add)| *add && !before.iter().any(|(had, added)| *added && had.eq_ignore_ascii_case(name))).map(|(name, _)| name).collect();
+    if !new.is_empty() {
+        let ids = server.home.with_twins(&server.home.album(&key).await?);
+        let libraries = server.home.all_libraries();
+        let theirs: Vec<crate::grants::Sight> = new.iter().map(|name| crate::grants::own_sent_home(&server, name, &libraries)).collect();
+        let held: Vec<i64> = ids.into_iter().filter(|id| theirs.iter().any(|sight| sight.level(*id) >= Level::Edit)).collect();
+        server.store.hold_in_album(&key, &held).map_err(Fail::internal)?;
+    }
     server.store.set_album_people(&key, &people).map_err(Fail::internal)?;
     Ok(Json(json!({ "people": people.len() })))
 }
@@ -209,18 +252,30 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_album_shows_what_its_pool_may_edit() {
+    fn a_shared_album_shows_what_its_owner_may_edit_and_the_adders_own() {
         let shelf = [library(1, "/photos/Holiday"), library(2, "/sent/Sam"), library(3, "/sent/Kim"), library(4, "/sent/Jo")];
         let ids = [photo(1, 1), photo(2, 1), photo(3, 1), photo(4, 1), photo(9, 1)];
         let sight = |name: &str, holiday: bool| {
             let grants = crate::grants::Grants { libraries: if holiday { [(1, Level::Edit)].into() } else { Default::default() }, ..Default::default() };
             crate::grants::resolve(false, &PathBuf::from("/sent").join(name), FilePath::new("/photos"), &shelf, &grants, &[])
         };
-        let pool = [sight("Sam", true), sight("Kim", false)];
-        assert_eq!(reachable(&ids, &pool), vec![photo(1, 1), photo(2, 1), photo(3, 1)], "Jo is no one of the pool; Holiday is Sam's to share");
-        let pool = [sight("Sam", false), sight("Kim", false)];
-        assert_eq!(reachable(&ids, &pool), vec![photo(2, 1), photo(3, 1)], "Sam may no longer edit Holiday: it leaves the album");
-        assert!(reachable(&ids, &[]).is_empty(), "a pool of no one shows nothing");
+        let kim = [sight("Kim", false)];
+        assert_eq!(reachable(&ids, Some(&sight("Sam", true)), &kim, &[]), vec![photo(1, 1), photo(2, 1), photo(3, 1)], "Jo is not in it; Holiday is Sam's to share");
+        assert_eq!(reachable(&ids, Some(&sight("Sam", false)), &kim, &[]), vec![photo(2, 1), photo(3, 1)], "Sam may no longer edit Holiday: it leaves the album");
+        assert!(reachable(&ids, None, &[], &[]).is_empty(), "no owner and no one adding shows nothing");
+        assert_eq!(reachable(&ids, Some(&sight("Sam", false)), &kim, &[photo(3, 1)]), vec![photo(2, 1)], "Kim's was in it before Kim was let add");
+        assert_eq!(reachable(&ids, Some(&sight("Sam", true)), &kim, &[photo(1, 1), photo(2, 1)]), vec![photo(1, 1), photo(2, 1), photo(3, 1)], "nothing of the owner's is held");
+    }
+
+    #[test]
+    fn held_photographs_are_kept_until_offered() {
+        let store = store();
+        store.hold_in_album("1a", &[7, 8]).unwrap();
+        store.hold_in_album("2b", &[7]).unwrap();
+        store.offer_to_album("1a", &[7, 99]);
+        assert_eq!((store.album_held("1a"), store.album_held("2b")), (vec![8], vec![7]));
+        store.forget_album("1a");
+        assert!(store.album_held("1a").is_empty());
     }
 
     fn account(name: &str, admin: bool, household: bool) -> Account {

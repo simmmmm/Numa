@@ -367,10 +367,17 @@ async fn relink(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id):
     Ok(Json(json!({ "link": format!("/{at}/{token}"), "base": crate::reach::base(&server.store) })))
 }
 
+const WHOSE_PIXELS: u64 = 40_000_000;
+
 async fn whose(State(server): State<Arc<Server>>, Signed(me): Signed, body: Bytes) -> Result<Json<Value>, Fail> {
     let key = key(&server.store)?;
     let _turn = server.decodes.acquire().await.map_err(Fail::internal)?;
     let found = tokio::task::spawn_blocking(move || -> Result<_, String> {
+
+        let pixels = image::ImageReader::new(std::io::Cursor::new(&body)).with_guessed_format().ok().and_then(|reader| reader.into_dimensions().ok()).map(|(width, height)| u64::from(width) * u64::from(height));
+        if pixels.is_none_or(|pixels| pixels > WHOSE_PIXELS) {
+            return Err("not a copy of a gallery's picture".to_string());
+        }
         let picture = image::load_from_memory(&body).map_err(|err| err.to_string())?.to_rgb8();
         Ok(crate::mark::read(&picture, &key))
     })
@@ -526,6 +533,7 @@ pub(crate) mod tests {
                 let store = Store::open(&data.join("server.db")).unwrap();
                 tables(&store).unwrap();
                 crate::shared::tables(&store).unwrap();
+                crate::passkey::tables(&store).unwrap();
                 assert!(store.add_account("Sam", "no password", true, true).unwrap());
                 let server = Server::new(store, photos.clone(), sent, data).unwrap();
                 let sam = session(&server, "Sam");

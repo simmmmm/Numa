@@ -2,6 +2,18 @@
   "note": "What is new, in plain words, for people who just updated. One list per version, newest first, at most six lines, each one sentence. Every client shows the same lines (Linux, Mac, iPad, iPhone, Numa Home) and numa.photo shows them on its download and What's New pages.",
   "versions": [
     {
+      "version": "0.53.0",
+      "date": "2026-11-23",
+      "lines": [
+        "Numa Home holds up better against requests from outside that are slow or made up.",
+        "Add a passkey to your Numa Home account, the safer way to sign in, with your fingerprint, face or code; your password keeps working.",
+        "In Numa, Sign In with a Passkey… signs in to Numa Home through your browser.",
+        "Numa Home's Settings opens from the menu under your name, with your password, passkeys and devices on one tab: Passwords and Passkeys.",
+        "Numa Home is quicker: thumbnails are kept, and Photos keeps your place.",
+        "Canon DNGs made with Adobe's converter no longer turn magenta."
+      ]
+    },
+    {
       "version": "0.52.0",
       "date": "2026-11-15",
       "lines": [

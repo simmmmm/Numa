@@ -117,7 +117,7 @@ pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(a
         return Err(Fail(StatusCode::FORBIDDEN, "You may look at this album, not add to it.".into()));
     }
     let changed = ids.clone();
-    let asked_name_was_new = asked.album.is_none();
+    let (asked_name_was_new, asked_inside) = (asked.album.is_none(), asked.inside);
     let key = server
         .home
         .ask(move |catalog| {
@@ -133,6 +133,10 @@ pub async fn album(State(server): State<Arc<Server>>, Signed(me): Signed, Json(a
     server.home.forget_albums();
     if asked_name_was_new {
         server.store.claim_album(&key, &me.name).map_err(Fail::internal)?;
+    }
+    if asked_inside {
+
+        server.store.offer_to_album(&key, &server.home.with_twins(&changed));
     }
 
     let updated = changed.iter().map(|id| server.store.touch(*id)).max();

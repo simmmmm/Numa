@@ -179,6 +179,8 @@ async fn put(State(server): State<Arc<Server>>, Signed(me): Signed, Path(key): P
         .map_err(|why| conflict(&why))?;
     server.home.forget_albums();
 
+    server.store.offer_to_album(&key, &server.home.with_twins(&touched));
+
     for id in touched {
         server.store.touch(id);
     }

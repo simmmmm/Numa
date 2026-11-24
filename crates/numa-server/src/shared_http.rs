@@ -302,3 +302,43 @@ fn photographs_with_one_name_are_all_kept() {
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 25, "all of them, none written over");
     assert!(folder.join("IMG_0001.jpg").exists() && folder.join("IMG_0001 (25).jpg").exists());
 }
+
+#[test]
+fn naming_an_admin_does_not_give_back_a_taken_grant() {
+    let fixture = fixture();
+    let owner = account("Taken Owner", Level::None);
+    fixture.server.store.set_grants("Taken Owner", &Grants { access: Level::Edit, ..Grants::default() }).unwrap();
+    let archive = fixture.ids[0];
+    let key = into_album(&owner, json!({ "ids": [archive], "name": "Taken", "inside": true })).json()["album"].as_str().unwrap().to_string();
+    fixture.server.store.set_grants("Taken Owner", &Grants { access: Level::None, ..Grants::default() }).unwrap();
+    let (thumb, jpeg) = (format!("/api/v1/photos/{archive}/thumb"), format!("/api/v1/photos/{archive}/jpeg"));
+    assert_eq!(status(&thumb, &owner), 404, "the grant is taken");
+    assert_eq!(ask("PUT", &format!("/api/v1/albums/{key}/people"), Some(&owner), r#"{"people":{"Sam":"add"}}"#, "").status, 200);
+    assert_eq!((status(&thumb, &owner), status(&jpeg, &owner)), (404, 404), "an admin named without being asked does not open the archive again");
+}
+
+#[test]
+fn what_was_in_an_album_before_is_held_until_its_account_adds_it() {
+    let (kim, hal, viewer) = (account("Held Kim", Level::None), account("Held Hal", Level::Edit), account("Held Viewer", Level::None));
+    let hers = send_home(&kim, "held-hers.jpg", 131);
+    let key = into_album(&kim, json!({ "ids": [hers], "name": "From Before", "inside": true })).json()["album"].as_str().unwrap().to_string();
+    fixture().server.store.forget_album(&key);
+    let (people, thumb) = (format!("/api/v1/albums/{key}/people"), format!("/api/v1/photos/{hers}/thumb"));
+    assert_eq!(ask("PUT", &people, Some(&hal), r#"{"people":{"Held Kim":"add","Held Viewer":"view"}}"#, "").status, 200, "a household account takes the album");
+    assert_eq!((status(&thumb, &hal), status(&thumb, &viewer)), (404, 404), "Kim's Sent Home photograph was in it before Kim was let add");
+    assert_eq!(status(&thumb, &kim), 200, "it is still hers");
+    assert_eq!(into_album(&kim, json!({ "ids": [hers], "album": key, "inside": true })).status, 200);
+    assert_eq!((status(&thumb, &hal), status(&thumb, &viewer)), (200, 200), "Kim put it in herself");
+
+    assert_eq!(ask("PUT", &people, Some(&hal), r#"{"people":{"Held Kim":"add","Held Viewer":"view"}}"#, "").status, 200);
+    assert_eq!(status(&thumb, &viewer), 200);
+}
+
+#[test]
+fn tidy_up_keeps_the_households_names_from_a_guest() {
+    let guest = account("Tidy Guest", Level::None);
+    let seen = ask("GET", "/api/v1/tidy", Some(&guest), "", "").json();
+    assert_eq!(seen["accounts"], json!(["Tidy Guest"]));
+    assert_eq!(ask("POST", "/api/v1/tidy/keep", Some(&guest), r#"{"key":"who:x|y|z","keep":[]}"#, "").status, 404);
+    assert_eq!(ask("POST", "/api/v1/map/bring", Some(&guest), "", "").status, 403);
+}

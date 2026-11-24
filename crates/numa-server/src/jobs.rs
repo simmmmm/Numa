@@ -279,8 +279,18 @@ pub fn stop(server: &Server) -> bool {
     server.jobs.pending() || server.activity.paused()
 }
 
+fn step_aside(decodes: &tokio::sync::Semaphore, all: usize) {
+    while decodes.available_permits() < all {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn all_decodes() -> usize {
+    std::thread::available_parallelism().map_or(2, |n| n.get())
+}
+
 fn ahead(server: &Arc<Server>, plan: Thumbnails, failed: &mut HashSet<i64>) -> bool {
-    let (started, mut made) = (Instant::now(), 0usize);
+    let (started, mut made, all) = (Instant::now(), 0usize, all_decodes());
     server.activity.start(Kind::Thumbnails);
     for (library, missing) in plan {
         if missing.is_empty() {
@@ -296,7 +306,10 @@ fn ahead(server: &Arc<Server>, plan: Thumbnails, failed: &mut HashSet<i64>) -> b
 
             let done: Vec<Result<Option<(i64, f32)>, i64>> = chunk
                 .par_iter()
-                .filter(|_| !server.activity.paused())
+                .filter(|_| {
+                    step_aside(&server.decodes, all);
+                    !server.activity.paused()
+                })
                 .map(|(photo, edits)| {
                     let (path, edits) = (&photo.path, edits.as_deref());
                     let loaded = match numa_io::video::is_video(path) {
@@ -343,6 +356,7 @@ fn analyse(server: &Arc<Server>, plan: Vec<(Library, Vec<Photo>)>, failed: &mut 
         return true;
     }
     server.activity.start(Kind::Analyse);
+    let all = all_decodes();
     for (library, pending) in plan {
         if pending.is_empty() {
             continue;
@@ -356,7 +370,10 @@ fn analyse(server: &Arc<Server>, plan: Vec<(Library, Vec<Photo>)>, failed: &mut 
             }
             let measured: Vec<(i64, Result<numa_io::analysis::Measured, String>)> = chunk
                 .par_iter()
-                .filter(|_| !server.activity.paused())
+                .filter(|_| {
+                    step_aside(&server.decodes, all);
+                    !server.activity.paused()
+                })
                 .map(|photo| (photo.id, numa_io::analysis::measure_photo(&photo.path)))
                 .collect();
             server.activity.add(Kind::Analyse, measured.len());
@@ -400,6 +417,8 @@ fn read_words(server: &Arc<Server>, plan: Vec<(Library, Vec<(PathBuf, i64)>)>) -
             if stop(server) {
                 return false;
             }
+
+            step_aside(&server.decodes, all_decodes());
             match numa_io::words::read_photos(chunk.to_vec()) {
                 Ok(read) => {
                     let mut indexes = crate::timeline::indexes(server, std::slice::from_ref(&library));
@@ -469,5 +488,22 @@ mod survive_tests {
             }
         });
         assert_eq!(rounds, 3);
+    }
+
+    #[test]
+    fn the_background_waits_while_a_page_decodes() {
+        let decodes = Arc::new(tokio::sync::Semaphore::new(2));
+        let started = Instant::now();
+        step_aside(&decodes, 2);
+        assert!(started.elapsed() < Duration::from_millis(20));
+        let page = decodes.clone().try_acquire_owned().unwrap();
+        let decoding = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(page);
+        });
+        let started = Instant::now();
+        step_aside(&decodes, 2);
+        assert!(started.elapsed() >= Duration::from_millis(40));
+        decoding.join().unwrap();
     }
 }

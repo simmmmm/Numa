@@ -1,0 +1,8 @@
+# One Rust for every build we make ourselves: this PC, CI, the AppImage, the
+# Mac. Distribution packages (OBS, Flathub) use their own Rust; rust-version in
+# Cargo.toml is the oldest of those. Move both on purpose, not with stable.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+# The Apple cross-check runs here too: cargo check --target aarch64-apple-ios.
+targets = ["aarch64-apple-ios", "aarch64-apple-darwin"]

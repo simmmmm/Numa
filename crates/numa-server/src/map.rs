@@ -221,11 +221,15 @@ pub fn night(server: &Server, report: &mut crate::night::Report) {
     }
 }
 
-pub async fn again(State(server): State<Arc<Server>>, Signed(_): Signed) -> Json<Value> {
+pub async fn again(State(server): State<Arc<Server>>, Signed(me): Signed) -> Result<Json<Value>, crate::Fail> {
+
+    if !me.sight.household {
+        return Err(crate::Fail(axum::http::StatusCode::FORBIDDEN, "Only the household fetches the map.".into()));
+    }
     if begin(&server) {
         std::thread::spawn(move || brought(&server));
     }
-    Json(json!({}))
+    Ok(Json(json!({})))
 }
 
 fn bring(server: &Server) -> Result<(usize, u64), String> {

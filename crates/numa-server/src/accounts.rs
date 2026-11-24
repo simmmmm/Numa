@@ -28,15 +28,17 @@ pub struct NewAccount {
 
 #[derive(Deserialize)]
 pub struct Login {
-    name: String,
-    password: String,
-    device: Option<String>,
+    pub(crate) name: String,
+    pub(crate) password: String,
+    pub(crate) device: Option<String>,
 }
 
 pub async fn status(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap) -> Json<serde_json::Value> {
     let setup = !server.store.has_accounts();
     let code = setup && !auth::in_house(peer, &headers);
-    Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "setup": setup, "code": code }))
+
+    let passkeys = !setup && crate::passkey::here(&server, peer, &headers);
+    Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "setup": setup, "code": code, "passkeys": passkeys }))
 }
 
 pub async fn setup(State(server): State<Arc<Server>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(new): Json<NewAccount>) -> Result<StatusCode, Fail> {
@@ -179,7 +181,7 @@ async fn hashed(password: &str) -> Result<String, Fail> {
     auth::argon(move || auth::hash(&password)).await?.map_err(Fail::internal)
 }
 
-async fn checked(server: &Server, name: &str, password: String, address: std::net::IpAddr, outside: bool) -> Result<Option<(String, String, bool)>, Fail> {
+pub(crate) async fn checked(server: &Server, name: &str, password: String, address: std::net::IpAddr, outside: bool) -> Result<Option<(String, String, bool)>, Fail> {
     let keys = auth::limit_keys(name, address, outside);
     let left = server.limit.reserve(&keys, now());
     if left > 0 {
@@ -210,6 +212,7 @@ pub async fn login(State(server): State<Arc<Server>>, ConnectInfo(peer): Connect
     let (address, https) = auth::client(peer, &headers);
     let outside = !auth::in_house(peer, &headers);
     let tried = checked(&server, &login.name, login.password, address, outside).await;
+
     let result = match &tried {
         Ok(Some(_)) => "ok",
         Ok(None) => "wrong",
@@ -229,8 +232,12 @@ pub async fn login(State(server): State<Arc<Server>>, ConnectInfo(peer): Connect
             left => format!("{text} {}", auth::try_again(left)),
         }));
     };
+    signed_in(&server, &name, admin, login.device.as_deref(), &address.to_string(), https)
+}
+
+pub(crate) fn signed_in(server: &Server, name: &str, admin: bool, device: Option<&str>, address: &str, https: bool) -> Result<Response, Fail> {
     let (token, digest) = auth::token();
-    server.store.add_session(&digest, &name, login.device.as_deref(), &address.to_string()).map_err(Fail::internal)?;
+    server.store.add_session(&digest, name, device, address).map_err(Fail::internal)?;
     let must_change = server.store.session(&digest).is_some_and(|account| account.must_change);
     let body = Json(json!({ "token": token, "name": name, "admin": admin, "must_change": must_change }));
     Ok(([(header::SET_COOKIE, cookie(&token, 31_536_000, https))], body).into_response())

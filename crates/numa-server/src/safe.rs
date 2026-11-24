@@ -57,13 +57,20 @@ pub async fn show(State(server): State<Arc<Server>>, Signed(me): Signed, headers
 
     attention.extend(crate::copy::attention(&server, now).into_iter().map(|text| json!({ "text": text, "link": "#/safe" })));
     let accounts = server.store.accounts().unwrap_or_default();
+
+    let mut copy = crate::copy::status(&server);
+    if !me.admin {
+        if let Some(copy) = copy.as_object_mut() {
+            copy.remove("where");
+        }
+    }
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "role": role(&me, &accounts),
         "devices": devices,
         "disks": disks.iter().map(|(names, total, free)| json!({ "names": names, "total": total, "free": free })).collect::<Vec<_>>(),
         "attention": attention,
-        "copy": crate::copy::status(&server),
+        "copy": copy,
     }))
 }
 

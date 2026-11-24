@@ -108,6 +108,51 @@ pub fn login_body(name: &str, password: &str, device: &str) -> String {
     serde_json::json!({ "name": name, "password": password, "device": device }).to_string()
 }
 
+pub fn app_page(address: &str, challenge: &str, device: &str, port: u16) -> String {
+    format!("{}/?app={challenge}&device={}&to={port}", base(address), escaped(device))
+}
+
+pub fn app_token(address: &str) -> Vec<OsString> {
+    let rest = ["--max-time", "30", "--header", "Content-Type: application/json", "--data-binary", "@-"];
+    curl(words(&rest), format!("{}/api/v1/app/token", base(address)))
+}
+
+pub fn app_token_body(code: &str, verifier: &str, device: &str) -> String {
+    serde_json::json!({ "code": code, "verifier": verifier, "device": device }).to_string()
+}
+
+pub fn app_code(request: &str) -> Option<String> {
+    let path = request.strip_prefix("GET ")?.split(' ').next()?;
+    let code = path.strip_prefix("/?")?.split('&').find_map(|pair| pair.strip_prefix("code="))?;
+    (code.len() == 64 && code.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| code.to_string())
+}
+
+pub fn await_code(listener: std::net::TcpListener, patience: std::time::Duration) -> Option<String> {
+    use std::io::{Read, Write};
+    let until = std::time::Instant::now() + patience;
+    listener.set_nonblocking(true).ok()?;
+    while std::time::Instant::now() < until {
+        let Ok((mut stream, _)) = listener.accept() else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        };
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let mut head = [0u8; 2048];
+        let read = stream.read(&mut head).unwrap_or(0);
+        let code = app_code(String::from_utf8_lossy(&head[..read]).lines().next().unwrap_or(""));
+        let (status, said) = match code {
+            Some(_) => ("200 OK", "Signed in. Go back to Numa."),
+            None => ("404 Not Found", "Nothing here."),
+        };
+        let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><meta name=viewport content=\"width=device-width\"><title>Numa</title><p style=\"font: 16px system-ui; margin: 3em\">{said}</p>");
+        if code.is_some() {
+            return code;
+        }
+    }
+    None
+}
+
 pub fn logout(address: &str) -> Vec<OsString> {
     curl(words(&["--max-time", "10", "--request", "POST", "--header", "@-"]), format!("{}/api/v1/logout", base(address)))
 }
@@ -254,6 +299,35 @@ mod tests {
         assert_eq!(link("numa://home/open?server=http%3A%2F%2Fnas%2&photo=7"), None);
         assert_eq!(link("numa://home/open?photo=7"), None);
         assert_eq!(link("numa://elsewhere?server=http%3A%2F%2Fnas&photo=7"), None);
+    }
+
+    #[test]
+    fn an_app_signs_in_through_the_browser() {
+        let code = "ab".repeat(32);
+        assert_eq!(app_page("https://photos.example.org", "c0ffee", "Sam's desk", 40123), "https://photos.example.org/?app=c0ffee&device=Sam%27s%20desk&to=40123");
+        assert_eq!(app_code(&format!("GET /?code={code} HTTP/1.1")), Some(code.clone()));
+        for wrong in ["GET /?code=short HTTP/1.1".to_string(), format!("POST /?code={code} HTTP/1.1"), format!("GET /elsewhere?code={code} HTTP/1.1"), format!("GET /?code={}zz HTTP/1.1", &code[2..]), String::new()] {
+            assert_eq!(app_code(&wrong), None, "{wrong}");
+        }
+        assert!(!app_token("nas").iter().any(|arg| arg.to_string_lossy().contains("secret")));
+        assert!(app_token_body(&code, "secret", "desk").contains("\"verifier\":\"secret\""));
+
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = |line: String| {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(stream, "{line}\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+            let mut answer = String::new();
+            let _ = stream.read_to_string(&mut answer);
+            answer
+        };
+        let waiting = std::thread::spawn(move || await_code(listener, std::time::Duration::from_secs(20)));
+        assert!(asked("GET /favicon.ico HTTP/1.1".into()).starts_with("HTTP/1.1 404"), "another knock is not the code");
+        assert!(asked(format!("GET /?code={code} HTTP/1.1")).contains("Go back to Numa"));
+        assert_eq!(waiting.join().unwrap(), Some(code));
+        let nobody = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert_eq!(await_code(nobody, std::time::Duration::from_millis(250)), None, "nobody came");
     }
 
     #[test]

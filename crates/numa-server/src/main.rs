@@ -12,12 +12,14 @@ mod grants;
 mod guard;
 mod home;
 mod jobs;
+mod listing;
 mod manage;
 mod map;
 mod mark;
 mod models;
 mod night;
 mod pages;
+mod passkey;
 mod safe;
 mod photos;
 mod places;
@@ -30,6 +32,8 @@ mod share;
 mod shared;
 #[cfg(test)]
 mod shared_http;
+#[cfg(test)]
+mod speed_http;
 mod start;
 mod store;
 mod sync;
@@ -82,6 +86,11 @@ pub struct Server {
     pub pace: guard::Pace,
 
     pub setup_code: String,
+
+    pub keys: passkey::Keys,
+
+    pub seen: auth::Seen,
+    pub listings: listing::Listings,
 }
 
 impl Server {
@@ -106,6 +115,9 @@ impl Server {
             limit: Default::default(),
             pace: Default::default(),
             setup_code: auth::setup_code(),
+            keys: Default::default(),
+            seen: Default::default(),
+            listings: Default::default(),
         }))
     }
 
@@ -179,9 +191,13 @@ fn main() -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     }
 
+    let socket = std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|err| format!("port {port}: {err}"))?;
+    socket.set_nonblocking(true).map_err(|err| err.to_string())?;
+
     let store = store::Store::open(&data.join("server.db"))?;
     share::tables(&store)?;
     shared::tables(&store)?;
+    passkey::tables(&store)?;
     whats_new::adopt(&store)?;
     let server = Server::new(store, photos, sent, data)?;
     if !server.store.has_accounts() {
@@ -206,7 +222,7 @@ fn main() -> Result<(), String> {
 
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.map_err(|err| err.to_string())?;
+        let listener = tokio::net::TcpListener::from_std(socket).map_err(|err| err.to_string())?;
         log::info!("Numa Home {} on port {port}", env!("CARGO_PKG_VERSION"));
         serve::serve(listener, router(server), serve::HEAD_TIME, serve::CONNECTIONS, stopped()).await;
         Ok(())
@@ -333,6 +349,7 @@ fn router(server: Arc<Server>) -> Router {
         .merge(trip_link::routes())
         .merge(album_sync::routes())
         .merge(whats_new::routes())
+        .merge(passkey::routes())
         .layer(axum::middleware::from_fn_with_state(server.clone(), guard::guarded))
         .with_state(server)
 }

@@ -3,14 +3,16 @@ members = ["crates/*"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.52.0"
+version = "0.53.0"
 edition = "2021"
+rust-version = "1.93"
 license = "GPL-3.0-or-later"
 
 [package]
 name = "numa"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

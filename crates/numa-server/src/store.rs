@@ -99,6 +99,10 @@ impl Store {
         work(&conn).map_err(|err| err.to_string())
     }
 
+    pub fn changes(&self) -> u64 {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).total_changes()
+    }
+
     pub fn set_manage(&self, name: &str, manage: bool) -> Result<bool, String> {
         self.with(|conn| conn.execute("UPDATE accounts SET manage = ?2 WHERE name = ?1", params![name, manage])).map(|changed| changed == 1)
     }
@@ -240,6 +244,10 @@ impl Store {
 
     pub fn note_arrival(&self, digest: &str) {
         let _ = self.with(|conn| conn.execute("UPDATE sessions SET sent = ?2 WHERE token = ?1", params![digest, now()]));
+    }
+
+    pub fn has_session(&self, digest: &str) -> bool {
+        self.with(|conn| conn.query_row("SELECT 1 FROM sessions WHERE token = ?1", [digest], |_| Ok(())).optional()).ok().flatten().is_some()
     }
 
     pub fn session_device(&self, digest: &str) -> Option<String> {

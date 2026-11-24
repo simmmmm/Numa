@@ -68,6 +68,10 @@ impl Sight {
     }
 }
 
+pub fn own_sent_home(server: &Server, name: &str, libraries: &[Library]) -> Sight {
+    resolve(false, &server.home.sent_folder(name), &server.home.photos, libraries, &Grants::default(), &[])
+}
+
 pub fn resolve(admin: bool, own: &Path, archive: &Path, libraries: &[Library], grants: &Grants, albums: &[(Level, Vec<i64>)]) -> Sight {
     let level = |library: &Library| match () {
         _ if library.path == own => Level::Edit,
@@ -105,13 +109,15 @@ pub async fn sight(server: &Server, account: &Account) -> Result<Sight, Fail> {
     for shared in server.store.shared_albums(&account.name).map_err(Fail::internal)? {
         let ids = server.home.album(&shared.key).await?;
         let ids = server.home.with_twins(&ids);
-        let mut pool = Vec::new();
-        for name in shared.pool() {
-            let Some((name, _, admin)) = server.store.account(name) else { continue };
-            let theirs = if admin { Grants::default() } else { server.store.grants(&name).map_err(Fail::internal)? };
-            pool.push(resolve(admin, &server.home.sent_folder(&name), &server.home.photos, &libraries, &theirs, &[]));
-        }
-        albums.push((Level::View, crate::shared::reachable(&ids, &pool)));
+        let owner = match shared.owner.as_deref().and_then(|name| server.store.account(name)) {
+            Some((name, _, admin)) => {
+                let theirs = if admin { Grants::default() } else { server.store.grants(&name).map_err(Fail::internal)? };
+                Some(resolve(admin, &server.home.sent_folder(&name), &server.home.photos, &libraries, &theirs, &[]))
+            }
+            None => None,
+        };
+        let adders: Vec<Sight> = shared.adders().into_iter().filter_map(|name| server.store.account(name)).map(|(name, _, _)| own_sent_home(server, &name, &libraries)).collect();
+        albums.push((Level::View, crate::shared::reachable(&ids, owner.as_ref(), &adders, &server.store.album_held(&shared.key))));
     }
     Ok(resolve(account.admin, &server.home.sent_folder(&account.name), &server.home.photos, &libraries, &grants, &albums))
 }

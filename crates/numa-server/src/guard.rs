@@ -20,13 +20,53 @@ pub async fn guarded(State(server): State<Arc<Server>>, request: Request, next: 
         true => Some(Fail(StatusCode::FORBIDDEN, "That request came from another site.".into()).into_response()),
         false => peer.and_then(|peer| crate::reach::gate(&server, peer, request.headers(), request.uri().path())).or_else(|| paced(&server, &request)),
     };
+    let (started, zipped) = (Instant::now(), crate::pages::takes_gzip(request.headers()));
+    let asked = timed().then(|| format!("{} {}", request.method(), request.uri().path()));
     let mut response = match refused {
         Some(refused) => refused,
         None => next.run(request).await,
     };
     tell(response.headers_mut(), https);
     keep_private(api, response.headers_mut());
+    let mut response = if zipped { packed(response).await } else { response };
+    took(response.headers_mut(), started, asked);
     response
+}
+
+fn timed() -> bool {
+    static TIMED: OnceLock<bool> = OnceLock::new();
+    *TIMED.get_or_init(|| std::env::var("NUMA_HOME_TIMING").is_ok_and(|value| !value.is_empty() && value != "0"))
+}
+
+fn took(headers: &mut HeaderMap, started: Instant, asked: Option<String>) {
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    if let Ok(value) = HeaderValue::from_str(&format!("total;dur={ms:.1}")) {
+        headers.insert(HeaderName::from_static("server-timing"), value);
+    }
+    if let Some(asked) = asked {
+        let size = headers.get(header::CONTENT_LENGTH).and_then(|value| value.to_str().ok()).unwrap_or("-");
+        log::info!("timing: {asked} {ms:.1} ms, {size} bytes");
+    }
+}
+
+async fn packed(response: Response) -> Response {
+    let headers = response.headers();
+    let json = headers.get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"application/json"));
+    if !json || headers.contains_key(header::CONTENT_ENCODING) {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return Fail::internal("an answer could not be read back to pack it").into_response();
+    };
+    if bytes.len() < 1024 {
+        return Response::from_parts(parts, bytes.into());
+    }
+    let packed = crate::pages::gzip(&bytes);
+    parts.headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    parts.headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    parts.headers.insert(header::CONTENT_LENGTH, HeaderValue::from(packed.len()));
+    Response::from_parts(parts, packed.into())
 }
 
 fn keep_private(api: bool, headers: &mut HeaderMap) {
@@ -107,6 +147,10 @@ fn cost(path: &str, query: Option<&str>) -> Option<f64> {
 fn paced(server: &Server, request: &Request) -> Option<Response> {
     let cost = cost(request.uri().path(), request.uri().query())?;
     let session = auth::digest(&auth::presented(request.headers())?);
+
+    if !server.seen.live(&session) && !server.store.has_session(&session) {
+        return None;
+    }
     static START: OnceLock<Instant> = OnceLock::new();
     let now = START.get_or_init(Instant::now).elapsed().as_secs_f64();
     let wait = server.pace.take(&session, cost, now).err()?;
@@ -186,5 +230,16 @@ mod tests {
         assert!(!same_origin(&headers(&[("host", "nas.local:8283"), ("origin", "null")])));
         assert!(same_origin(&headers(&[("host", "127.0.0.1:8283"), ("x-forwarded-host", "photos.example.org"), ("origin", "https://photos.example.org")])));
         assert!(changes(&Method::POST) && changes(&Method::DELETE) && !changes(&Method::GET));
+    }
+
+    #[test]
+    fn only_a_live_session_has_a_bucket() {
+        use crate::share::tests::http::{ask, fixture};
+        let fixture = fixture();
+        let held = |token: &str| fixture.server.pace.0.lock().unwrap().contains_key(&auth::digest(token));
+        assert_eq!(ask("GET", &format!("/api/v1/photos/{}/thumb", fixture.ids[0]), Some("made-up"), "", "").status, 401);
+        assert!(!held("made-up"));
+        assert_eq!(ask("GET", &format!("/api/v1/photos/{}/thumb", fixture.ids[0]), Some(&fixture.sam), "", "").status, 200);
+        assert!(held(&fixture.sam));
     }
 }

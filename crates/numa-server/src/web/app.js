@@ -17,6 +17,10 @@ function h(tag, props, ...children) {
   return el;
 }
 
+function group(label, card) {
+  return h('div', { class: 'group' }, label && h('div', { class: 'section-label' }, label), card);
+}
+
 const ICONS = {
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
@@ -97,7 +101,7 @@ async function fetched(path, options) {
   const text = await response.text();
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
-  if (response.status === 401 && !['login', 'setup'].includes(path)) {
+  if (response.status === 401 && !['login', 'setup', 'passkey/login'].includes(path)) {
     signIn();
     throw new Error(S.signInFirst);
   }
@@ -132,7 +136,8 @@ const when = seconds => new Date(seconds * 1000).toLocaleString(S.locale, {
 
 function route() {
   const [path, query] = (location.hash.slice(1) || '/').split('?');
-  return { path, params: new URLSearchParams(query || '') };
+
+  return { path: path === '/devices' ? '/sign-in' : path, params: new URLSearchParams(query || '') };
 }
 function go(path, params) {
   const query = new URLSearchParams(Object.entries(params || {}).filter(([, value]) => value != null && value !== '')).toString();
@@ -149,26 +154,32 @@ async function start() {
   }
 
   if (status.setup) return firstStart('account');
+
+  state.passkeys = status.passkeys;
   try { state.me = await api('me'); } catch (_) { return; }
   adoptCopyEdge(state.me);
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
-  whatsNew();
+  if (!await appSignIn()) whatsNew();
 }
 
-function gate(text, button, submit) {
+function gate(text, button, submit, also) {
   const name = h('input', { type: 'text', autocomplete: 'username', placeholder: S.name, required: true, autocapitalize: 'words' });
   const password = h('input', {
     type: 'password', placeholder: S.password, required: true,
     autocomplete: button === S.signIn ? 'current-password' : 'new-password',
   });
-  gateOf(S.numaHome, text, [name, password], button, () => submit(name.value.trim(), password.value));
+  gateOf(S.numaHome, text, [name, password], button, () => submit(name.value.trim(), password.value), also);
 }
 
-function gateOf(heading, text, fields, button, submit) {
+function gateOf(heading, text, fields, button, submit, also) {
   titled(button);
   const said = h('p', { class: 'said', role: 'status' });
+  const other = also && h('button', { class: 'chip', type: 'button', onclick: async () => {
+    said.textContent = '';
+    try { await also[1](); } catch (error) { said.textContent = error.message; }
+  } }, also[0]);
   const form = h('form', {
     onsubmit: async event => {
       event.preventDefault();
@@ -176,7 +187,7 @@ function gateOf(heading, text, fields, button, submit) {
       try { await submit(); } catch (error) { said.textContent = error.message; }
     },
   }, h('img', { class: 'mark', src: '/mark.png', alt: '' }), h('h1', {}, heading), h('p', { class: 'body' }, text),
-  fields, h('button', { class: 'primary', type: 'submit' }, button), said);
+  fields, h('button', { class: 'primary', type: 'submit' }, button), other, said);
   app.replaceChildren(h('div', { class: 'gate' }, form));
   fields[0].focus();
 }
@@ -211,18 +222,88 @@ function browserName() {
 function signIn() {
   state.me = null;
   closeViewer(false);
-  gate(S.signInText, S.signIn, signInAs);
+
+  gate(S.signInText, S.signIn, signInAs, state.passkeys && window.PublicKeyCredential && [S.signInWithPasskey, signInWithPasskey]);
 }
 
 async function signInAs(name, password) {
-  const me = await api('login', { method: 'POST', body: JSON.stringify({ name, password, device: browserName() }) });
+  await signedIn(await api('login', { method: 'POST', body: JSON.stringify({ name, password, device: browserName() }) }));
+}
+
+async function signedIn(me) {
   state.me = await api('me').catch(() => ({ name: me.name, admin: me.admin, manage: false, must_change: me.must_change }));
   adoptCopyEdge(state.me);
   state.libraries = null;
   if (state.me.must_change) return renewGate();
   if (!location.hash) history.replaceState(null, '', '#' + startPage());
   render();
-  whatsNew();
+  if (!await appSignIn()) whatsNew();
+}
+
+const b64u = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), letter => letter.charCodeAt(0));
+
+const passkeyAsked = made => made.catch(error => { throw new Error(error.name === 'NotAllowedError' ? S.passkeyNotUsed : error.message); });
+
+async function signInWithPasskey() {
+  const asked = await api('passkey/challenge', { method: 'POST' });
+  const shown = await passkeyAsked(navigator.credentials.get({ publicKey: { challenge: unb64u(asked.challenge), rpId: asked.rp, userVerification: 'required' } }));
+  const said = shown.response;
+  await signedIn(await api('passkey/login', { method: 'POST', body: JSON.stringify({
+    id: b64u(shown.rawId), client: b64u(said.clientDataJSON), data: b64u(said.authenticatorData), signature: b64u(said.signature), device: browserName(),
+  }) }));
+}
+
+async function addPasskey() {
+  const password = h('input', { type: 'password', name: 'password', placeholder: S.currentPassword, required: true, autocomplete: 'current-password' });
+  const asked = await dialog(S.addPasskey, S.addPasskeyText, [password], S.continue);
+  if (!asked) return false;
+  const offer = await api('passkeys/options', { method: 'POST', body: JSON.stringify({ password: asked.password }) });
+  const made = await passkeyAsked(navigator.credentials.create({ publicKey: {
+    challenge: unb64u(offer.challenge), rp: offer.rp,
+    user: { id: unb64u(offer.user.id), name: offer.user.name, displayName: offer.user.name },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+    attestation: 'none',
+    excludeCredentials: offer.exclude.map(id => ({ type: 'public-key', id: unb64u(id) })),
+  } }));
+  const said = made.response;
+  if (!said.getPublicKey || !said.getPublicKey()) throw new Error(S.passkeyUnsupported);
+
+  await api('passkeys', { method: 'POST', body: JSON.stringify({
+    id: b64u(made.rawId), client: b64u(said.clientDataJSON), attestation: b64u(said.attestationObject),
+    data: said.getAuthenticatorData ? b64u(said.getAuthenticatorData()) : undefined, key: b64u(said.getPublicKey()),
+    alg: said.getPublicKeyAlgorithm(), label: browserName(),
+  }) });
+  toast(S.passkeyAdded);
+  return true;
+}
+
+async function removePasskey(one) {
+  const password = h('input', { type: 'password', name: 'password', placeholder: S.currentPassword, required: true, autocomplete: 'current-password' });
+  const asked = await dialog(S.removePasskey, phrase('removePasskeyText', { label: one.label }), [password], S.remove);
+  if (!asked) return false;
+  await api('passkeys/remove', { method: 'POST', body: JSON.stringify({ id: one.id, password: asked.password }) });
+  toast(S.passkeyRemoved);
+  return true;
+}
+
+async function appSignIn() {
+  const asked = new URLSearchParams(location.search);
+  const challenge = asked.get('app'), to = asked.get('to') || 'numa';
+  if (!challenge) return false;
+  history.replaceState(null, '', location.pathname + location.hash);
+  const port = Number(to);
+  const back = to === 'numa' ? 'numa://home-sign-in' : Number.isInteger(port) && port >= 1024 && port <= 65535 ? `http://127.0.0.1:${port}/` : null;
+  if (!back) return true;
+  const device = (asked.get('device') || '').slice(0, 60) || S.aNumaApp;
+  if (!await ask(S.appSignIn, phrase('appSignInText', { device, name: state.me.name }), S.allow)) return true;
+  try {
+    const { code } = await api('app/allow', { method: 'POST', body: JSON.stringify({ challenge }) });
+    location.href = `${back}?code=${code}`;
+    toast(S.appSignedIn);
+  } catch (error) { toast(error.message); }
+  return true;
 }
 
 async function libraries() {
@@ -246,7 +327,7 @@ function syncedWith(id) {
 window.addEventListener('hashchange', () => { if (state.me) render(); });
 
 const TITLES = { '/today': S.today, '/libraries': S.libraries, '/people': S.people, '/albums': S.albums, '/places': S.places, '/import': S.importPage, '/tidy': S.tidyUp, '/trash': S.trash, '/proofs': S.proofs,
-  '/safe': S.settings, '/reach': S.settings, '/activity': S.settings, '/accounts': S.settings, '/devices': S.settings, '/cameras': S.settings };
+  '/safe': S.settings, '/reach': S.settings, '/activity': S.settings, '/accounts': S.settings, '/sign-in': S.settings, '/cameras': S.settings };
 const titled = page => { document.title = page ? `${page} · ${S.numaHome}` : S.numaHome; };
 function pageTitle(path, params) {
   if (['/accounts', '/cameras', '/reach'].includes(path) && !state.me.admin) path = '/';
@@ -259,6 +340,8 @@ function pageTitle(path, params) {
 function render() {
   if (state.me.first_start) return firstStart(state.me.first_start);
   const { path, params } = route();
+  const back = cameBack;
+  cameBack = false;
   closeViewer(false);
   titled(pageTitle(path, params));
   const main = h('main');
@@ -280,10 +363,10 @@ function render() {
   if (path === '/places') return placesPage(main, params);
   if (path === '/libraries') return shelves(main);
   if (path === '/accounts' && state.me.admin) return accounts(main);
-  if (path === '/devices') return devicesPage(main);
+  if (path === '/sign-in') return signInPage(main);
   if (path === '/cameras' && state.me.admin) return cameras(main);
   if (params.get('q')) return search(main, params);
-  return timeline(main, params);
+  return timeline(main, params, back);
 }
 
 function header(path, params) {
@@ -298,7 +381,8 @@ function header(path, params) {
         const start = startPage() === '/today' ? 'photos' : 'today';
         try { await api('me', { method: 'PUT', body: JSON.stringify({ start }) }); state.me.start = start; } catch (error) { toast(error.message); }
       } }, startPage() === '/today' ? S.startOnPhotos : S.startOnToday),
-      h('button', { onclick: changePassword }, S.changePasswordEll),
+      h('div', { class: 'section-label' }, S.settings),
+      ...settingsTabs().map(([label, to]) => h('button', { onclick: () => go(to) }, label)),
       h('button', { onclick: async () => { await api('logout', { method: 'POST' }).catch(() => {}); signIn(); } }, S.signOut),
     ]);
   } }, state.me.name);
@@ -318,8 +402,6 @@ function placesNav(path, params) {
   const rest = [
     h('div', { class: 'section-label extra' }, S.archive),
     place(S.importPage, '/import', true), place(S.tidyUp, '/tidy', true), place(S.trash, '/trash', true), place(S.proofs, '/proofs', true),
-    h('div', { class: 'section-label extra' }, S.household),
-    place(S.settings, '/safe', true),
   ];
 
   const group = (label, to, key) => {
@@ -375,7 +457,7 @@ function placesNav(path, params) {
   }, () => {});
   const nav = h('nav', { class: 'places-nav', 'aria-label': S.places },
     place(S.today, '/today'), place(S.photosPage, '/'), group(S.libraries, '/libraries', 'library'), group(S.people, '/people', 'person'), albums, places, rest);
-  const extras = ['/albums', '/places', '/import', '/tidy', '/trash', '/proofs', '/safe'];
+  const extras = ['/albums', '/places', '/import', '/tidy', '/trash', '/proofs'];
   nav.append(h('button', { class: 'place-link more' + (extras.includes(here) ? ' chosen' : ''), 'aria-haspopup': 'menu', onclick: event => {
     event.stopPropagation();
     menu(nav, [place(S.albums, '/albums'), place(S.places, '/places'), ...rest].filter(Boolean).map(one => one.tagName === 'BUTTON'
@@ -506,7 +588,7 @@ const tileWide = () => innerWidth < 720 ? 150 : Math.round(photoSize * 0.75);
 document.documentElement.style.setProperty('--tile', tileWide() + 'px');
 const GAP = 3;
 
-async function timeline(main, params) {
+async function timeline(main, params, back) {
   const narrowed = narrowedBy(params);
 
   if (await albumPage(main, params, narrowed)) return;
@@ -540,10 +622,37 @@ async function timeline(main, params) {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
 
-      state.sections.find(section => section.el === entry.target)?.load().then(() => near.unobserve(entry.target), () => {});
+      state.sections.find(section => section.el === entry.target)?.load().then(() => { near.unobserve(entry.target); hold?.(); }, () => {});
     }
   }, { rootMargin: '1500px 0px' });
+  const hold = back && await returnTo(state.sections, main);
   state.sections.forEach(section => near.observe(section.el));
+}
+
+let cameBack = true;
+const placeKey = () => 'numa-place:' + location.hash;
+const headLine = () => (document.querySelector('header')?.offsetHeight || 0) + 1;
+function keepPlace() {
+  const sections = state.sections?.filter(section => section.month && section.el.isConnected);
+  const section = sections?.find(one => one.el.getBoundingClientRect().bottom > headLine());
+  if (!section) return;
+  const place = { month: section.month, into: headLine() - section.el.getBoundingClientRect().top };
+  try { sessionStorage.setItem(placeKey(), JSON.stringify(place)); } catch (_) {  }
+}
+addEventListener('pagehide', keepPlace);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') keepPlace(); });
+
+async function returnTo(sections, main) {
+  let place = null;
+  try { place = JSON.parse(sessionStorage.getItem(placeKey())); } catch (_) {  }
+  const at = sections.findIndex(section => section.month === place?.month);
+  if (at < 0) return null;
+  await Promise.allSettled(sections.slice(Math.max(0, at - 1), at + 2).map(section => section.load()));
+  let held = main.isConnected;
+  const back = () => held && main.isConnected && scrollTo(0, sections[at].el.getBoundingClientRect().top + scrollY - headLine() + place.into);
+  back();
+  for (const kind of ['wheel', 'touchstart', 'keydown', 'pointerdown']) addEventListener(kind, () => { held = false; }, { once: true, passive: true });
+  return back;
 }
 
 const FILTERS = ['library', 'album', 'chapter', 'person', 'place', 'region', 'camera', 'date', 'by', 'thing', 'flag', 'rating', 'q'];
@@ -737,7 +846,7 @@ function monthSection(month, query) {
   const el = h('section', { class: 'month' },
     h('div', { class: 'head' }, h('span', { class: 'section-label' }, month.month === 'all' ? sortSaid(viewSort.sort) : monthName(month.month)), caption),
     rows);
-  const section = { el, rows, count: month.count, photos: null, loading: null };
+  const section = { el, rows, month: month.month, count: month.count, photos: null, loading: null };
   requestAnimationFrame(() => { if (!section.photos) rows.style.height = estimate(month.count, rows.clientWidth || innerWidth) + 'px'; });
   section.load = () => section.loading = section.loading || api(`timeline/${month.month}` + (query ? '?' + query : '')).then(list => {
     section.photos = list;
@@ -787,6 +896,8 @@ const aspect = photo => Math.min(4, Math.max(0.3, photo.aspect || 1.5));
 
 function tile(section, photo, style, height, wide = 150) {
   const edge = height * (devicePixelRatio || 1) > 330 ? 512 : 256;
+
+  if (photo.v && !newest.has(photo.id)) versions.set(photo.id, photo.v);
   const image = h('img', { src: thumb(photo.id, edge), loading: 'lazy', decoding: 'async', alt: '' });
   image.addEventListener('load', () => image.classList.add('in'));
   const frame = photo.video && !photo.poster && firstFrame(photo);
@@ -1143,6 +1254,18 @@ function openViewer(section, at) {
   show();
 }
 
+function nextAhead(viewer, photo) {
+  clearTimeout(viewer.ahead);
+  viewer.ahead = setTimeout(() => {
+    if (state.viewer !== viewer || viewer.photo.id !== photo.id) return;
+    const photos = viewer.sections[viewer.si].photos || [];
+    for (const by of [1, -1]) {
+      const beside = photos[viewer.pi + by];
+      if (beside && !beside.video) new Image().src = versioned(`/api/v1/photos/${beside.id}/preview`, beside.id);
+    }
+  }, 400);
+}
+
 const current = () => state.viewer.photo;
 
 function show() {
@@ -1166,7 +1289,11 @@ function show() {
 
     viewer.image.src = thumb(photo.id, 512);
     const large = new Image();
-    large.onload = () => { if (state.viewer === viewer && viewer.photo.id === photo.id && !viewer.zoom.full) viewer.image.src = large.src; };
+    large.onload = () => {
+      if (state.viewer !== viewer || viewer.photo.id !== photo.id) return;
+      if (!viewer.zoom.full) viewer.image.src = large.src;
+      nextAhead(viewer, photo);
+    };
     large.src = versioned(`/api/v1/photos/${photo.id}/preview`, photo.id);
     if (photo.live) holdLive(viewer, photo);
   }

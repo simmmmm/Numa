@@ -79,15 +79,53 @@ impl FromRequestParts<Arc<Server>> for Signed {
     type Rejection = Fail;
 
     async fn from_request_parts(parts: &mut Parts, server: &Arc<Server>) -> Result<Self, Fail> {
-        let mut account = presented(&parts.headers)
-            .and_then(|token| server.store.session(&digest(&token)))
-            .ok_or_else(|| Fail(StatusCode::UNAUTHORIZED, "Sign in first.".into()))?;
+        let nobody = || Fail(StatusCode::UNAUTHORIZED, "Sign in first.".into());
+        let digest = digest(&presented(&parts.headers).ok_or_else(nobody)?);
+        let kept = server.seen.kept(&digest, (server.store.changes(), server.home.turn()));
+        let fresh = kept.is_none();
+        let mut account = match kept {
+            Some(account) => account,
+            None => server.store.session(&digest).ok_or_else(nobody)?,
+        };
         if account.must_change && !parts.uri.path().starts_with("/api/v1/me") {
 
             return Err(Fail(StatusCode::FORBIDDEN, "Choose a new password on Numa Home's page in a browser first.".into()));
         }
-        account.sight = Arc::new(crate::grants::sight(server, &account).await?);
+        if fresh {
+
+            let of = (server.store.changes(), server.home.turn());
+            account.sight = Arc::new(crate::grants::sight(server, &account).await?);
+            if of == (server.store.changes(), server.home.turn()) {
+                server.seen.keep(digest, account.clone(), of);
+            }
+        }
         Ok(Signed(account))
+    }
+}
+
+#[derive(Default)]
+pub struct Seen(Mutex<HashMap<String, (Account, (u64, u64), std::time::Instant)>>);
+
+const SEEN_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Seen {
+    fn kept(&self, digest: &str, of: (u64, u64)) -> Option<Account> {
+        let seen = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (account, made_of, at) = seen.get(digest)?;
+        (*made_of == of && at.elapsed() < SEEN_FOR).then(|| account.clone())
+    }
+
+    fn keep(&self, digest: String, account: Account, of: (u64, u64)) {
+        let mut seen = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if seen.len() >= 1000 {
+            seen.clear();
+        }
+        seen.insert(digest, (account, of, std::time::Instant::now()));
+    }
+
+    pub fn live(&self, digest: &str) -> bool {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(digest).is_some_and(|(_, _, at)| at.elapsed() < SEEN_FOR)
     }
 }
 
@@ -146,6 +184,10 @@ impl Limit {
 
         if map.len() > 10_000 {
             map.retain(|_, (_, last)| now - *last < FORGET);
+        }
+
+        if map.len() > 10_000 {
+            map.retain(|key, (failures, _)| wait(key, *failures) > 0);
         }
         for key in keys {
             let entry = map.entry(key.clone()).or_insert((0, now));

@@ -52,6 +52,11 @@ within 8 GB. Set `TZ` in `compose.yaml` to your time zone
 `NUMA_HOME_NIGHT=2-5` moves the hours, `NUMA_HOME_CACHE_GB` the cache's
 size. The Activity page says each morning what was done and what needs you.
 
+The thumbnail cache is in `/data`. With the photographs on hard disks, put
+`/data` on an SSD or NVMe volume: the grid's thumbnails are then read from
+there and not from the hard disks. `NUMA_HOME_TIMING=1` writes every request
+to the log with the time it took.
+
 Outside the house, use the NAS's own reverse proxy or Tailscale; Numa Home
 speaks plain HTTP. Behind a reverse proxy, set `NUMA_HOME_PROXY` in
 `compose.yaml` to the proxy's address or network as Numa Home sees it, comma

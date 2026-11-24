@@ -3,7 +3,7 @@
 const reachTime = at => new Date(at * 1000).toLocaleString(S.locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 function signInRows(rows) {
-  const result = { ok: S.signInOk, wrong: S.signInWrong, locked: S.signInLocked };
+  const result = { ok: S.signInOk, wrong: S.signInWrong, locked: S.signInLocked, passkey: S.signInNeedsPasskey };
   return rows.map(one => h('li', {}, h('div', {}, h('div', { class: 'name' }, `${one.name || '–'} · ${result[one.result] || one.result}`),
     h('div', { class: 'caption' }, `${reachTime(one.at)} · ${one.address} · ${one.outside ? S.signInFrom : S.signInHere}`)),
   h('i', { class: one.result === 'ok' ? 'signal ok' : 'signal' })));
@@ -53,19 +53,19 @@ async function reachPage(main) {
   page.replaceChildren(
     h('p', { class: 'body role' }, S.reachText),
     h('div', { class: 'boxes' },
-      h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.reachNow), h('ul', {}, status),
-        reach.mode === 'all' && h('button', { class: 'chip', onclick: () => send('links', false) }, S.reachCloseNow)),
-      h('form', { class: 'box', onsubmit: event => { event.preventDefault(); send(chosen(), confirm.checked); } }, h('div', { class: 'section-label' }, S.reachAddress), address,
-        ...radios, warning, save),
-      h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.reachCheck),
+      group(S.reachNow, h('section', { class: 'box' }, h('ul', {}, status),
+        reach.mode === 'all' && h('button', { class: 'chip', onclick: () => send('links', false) }, S.reachCloseNow))),
+      group(S.reachAddress, h('form', { class: 'box', onsubmit: event => { event.preventDefault(); send(chosen(), confirm.checked); } }, address,
+        ...radios, warning, save)),
+      group(S.reachCheck, h('section', { class: 'box' },
         h('p', { class: 'body' }, S.reachCheckText),
         reach.address && h('a', { class: 'name', href: reach.address + '/api/v1/reach/ping', target: '_blank', rel: 'noopener' }, reach.address + '/api/v1/reach/ping'),
-        h('button', { class: 'chip', onclick: () => render() }, S.reachCheckAgain)),
-      h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.reachTries), h('p', { class: 'caption' }, S.reachTriesText),
-        tries.length ? h('ul', {}, signInRows(tries)) : h('p', { class: 'body' }, S.reachNoTries), h('p', { class: 'caption' }, S.reachSessions)),
-      h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.reachWays), h('ul', {},
+        h('button', { class: 'chip', onclick: () => render() }, S.reachCheckAgain))),
+      group(S.reachTries, h('section', { class: 'box' }, h('p', { class: 'caption' }, S.reachTriesText),
+        tries.length ? h('ul', {}, signInRows(tries)) : h('p', { class: 'body' }, S.reachNoTries), h('p', { class: 'caption' }, S.reachSessions))),
+      group(S.reachWays, h('section', { class: 'box' }, h('ul', {},
         way(S.reachProxyTitle, S.reachProxyText), way(S.reachTailscaleTitle, S.reachTailscaleText),
-        way(S.reachTunnelTitle, S.reachTunnelText), way(S.reachWireguardTitle, S.reachWireguardText)))));
+        way(S.reachTunnelTitle, S.reachTunnelText), way(S.reachWireguardTitle, S.reachWireguardText))))));
 }
 
 async function signInsBox(page) {

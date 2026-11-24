@@ -3,6 +3,7 @@ set -eu
 
 case "$1" in
 build)
+    mkdir -p target/dist/build/examples target/dist/build/deps
     ORT_LIB_PATH="$PWD/onnxruntime/lib" ORT_PREFER_DYNAMIC_LINK=1 \
     RUSTFLAGS="-C link-arg=-Wl,-rpath,/usr/lib/numa" \
         cargo build --profile dist --offline --locked

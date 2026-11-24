@@ -189,7 +189,11 @@ pub async fn list(State(server): State<Arc<Server>>, Signed(me): Signed, Query(a
         Some(id) => Some(seen.iter().find(|library| library.id == id).cloned().ok_or_else(|| Fail(StatusCode::NOT_FOUND, "There is no such library.".into()))?),
         None => None,
     };
-    let accounts: Vec<String> = server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect();
+
+    let accounts: Vec<String> = match me.sight.household {
+        true => server.store.accounts().map_err(Fail::internal)?.into_iter().map(|account| account.name).collect(),
+        false => vec![me.name.clone()],
+    };
     let chosen = mine(&server, &me, everyone).await?;
     let only_id = only.as_ref().map(|library| library.id);
     let (working, asking) = (server.clone(), me.clone());
@@ -250,7 +254,8 @@ pub struct Kept {
 
 pub async fn keep(State(server): State<Arc<Server>>, Signed(me): Signed, Json(kept): Json<Kept>) -> Result<Json<Value>, Fail> {
     if kept.key.starts_with("who:") {
-        if server.home.editable(&me).is_empty() {
+
+        if !me.sight.household {
             return Err(Fail(StatusCode::NOT_FOUND, "There is no such set.".into()));
         }
         server.store.settle(&[kept.key]);

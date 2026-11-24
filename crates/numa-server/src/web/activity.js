@@ -138,10 +138,12 @@ function lastNight(night) {
   ];
 }
 
-const SAFE = ['/safe', '/accounts', '/devices', '/cameras', '/reach', '/activity'];
+const SAFE = ['/safe', '/accounts', '/sign-in', '/cameras', '/reach', '/activity'];
+
+const settingsTabs = () => [[S.safeAtHome, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.signInTab, '/sign-in'], state.me.admin && [S.cameras, '/cameras'], state.me.admin && [S.reachable, '/reach'],
+  [S.activity, '/activity']].filter(Boolean);
 function safeHead(path) {
-  const tabs = [[S.safeAtHome, '/safe'], state.me.admin && [S.accounts, '/accounts'], [S.devices, '/devices'], state.me.admin && [S.cameras, '/cameras'], state.me.admin && [S.reachable, '/reach'],
-    [S.activity, '/activity']].filter(Boolean);
+  const tabs = settingsTabs();
   if (!tabs.some(([, to]) => to === path)) return null;
   return h('div', { class: 'safe-head' }, h('h1', {}, S.settings),
     h('div', { class: 'chips' }, tabs.map(([label, to]) => h('button', { class: 'chip' + (to === path ? ' chosen' : ''),
@@ -171,24 +173,24 @@ async function safePage(main) {
     h('div', {}, h('div', { class: 'name' }, one.label), h('div', { class: 'caption' }, one.kind === 'card' ? phrase('cardInNas', { photos: counted(one.count) }) : S.sendHome)),
     h('span', { class: 'caption' + (one.late ? ' late' : '') }, ago(one.sent)));
   const disk = one => h('div', { class: 'disk' },
-    h('div', { class: 'big' }, diskSize(one.free)),
-    h('div', { class: 'caption' }, phrase('freeOf', { total: diskSize(one.total), names: one.names.join(', ') })),
+    h('div', { class: 'big' }, diskSize(one.total - one.free)),
+    h('div', { class: 'caption' }, phrase('usedOf', { total: diskSize(one.total), names: one.names.join(', ') })),
     h('div', { class: 'meter' }, h('div', { class: 'fill', style: filled(one.total ? 1 - one.free / one.total : 0) })));
   const night = activity && activity.night;
 
   page.replaceChildren(h('p', { class: 'body role' }, safe.role), ...[top].flat().filter(Boolean), h('div', { class: 'boxes' },
-    h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.devices), safe.devices.length
+    group(S.devices, h('section', { class: 'box' }, safe.devices.length
       ? h('ul', {}, safe.devices.map(device))
-      : h('p', { class: 'body' }, S.devicesEmpty)),
-    h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.storage), safe.disks.map(disk)),
+      : h('p', { class: 'body' }, S.devicesEmpty))),
+    group(S.storage, h('section', { class: 'box' }, safe.disks.map(disk))),
     secondCopy(safe.copy),
     rights && homeRights(rights),
-    night && h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.lastNight),
+    night && group(S.lastNight, h('section', { class: 'box' },
       h('ul', { class: 'done' }, night.done.slice(0, 4).map(line => h('li', {}, line))),
-      h('button', { class: 'chip', onclick: () => go('/activity') }, S.activity)),
-    h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.numaHome), h('div', { class: 'big' }, safe.version),
+      h('button', { class: 'chip', onclick: () => go('/activity') }, S.activity))),
+    group(S.numaHome, h('section', { class: 'box' }, h('div', { class: 'big' }, safe.version),
 
-      h('a', { class: 'caption', href: '/licences', target: '_blank', rel: 'noopener' }, S.licences))));
+      h('a', { class: 'caption', href: '/licences', target: '_blank', rel: 'noopener' }, S.licences)))));
 }
 
 function homeRights(rights) {
@@ -201,8 +203,8 @@ function homeRights(rights) {
       toast(S.rightsSaved);
     } catch (error) { toast(error.message); }
   };
-  return h('form', { class: 'box', onsubmit: save }, h('div', { class: 'section-label' }, S.inHomesJpegs),
-    creator, copyright, h('p', { class: 'caption' }, S.inHomesJpegsText), h('button', { class: 'chip', type: 'submit' }, S.save));
+  return group(S.inHomesJpegs, h('form', { class: 'box', onsubmit: save },
+    creator, copyright, h('p', { class: 'caption' }, S.inHomesJpegsText), h('button', { class: 'chip', type: 'submit' }, S.save)));
 }
 
 const GUIDE_RESTORE = 'https://guide.numa.photo/numa-home#restore';
@@ -215,22 +217,22 @@ function secondCopy(copy) {
   const when = copy.exists && h('div', { class: 'copy-when' },
     h('span', { class: 'big' }, copy.last ? clock(copy.last) : S.notYet),
     h('span', { class: 'caption' }, copy.running ? S.copyingNow : copy.last ? `${ago(copy.last)} · ${holds}` : S.copyTonight));
-  const disk = copy.exists && h('li', {}, h('div', {}, h('div', { class: 'name' }, copy.where),
-    h('div', { class: 'caption' }, [copy.total && phrase('freeShort', { free: diskSize(copy.free), total: diskSize(copy.total) }), S.onlyAdds].filter(Boolean).join(' · '))));
+  const disk = copy.exists && h('li', {}, h('div', {}, h('div', { class: 'name' }, copy.where || S.secondCopy),
+    h('div', { class: 'caption' }, [copy.total && phrase('usedShort', { used: diskSize(copy.total - copy.free), total: diskSize(copy.total) }), S.onlyAdds].filter(Boolean).join(' · '))));
   const databases = h('li', {}, h('div', {}, h('div', { class: 'name' }, S.databaseCopies),
     h('div', { class: 'caption' }, copy.databases.newest ? phrase(copy.databases.count === 1 ? 'nightlyCopy' : 'nightlyCopies', { n: copy.databases.count, when: clock(copy.databases.newest) }) : S.databasesTonight)));
   const problems = [!copy.complete && copy.exists && copy.problem, copy.databases.problem].filter(Boolean);
   const now = state.me.admin
     ? h('button', { class: 'chip', onclick: async () => { try { await api('copy', { method: 'POST' }); toast(S.copyStarts); } catch (error) { toast(error.message); } } }, S.copyNow)
     : h('button', { class: 'chip', 'aria-disabled': 'true', title: S.copyRefused, onclick: () => toast(S.copyRefused) }, S.copyNow);
-  return h('section', { class: 'box' }, h('div', { class: 'section-label' }, S.secondCopy),
+  return group(S.secondCopy, h('section', { class: 'box' },
     when || h('p', { class: 'body' }, S.noCopyDisk),
     h('ul', {}, disk, databases),
     problems.map(problem => h('p', { class: 'caption' }, problem)),
-    h('div', { class: 'copy-acts' }, now, h('a', { class: 'caption', href: GUIDE_RESTORE, target: '_blank', rel: 'noopener' }, S.howToRestore)));
+    h('div', { class: 'copy-acts' }, now, h('a', { class: 'caption', href: GUIDE_RESTORE, target: '_blank', rel: 'noopener' }, S.howToRestore))));
 }
 
-async function devicesPage(main) {
+async function signInPage(main) {
   const page = h('div', { class: 'safe devices' }, h('p', { class: 'body' }, S.loading));
   main.append(page);
   const list = await api('sessions').catch(error => (page.replaceChildren(fault(error.message)), null));
@@ -252,6 +254,31 @@ async function devicesPage(main) {
   const elsewhere = others > 0 && h('button', { class: 'primary', onclick: async () => {
     try { await api('sessions/others', { method: 'POST' }); toast(S.signedOutElsewhere); render(); } catch (error) { toast(error.message); }
   } }, S.signOutElsewhere);
-  page.replaceChildren(h('p', { class: 'body role' }, state.me.admin ? S.devicesAdminText : S.devicesText),
-    h('section', { class: 'box' }, h('ul', {}, [...list.filter(one => one.this), ...list.filter(one => !one.this)].map(row))), elsewhere);
+
+  const keys = await api('passkeys').catch(() => ({ here: false, address: true, passkeys: [] }));
+
+  const said = h('p', { class: 'said', role: 'status' });
+  const again = async change => {
+    said.textContent = '';
+    try { if (await change()) render(); } catch (error) { said.textContent = error.message; }
+  };
+  const key = one => h('li', {},
+    h('div', {}, h('div', { class: 'name' }, one.label),
+      h('div', { class: 'caption' }, [phrase('passkeyMadeOn', { day: day(one.made) }), one.used && phrase('passkeyUsedAgo', { ago: ago(one.used) })].filter(Boolean).join(' · '))),
+    h('button', { class: 'chip', onclick: () => again(() => removePasskey(one)) }, S.remove));
+  const can = keys.here && window.PublicKeyCredential;
+
+  const missing = address => address !== false ? h('p', { class: 'caption' }, S.passkeysWhere)
+    : state.me.admin ? [h('p', { class: 'caption' }, S.passkeysNoAddressAdmin), h('button', { class: 'chip', onclick: () => go('/reach') }, S.openReachable)]
+      : h('p', { class: 'caption' }, S.passkeysNoAddress);
+  const passkeys = group(S.passkeys, h('section', { class: 'box' }, h('p', { class: 'body' }, S.passkeysText),
+    keys.passkeys.length > 0 && h('ul', {}, keys.passkeys.map(key)),
+    can ? h('button', { class: 'chip', onclick: () => again(addPasskey) }, S.addPasskeyEll) : missing(keys.address),
+    said));
+  const password = group(S.password, h('section', { class: 'box' }, h('p', { class: 'body' }, S.passwordText),
+    h('button', { class: 'chip', onclick: changePassword }, S.changePasswordEll)));
+  const devices = group(S.devices, h('section', { class: 'box' },
+    h('p', { class: 'body' }, state.me.admin ? S.devicesAdminText : S.devicesText),
+    h('ul', {}, [...list.filter(one => one.this), ...list.filter(one => !one.this)].map(row)), elsewhere));
+  page.replaceChildren(password, passkeys, devices);
 }

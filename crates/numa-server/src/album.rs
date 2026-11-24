@@ -390,6 +390,7 @@ pub async fn put_photos(State(server): State<Arc<Server>>, Signed(me): Signed, P
     new.sort_unstable();
     new.dedup();
     let (album, inside) = (chapter.album, asked.inside);
+    let album_key = album.clone();
     let changed = server
         .home
         .ask(move |catalog| -> Result<Vec<i64>, String> {
@@ -405,6 +406,10 @@ pub async fn put_photos(State(server): State<Arc<Server>>, Signed(me): Signed, P
         .await?
         .map_err(Fail::bad)?;
     server.home.forget_albums();
+    if inside {
+
+        server.store.offer_to_album(&album_key, &server.home.with_twins(&changed));
+    }
 
     let updated = changed.iter().map(|id| server.store.touch(*id)).max();
     match inside {

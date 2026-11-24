@@ -2,6 +2,7 @@
 name = "numa-gpu"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license = "GPL-3.0-or-later AND LGPL-2.1-only"
 publish = false
 

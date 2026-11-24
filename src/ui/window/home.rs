@@ -82,11 +82,12 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     password.set_title("Password");
     let sign_in = gtk::Button::with_label("Sign In");
     sign_in.set_valign(gtk::Align::Center);
+    let passkey = passkey_row();
     let signed = adw::ActionRow::new();
     let sign_out = gtk::Button::with_label("Sign Out");
     sign_out.set_valign(gtk::Align::Center);
     signed.add_suffix(&sign_out);
-    for row in [address.upcast_ref::<gtk::Widget>(), name.upcast_ref(), password.upcast_ref(), signed.upcast_ref()] {
+    for row in [address.upcast_ref::<gtk::Widget>(), name.upcast_ref(), password.upcast_ref(), passkey.upcast_ref(), signed.upcast_ref()] {
         group.add(row);
     }
     group.set_header_suffix(Some(&sign_in));
@@ -96,18 +97,19 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
     group.add(&keep);
     group.add(&metered);
 
-    let show = Rc::new(glib::clone!(
+    let show: Rc<dyn Fn(&Account)> = Rc::new(glib::clone!(
         #[weak] address,
         #[weak] name,
         #[weak] password,
         #[weak] sign_in,
+        #[weak] passkey,
         #[weak] signed,
         #[weak] keep,
         #[weak] metered,
         move |account: &Account| {
             address.set_text(&account.address);
             name.set_text(&account.name);
-            for row in [address.upcast_ref::<gtk::Widget>(), name.upcast_ref(), password.upcast_ref(), sign_in.upcast_ref()] {
+            for row in [address.upcast_ref::<gtk::Widget>(), name.upcast_ref(), password.upcast_ref(), passkey.upcast_ref(), sign_in.upcast_ref()] {
                 row.set_visible(!account.signed_in());
             }
             for row in [&keep, &metered] {
@@ -147,21 +149,19 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
                 async move {
                     let out = curl(api::login(&account.address), body, &Running::default()).await;
                     button.set_sensitive(true);
-                    match api::signed_in(&out) {
-                        Ok((token, name)) => {
-                            let account = Account { name, token, ..account };
-                            state.catalog.remember(ACCOUNT, &account);
-                            password.set_text("");
-                            show(&account);
-
-                            home_sync::adopt(&state, true);
-                        }
-                        Err(Failure::SignIn(sentence)) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&sentence))),
-                        Err(failure) => dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&said(failure, &account)))),
+                    if keep_session(&state, &*show, &dialog, &out, account) {
+                        password.set_text("");
                     }
                 }
             ));
         }
+    ));
+    passkey.connect_activated(glib::clone!(
+        #[strong] state,
+        #[strong] show,
+        #[weak] dialog,
+        #[weak] address,
+        move |row| passkey_sign_in(&state, &show, &dialog, address.text().trim(), row)
     ));
     sign_out.connect_clicked(glib::clone!(
         #[strong] state,
@@ -179,6 +179,73 @@ pub(super) fn preferences_group(state: &App, dialog: &adw::PreferencesDialog) ->
         }
     ));
     group
+}
+
+fn passkey_row() -> adw::ActionRow {
+    let passkey = adw::ActionRow::new();
+    passkey.set_title("Sign In with a Passkey…");
+    passkey.set_subtitle("In your browser, on Numa Home's own page");
+    passkey.set_activatable(true);
+    passkey.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    passkey
+}
+
+fn passkey_sign_in(state: &App, show: &Rc<dyn Fn(&Account)>, dialog: &adw::PreferencesDialog, address: &str, row: &adw::ActionRow) {
+    let account = Account { address: address.to_string(), name: String::new(), token: String::new() };
+    if account.address.is_empty() {
+        dialog.add_toast(adw::Toast::new("Fill in the address"));
+        return;
+    }
+
+    let secret = std::fs::File::open("/dev/urandom").and_then(|mut source| {
+        let mut bytes = [0u8; 32];
+        std::io::Read::read_exact(&mut source, &mut bytes).map(|()| bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+    });
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0));
+    let (Ok(verifier), Ok(listener)) = (secret, listener) else {
+        dialog.add_toast(adw::Toast::new("The sign-in could not be started"));
+        return;
+    };
+    let Some(challenge) = glib::compute_checksum_for_string(glib::ChecksumType::Sha256, &verifier) else { return };
+    let port = listener.local_addr().map_or(0, |at| at.port());
+    let device = glib::host_name().to_string();
+    gtk::UriLauncher::new(&api::app_page(&account.address, &challenge, &device, port)).launch(None::<&gtk::Window>, gio::Cancellable::NONE, |_| {});
+    row.set_sensitive(false);
+    glib::spawn_future_local(glib::clone!(
+        #[strong] state,
+        #[strong] show,
+        #[weak] dialog,
+        #[weak] row,
+        async move {
+            let code = gio::spawn_blocking(move || api::await_code(listener, std::time::Duration::from_secs(300))).await.ok().flatten();
+            row.set_sensitive(true);
+
+            let Some(code) = code else { return };
+            let out = curl(api::app_token(&account.address), api::app_token_body(&code, &verifier, &device), &Running::default()).await;
+            keep_session(&state, &*show, &dialog, &out, account);
+        }
+    ));
+}
+
+fn keep_session(state: &App, show: &dyn Fn(&Account), dialog: &adw::PreferencesDialog, out: &str, account: Account) -> bool {
+    match api::signed_in(out) {
+        Ok((token, name)) => {
+            let account = Account { name, token, ..account };
+            state.catalog.remember(ACCOUNT, &account);
+            show(&account);
+
+            home_sync::adopt(state, true);
+            true
+        }
+        Err(Failure::SignIn(sentence)) => {
+            dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&sentence)));
+            false
+        }
+        Err(failure) => {
+            dialog.add_toast(adw::Toast::new(&glib::markup_escape_text(&said(failure, &account))));
+            false
+        }
+    }
 }
 
 fn pace_rows(state: &App) -> [adw::PreferencesRow; 2] {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, RwLock};
 
 use axum::http::StatusCode;
@@ -21,6 +22,8 @@ pub struct Home {
     shelf: RwLock<Shelf>,
 
     albums: RwLock<HashMap<String, Vec<i64>>>,
+
+    turn: AtomicU64,
 }
 
 #[derive(Default)]
@@ -35,6 +38,8 @@ struct Shelf {
     twins: HashMap<i64, Vec<i64>>,
 
     holds: HashMap<i64, i64>,
+
+    bursts: HashMap<i64, HashMap<i64, usize>>,
 }
 
 pub fn found_under(root: &Path) -> Vec<PathBuf> {
@@ -94,7 +99,7 @@ impl Home {
             })
             .map_err(|err| err.to_string())?;
         opened.recv().map_err(|err| err.to_string())??;
-        Ok(Self { tx, photos, sent, found: RwLock::default(), shelf: RwLock::default(), albums: RwLock::default() })
+        Ok(Self { tx, photos, sent, found: RwLock::default(), shelf: RwLock::default(), albums: RwLock::default(), turn: AtomicU64::new(0) })
     }
 
     pub async fn ask<R: Send + 'static>(&self, work: impl FnOnce(&Catalog) -> R + Send + 'static) -> Result<R, Fail> {
@@ -161,6 +166,24 @@ impl Home {
 
     pub fn forget_albums(&self) {
         self.albums.write().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+        self.turn.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn turn(&self) -> u64 {
+        self.turn.load(Ordering::SeqCst)
+    }
+
+    pub fn amend(&self, id: i64, change: impl FnOnce(&mut Photo)) {
+        if let Some(photo) = self.shelf.write().unwrap_or_else(|poisoned| poisoned.into_inner()).photos.get_mut(&id) {
+            change(photo);
+        }
+        self.turn.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn bursts(&self, libraries: impl IntoIterator<Item = i64>) -> HashMap<(i64, i64), usize> {
+        let shelf = self.shelf.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let of = |library: i64| shelf.bursts.get(&library).into_iter().flatten().map(move |(burst, count)| ((library, *burst), *count));
+        libraries.into_iter().flat_map(of).collect()
     }
 
     pub fn all_libraries(&self) -> Vec<Library> {
@@ -260,10 +283,16 @@ impl Home {
                 shelf.twins.entry(still).or_default().push(video);
             }
             shelf.holds.extend(held);
+            let mut bursts: HashMap<i64, usize> = HashMap::new();
+            photos.iter().filter_map(|photo| photo.burst).for_each(|burst| *bursts.entry(burst).or_default() += 1);
+            shelf.bursts.insert(library, bursts);
             shelf.files.insert(library, photos.iter().map(|photo| photo.id).collect());
             ids.extend(photos.iter().map(|photo| photo.id));
             shelf.photos.extend(photos.into_iter().map(|photo| (photo.id, photo)));
         }
+
+        drop(shelf);
+        self.turn.fetch_add(1, Ordering::SeqCst);
         ids
     }
 }

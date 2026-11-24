@@ -114,18 +114,35 @@ pub async fn sharpness_now(State(server): State<Arc<Server>>, Signed(me): Signed
 #[derive(Deserialize)]
 pub struct Edge {
     edge: Option<u32>,
+
+    v: Option<String>,
 }
 
-pub async fn thumb(state: State<Arc<Server>>, signed: Signed, id: Path<i64>, Query(edge): Query<Edge>, headers: HeaderMap) -> Result<Response, Fail> {
-    let edge = match edge.edge.unwrap_or(256) {
+pub async fn thumb(state: State<Arc<Server>>, signed: Signed, id: Path<i64>, Query(asked): Query<Edge>, headers: HeaderMap) -> Result<Response, Fail> {
+    let edge = match asked.edge.unwrap_or(256) {
         0..=320 => thumbs::LIBRARY_EDGE,
         _ => thumbs::STEPS[0],
     };
-    picture(state, signed, id, edge, headers).await
+    picture(state, signed, id, edge, asked.v, headers).await
 }
 
-pub async fn preview(state: State<Arc<Server>>, signed: Signed, id: Path<i64>, headers: HeaderMap) -> Result<Response, Fail> {
-    picture(state, signed, id, 2048, headers).await
+pub async fn preview(state: State<Arc<Server>>, signed: Signed, id: Path<i64>, Query(asked): Query<Edge>, headers: HeaderMap) -> Result<Response, Fail> {
+    picture(state, signed, id, 2048, asked.v, headers).await
+}
+
+pub(crate) fn version(photo: &Photo) -> Option<String> {
+    stamp(&photo.path, photo.mtime, photo.edited)
+}
+
+fn stamp(path: &FilePath, mtime: i64, edited: bool) -> Option<String> {
+    (!edited && !numa_io::video::is_video(path)).then(|| fnv(&format!("{}\0{mtime}", path.display())).to_string())
+}
+
+fn caching(current: Option<&str>, asked: Option<&str>) -> &'static str {
+    match (current, asked) {
+        (Some(current), Some(asked)) if current == asked => "private, max-age=31536000, immutable",
+        _ => "private, no-cache",
+    }
 }
 
 pub(crate) async fn edits(server: &Server, photo: &Photo) -> Result<Option<String>, Fail> {
@@ -136,8 +153,9 @@ pub(crate) async fn edits(server: &Server, photo: &Photo) -> Result<Option<Strin
     server.home.ask(move |catalog| catalog.edits_json(id)).await?.map_err(Fail::internal)
 }
 
-async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, edge: u32, headers: HeaderMap) -> Result<Response, Fail> {
+async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id): Path<i64>, edge: u32, asked: Option<String>, headers: HeaderMap) -> Result<Response, Fail> {
     let photo = server.home.photo(&me, id, Level::View)?;
+    let caching = caching(version(&photo).as_deref(), asked.as_deref());
 
     let video = numa_io::video::is_video(&photo.path);
     let edge = match (video, edge <= thumbs::LIBRARY_EDGE) {
@@ -148,12 +166,22 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
     let edits = if video { None } else { edits(&server, &photo).await? };
     let tag = format!("\"{:x}\"", fnv(&format!("{}\0{}\0{edge}\0{}", photo.path.display(), photo.mtime, edits.as_deref().unwrap_or(""))));
     if headers.get(header::IF_NONE_MATCH).is_some_and(|asked| asked.as_bytes() == tag.as_bytes()) {
-        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag)]).into_response());
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag), (header::CACHE_CONTROL, caching.to_string())]).into_response());
     }
     let (kept, id) = (photo.aspect, photo.id);
-    let bytes = match thumbs::cached(&photo.path, photo.mtime, edge, edits.as_deref()) {
-        Some(file) => tokio::fs::read(file).await.ok(),
+
+    let near = (edge == thumbs::LIBRARY_EDGE).then(|| thumbs::in_cache(&photo.path, photo.mtime, edge, edits.as_deref()));
+    let bytes = match &near {
+        Some(near) => tokio::fs::read(near).await.ok(),
         None => None,
+    };
+    let near = near.filter(|_| bytes.is_none() && apart(&photo.path));
+    let bytes = match bytes {
+        Some(bytes) => Some(bytes),
+        None => match thumbs::cached(&photo.path, photo.mtime, edge, edits.as_deref()) {
+            Some(file) => tokio::fs::read(file).await.ok(),
+            None => None,
+        },
     };
     let bytes = match bytes {
         Some(bytes) => bytes,
@@ -177,9 +205,35 @@ async fn picture(State(server): State<Arc<Server>>, Signed(me): Signed, Path(id)
             .map_err(Fail::unreadable)?
         }
     };
+    if let Some(near) = near {
+        bring_near(near, bytes.clone());
+    }
     reshape(&server, id, kept, &bytes).await;
-    let headers = [(header::CONTENT_TYPE, "image/jpeg".to_string()), (header::CACHE_CONTROL, "private, no-cache".to_string()), (header::ETAG, tag)];
+    let headers = [(header::CONTENT_TYPE, "image/jpeg".to_string()), (header::CACHE_CONTROL, caching.to_string()), (header::ETAG, tag)];
     Ok((headers, bytes).into_response())
+}
+
+fn apart(photo: &FilePath) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    static APART: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, bool>>> = std::sync::Mutex::new(None);
+    let Some(folder) = photo.parent() else { return false };
+    let mut apart = APART.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *apart.get_or_insert_with(Default::default).entry(folder.to_path_buf()).or_insert_with(|| {
+        let device = |dir: &FilePath| dir.ancestors().find_map(|dir| std::fs::metadata(dir).ok()).map(|meta| meta.dev());
+        device(folder) != device(&thumbs::cache_dir())
+    })
+}
+
+fn bring_near(near: std::path::PathBuf, bytes: Vec<u8>) {
+    tokio::task::spawn_blocking(move || {
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = near.with_extension(format!("{}.{count}.near", std::process::id()));
+        let written = near.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&temp, &bytes)).and_then(|()| std::fs::rename(&temp, &near));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+    });
 }
 
 pub fn reshaped(kept: Option<f32>, shape: f32) -> bool {
@@ -192,10 +246,11 @@ async fn reshape(server: &Arc<Server>, id: i64, kept: Option<f32>, picture: &[u8
     if !reshaped(kept, shape) {
         return;
     }
-    let home = server.clone();
-    let saved = server.home.ask(move |catalog| catalog.set_aspects(&[(id, shape)]).map(|()| home.shelve(Some(library_of(id)), catalog))).await;
-    if let Ok(Err(err)) | Err(Fail(_, err)) = saved.map(|saved| saved.map(drop)) {
-        log::warn!("the shape of photograph {id} was not kept: {err}");
+
+    let saved = server.home.ask(move |catalog| catalog.set_aspects(&[(id, shape)])).await;
+    match saved {
+        Ok(Ok(())) => server.home.amend(id, |photo| photo.aspect = Some(shape)),
+        Ok(Err(err)) | Err(Fail(_, err)) => log::warn!("the shape of photograph {id} was not kept: {err}"),
     }
 }
 
@@ -381,7 +436,11 @@ pub async fn marks(State(server): State<Arc<Server>>, Signed(me): Signed, Path(i
     if marks.rating > 5 {
         return Err(Fail::bad("A rating is 0 to 5 stars."));
     }
-    changed(&server, id, move |catalog| catalog.set_rating(id, marks.rating).and_then(|()| catalog.set_flag(id, flag))).await
+
+    let rating = marks.rating;
+    server.home.ask(move |catalog| catalog.set_rating(id, rating).and_then(|()| catalog.set_flag(id, flag))).await?.map_err(Fail::internal)?;
+    server.home.amend(id, |photo| (photo.rating, photo.flag) = (rating, flag));
+    Ok(Json(json!({ "updated": server.store.touch(id) })))
 }
 
 #[derive(Deserialize)]
@@ -450,6 +509,20 @@ mod tests {
         assert!(!super::reshaped(Some(0.6667), 213.0 / 320.0));
 
         assert!(super::reshaped(None, 1.5));
+    }
+
+    #[test]
+    fn only_the_current_version_is_kept_for_good() {
+        let path = std::path::Path::new("/photos/a.RAF");
+        let now = super::stamp(path, 100, false).unwrap();
+        assert_eq!(super::caching(Some(&now), Some(&now)), "private, max-age=31536000, immutable");
+        let before = super::stamp(path, 99, false).unwrap();
+        assert_eq!(super::caching(Some(&now), Some(&before)), "private, no-cache", "a stale address");
+        assert_eq!(super::caching(Some(&now), None), "private, no-cache", "the apps' address");
+
+        assert_eq!(super::stamp(path, 100, true), None);
+        assert_eq!(super::stamp(std::path::Path::new("/photos/a.mp4"), 100, false), None);
+        assert_eq!(super::caching(None, Some(&now)), "private, no-cache");
     }
 
     #[test]

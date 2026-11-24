@@ -16,8 +16,11 @@ unused-allowed-license = "allow"
 
 # RUSTSEC-2024-0436: paste is unmaintained, a proc-macro pulled in by rav1e
 # (numa-io's AVIF encoder). No newer rav1e drops it; it is not a vulnerability.
+# RUSTSEC-2026-0543: chrono is unmaintained, every version; it is rawler's
+# (the raw decoder, for a file's dates). Not a vulnerability, and no version
+# to move to: it goes when rawler takes jiff or time.
 [advisories]
-ignore = ["RUSTSEC-2024-0436"]
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2026-0543"]
 
 [sources]
 unknown-registry = "deny"

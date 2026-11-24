@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::auth::Signed;
 use crate::grants::Level;
 use crate::store::Account;
-use crate::home::{month as month_of, when};
+use crate::home::when;
 use crate::{Fail, Server};
 
 #[derive(Deserialize, Default)]
@@ -51,6 +51,14 @@ impl Wanted {
         Wanted { album: Some(album.to_string()), flag, rating, ..Wanted::default() }
     }
 
+    fn plain(&self) -> Option<String> {
+        let elsewhere = [&self.person, &self.album, &self.q, &self.thing, &self.by, &self.camera, &self.place, &self.region, &self.chapter];
+        if elsewhere.iter().any(|filter| given(filter).is_some()) {
+            return None;
+        }
+        Some(format!("{:?}", (self.library, given(&self.flag), self.rating, given(&self.date), given(&self.sort), given(&self.reversed))))
+    }
+
     fn sorted(&self) -> Option<Sort> {
         match given(&self.sort).as_deref() {
             Some("name") => Some(Sort::Name),
@@ -62,7 +70,7 @@ impl Wanted {
     }
 }
 
-const EVERYTHING: &str = "all";
+use crate::listing::{Listed, EVERYTHING};
 
 fn given(text: &Option<String>) -> Option<String> {
     text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
@@ -80,29 +88,34 @@ pub async fn libraries(State(server): State<Arc<Server>>, Signed(me): Signed) ->
     Json(rows.collect())
 }
 
-pub async fn months(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
-    let photos = chosen(&server, &me, &wanted).await?;
-
-    type Month = (String, usize, Vec<(i64, usize)>);
-    let mut months: Vec<Month> = Vec::new();
-    let flat = wanted.sorted().is_some();
-    for photo in &photos {
-        let month = if flat { EVERYTHING.to_string() } else { month_of(photo) };
-        if months.last().is_none_or(|(last, ..)| *last != month) {
-            months.push((month, 0, Vec::new()));
-        }
-        let (_, count, libraries) = months.last_mut().expect("pushed above");
-        *count += 1;
-        let library = library_of(photo.id);
-        match libraries.iter_mut().find(|(id, _)| *id == library) {
-            Some((_, n)) => *n += 1,
-            None => libraries.push((library, 1)),
-        }
+async fn listed(server: &Arc<Server>, me: &Account, wanted: &Wanted) -> Result<Arc<Listed>, Fail> {
+    let (plain, turn) = (wanted.plain(), server.home.turn());
+    if let Some(kept) = plain.as_deref().and_then(|query| server.listings.kept(&me.sight, query, turn)) {
+        return Ok(kept);
     }
-    let rows = months.into_iter().map(|(month, count, mut libraries)| {
+    let listed = Arc::new(Listed::of(chosen(server, me, wanted).await?, wanted.sorted().is_some()));
+
+    if let Some(query) = plain.filter(|_| server.home.turn() == turn) {
+        server.listings.keep(me.sight.clone(), query, turn, listed.clone());
+    }
+    Ok(listed)
+}
+
+pub async fn months(State(server): State<Arc<Server>>, Signed(me): Signed, Query(wanted): Query<Wanted>) -> Result<Json<Vec<Value>>, Fail> {
+    let listed = listed(&server, &me, &wanted).await?;
+
+    let rows = listed.months.iter().map(|(month, run)| {
+        let mut libraries: Vec<(i64, usize)> = Vec::new();
+        for photo in &listed.photos[run.clone()] {
+            let library = library_of(photo.id);
+            match libraries.iter_mut().find(|(id, _)| *id == library) {
+                Some((_, n)) => *n += 1,
+                None => libraries.push((library, 1)),
+            }
+        }
         libraries.sort_by_key(|library| std::cmp::Reverse(library.1));
         let libraries: Vec<Value> = libraries.into_iter().map(|(id, count)| json!({ "id": id, "count": count })).collect();
-        json!({ "month": month, "count": count, "libraries": libraries })
+        json!({ "month": month, "count": run.len(), "libraries": libraries })
     });
     Ok(Json(rows.collect()))
 }
@@ -117,7 +130,7 @@ pub async fn month(
     if !shaped {
         return Err(Fail::bad("A month is written 2026-03."));
     }
-    let photos: Vec<Photo> = chosen(&server, &me, &wanted).await?.into_iter().filter(|photo| month == EVERYTHING || month_of(photo) == month).collect();
+    let photos = listed(&server, &me, &wanted).await?.month(&month);
     let marks = Marks::of(&server, &photos);
     let rows = tokio::task::spawn_blocking(move || photos.iter().map(|photo| marks.shaped(photo)).collect::<Vec<Value>>())
     .await
@@ -132,21 +145,16 @@ pub(crate) struct Marks {
 
 impl Marks {
     pub(crate) fn of<'a>(server: &Server, photos: impl IntoIterator<Item = &'a Photo>) -> Self {
-        let mut marks = Marks { bursts: HashMap::new(), live: server.home.live() };
-        for library in photos.into_iter().map(|photo| library_of(photo.id)).collect::<HashSet<i64>>() {
-            let files = server.home.files(library);
-            for burst in files.iter().filter_map(|photo| photo.burst) {
-                *marks.bursts.entry((library, burst)).or_default() += 1;
-            }
-        }
-        marks
+        let libraries = photos.into_iter().map(|photo| library_of(photo.id)).collect::<HashSet<i64>>();
+        Marks { bursts: server.home.bursts(libraries), live: server.home.live() }
     }
 
     pub(crate) fn shaped(&self, photo: &Photo) -> Value {
         let aspect = photo.aspect.or_else(|| {
             numa_io::thumbs::cached_size(&photo.path, photo.mtime, numa_io::thumbs::LIBRARY_EDGE).map(|(w, h)| w as f32 / h as f32)
         });
-        let aspect = aspect.or_else(|| numa_io::video::probe(&photo.path).and_then(|film| film.size).map(|(w, h)| w as f32 / h as f32));
+        let video = numa_io::video::is_video(&photo.path);
+        let aspect = aspect.or_else(|| video.then(|| numa_io::video::probe(&photo.path)).flatten().and_then(|film| film.size).map(|(w, h)| w as f32 / h as f32));
         let mut row = self.tile(photo);
         row["aspect"] = json!(aspect.unwrap_or(1.5));
         row
@@ -159,7 +167,7 @@ impl Marks {
         let mut row = json!({
             "id": photo.id, "name": photo.path.file_name().map(|name| name.to_string_lossy()), "taken": when(photo),
             "rating": photo.rating, "flag": crate::photos::flag_name(photo.flag), "edited": photo.edited, "raw": numa_io::raw::is_raw(&photo.path),
-            "stack": stack,
+            "stack": stack, "v": crate::photos::version(photo),
         });
 
         if numa_io::video::is_video(&photo.path) {
@@ -616,6 +624,47 @@ mod tests {
 
         times.sort_by(|a, b| order(*a, *b, true));
         assert_eq!(times, [day + 3, day + 10, 2 * day + 5, 2 * day + 9]);
+    }
+
+    #[test]
+    fn a_still_without_a_shape_is_not_read_as_a_video() {
+
+        let boxed = |kind: &[u8], content: &[u8]| [&((content.len() + 8) as u32).to_be_bytes()[..], kind, content].concat();
+        let mut tkhd = vec![0u8; 84];
+        tkhd[40..44].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        tkhd[76..80].copy_from_slice(&(1000u32 << 16).to_be_bytes());
+        tkhd[80..84].copy_from_slice(&(2000u32 << 16).to_be_bytes());
+        let path = std::env::temp_dir().join(format!("numa-shaped-{}.jpg", std::process::id()));
+        std::fs::write(&path, boxed(b"moov", &boxed(b"trak", &boxed(b"tkhd", &tkhd)))).unwrap();
+        let photo = numa_io::catalog::Photo {
+            id: 1,
+            path: path.clone(),
+            mtime: 0,
+            taken: None,
+            rating: 0,
+            flag: numa_io::catalog::Flag::None,
+            sharpness: None,
+            blown: None,
+            best_of_burst: false,
+            burst: None,
+            echo: None,
+            exposure: None,
+            focal35: None,
+            raw_clipped: None,
+            raw_dark: None,
+            eyes_closed: None,
+            faces: None,
+            face_sharpness: None,
+            brightness: None,
+            contrast: None,
+            suggested: None,
+            edited: false,
+            aspect: None,
+        };
+        let marks = super::Marks { bursts: Default::default(), live: Default::default() };
+        let row = marks.shaped(&photo);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(row["aspect"], 1.5);
     }
 
     #[test]

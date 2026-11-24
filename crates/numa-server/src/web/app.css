@@ -708,16 +708,23 @@ dialog.ask .year { width: 80px; margin-left: auto; }
 .safe-head .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .safe-head + .activity-page { padding-top: 0; }
 .safe { display: grid; gap: 14px; max-width: 1100px; }
-.safe .attention { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: var(--radius-card); background: var(--ground-view); color: var(--ink); font-weight: 600; }
+.safe .attention { display: flex; align-items: center; gap: 12px; padding: var(--space-16); border-radius: var(--radius-card); background: var(--ground-chip); color: var(--ink); font-weight: 600; }
 .safe .signal { width: 10px; height: 10px; border-radius: 5px; background: var(--attention); flex: none; }
 .safe .role { margin: 0; }
 .safe .check { display: flex; align-items: center; gap: var(--space-8); }
 .safe input[type=checkbox] { accent-color: var(--accent); }
 .safe .signal.ok { background: var(--accent); }
 .safe .all-home { margin: 0; color: var(--ink); font-weight: 600; }
-/* Boxes flow down three columns, so a short one fills under a short one. */
+/* Groups flow down three columns, so a short one fills under a short one; a
+   label never parts from its card. A group is the label over a visible card,
+   both on the page's left line: the card
+   the one raised grey, so on it text is `name` (`label` fails 4.5:1) and a
+   chip takes the page's ground. */
 .safe .boxes { columns: 300px 3; column-gap: 14px; }
-.safe .box { background: var(--ground-view); border-radius: var(--radius-card); padding: 16px 18px; display: grid; gap: 10px; break-inside: avoid; margin-bottom: 14px; }
+.safe .group { display: grid; gap: var(--space-8); break-inside: avoid; margin-bottom: var(--space-14); }
+.safe .box { background: var(--ground-chip); border-radius: var(--radius-card); padding: var(--space-16); display: grid; gap: var(--space-12); }
+.safe .box :is(.caption, .body) { color: var(--name); }
+.safe .box .chip:not(.chosen) { background: var(--ground-page); }
 .safe .box > .chip, .safe > .primary { justify-self: start; }
 .safe ul { list-style: none; margin: 0; padding: 0; }
 .safe li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
